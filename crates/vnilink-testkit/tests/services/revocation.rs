@@ -7,9 +7,11 @@ use std::collections::BTreeSet;
 
 use vnilink::{CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase};
 use vnilink_testkit::desktop::MonitorCapture;
+use vnilink_testkit::events::hosted_closes;
+use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{hosted_closes, phase, whole_disk};
+use super::support::phase;
 
 /// A Files pipe beside a Desktop: refused until the host grants Transfer,
 /// opened once, carrying real operations without taking the connection's
@@ -21,7 +23,7 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host)?;
+    let (root, folder) = whole_disk(&pair.host, "")?;
     let session = pair.connect_control();
     let screen = pair.attach(&session, ServiceKind::Desktop);
     let screen_work = controller.service_lease(screen.id, screen.generation)?;
@@ -201,9 +203,9 @@ fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothin
     let pair = Pair::for_desktop();
     let (host, a) = (&pair.host, &pair.controller);
     let b = pair.add_viewer("viewer");
-    whole_disk(host)?;
+    whole_disk(host, "")?;
     host.core
-        .set_capture(Box::new(MonitorCapture((1920, 1080))))?;
+        .set_capture(Box::new(MonitorCapture::new((1920, 1080))))?;
     host.core.set_service_sharing(ServiceKind::Files, true)?;
     let mut connections = Vec::new();
     for viewer in [a, &b] {

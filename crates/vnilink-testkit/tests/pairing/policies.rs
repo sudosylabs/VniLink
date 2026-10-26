@@ -7,16 +7,11 @@ use std::time::Duration;
 use vnilink::job::{FileResourcePolicy, FileRetentionPolicy};
 use vnilink::power::PowerPolicy;
 use vnilink::terminal::TerminalPolicy;
-use vnilink::{Error, RelaySettings, ServiceKind, ServicePermissions};
+use vnilink::{Error, ServiceKind, ServicePermissions};
+use vnilink_testkit::store::{Fault, Installed};
 use vnilink_testkit::{traced, Engine, TestResult};
 
-use super::support::{Fault, Installed, TestStore, EVERYTHING};
-
-/// An engine whose store the test holds and counts.
-fn installed() -> Installed<TestStore> {
-    Installed::open_in("host", TestStore::default(), RelaySettings::public_n0())
-        .expect("a loopback engine")
-}
+use super::support::EVERYTHING;
 
 /// What the host's peer may use once the host shares everything but Files
 /// and system actions.
@@ -38,7 +33,7 @@ const ALL_BUT_FILES: ServicePermissions = ServicePermissions {
 #[test]
 fn service_permissions_are_independent_persisted_and_rollback_before_revocation() -> TestResult {
     let _trace = traced();
-    let mut host = installed();
+    let mut host = Installed::faulty("host");
     let controller = Engine::start("controller");
     let lifetime = Duration::from_secs(60);
     host.core
@@ -168,7 +163,7 @@ fn service_permissions_are_independent_persisted_and_rollback_before_revocation(
 #[test]
 fn terminal_policy_is_durable_and_save_failure_rolls_back() -> TestResult {
     let _trace = traced();
-    let mut host = installed();
+    let mut host = Installed::faulty("host");
     let policy = TerminalPolicy {
         allow_persistence: false,
         max_sessions: 3,
@@ -226,7 +221,7 @@ fn terminal_policy_is_durable_and_save_failure_rolls_back() -> TestResult {
 #[test]
 fn file_retention_policy_is_durable_and_save_failure_rolls_back() -> TestResult {
     let _trace = traced();
-    let mut host = installed();
+    let mut host = Installed::faulty("host");
     let policy = FileRetentionPolicy {
         resume_cache_bytes: 12_345,
         resume_cache_age_secs: 456,
@@ -277,7 +272,7 @@ fn file_retention_policy_is_durable_and_save_failure_rolls_back() -> TestResult 
 #[test]
 fn power_policy_is_durable_and_save_failure_rolls_back() -> TestResult {
     let _trace = traced();
-    let mut host = installed();
+    let mut host = Installed::faulty("host");
     let policy = PowerPolicy {
         incoming_display: true,
         outgoing_system: true,
@@ -312,7 +307,7 @@ fn power_policy_is_durable_and_save_failure_rolls_back() -> TestResult {
 #[test]
 fn file_resource_policy_roundtrips_and_save_failure_preserves_durable_state() -> TestResult {
     let _trace = traced();
-    let mut host = installed();
+    let mut host = Installed::faulty("host");
     let policy = FileResourcePolicy {
         max_concurrent_receivers: 2,
         max_reserved_bytes: 123_456,

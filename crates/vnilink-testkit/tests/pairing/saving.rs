@@ -9,19 +9,14 @@ use std::time::Duration;
 use vnilink::{
     CoreEvent, Error, EventSubscription, Grants, RelaySettings, ServiceKind, SessionPhase,
 };
+use vnilink_testkit::events::drain;
+use vnilink_testkit::session::wait_request;
+use vnilink_testkit::store::{Fault, Installed, TestStore};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult};
 
-use super::support::{
-    credentialed_relay, drain, exchange, wait_request, Fault, Installed, TestStore, EVERYTHING,
-};
+use super::support::{credentialed_relay, exchange, EVERYTHING};
 
 const LIFETIME: Duration = Duration::from_secs(60);
-
-/// A host whose store the test holds and counts.
-fn host() -> Installed<TestStore> {
-    Installed::open_in("host", TestStore::default(), RelaySettings::public_n0())
-        .expect("a loopback engine")
-}
 
 /// Whether `events` published one that `kind` picks, taking them all.
 fn published(events: &EventSubscription, kind: fn(&CoreEvent) -> bool) -> bool {
@@ -73,7 +68,7 @@ fn assert_fenced(host: &Installed<TestStore>, before: &[u8], attempts: usize) {
 #[test]
 fn a_failed_save_keeps_the_previous_record() -> TestResult {
     let trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let before = host.store.record().ok_or("the first open saves a record")?;
     host.store.fail_next_save(Fault::Locked);
     assert!(
@@ -254,7 +249,7 @@ fn a_failed_save_keeps_the_previous_record() -> TestResult {
 #[test]
 fn an_unavailable_save_does_not_fence_the_engine() -> TestResult {
     let _trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let before = host.store.record().ok_or("the first open saves a record")?;
     let attempts = host.store.save_attempts();
     host.store.fail_next_save(Fault::Unavailable);
@@ -315,7 +310,7 @@ fn an_unavailable_save_does_not_fence_the_engine() -> TestResult {
 #[test]
 fn an_uncertain_consent_save_fences_without_a_second_write() -> TestResult {
     let _trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let before = host.store.record().ok_or("the first open saves a record")?;
     let attempts = host.store.save_attempts();
     host.store.fail_next_save(Fault::RecoveryRequired);
@@ -344,7 +339,7 @@ fn an_uncertain_consent_save_fences_without_a_second_write() -> TestResult {
 #[test]
 fn an_uncertain_pairing_save_fences_without_remembering_the_peer() -> TestResult {
     let trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let controller = Engine::start("controller");
     let invitation = controller.core.create_invitation(LIFETIME)?;
     let before = host.store.record().ok_or("the first open saves a record")?;
@@ -382,7 +377,7 @@ fn an_uncertain_pairing_save_fences_without_remembering_the_peer() -> TestResult
 #[test]
 fn an_uncertain_forget_save_fences_and_keeps_the_paired_record() -> TestResult {
     let trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let controller = Engine::start("controller");
     host.core
         .accept_invitation(&controller.core.create_invitation(LIFETIME)?)?;
@@ -422,7 +417,7 @@ fn an_uncertain_forget_save_fences_and_keeps_the_paired_record() -> TestResult {
 #[test]
 fn an_uncertain_reset_keeps_the_saved_record_and_the_bound_secret() -> TestResult {
     let _trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let before = host.store.record().ok_or("the first open saves a record")?;
     let secret = host.core.export_identity();
     let attempts = host.store.save_attempts();
@@ -452,7 +447,7 @@ fn an_uncertain_reset_keeps_the_saved_record_and_the_bound_secret() -> TestResul
 #[test]
 fn an_uncertain_control_approval_fences_before_the_peer_is_saved() -> TestResult {
     let trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let controller = Engine::start("controller");
     exchange(&host.core, &controller.core, true);
     host.core.start_hosting()?;
@@ -498,7 +493,7 @@ fn an_uncertain_control_approval_fences_before_the_peer_is_saved() -> TestResult
 #[test]
 fn a_panicking_save_fences_the_core_and_leaves_terminal_consent_unsaved() -> TestResult {
     let _trace = traced();
-    let host = host();
+    let host = Installed::faulty("host");
     let before = host.store.record().ok_or("the first open saves a record")?;
     let attempts = host.store.save_attempts();
     host.store.panic_next_save();

@@ -13,12 +13,10 @@ use vnilink::terminal::{
 use vnilink::{
     BackendStartup, Error, RemoteTerminalService, ServiceKind, ServicePhase, SessionPhase,
 };
-use vnilink_testkit::terminal::{shell, SIZE};
+use vnilink_testkit::terminal::{read_until, shell, SIZE};
 use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{
-    assert_content_unrecorded, host_ended_shells, open, phase, read_to_exit, read_until,
-};
+use super::support::{host_ended_shells, open, phase, read_to_exit, SHELL};
 
 /// A terminal refused for want of the grant fails only itself; once granted,
 /// a terminal opens beside a Files service, refuses a second open, carries
@@ -111,7 +109,7 @@ fn a_terminal_ends_with_its_shell_and_leaves_its_connection_and_siblings() -> Te
           hosting: service released service=1
     "#]]
     .assert_eq(&trace.story(&["terminal", "hosting"]));
-    assert_content_unrecorded(&trace, &["VNI_READY", "stty", "39 117", "α"]);
+    trace.assert_unrecorded("terminal content", &["VNI_READY", "stty", "39 117", "α"]);
     Ok(())
 }
 
@@ -245,7 +243,7 @@ fn changing_the_offered_shell_waits_for_running_shells() -> TestResult {
           terminal: terminal stream ended ended=shell exited explicit_close=true service=2
     "#]]
     .assert_eq(&trace.story(&["terminal"]));
-    assert_content_unrecorded(&trace, &["VNI_ARGS"]);
+    trace.assert_unrecorded("terminal content", &["VNI_ARGS"]);
     Ok(())
 }
 
@@ -307,7 +305,7 @@ fn closing_a_terminal_does_not_wait_for_unread_output() -> TestResult {
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
     "#]]
     .assert_eq(&trace.tell(&["terminal"]).to_string());
-    assert_content_unrecorded(&trace, &["VNI_STREAM"]);
+    trace.assert_unrecorded("terminal content", &["VNI_STREAM"]);
     Ok(())
 }
 
@@ -341,7 +339,7 @@ fn disconnecting_does_not_wait_for_unread_terminal_output() -> TestResult {
             .only(&["terminal opened"])
             .to_string(),
     );
-    assert_content_unrecorded(&trace, &["VNI_STREAM"]);
+    trace.assert_unrecorded("terminal content", &["VNI_STREAM"]);
     Ok(())
 }
 
@@ -422,7 +420,13 @@ fn simultaneous_terminals_run_independent_shells() -> TestResult {
     );
     second.input(b"printf 'SECOND_ALIVE\\n'; exit 0\n")?;
     let mut output = Vec::new();
-    let exit = read_until(&second, &mut output, "the second shell to exit", |_| false);
+    let exit = read_until(
+        &second,
+        &mut output,
+        "the second shell to exit",
+        SHELL,
+        |_| false,
+    );
     assert_eq!(exit, Some(0), "the second shell runs to its own exit");
     assert!(
         String::from_utf8_lossy(&output).contains("SECOND_ALIVE"),
@@ -441,6 +445,6 @@ fn simultaneous_terminals_run_independent_shells() -> TestResult {
           terminal: terminal stream ended ended=shell exited explicit_close=true service=2
     "#]]
     .assert_eq(&trace.tell(&["terminal"]).to_string());
-    assert_content_unrecorded(&trace, &["SECOND_ALIVE"]);
+    trace.assert_unrecorded("terminal content", &["SECOND_ALIVE"]);
     Ok(())
 }

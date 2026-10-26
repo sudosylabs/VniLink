@@ -215,9 +215,9 @@ pub struct DesktopSession {
     pipeline: Option<std::thread::JoinHandle<Result<(), vnilink_media::PublishError>>>,
 }
 
-/// What the viewer's window can show; `stills` asks for still pictures,
-/// which need a 4:4:4 decoder.
-fn window_decoders(stills: bool) -> Vec<vnilink::WindowDecoder> {
+/// What a viewer's window decodes: H.264, and AV1 at 4:4:4 when it shows
+/// `stills`, which need a 4:4:4 decoder.
+pub fn window_decoders(stills: bool) -> Vec<vnilink::WindowDecoder> {
     vec![
         vnilink::WindowDecoder {
             codec: vnilink::VideoCodec::H264,
@@ -452,13 +452,38 @@ impl HostDesktop for LoggingDesktop {
     }
 }
 
-/// A host's capture of one display of this size, set up as adapters are
-/// before a session; it offers no still pictures.
-pub struct MonitorCapture(pub (u16, u16));
+/// A host's capture of one display, set up as adapters are before a
+/// session; it offers no still pictures.
+pub struct MonitorCapture {
+    monitor: (u16, u16),
+    separate_cursor: bool,
+}
+
+impl MonitorCapture {
+    /// A display of `monitor`'s size, its cursor drawn into its pictures.
+    pub fn new(monitor: (u16, u16)) -> Self {
+        Self {
+            monitor,
+            separate_cursor: false,
+        }
+    }
+
+    /// Sends its cursor apart from its pictures when `separate`.
+    pub fn separate_cursor(self, separate: bool) -> Self {
+        Self {
+            separate_cursor: separate,
+            ..self
+        }
+    }
+}
 
 impl HostCapture for MonitorCapture {
     fn monitor(&self) -> (u16, u16) {
-        self.0
+        self.monitor
+    }
+
+    fn separate_cursor(&self) -> bool {
+        self.separate_cursor
     }
 }
 
@@ -466,6 +491,130 @@ impl HostCapture for MonitorCapture {
 /// encoder hands one over.
 pub fn keyframe(timestamp_us: u64, payload: Vec<u8>) -> EncodedFrame {
     EncodedFrame::h264(true, timestamp_us, payload).expect("an H.264 keyframe")
+}
+
+/// A picture that is not a keyframe, stamped `timestamp_us`, carrying
+/// `payload`.
+pub fn delta(timestamp_us: u64, payload: Vec<u8>) -> EncodedFrame {
+    EncodedFrame::h264(false, timestamp_us, payload).expect("an H.264 frame")
+}
+
+/// The next input failure the host reports in `events`: the session it
+/// names and why.
+pub fn input_failed(events: &vnilink::EventSubscription) -> (u64, &'static str) {
+    crate::events::next_picked(
+        events,
+        "the host to report an input failure",
+        crate::DEFAULT_WAIT,
+        |event| match event {
+            vnilink::CoreEvent::InputFailed { id, message } => Some((id, message)),
+            _ => None,
+        },
+    )
+}
+
+/// What a host's desktop was asked to do: an input event, text typed as
+/// characters, or text typed as the host layout's keys.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Typed {
+    Event(InputEvent),
+    Text(String),
+    Chord(String),
+}
+
+/// What a host's desktop was asked to type, in order: the log of a desktop
+/// [`Typing::install`] puts on an engine.
+#[derive(Clone, Default)]
+pub struct Typing(Arc<Mutex<Vec<Typed>>>);
+
+impl Typing {
+    /// Installs on `host` a desktop of one `monitor`-sized display that
+    /// records what it is asked to type and the input it applies, refusing
+    /// text when `fail_text` and translated keys when `fail_chord`, as an
+    /// operating system can.
+    pub fn install(
+        host: &crate::Engine,
+        monitor: (u16, u16),
+        fail_text: bool,
+        fail_chord: bool,
+    ) -> Result<Self, vnilink::Error> {
+        let typing = Self::default();
+        host.core.set_desktop(Box::new(TypingDesktop {
+            typing: typing.clone(),
+            monitor,
+            fail_text,
+            fail_chord,
+        }))?;
+        Ok(typing)
+    }
+
+    /// Everything asked so far.
+    pub fn seen(&self) -> Vec<Typed> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// Waits until the host was asked as many things as `expected`, then
+    /// states that they are `expected`, in order, for the contract `what`:
+    /// one more, or one fewer, fails.
+    pub fn wait(&self, expected: &[Typed], what: &str) {
+        let got = crate::wait_for(
+            &format!("the host to be asked {} things", expected.len()),
+            crate::DEFAULT_WAIT,
+            || {
+                let got = self.seen();
+                (got.len() >= expected.len()).then_some(got)
+            },
+        );
+        assert_eq!(got, expected, "{what}");
+    }
+
+    fn record(&self, typed: Typed) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(typed);
+    }
+}
+
+struct TypingDesktop {
+    typing: Typing,
+    monitor: (u16, u16),
+    fail_text: bool,
+    fail_chord: bool,
+}
+
+impl HostDesktop for TypingDesktop {
+    fn apply(&mut self, event: InputEvent) -> Result<(), vnilink::Error> {
+        self.typing.record(Typed::Event(event));
+        Ok(())
+    }
+
+    fn type_text(&mut self, text: &str) -> Result<(), vnilink::Error> {
+        if self.fail_text {
+            return Err(vnilink::Error::InputFailed(
+                "the operating system rejected the event",
+            ));
+        }
+        self.typing.record(Typed::Text(text.to_owned()));
+        Ok(())
+    }
+
+    fn type_chord(&mut self, text: &str) -> Result<(), vnilink::Error> {
+        if self.fail_chord {
+            return Err(vnilink::Error::InputFailed(
+                "translated keys are not available",
+            ));
+        }
+        self.typing.record(Typed::Chord(text.to_owned()));
+        Ok(())
+    }
+
+    fn monitor(&self) -> (u16, u16) {
+        self.monitor
+    }
 }
 
 /// The next picture `video` brings, within the kit's wait, failing naming

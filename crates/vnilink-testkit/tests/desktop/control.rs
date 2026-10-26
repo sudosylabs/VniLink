@@ -2,88 +2,14 @@
 //! control over, and a view-only viewer, each releasing what it held.
 
 use expect_test::expect;
-use std::sync::{Arc, Mutex};
 
 use vnilink::DesktopControlState::{Contended, Controlling, Viewing};
 use vnilink::{
-    usage, Error, Grants, HostDesktop, InputEvent, KeyboardMode, LocalKey, PointerButton,
-    PointerSettings, ServiceKind, SessionPhase,
+    usage, Error, Grants, InputEvent, KeyboardMode, LocalKey, PointerButton, PointerSettings,
+    ServiceKind, SessionPhase,
 };
-use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, SCREEN};
+use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, Typed, Typing, SCREEN};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
-
-use super::lifecycle::pair;
-
-/// What a host's desktop was asked to do: an input event, text typed as
-/// characters, or text typed as the host layout's keys.
-#[derive(Clone, Debug, PartialEq)]
-enum Typed {
-    Event(InputEvent),
-    Text(String),
-    Chord(String),
-}
-
-/// A desktop that records what it is asked to type, as well as the input
-/// it applies.
-struct TypingDesktop {
-    typed: Arc<Mutex<Vec<Typed>>>,
-}
-
-impl TypingDesktop {
-    fn record(&self, typed: Typed) {
-        self.typed
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(typed);
-    }
-}
-
-impl HostDesktop for TypingDesktop {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
-        self.record(Typed::Event(event));
-        Ok(())
-    }
-
-    fn type_text(&mut self, text: &str) -> Result<(), Error> {
-        self.record(Typed::Text(text.to_owned()));
-        Ok(())
-    }
-
-    fn type_chord(&mut self, text: &str) -> Result<(), Error> {
-        self.record(Typed::Chord(text.to_owned()));
-        Ok(())
-    }
-
-    fn monitor(&self) -> (u16, u16) {
-        SCREEN
-    }
-}
-
-/// Installs a [`TypingDesktop`] on `host`, and gives what it records.
-fn install_typing(host: &Engine) -> Result<Arc<Mutex<Vec<Typed>>>, Error> {
-    let typed = Arc::new(Mutex::new(Vec::new()));
-    host.core.set_desktop(Box::new(TypingDesktop {
-        typed: Arc::clone(&typed),
-    }))?;
-    Ok(typed)
-}
-
-/// Waits until `typed` holds as many items as `expected`, then states that
-/// they are `expected`, for the contract `what`.
-fn assert_typed(typed: &Mutex<Vec<Typed>>, expected: &[Typed], what: &str) {
-    let got = wait_for(
-        &format!("the host to be asked {} things", expected.len()),
-        DEFAULT_WAIT,
-        || {
-            let got = typed
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .clone();
-            (got.len() >= expected.len()).then_some(got)
-        },
-    );
-    assert_eq!(got, expected, "{what}");
-}
 
 /// Each desktop keeps the keyboard mode and shortcut swap it opened with:
 /// changing one's leaves the other's, and neither changes while a key is
@@ -102,10 +28,10 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
         .iter()
         .zip([KeyboardMode::Map, KeyboardMode::Character])
     {
-        typed.push(install_typing(host)?);
-        pair(host, &controller)?;
+        typed.push(Typing::install(host, SCREEN, false, false)?);
+        host.pair_for_control(&controller)?;
         controller.core.set_keyboard_mode(mode)?;
-        let connection = controller.connect_services(&host)?;
+        let connection = controller.connect_services(host)?;
         desktops.push(controller.open_desktop(&connection)?);
         connections.push(connection);
     }
@@ -143,8 +69,7 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
         Typed::Event(InputEvent::key_down(usage::A)),
         Typed::Event(InputEvent::key_down(usage::A)),
     ];
-    assert_typed(
-        &typed[0],
+    typed[0].wait(
         &pressed,
         "a swapped Command reaches the host as Control, and a repeat as a repeat",
     );
@@ -157,15 +82,13 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
         Typed::Event(InputEvent::key_up(usage::LEFT_CONTROL)),
         Typed::Event(InputEvent::key_down(usage::B)),
     ]);
-    assert_typed(
-        &typed[0],
+    typed[0].wait(
         &released,
         "releasing input lifts each held key once, before the key sent after it",
     );
 
     second.submit_local_key(key(usage::GRAVE, true, "@"))?;
-    assert_typed(
-        &typed[1],
+    typed[1].wait(
         &[Typed::Text("@".into())],
         "Character mode types the character",
     );
@@ -177,8 +100,7 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
     second.set_keyboard_mode(KeyboardMode::Translate)?;
     second.submit_local_key(key(usage::GRAVE, true, "@"))?;
     second.submit_local_key(key(usage::GRAVE, false, ""))?;
-    assert_typed(
-        &typed[1],
+    typed[1].wait(
         &[Typed::Text("@".into()), Typed::Chord("@".into())],
         "Translate mode types the character as the host layout's keys",
     );
@@ -209,10 +131,7 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
         !fresh.is_cancelled(),
         "closing the old desktop again leaves the reopened one"
     );
-    assert!(
-        trace.events().iter().all(|event| !event.contains('@')),
-        "no engine records the text typed"
-    );
+    trace.assert_unrecorded("the text typed", &["@"]);
     trace.wait_for_records("service phase", 2);
     expect![[r#"
         controller:
@@ -323,11 +242,11 @@ fn handing_control_over_releases_held_keys_and_keeps_every_viewer() -> TestResul
     let mut owners = Vec::new();
     let mut videos = Vec::new();
     for peer in &peers {
-        pair(&host, peer)?;
+        host.pair_for_control(peer)?;
         let connection = peer.connect_services(&host)?;
         let desktop = peer.open_desktop(&connection)?;
         owners.push(
-            host.hosted_for(ServiceKind::Desktop, &peer)
+            host.hosted_for(ServiceKind::Desktop, peer)
                 .ok_or("the host serves the Desktop")?,
         );
         videos.push(desktop.subscribe_video()?);

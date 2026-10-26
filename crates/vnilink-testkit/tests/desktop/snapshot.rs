@@ -12,6 +12,7 @@ use vnilink::snapshot::{
     SnapshotFailure, MAX_SNAPSHOT_BYTES, SNAPSHOT_MIN_INTERVAL,
 };
 use vnilink::{Core, Error, Grants, ServiceKind, ServicePhase, SessionInfo};
+use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 /// An image `width` by `height` of one colour, as BGRA rows `stride` bytes
@@ -209,11 +210,7 @@ fn view_allows_a_screenshot_without_control_audio_or_a_desktop_session() -> Test
     assert!(
         host.hosted_services()?
             .iter()
-            .all(|service| service.kind != ServiceKind::Desktop
-                || matches!(
-                    service.phase,
-                    ServicePhase::Closed(_) | ServicePhase::Failed(_)
-                )),
+            .all(|service| service.kind != ServiceKind::Desktop || service_ended(&service.phase)),
         "a screenshot opens no desktop on the host"
     );
     let again = request(controller, &connection, false);

@@ -7,9 +7,11 @@ use expect_test::expect;
 use std::time::{Duration, Instant};
 
 use vnilink::{CoreEvent, Error, Grants, SessionPhase};
+use vnilink_testkit::events::drain;
+use vnilink_testkit::session::wait_request;
 use vnilink_testkit::{holds, traced, wait_for, Engine, TestResult};
 
-use super::support::{drain, exchange, wait_request};
+use super::support::exchange;
 
 /// How long the host takes to ask its owner, at most.
 const ASKING: Duration = Duration::from_secs(5);

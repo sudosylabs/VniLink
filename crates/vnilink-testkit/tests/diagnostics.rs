@@ -68,7 +68,8 @@ fn live_snapshot_reports_pipeline_path_and_lease() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host, &pair.controller);
-    host.core.set_capture(Box::new(MonitorCapture((1, 1))))?;
+    host.core
+        .set_capture(Box::new(MonitorCapture::new((1, 1))))?;
     let connection = pair.connect_services();
     let desktop = controller.open_desktop(&connection)?;
     wait_for("the viewer to control", DEFAULT_WAIT, || {
@@ -199,7 +200,8 @@ fn live_snapshot_names_the_coders_and_the_last_end() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host, &pair.controller);
-    host.core.set_capture(Box::new(MonitorCapture((1, 1))))?;
+    host.core
+        .set_capture(Box::new(MonitorCapture::new((1, 1))))?;
     let connection = pair.connect_services();
     let desktop = controller.open_desktop(&connection)?;
     let remote = host
@@ -308,9 +310,6 @@ fn ignored_failures_reach_the_snapshot_by_area_and_reason() -> TestResult {
         !export_json(&snapshot)?.contains("192.0.2.9"),
         "a failure's text was exported"
     );
-    assert!(
-        !trace.events().join("\n").contains("192.0.2.9"),
-        "a failure's text was recorded"
-    );
+    trace.assert_unrecorded("a failure's text", &["192.0.2.9"]);
     Ok(())
 }

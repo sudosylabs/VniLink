@@ -6,9 +6,7 @@ use expect_test::expect;
 
 use vnilink::{CloseCause, Error, ServiceKind, ServicePhase, SessionPhase};
 use vnilink_testkit::desktop::keyframe;
-use vnilink_testkit::{traced, Engine, Pair, TestResult, DEFAULT_WAIT};
-
-use super::support::{hosted_ends, pair_for_control, redialed, VIEW_AND_CONTROL};
+use vnilink_testkit::{traced, Engine, Pair, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED};
 
 /// A redial carries an open Desktop to the next generation and cancels the
 /// old lease for good, keeps a closed Files closed, and leaves a service on
@@ -20,8 +18,8 @@ fn a_redial_never_revives_old_leases_or_closed_services() -> TestResult {
     let controller = Engine::start("controller");
     let a = Engine::start("host-a");
     let b = Engine::start("host-b");
-    pair_for_control(&a, &controller)?;
-    pair_for_control(&b, &controller)?;
+    a.pair_for_control(&controller)?;
+    b.pair_for_control(&controller)?;
     let sa = controller.connect_control(&a)?;
     let sb = controller.connect_control(&b)?;
     let core = &controller.core;
@@ -35,7 +33,7 @@ fn a_redial_never_revives_old_leases_or_closed_services() -> TestResult {
     vnilink_testkit::wait_for("the old lease to be cancelled", DEFAULT_WAIT, || {
         old.is_cancelled().then_some(())
     });
-    redialed(&controller, &sa);
+    controller.redialed(&sa);
     let next = core.controller_service(screen.id)?;
     assert_eq!(next.id, screen.id, "the redial keeps the service's id");
     assert_eq!(
@@ -112,7 +110,7 @@ fn a_redial_keeps_the_files_owner_and_fences_its_old_pipe() -> TestResult {
     let controller = &pair.controller.core;
     pair.host.core.set_desktop_sharing(vnilink::Grants {
         transfer: true,
-        ..VIEW_AND_CONTROL
+        ..SEEN_AND_CONTROLLED
     })?;
     let session = pair.connect_control();
     let owner = pair.attach(&session, ServiceKind::Files);
@@ -121,7 +119,7 @@ fn a_redial_keeps_the_files_owner_and_fences_its_old_pipe() -> TestResult {
     vnilink_testkit::wait_for("the old pipe to be cancelled", DEFAULT_WAIT, || {
         old.is_cancelled().then_some(())
     });
-    redialed(&pair.controller, &session);
+    pair.controller.redialed(&session);
     let next = controller.controller_service(owner.id)?;
     assert_eq!(
         next.phase,
@@ -155,7 +153,7 @@ fn a_redial_keeps_the_files_owner_and_fences_its_old_pipe() -> TestResult {
         "closing the pipe leaves the connection"
     );
     assert_eq!(
-        hosted_ends(&trace, "host"),
+        trace.hosted_ends("host"),
         [
             (1, "closed: ParentLoss".to_owned()),
             (2, "closed: PeerClose".to_owned())
@@ -187,7 +185,7 @@ fn a_redial_fences_the_old_desktop_handle_without_retiring_its_replacement() -> 
     let owner = pair.attach(&session, ServiceKind::Desktop);
     let old = controller.open_desktop_service(owner.id, owner.generation)?;
     controller.drop_controller_link(session.id)?;
-    redialed(&pair.controller, &session);
+    pair.controller.redialed(&session);
     let fresh = controller.controller_service(owner.id)?;
     assert_eq!(
         fresh.phase,
@@ -231,7 +229,7 @@ fn a_redial_fences_the_old_desktop_handle_without_retiring_its_replacement() -> 
         "closing the Desktop leaves the connection"
     );
     assert_eq!(
-        hosted_ends(&trace, "host"),
+        trace.hosted_ends("host"),
         [
             (1, "closed: ParentLoss".to_owned()),
             (2, "closed: PeerClose".to_owned())

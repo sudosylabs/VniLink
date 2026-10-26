@@ -17,7 +17,7 @@ use expect_test::expect;
 
 use vnilink::{Error, Grants, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{DesktopSession, RecordingClipboard, Script, ScriptedScreen};
-use vnilink_testkit::{traced, Engine, Pair, Traced};
+use vnilink_testkit::{traced, wait_for, Engine, Pair, DEFAULT_WAIT};
 
 /// What the host shares: it may be seen and controlled, and its clipboard
 /// shared when `clipboard`.
@@ -79,6 +79,17 @@ impl Copied {
     }
 }
 
+/// Retries the host's `publish` until its side of the clipboard stream is
+/// open: a controller sends Ready before the host installs its sender.
+/// Every other failure fails at once.
+fn publish_once_open(what: &str, mut publish: impl FnMut() -> Result<(), Error>) {
+    wait_for(what, DEFAULT_WAIT, || match publish() {
+        Ok(()) => Some(()),
+        Err(Error::Unsupported("clipboard stream is not open")) => None,
+        Err(error) => panic!("the host's publication failed: {error}"),
+    });
+}
+
 /// `story` with each engine's lines sorted, for a scenario whose work on
 /// both computers at once is recorded in either order.
 fn unordered(story: &str) -> String {
@@ -103,18 +114,6 @@ fn unordered(story: &str) -> String {
         told.push('\n');
     }
     told
-}
-
-/// Fails if anything the engines recorded holds one of `content`: what was
-/// copied is the person's, never the record's.
-fn assert_unrecorded(trace: &Traced, content: &[&str]) {
-    let everything = trace.events().join("\n");
-    for content in content {
-        assert!(
-            !everything.contains(content),
-            "copied content was recorded: {content}"
-        );
-    }
 }
 
 fn session() -> (DesktopSession, Arc<Mutex<Vec<String>>>) {
@@ -163,12 +162,7 @@ fn text_crosses_both_ways_and_is_never_recorded() {
           clipboard: clipboard sent bytes=13 service=1
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    let everything = trace.events().join("\n");
-    assert!(!everything.contains("horse"), "copied text was recorded");
-    assert!(
-        !everything.contains("from the host"),
-        "copied text was recorded"
-    );
+    trace.assert_unrecorded("copied content", &["horse", "from the host"]);
 }
 
 /// Without the grant nothing crosses either way, the host records why,
@@ -273,8 +267,5 @@ fn a_file_selection_crosses_a_session_and_its_story_is_recorded() {
           clipboard: clipboard received amount=1 kind=files
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    assert!(
-        !trace.events().join("\n").contains("quarterly"),
-        "a file's name was recorded"
-    );
+    trace.assert_unrecorded("a copied file's name", &["quarterly"]);
 }

@@ -5,9 +5,8 @@ use expect_test::expect;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::shared::whole_disk;
 use vnilink::{ConflictChoice, JobState};
-use vnilink_testkit::files::{self, drive_to_end, received, tree, write_files, Entry};
+use vnilink_testkit::files::{self, drive_to_end, received, tree, whole_disk, write_files, Entry};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(60);

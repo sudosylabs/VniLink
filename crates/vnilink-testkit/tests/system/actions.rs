@@ -10,11 +10,11 @@ use vnilink::{
     AvailabilityReason, Capability, CoreEvent, Error, OperationState, ServiceKind, SessionPhase,
     SystemAction, SystemPolicy, SystemSupport,
 };
+use vnilink_testkit::system::FakeSystem;
 use vnilink_testkit::system::{RecordingSystem, SystemSession};
 use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-use super::backends::FakeSystem;
-use super::{open_system, sharing};
+use super::sharing;
 
 /// The host's policy allows restart and shutdown besides the lock.
 const RESTART_AND_SHUTDOWN: SystemPolicy = SystemPolicy {
@@ -227,7 +227,7 @@ fn an_action_that_never_answers_does_not_hold_the_service() -> TestResult {
     let controller = &pair.controller.core;
     let connection = pair.connect_services();
     let _stalled = fake.stall_locks();
-    let system = open_system(controller, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let locked = system.execute(SystemAction::Lock);
     assert!(
         locked.is_err(),
@@ -294,7 +294,7 @@ fn a_restart_waits_out_its_notice_and_tells_the_host() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let events = host.subscribe()?;
     let connection = pair.connect_services();
-    let system = open_system(controller, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let restart = system.execute(SystemAction::Restart)?;
     assert_eq!(
         restart.state,
@@ -376,7 +376,7 @@ fn either_computer_can_cancel_a_scheduled_restart() -> TestResult {
     let pair = sharing(&fake)?;
     allow_restart(&pair, Duration::from_secs(30))?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     // At the host, as its user chooses in the notice.
     let first = system.execute(SystemAction::Restart)?;
     let cancelled = pair.host.core.cancel_system_action(first.id)?;
@@ -420,12 +420,12 @@ fn another_connection_cannot_cancel_and_run_now_starts_at_once() -> TestResult {
     allow_restart(&pair, Duration::from_secs(30))?;
     let host = &pair.host.core;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let restart = system.execute(SystemAction::Restart)?;
     // A second paired computer asks to cancel someone else's restart.
     let other = pair.add_viewer("other");
     let other_connection = other.connect_services(&pair.host)?;
-    let other_system = open_system(&other.core, &other_connection)?;
+    let other_system = other.open_system(&other_connection)?;
     assert!(
         other_system.cancel(restart.id).is_err(),
         "another computer cannot cancel the restart"
@@ -466,7 +466,7 @@ fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() -> Tes
     allow_restart(&pair, Duration::from_secs(30))?;
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let connection = pair.connect_services();
-    let system = open_system(controller, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let restart = system.execute(SystemAction::Restart)?;
     controller.disconnect_session(connection.id)?;
     wait_for(
@@ -483,7 +483,7 @@ fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() -> Tes
     // Policy turned off during the notice: the start gate refuses it.
     allow_restart(&pair, Duration::from_millis(300))?;
     let connection = pair.controller.connect_services(&pair.host)?;
-    let system = open_system(controller, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let restart = system.execute(SystemAction::Restart)?;
     host.set_system_policy(SystemPolicy::default())?;
     let refused = wait_for("the restart to be refused", DEFAULT_WAIT, || {
@@ -518,7 +518,7 @@ fn backend_failure_is_a_failed_operation_not_a_lost_request() -> TestResult {
     fake.calls().fail_lock = true;
     let pair = sharing(&fake)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let failed = system.execute(SystemAction::Lock)?;
     assert_eq!(failed.state, OperationState::Failed, "a refused lock fails");
     assert!(
@@ -549,7 +549,7 @@ fn operations_never_replay_across_reconnect() -> TestResult {
     let pair = sharing(&fake)?;
     let controller = &pair.controller.core;
     let connection = pair.connect_services();
-    let system = open_system(controller, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let first = system.execute(SystemAction::Lock)?;
     assert_eq!(first.state, OperationState::Executed);
     controller.disconnect_session(connection.id)?;
@@ -565,7 +565,7 @@ fn operations_never_replay_across_reconnect() -> TestResult {
         connection.generation > 0,
         "the reconnect is a later generation"
     );
-    let system = open_system(controller, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     assert!(
         matches!(system.operation(first.id), Err(Error::NoSession)),
         "the previous connection's operation is unreachable, not resumed"

@@ -10,9 +10,10 @@ use vnilink::{
     usage, CoreEvent, Error, Grants, InputEvent, Quality, SessionPhase, SessionRole, VideoCodecCaps,
 };
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
-use vnilink_testkit::{traced, wait_for, Engine, TestResult};
+use vnilink_testkit::events::next_event;
+use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED};
 
-use super::support::{introduce, next_event, pair, wait_closed, INVITATION, SEEN_AND_CONTROLLED};
+use super::support::{introduce, INVITATION};
 
 /// Only clipboard: what a host shares that admits no session.
 const CLIPBOARD_ONLY: Grants = Grants {
@@ -115,8 +116,8 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
     );
 
     host.core.stop_hosted_session()?;
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
+    host.wait_closed(SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
     assert!(
         matches!(
             controller.core.submit_input(
@@ -178,7 +179,7 @@ fn peers_past_capacity_are_rejected_while_live_sessions_stay_active() -> TestRes
         .map(|n| Engine::start(&format!("controller-{n}")))
         .collect();
     for controller in &peers {
-        pair(&host, controller)?;
+        host.pair_for_control(controller)?;
     }
     let mut sessions = Vec::new();
     for controller in &peers[..4] {
@@ -314,7 +315,7 @@ fn re_pairing_uses_unchanged_global_consent() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     host.core.revoke(&controller.endpoint())?;
     let info = host
         .core
@@ -421,7 +422,7 @@ fn the_desktop_adapter_cannot_change_during_a_session() -> TestResult {
         1,
         "a desktop with a monitor is one monitor"
     );
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
     assert_eq!(
         (session.monitor_width, session.monitor_height),
@@ -433,7 +434,7 @@ fn the_desktop_adapter_cannot_change_during_a_session() -> TestResult {
         "the desktop does not change during a session"
     );
     host.core.stop_hosted_session()?;
-    wait_closed(&host, SessionRole::Host);
+    host.wait_closed(SessionRole::Host);
     InputLog::install(&host, (100, 0))?;
     let capabilities = host.core.capabilities();
     assert!(
@@ -460,26 +461,33 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
     let controller_events = controller.core.subscribe()?;
     host.core.start_hosting()?;
     assert_eq!(
-        next_event(&host_events, |event| matches!(
-            event,
-            CoreEvent::HostingChanged { .. }
-        )),
+        next_event(
+            &host_events,
+            "the engine to publish the event",
+            DEFAULT_WAIT,
+            |event| matches!(event, CoreEvent::HostingChanged { .. })
+        ),
         CoreEvent::HostingChanged { hosting: true },
         "hosting is published"
     );
     controller
         .core
         .accept_invitation(&host.core.create_invitation(INVITATION)?)?;
-    next_event(&controller_events, |event| {
-        matches!(event, CoreEvent::DevicePaired { .. })
-    });
+    next_event(
+        &controller_events,
+        "the engine to publish the event",
+        DEFAULT_WAIT,
+        |event| matches!(event, CoreEvent::DevicePaired { .. }),
+    );
     host.core
         .accept_invitation(&controller.core.create_invitation(INVITATION)?)?;
     assert_eq!(
-        next_event(&host_events, |event| matches!(
-            event,
-            CoreEvent::DevicePaired { .. }
-        )),
+        next_event(
+            &host_events,
+            "the engine to publish the event",
+            DEFAULT_WAIT,
+            |event| matches!(event, CoreEvent::DevicePaired { .. })
+        ),
         CoreEvent::DevicePaired {
             endpoint_id: controller.endpoint()
         },
@@ -487,10 +495,12 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
     );
     host.core.set_desktop_sharing(SEEN_AND_CONTROLLED)?;
     assert_eq!(
-        next_event(&host_events, |event| matches!(
-            event,
-            CoreEvent::DeviceAuthorized { .. }
-        )),
+        next_event(
+            &host_events,
+            "the engine to publish the event",
+            DEFAULT_WAIT,
+            |event| matches!(event, CoreEvent::DeviceAuthorized { .. })
+        ),
         CoreEvent::DeviceAuthorized {
             endpoint_id: controller.endpoint()
         },
@@ -499,15 +509,20 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
     let session = controller.core.connect(&host.endpoint())?;
     let mut host_phases = Vec::new();
     while host_phases.last() != Some(&SessionPhase::Active) {
-        match next_event(&host_events, |event| {
-            matches!(
-                event,
-                CoreEvent::SessionChanged {
-                    role: SessionRole::Host,
-                    ..
-                }
-            )
-        }) {
+        match next_event(
+            &host_events,
+            "the engine to publish the event",
+            DEFAULT_WAIT,
+            |event| {
+                matches!(
+                    event,
+                    CoreEvent::SessionChanged {
+                        role: SessionRole::Host,
+                        ..
+                    }
+                )
+            },
+        ) {
             CoreEvent::SessionChanged {
                 id,
                 generation,
@@ -541,15 +556,20 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
     );
     let mut controller_phases = Vec::new();
     while controller_phases.last() != Some(&SessionPhase::Active) {
-        match next_event(&controller_events, |event| {
-            matches!(
-                event,
-                CoreEvent::SessionChanged {
-                    role: SessionRole::Controller,
-                    ..
-                }
-            )
-        }) {
+        match next_event(
+            &controller_events,
+            "the engine to publish the event",
+            DEFAULT_WAIT,
+            |event| {
+                matches!(
+                    event,
+                    CoreEvent::SessionChanged {
+                        role: SessionRole::Controller,
+                        ..
+                    }
+                )
+            },
+        ) {
             CoreEvent::SessionChanged { phase, .. } => controller_phases.push(phase),
             other => panic!("controller session event was {other:?}"),
         }
@@ -567,17 +587,19 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
     );
     host.core.revoke(&controller.endpoint())?;
     assert_eq!(
-        next_event(&host_events, |event| matches!(
-            event,
-            CoreEvent::DeviceUnpaired { .. }
-        )),
+        next_event(
+            &host_events,
+            "the engine to publish the event",
+            DEFAULT_WAIT,
+            |event| matches!(event, CoreEvent::DeviceUnpaired { .. })
+        ),
         CoreEvent::DeviceUnpaired {
             endpoint_id: controller.endpoint()
         },
         "the host publishes the controller unpaired"
     );
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
+    host.wait_closed(SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
     expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
@@ -598,7 +620,8 @@ fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() -> TestR
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    host.core.set_capture(Box::new(MonitorCapture((1, 1))))?;
+    host.core
+        .set_capture(Box::new(MonitorCapture::new((1, 1))))?;
     host.core.set_video_codecs(VideoCodecCaps::default())?;
     assert!(
         host.core.capabilities().desktop_capture,
@@ -608,7 +631,7 @@ fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() -> TestR
         !host.core.capabilities().h264_encode,
         "no codecs, no encoder"
     );
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     assert!(
         matches!(
             controller.core.connect(&host.endpoint()),
@@ -629,7 +652,7 @@ fn a_host_without_an_encoder_reports_unsupported_instead_of_admitting() -> TestR
         "a host that can encode admits the session"
     );
     controller.core.disconnect()?;
-    wait_closed(&controller, SessionRole::Controller);
+    controller.wait_closed(SessionRole::Controller);
     Ok(())
 }
 
@@ -663,7 +686,7 @@ fn a_controller_without_a_decoder_is_rejected_before_dialing() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     controller
         .core
         .set_video_codecs(VideoCodecCaps::default())?;

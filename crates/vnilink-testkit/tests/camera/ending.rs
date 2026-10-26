@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use vnilink::{Capability, Error, RemoteStatus, ServiceKind, ServicePhase};
 use vnilink_testkit::camera::{config, CameraHost, StandInCameras};
+use vnilink_testkit::desktop::keyframe;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-use super::{connection_active, first_picture, keyframe, unshared};
+use super::{connection_active, first_picture, unshared};
 
 /// A viewer that closes its camera stops the host's capture, and the
 /// connection and its other services stay.
@@ -42,7 +43,10 @@ fn closing_the_camera_stops_capture_and_leaves_the_connection() -> TestResult {
         "closing the camera keeps the connection"
     );
     assert!(
-        matches!(source.publish(keyframe(3, 1)?), Err(Error::NoSession)),
+        matches!(
+            source.publish(keyframe(3, vec![7; 1])),
+            Err(Error::NoSession)
+        ),
         "a closed camera takes no more pictures"
     );
     trace.wait_for_records("camera picture ended", 1);

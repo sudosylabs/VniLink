@@ -6,9 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use vnilink::{CursorImage, CursorState, HostCapture, Quality, SessionRole};
+use vnilink_testkit::session::wait_closed;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult};
-
-use super::support::wait_closed;
 
 /// A host's capture of a 1920×1080 display that draws its cursor apart
 /// from the picture, or does not.

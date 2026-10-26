@@ -397,7 +397,7 @@ fn senders_keep_no_copy_of_their_sources() -> TestResult {
 #[cfg(windows)]
 #[test]
 fn windows_serve_holds_its_source_against_replacement() -> TestResult {
-    use crate::shared::whole_disk;
+    use vnilink_testkit::files::whole_disk;
     let _trace = traced();
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host.core, &pair.controller.core);

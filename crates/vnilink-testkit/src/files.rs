@@ -1,13 +1,14 @@
 //! What the files suites share: deterministic file contents, exact tree
-//! comparison, and jobs driven as the application drives them.
+//! comparison, jobs driven as the application drives them, a computer
+//! sharing its whole disk, and the folders an engine watches.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use vnilink::{Core, JobSnapshot};
+use vnilink::{Core, CoreEvent, EntryToken, EventSubscription, JobSnapshot, MAX_PAGE};
 
-use crate::{wait_for, Pair};
+use crate::{holds, wait_for, Engine, Pair, DEFAULT_WAIT};
 
 /// `len` bytes that differ for each `seed` and compress poorly, as real
 /// files mostly do.
@@ -231,4 +232,138 @@ pub fn files_with_bytes(folder: &Path, bytes: &[u8]) -> Vec<std::path::PathBuf> 
         }
     }
     found
+}
+
+/// Where `path` is among `core`'s file roots: the first root holding it,
+/// and the path below that root with `/`.
+pub fn locate(core: &Core, path: &Path) -> Option<(u64, String)> {
+    core.file_roots()
+        .expect("file roots")
+        .into_iter()
+        .find_map(|(id, root)| {
+            let below = path.strip_prefix(root).ok()?;
+            let below = below
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            Some((id, below))
+        })
+}
+
+/// Shares `engine`'s whole disk rather than its one folder, as the
+/// application does, and names `inside` (a path in its folder, the folder
+/// itself for `""`) from the disk's root: the root's id and the path within
+/// it.
+pub fn whole_disk(
+    engine: &Engine,
+    inside: &str,
+) -> Result<(u64, String), Box<dyn std::error::Error>> {
+    engine.core.enable_filesystem_access()?;
+    let folder = std::fs::canonicalize(engine.root())?.join(inside);
+    Ok(locate(&engine.core, &folder).ok_or("a disk root holds the engine's folder")?)
+}
+
+/// A folder of the test's own, addressed as an engine with its whole file
+/// system shared names it: a root and the path below it. Fixtures are
+/// ordinary folders; only paths below the fixture are written.
+#[derive(Clone)]
+pub struct Location {
+    pub root: u64,
+    pub relative: String,
+}
+
+impl Location {
+    /// Where `fixture` is among `core`'s roots.
+    pub fn of(core: &Core, fixture: &Path) -> Self {
+        let fixture = std::fs::canonicalize(fixture).expect("the fixture exists");
+        let (root, relative) =
+            locate(core, &fixture).expect("the fixture is under one of the engine's roots");
+        assert!(
+            !relative.is_empty(),
+            "writes stay inside a temporary fixture"
+        );
+        Self { root, relative }
+    }
+
+    /// `child` below the fixture, or the fixture itself for `""`.
+    pub fn path(&self, child: &str) -> String {
+        if child.is_empty() {
+            self.relative.clone()
+        } else {
+            format!("{}/{child}", self.relative)
+        }
+    }
+}
+
+/// The identity `name` in `path` is listed with, as a pane holds it; it
+/// must be the native one.
+pub fn token_of(core: &Core, root: u64, path: &str, name: &str) -> EntryToken {
+    let token = core
+        .list_dir(root, path, 0, MAX_PAGE)
+        .expect("a listing")
+        .entries
+        .into_iter()
+        .find(|entry| entry.name == name)
+        .unwrap_or_else(|| panic!("{name} is listed"))
+        .token;
+    assert!(
+        token.is_strong(),
+        "fixture entries must carry native identity"
+    );
+    token
+}
+
+/// The object `path` names, where the platform says: its inode on Unix.
+#[cfg(unix)]
+pub fn identity(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).ok().map(|meta| meta.ino())
+}
+
+/// The object `path` names, where the platform says: nothing here.
+#[cfg(not(unix))]
+pub fn identity(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// The names a delete set aside in `folder` while it worked and did not
+/// remove.
+pub fn set_aside(folder: &Path) -> Vec<String> {
+    std::fs::read_dir(folder)
+        .expect("a readable folder")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".vnldelete."))
+        .collect()
+}
+
+/// A watch may report its own start: waits until `events` has been quiet
+/// for a while, and drops what came before.
+pub fn settle(events: &EventSubscription) {
+    wait_for("the watch to settle", DEFAULT_WAIT, || {
+        events
+            .recv_timeout(Duration::from_millis(300))
+            .is_none()
+            .then_some(())
+    });
+}
+
+/// Whether `events` holds a change to `watch`, taking what it holds.
+pub fn saw_change(events: &EventSubscription, watch: u64) -> bool {
+    let mut seen = false;
+    while let Some(event) = events.try_recv() {
+        seen |= matches!(event, CoreEvent::FolderChanged { watch: changed } if changed == watch);
+    }
+    seen
+}
+
+/// Waits up to `within` for a change to `watch`, failing as `what`.
+pub fn wait_for_change(events: &EventSubscription, watch: u64, what: &str, within: Duration) {
+    wait_for(what, within, || saw_change(events, watch).then_some(()));
+}
+
+/// No change to `watch` arrives throughout `period`.
+pub fn no_change(events: &EventSubscription, watch: u64, what: &str, period: Duration) {
+    holds(what, period, || !saw_change(events, watch));
 }

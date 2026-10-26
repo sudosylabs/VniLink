@@ -4,22 +4,18 @@
 
 use expect_test::expect;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use vnilink::probes::{ScanHooks, MAX_ACTIVE_JOBS};
 use vnilink::{Core, Error, JobState, ServicePhase};
 use vnilink_testkit::files::{drive_to_end, payload};
-use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult};
+use vnilink_testkit::{holds, lock, traced, wait_for, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(30);
 
 /// How long the owner tests waited for the engines to settle.
 const SETTLED_WITHIN: Duration = Duration::from_secs(8);
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
-}
 
 /// Transfers left interrupted when their Files owner went wait to resume
 /// and hold back nothing: with as many as may be active, one more is

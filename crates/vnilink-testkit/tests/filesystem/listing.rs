@@ -4,7 +4,7 @@
 use vnilink::{EntryKind, MAX_LISTED, MAX_PAGE};
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 
-use super::Location;
+use vnilink_testkit::files::Location;
 
 #[test]
 fn listings_are_exact_sorted_and_paged() -> TestResult {

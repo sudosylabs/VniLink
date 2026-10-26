@@ -3,17 +3,14 @@
 //! closes, loses the grant or the policy narrows.
 
 use expect_test::expect;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use vnilink::{
-    Core, Error, InstallationStore, MemoryStore, PrivacyState, RelaySettings, ServiceKind,
-    SessionPhase, SystemAction, SystemPolicy,
-};
-use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
+use vnilink::{Error, PrivacyState, ServiceKind, SessionPhase, SystemAction, SystemPolicy};
+use vnilink_testkit::store::{Fault, Installed};
+use vnilink_testkit::system::FakeSystem;
+use vnilink_testkit::{pair_cores_for_control, traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
-use super::backends::FakeSystem;
-use super::{open_system, sharing, PRIVACY};
+use super::{sharing, PRIVACY};
 
 /// Privacy is one controller's at a time: while one holds it, another is
 /// refused; closing the holder's service gives the screen and input back,
@@ -27,9 +24,9 @@ fn privacy_is_one_controller_s_until_its_service_closes() -> TestResult {
     let second = pair.add_viewer("other");
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     let other_connection = second.connect_services(&pair.host)?;
-    let other = open_system(&second.core, &other_connection)?;
+    let other = second.open_system(&other_connection)?;
     let held = system.set_privacy(true, true)?;
     assert!(
         held.display_private && held.input_blocked,
@@ -97,7 +94,7 @@ fn revoke_restores_privacy_and_fences_late_requests() -> TestResult {
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(false, true)?;
     assert!(fake.calls().input.restricted, "the host's input is blocked");
     host.set_service_sharing(ServiceKind::System, false)?;
@@ -130,7 +127,7 @@ fn privacy_without_policy_is_unauthorized_and_local_state_is_pollable() -> TestR
     let pair = sharing(&fake)?;
     let host = &pair.host.core;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     assert!(
         matches!(system.set_privacy(true, false), Err(Error::Unauthorized)),
         "privacy the policy does not allow is refused"
@@ -159,7 +156,7 @@ fn narrowing_the_policy_gives_privacy_back_at_once() -> TestResult {
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     host.set_system_policy(SystemPolicy::default())?;
     assert!(
@@ -178,77 +175,6 @@ fn narrowing_the_policy_gives_privacy_back_at_once() -> TestResult {
     Ok(())
 }
 
-/// A store whose next save fails as a locked store does, once.
-struct SaveFails {
-    store: MemoryStore,
-    fail_next: AtomicBool,
-}
-
-impl InstallationStore for SaveFails {
-    fn load(&self) -> Result<Option<Vec<u8>>, Error> {
-        self.store.load()
-    }
-    fn save(&self, record: &[u8]) -> Result<(), Error> {
-        if self.fail_next.swap(false, Ordering::SeqCst) {
-            return Err(Error::StoreLocked);
-        }
-        self.store.save(record)
-    }
-}
-
-/// A host on loopback whose installation is `store`, set up as
-/// [`Engine::start`] sets one up for these scenarios.
-struct StoredHost(Core);
-
-impl StoredHost {
-    fn start(store: Arc<SaveFails>) -> Result<Self, Error> {
-        let core = Core::open_direct(store, RelaySettings::public_n0())?;
-        core.set_trace_name("host");
-        core.set_hostname("host")?;
-        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "testkit"))?;
-        Ok(Self(core))
-    }
-}
-
-impl StoredHost {
-    /// `viewer` and this host trust each other, as [`Engine::pair_with`]
-    /// pairs two engines.
-    fn pair_with(&self, viewer: &Engine) -> Result<(), Error> {
-        let invitation = std::time::Duration::from_secs(60);
-        self.0.start_hosting()?;
-        viewer
-            .core
-            .accept_invitation(&self.0.create_invitation(invitation)?)?;
-        self.0
-            .accept_invitation(&viewer.core.create_invitation(invitation)?)?;
-        self.0.set_desktop_sharing(vnilink::Grants {
-            view: true,
-            control: true,
-            clipboard: false,
-            transfer: false,
-        })
-    }
-
-    /// `viewer`'s services connection to this host, once admitted.
-    fn connect(&self, viewer: &Engine) -> Result<vnilink::SessionInfo, Error> {
-        let pending = viewer.core.begin_connect_services(&self.0.endpoint_id())?;
-        Ok(wait_for(
-            "the connection to be admitted",
-            DEFAULT_WAIT,
-            || {
-                let session = viewer.core.controller_session(pending.id).ok()?;
-                (session.phase == SessionPhase::Active).then_some(session)
-            },
-        ))
-    }
-}
-
-impl Drop for StoredHost {
-    fn drop(&mut self) {
-        self.0.shutdown();
-    }
-}
-
 /// A policy change that fails to save leaves the policy and the held
 /// privacy as they were; a saved narrowing restores each facility exactly
 /// once, and both controllers' services and connections survive it, with
@@ -256,26 +182,22 @@ impl Drop for StoredHost {
 #[test]
 fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() -> TestResult {
     let trace = traced();
-    let store = Arc::new(SaveFails {
-        store: MemoryStore::empty(),
-        fail_next: AtomicBool::new(false),
-    });
-    let stored = StoredHost::start(Arc::clone(&store))?;
-    let host = &stored.0;
+    let stored = Installed::faulty("host");
+    let host = &stored.core;
     let fake = Arc::new(FakeSystem::full());
     host.set_system_actions(Some(
         Arc::clone(&fake) as Arc<dyn vnilink::HostSystemActions>
     ))?;
     let holder = Engine::start("holder");
-    stored.pair_with(&holder)?;
+    pair_cores_for_control(host, &holder.core)?;
     let sibling = Engine::start("sibling");
-    stored.pair_with(&sibling)?;
+    pair_cores_for_control(host, &sibling.core)?;
     host.set_service_sharing(ServiceKind::System, true)?;
     host.set_system_policy(PRIVACY)?;
-    let connection = stored.connect(&holder)?;
-    let system = open_system(&holder.core, &connection)?;
-    let sibling_connection = stored.connect(&sibling)?;
-    let sibling_system = open_system(&sibling.core, &sibling_connection)?;
+    let connection = holder.connect_services_to(&host.endpoint_id())?;
+    let system = holder.open_system(&connection)?;
+    let sibling_connection = sibling.connect_services_to(&host.endpoint_id())?;
+    let sibling_system = sibling.open_system(&sibling_connection)?;
     system.set_privacy(true, true)?;
     let done = |fake: &FakeSystem| {
         let calls = fake.calls();
@@ -283,7 +205,7 @@ fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() -> 
     };
     assert_eq!(done(&fake), (1, 1), "each facility was restricted once");
 
-    store.fail_next.store(true, Ordering::SeqCst);
+    stored.store.fail_next_save(Fault::Locked);
     assert!(
         matches!(
             host.set_system_policy(SystemPolicy::default()),
@@ -360,7 +282,7 @@ fn local_privacy_release_is_observed_and_reenable_reapplies_native_restrictions(
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     {
         let mut calls = fake.calls();
@@ -405,7 +327,7 @@ fn input_only_enable_skips_unsupported_display_facility() -> TestResult {
     let pair = sharing(&fake)?;
     pair.host.core.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     assert!(
         system.set_privacy(true, false).is_err(),
         "display privacy the OS cannot give is refused"

@@ -9,9 +9,12 @@ use vnilink::{
     SessionRole,
 };
 use vnilink_testkit::desktop::InputLog;
-use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult};
+use vnilink_testkit::events::drain;
+use vnilink_testkit::session::wait_closed;
+use vnilink_testkit::store::Installed;
+use vnilink_testkit::{holds, pair_cores_for_control, traced, wait_for, Engine, Pair, TestResult};
 
-use super::support::{device, drain, pair_for_control, wait_closed, Installed};
+use super::support::device;
 
 /// How long a reconnect or a refresh takes, at most.
 const SETTLING: Duration = Duration::from_secs(5);
@@ -25,7 +28,7 @@ fn a_custom_home_relay_is_what_the_peer_stores() -> TestResult {
     let relay = RelaySettings::custom(vec![CustomRelay::new("https://relay.example.com")?])?;
     let host = Installed::start_with("host", relay);
     let controller = Engine::start("controller");
-    pair_for_control(&host.core, &controller.core);
+    pair_cores_for_control(&host.core, &controller.core)?;
     let host_id = host.core.endpoint_id();
     controller.core.connect(&host_id)?;
     let expected = host.core.snapshot()?.relay_urls;

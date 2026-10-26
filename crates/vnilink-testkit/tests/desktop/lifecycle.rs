@@ -8,26 +8,9 @@
 
 use expect_test::expect;
 
-use vnilink::{usage, Error, Grants, InputEvent, PointerButton, ServiceKind, SessionPhase};
+use vnilink::{usage, Error, InputEvent, PointerButton, ServiceKind, SessionPhase};
 use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture, SCREEN};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
-
-/// What a host shares with the controllers these scenarios pair: it may be
-/// seen and controlled.
-const SEEN_AND_CONTROLLED: Grants = Grants {
-    view: true,
-    control: true,
-    clipboard: false,
-    transfer: false,
-};
-
-/// `host` and `controller` trust each other as two paired computers do, the
-/// host serving and sharing itself to be seen and controlled. [`Pair`] does
-/// this for one host and one controller; these scenarios pair several.
-pub(super) fn pair(host: &Engine, controller: &Engine) -> Result<(), Error> {
-    host.pair_with(controller)?;
-    host.core.set_desktop_sharing(SEEN_AND_CONTROLLED)
-}
 
 /// A Desktop service opens only while the host shares Desktop, and a
 /// connection outlives its desktops: one closed and another opened on the
@@ -207,8 +190,8 @@ fn closing_one_computers_desktop_keeps_another_computer_streaming() -> TestResul
     let mut videos = Vec::new();
     for host in &hosts {
         InputLog::install(host, SCREEN)?;
-        pair(host, &controller)?;
-        let connection = controller.connect_services(&host)?;
+        host.pair_for_control(&controller)?;
+        let connection = controller.connect_services(host)?;
         let desktop = controller.open_desktop(&connection)?;
         videos.push(desktop.subscribe_video()?);
         desktops.push(desktop);
@@ -271,12 +254,12 @@ fn adapters_change_while_no_desktop_is_open_and_are_refused_while_one_is() -> Te
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     let connection = pair.connect_services();
-    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
+    host.set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
     InputLog::install(&pair.host, SCREEN)?;
     let desktop = pair.controller.open_desktop(&connection)?;
     assert!(
         matches!(
-            host.set_capture(Box::new(MonitorCapture(SCREEN))),
+            host.set_capture(Box::new(MonitorCapture::new(SCREEN))),
             Err(Error::Busy)
         ),
         "an open desktop refuses a new capture"
@@ -291,7 +274,7 @@ fn adapters_change_while_no_desktop_is_open_and_are_refused_while_one_is() -> Te
         DEFAULT_WAIT,
         || InputLog::install(&pair.host, SCREEN).ok(),
     );
-    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
+    host.set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
     assert_eq!(
         pair.controller.core.controller_session(connection.id)?,
         connection,
@@ -311,7 +294,7 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
     InputLog::install(&host, SCREEN)?;
     let mut opened = Vec::new();
     for controller in &controllers {
-        pair(&host, controller)?;
+        host.pair_for_control(controller)?;
         let connection = controller.connect_services(&host)?;
         let owner = controller.core.attach_controller_service(
             connection.id,
@@ -322,7 +305,7 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
             .core
             .open_desktop_service(owner.id, owner.generation)?;
         let remote = host
-            .hosted_for(ServiceKind::Desktop, &controller)
+            .hosted_for(ServiceKind::Desktop, controller)
             .ok_or("the host serves the Desktop")?;
         let video = desktop.subscribe_video()?;
         opened.push((desktop, owner, remote, connection, video));

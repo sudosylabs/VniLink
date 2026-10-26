@@ -18,14 +18,10 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{Error, ServiceKind};
-use vnilink_testkit::terminal::{TerminalSession, ENTER};
+use vnilink_testkit::terminal::{contains, TerminalSession, ENTER};
 use vnilink_testkit::{traced, wait_for, Pair, DEFAULT_WAIT};
 
 const SHELL: Duration = Duration::from_secs(10);
-
-fn contains(output: &[u8], text: &str) -> bool {
-    String::from_utf8_lossy(output).contains(text)
-}
 
 /// What is typed reaches the shell, its output comes back, and its exit
 /// code ends the terminal; the host records the shell opening and its exit.
@@ -41,16 +37,7 @@ fn a_shell_runs_what_is_typed_and_ends_with_its_exit_code() {
     session.input(&format!("exit 7{ENTER}")).unwrap();
     let (_, exit) = session.read_until("the shell to exit", SHELL, |_| false);
     assert_eq!(exit, Some(7));
-    wait_for("the host to release the terminal", DEFAULT_WAIT, || {
-        session
-            .pair
-            .host
-            .core
-            .hosted_services()
-            .ok()?
-            .is_empty()
-            .then_some(())
-    });
+    session.pair.host.wait_released(None);
     expect![[r#"
         host:
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
@@ -131,9 +118,7 @@ fn without_the_grant_no_terminal_opens_and_the_connection_lives() {
             .phase,
         vnilink::SessionPhase::Active
     );
-    wait_for("the refusal to be recorded", DEFAULT_WAIT, || {
-        (!trace.named("service refused").is_empty()).then_some(())
-    });
+    trace.wait_for_records("service refused", 1);
     expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Terminal service=1 to=failed

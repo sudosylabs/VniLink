@@ -16,12 +16,12 @@ use vnilink::{
 };
 use vnilink_testkit::camera::{config, CAMERA};
 use vnilink_testkit::desktop::{keyframe, InputLog};
+use vnilink_testkit::events::wait_hosted_close;
+use vnilink_testkit::files::whole_disk;
+use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{
-    finished, pair_for_control, phase, reaches, redialed, wait_hosted_close, wait_record,
-    whole_disk,
-};
+use super::support::phase;
 
 /// The controller names each close: a service that followed its connection
 /// across a redial and one on a connection that closed both name the
@@ -37,14 +37,14 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
     // new generation as the connection establishes, so a later close names
     // the parent's loss. Replaced covers only the race before adoption,
     // which no ordered sequence reaches.
-    pair_for_control(&host_a, &controller)?;
+    host_a.pair_for_control(&controller)?;
     let session = controller.connect_control(&host_a)?;
     let follower =
         core.attach_controller_service(session.id, session.generation, ServiceKind::Files)?;
     core.drop_controller_link(session.id)?;
-    redialed(&controller, &session);
+    controller.redialed(&session);
     core.disconnect_session(session.id)?;
-    reaches(&controller, session.id, SessionPhase::Closed);
+    controller.wait_phase(session.id, SessionPhase::Closed);
     let followed = core.controller_service(follower.id)?;
     assert!(
         followed.generation > session.generation,
@@ -56,12 +56,12 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
         "a followed record closes with its parent"
     );
     // The record shares the closing connection's generation.
-    pair_for_control(&host_b, &controller)?;
+    host_b.pair_for_control(&controller)?;
     let session = controller.connect_control(&host_b)?;
     let orphaned =
         core.attach_controller_service(session.id, session.generation, ServiceKind::Desktop)?;
     core.disconnect_session(session.id)?;
-    reaches(&controller, session.id, SessionPhase::Closed);
+    controller.wait_phase(session.id, SessionPhase::Closed);
     assert_eq!(
         phase(&controller, &orphaned),
         ServicePhase::Closed(CloseCause::ParentLoss),
@@ -70,7 +70,7 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
     // Shutdown names itself on the event stream.
     let live = Engine::start("live");
     let last_host = Engine::start("last-host");
-    pair_for_control(&last_host, &live)?;
+    last_host.pair_for_control(&live)?;
     let session = live.connect_control(&last_host)?;
     let owned =
         live.core
@@ -114,7 +114,7 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
     let trace = traced();
     let pair = Pair::for_services(&[ServiceKind::Files]);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    whole_disk(&pair.host)?;
+    whole_disk(&pair.host, "")?;
     InputLog::install(&pair.host, (1920, 1080))?;
     let parent = pair.connect_services();
     let (_, _pipe) = pair.controller.open_files(&parent)?;
@@ -134,7 +134,7 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
         pair.host
             .hosted(Some(ServiceKind::Files))
             .iter()
-            .all(|service| finished(&service.phase))
+            .all(|service| service_ended(&service.phase))
             .then_some(())
     });
 
@@ -146,7 +146,7 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
         ..Default::default()
     })?;
     wait_for("the idle Desktop to expire", DEFAULT_WAIT, || {
-        finished(&phase(&pair.controller, &desktop_owner)).then_some(())
+        service_ended(&phase(&pair.controller, &desktop_owner)).then_some(())
     });
     assert_eq!(
         phase(&pair.controller, &desktop_owner),
@@ -158,11 +158,14 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
         SessionPhase::Active,
         "an idle Desktop's expiry leaves the connection"
     );
-    wait_record(
-        &trace,
-        "host",
+    trace.wait_for_records_with(
         "service phase",
-        &[("kind", "Desktop"), ("to", "closed: PeerClose")],
+        &[
+            ("engine", "host"),
+            ("kind", "Desktop"),
+            ("to", "closed: PeerClose"),
+        ],
+        1,
     );
     expect![[r#"
         controller:
@@ -301,7 +304,7 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
         pair.host
             .hosted(Some(ServiceKind::Camera))
             .iter()
-            .all(|service| finished(&service.phase))
+            .all(|service| service_ended(&service.phase))
             .then_some(())
     });
     assert!(
@@ -358,7 +361,7 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host)?;
+    let (root, folder) = whole_disk(&pair.host, "")?;
     let applied = InputLog::install(&pair.host, (1920, 1080))?;
     host.set_service_sharing(ServiceKind::Files, true)?;
     let session = controller.connect(&pair.host.endpoint())?;
@@ -488,7 +491,7 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
     // A redial after the Desktop closed stays neutral rather than resuming
     // capture.
     controller.drop_controller_link(session.id)?;
-    let fresh = redialed(&pair.controller, &session);
+    let fresh = pair.controller.redialed(&session);
     assert!(
         fresh.quality.is_none(),
         "{close:?}: the redial has no picture quality"

@@ -226,7 +226,7 @@ fn codecs_and_input_do_not_claim_capture_or_clipboard() -> TestResult {
             .available,
         "codecs and input do not make view available"
     );
-    core.set_capture(Box::new(MonitorCapture((1, 1))))?;
+    core.set_capture(Box::new(MonitorCapture::new((1, 1))))?;
     assert!(
         core.capability_availability(None, Capability::DesktopView)?
             .available,

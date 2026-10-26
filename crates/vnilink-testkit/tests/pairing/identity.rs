@@ -10,9 +10,8 @@ use vnilink::{
 };
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::relay::LocalRelay;
-use vnilink_testkit::{traced, Engine, TestResult};
-
-use super::support::{start_storeless, SEEN_AND_CONTROLLED};
+use vnilink_testkit::store::start_storeless;
+use vnilink_testkit::{traced, Engine, TestResult, SEEN_AND_CONTROLLED};
 
 /// Shutting down twice is the same as once: the engine still says who it
 /// is, and every call that would reach another computer or the desktop
@@ -74,7 +73,7 @@ fn shutdown_is_idempotent_and_later_calls_report_it() -> TestResult {
     );
     shut(core.subscribe_video().map(drop), "subscribe_video");
     shut(
-        core.set_capture(Box::new(MonitorCapture((1, 1)))),
+        core.set_capture(Box::new(MonitorCapture::new((1, 1)))),
         "set_capture",
     );
     Ok(())

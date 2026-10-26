@@ -84,8 +84,7 @@ fn an_upload_lands_exactly() {
           files: file received outcome=received resumed_at=0 size=9437191 took=9437191
           files: job state done_bytes=9442823 files_done=5 from=transferring job=1 sender=false to=complete
     "#]].assert_eq(&trace.concurrent_story(&["files"]));
-    let everything = trace.events().join("\n");
-    assert!(!everything.contains("read me"), "a file name was recorded");
+    trace.assert_unrecorded("a file's name", &["read me"]);
 }
 
 #[test]

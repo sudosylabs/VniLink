@@ -5,9 +5,10 @@ use expect_test::expect;
 
 use vnilink::{
     EncodedFrame, Error, FrameRole, HostCapture, RemoteDesktopService, ServiceInfo, ServiceKind,
-    VideoCodec, WindowDecoder,
+    VideoCodec,
 };
 use vnilink_testkit::desktop::next_picture;
+use vnilink_testkit::desktop::window_decoders;
 use vnilink_testkit::{traced, Pair, TestResult};
 
 use super::streams::SCREEN;
@@ -27,25 +28,6 @@ impl HostCapture for Capture {
     }
 }
 
-/// What a viewer's window decodes: H.264, and AV1 at 4:4:4 when it shows
-/// stills.
-fn window(shows_stills: bool) -> Vec<WindowDecoder> {
-    vec![
-        WindowDecoder {
-            codec: VideoCodec::H264,
-            hardware: false,
-            chroma444: false,
-            bt601: false,
-        },
-        WindowDecoder {
-            codec: VideoCodec::Av1,
-            hardware: false,
-            chroma444: shows_stills,
-            bt601: false,
-        },
-    ]
-}
-
 /// A desktop open between a host whose capture sends stills when
 /// `host_sends` and a viewer whose window shows them when `viewer_shows`,
 /// with the host's side of it.
@@ -63,7 +45,7 @@ impl Opened {
             .set_capture(Box::new(Capture { stills: host_sends }))?;
         pair.controller
             .core
-            .set_window_decoders(window(viewer_shows))?;
+            .set_window_decoders(window_decoders(viewer_shows))?;
         let connection = pair.connect_services();
         let desktop = pair.controller.open_desktop(&connection)?;
         let remote = pair

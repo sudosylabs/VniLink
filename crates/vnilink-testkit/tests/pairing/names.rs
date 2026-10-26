@@ -8,9 +8,12 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{CoreEvent, Error, SessionPhase, SessionRole};
-use vnilink_testkit::{traced, Engine, Pair, TestResult};
+use vnilink_testkit::events::drain;
+use vnilink_testkit::session::wait_closed;
+use vnilink_testkit::store::Installed;
+use vnilink_testkit::{pair_cores_for_control, traced, Engine, Pair, TestResult};
 
-use super::support::{device, drain, pair_for_control, wait_closed, Installed};
+use super::support::device;
 
 const CLOSING: Duration = Duration::from_secs(5);
 
@@ -146,7 +149,7 @@ fn pairing_learns_names_before_connect_and_local_names_survive_refresh() -> Test
     let trace = traced();
     let mut host = Installed::start("host");
     let controller = Engine::start("controller");
-    pair_for_control(&host.core, &controller.core);
+    pair_cores_for_control(&host.core, &controller.core)?;
     assert_eq!(
         host.core.peer_hostname(&controller.endpoint())?.as_deref(),
         Some("controller"),

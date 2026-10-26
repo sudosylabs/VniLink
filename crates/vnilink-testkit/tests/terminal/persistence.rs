@@ -5,12 +5,10 @@ use expect_test::expect;
 
 use vnilink::terminal::{TerminalOptions, TerminalSize, TERMINAL_CHUNK};
 use vnilink::{Error, ServiceKind, SessionPhase};
-use vnilink_testkit::terminal::shell;
+use vnilink_testkit::terminal::{contains, read_until, shell};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{
-    assert_content_unrecorded, host_ended_shells, open_with, options, phase, read_until,
-};
+use super::support::{host_ended_shells, options, phase, SHELL};
 
 /// The story of a scenario that disconnects: the terminals the host opened
 /// or refused. On a disconnect the host sometimes records no end of the
@@ -43,14 +41,20 @@ fn a_persistent_shell_resumes_with_its_identity_history_and_environment() -> Tes
         .core
         .set_terminal_factory(Some(shell(&pair.host.root())))?;
     let connection = pair.connect_services();
-    let terminal = open_with(&pair.controller, &connection, options(true, None))?;
+    let terminal = pair
+        .controller
+        .open_terminal(&connection, options(true, None))?;
     let metadata = terminal.session();
     assert!(metadata.process_id > 0, "the shell's process is named");
     terminal.input(b"VNI_KEEP=kept; printf 'BEFORE_%s\\n' DETACH\n")?;
     let mut before = Vec::new();
-    read_until(&terminal, &mut before, "the shell's answer", |text| {
-        text.contains("BEFORE_DETACH")
-    });
+    read_until(
+        &terminal,
+        &mut before,
+        "the shell's answer",
+        SHELL,
+        |output| contains(output, "BEFORE_DETACH"),
+    );
     controller.disconnect_session(connection.id)?;
     host_keeps_detached(&pair.host, &metadata.id);
     let connection = pair.connect_services();
@@ -62,8 +66,7 @@ fn a_persistent_shell_resumes_with_its_identity_history_and_environment() -> Tes
     );
     assert_eq!(discovered[0].id, metadata.id, "the kept shell is the same");
     assert!(!discovered[0].attached, "the kept shell is detached");
-    let resumed = open_with(
-        &pair.controller,
+    let resumed = pair.controller.open_terminal(
         &connection,
         TerminalOptions {
             size: TerminalSize {
@@ -90,7 +93,8 @@ fn a_persistent_shell_resumes_with_its_identity_history_and_environment() -> Tes
         &resumed,
         &mut replay,
         "the resumed shell's answer",
-        |text| text.contains("AFTER:kept") && text.contains("40 120"),
+        SHELL,
+        |output| contains(output, "AFTER:kept") && contains(output, "40 120"),
     );
     assert!(
         String::from_utf8_lossy(&replay).contains("BEFORE_DETACH"),
@@ -117,7 +121,7 @@ fn a_persistent_shell_resumes_with_its_identity_history_and_environment() -> Tes
             .only(ACROSS_A_DISCONNECT)
             .to_string(),
     );
-    assert_content_unrecorded(&trace, &["VNI_KEEP", "BEFORE_", "AFTER:"]);
+    trace.assert_unrecorded("terminal content", &["VNI_KEEP", "BEFORE_", "AFTER:"]);
     Ok(())
 }
 
@@ -132,7 +136,7 @@ fn a_kept_shell_is_its_peers_alone_and_revoking_terminal_ends_it() -> TestResult
     let (host, owner) = (&pair.host, &pair.controller);
     host.core.set_terminal_factory(Some(shell(&host.root())))?;
     let connection = owner.connect_services(host)?;
-    let terminal = open_with(owner, &connection, options(true, None))?;
+    let terminal = owner.open_terminal(&connection, options(true, None))?;
     let retained = terminal.session();
     owner.core.disconnect_session(connection.id)?;
     host_keeps_detached(host, &retained.id);
@@ -153,7 +157,7 @@ fn a_kept_shell_is_its_peers_alone_and_revoking_terminal_ends_it() -> TestResult
     );
     assert!(
         matches!(
-            open_with(&other, &foreign, options(true, Some(retained.id.clone()))),
+            other.open_terminal(&foreign, options(true, Some(retained.id.clone()))),
             Err(Error::Unauthorized)
         ),
         "another peer cannot resume the kept shell"
@@ -196,12 +200,18 @@ fn closing_a_persistent_terminal_bypasses_stalled_input() -> TestResult {
         .core
         .set_terminal_factory(Some(shell(&pair.host.root())))?;
     let connection = pair.connect_services();
-    let terminal = open_with(&pair.controller, &connection, options(true, None))?;
+    let terminal = pair
+        .controller
+        .open_terminal(&connection, options(true, None))?;
     terminal.input(b"stty -echo; printf 'SLEEP_%s\\n' STARTED; sleep 60\n")?;
     let mut output = Vec::new();
-    read_until(&terminal, &mut output, "the shell to sleep", |text| {
-        text.contains("SLEEP_STARTED")
-    });
+    read_until(
+        &terminal,
+        &mut output,
+        "the shell to sleep",
+        SHELL,
+        |output| contains(output, "SLEEP_STARTED"),
+    );
     // Fill the input queue a shell that sleeps never reads; some is
     // refused once it is full.
     for _ in 0..128 {
@@ -224,6 +234,6 @@ fn closing_a_persistent_terminal_bypasses_stalled_input() -> TestResult {
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
     "#]]
     .assert_eq(&trace.tell(&["terminal"]).to_string());
-    assert_content_unrecorded(&trace, &["SLEEP_"]);
+    trace.assert_unrecorded("terminal content", &["SLEEP_"]);
     Ok(())
 }

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use expect_test::expect;
 
-use super::{assert_unrecorded, sharing, Copied};
+use super::{sharing, Copied};
 use vnilink::{CoreEvent, Error, HostClipboard, ServiceKind, SessionInfo};
 use vnilink_testkit::desktop::{keyframe, next_picture, InputLog};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult};
@@ -21,8 +21,7 @@ use vnilink_testkit::{traced, wait_for, Engine, TestResult};
 /// input it applies; the host does not share its clipboard yet.
 fn connected(host: &Engine, controller: &Engine) -> Result<SessionInfo, Error> {
     InputLog::install(host, (1920, 1080))?;
-    host.pair_with(controller)?;
-    host.core.set_desktop_sharing(sharing(false))?;
+    host.pair_for_control(controller)?;
     controller.connect_services(host)
 }
 
@@ -189,7 +188,10 @@ fn text_copied_on_both_computers_at_once_crosses_both_ways() -> TestResult {
           clipboard: clipboard sent bytes=9 service=1
     "#]]
     .assert_eq(&super::unordered(&trace.story(&["clipboard"])));
-    assert_unrecorded(&trace, &["secret-denied", "controller copy", "host copy"]);
+    trace.assert_unrecorded(
+        "copied content",
+        &["secret-denied", "controller copy", "host copy"],
+    );
     Ok(())
 }
 
@@ -243,7 +245,7 @@ fn withdrawing_the_grant_refuses_text_and_the_desktop_lives() -> TestResult {
           clipboard: clipboard received bytes=8 hosted=true service=1
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["granted", "revoked", "restored"]);
+    trace.assert_unrecorded("copied content", &["granted", "revoked", "restored"]);
     Ok(())
 }
 
@@ -326,8 +328,8 @@ fn a_reopened_desktop_starts_without_text_and_the_closed_one_is_fenced() -> Test
           clipboard: clipboard received bytes=5 hosted=true service=2
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(
-        &trace,
+    trace.assert_unrecorded(
+        "copied content",
         &[
             "host copy",
             "late-controller-copy",
@@ -466,7 +468,7 @@ fn each_computers_desktop_has_its_own_clipboard() -> TestResult {
           clipboard: clipboard sent bytes=3 service=1
           clipboard: clipboard sent bytes=12 service=1
     "#]].assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["no adapter", "still active"]);
+    trace.assert_unrecorded("copied content", &["no adapter", "still active"]);
     Ok(())
 }
 

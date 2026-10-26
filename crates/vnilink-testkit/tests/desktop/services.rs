@@ -5,46 +5,12 @@
 use expect_test::expect;
 use std::sync::Arc;
 
-use vnilink::{CursorImage, CursorState, HostCapture, ServiceKind, SessionPhase};
-use vnilink_testkit::desktop::{keyframe, next_picture, InputLog};
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink::{CursorImage, CursorState, ServiceKind, SessionPhase};
+use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture};
+use vnilink_testkit::files::whole_disk;
+use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 use super::streams::SCREEN;
-
-/// A host's capture of one display that sends its cursor apart from its
-/// pictures.
-struct CursorCapture;
-
-impl HostCapture for CursorCapture {
-    fn monitor(&self) -> (u16, u16) {
-        SCREEN
-    }
-
-    fn separate_cursor(&self) -> bool {
-        true
-    }
-}
-
-/// Shares `engine`'s whole disk rather than its one folder, as the
-/// application does, and names the engine's folder from the disk's root:
-/// the root's id and the path within it.
-fn whole_disk(engine: &Engine) -> Result<(u64, String), Box<dyn std::error::Error>> {
-    engine.core.enable_filesystem_access()?;
-    let folder = std::fs::canonicalize(engine.root())?;
-    let (id, base) = engine
-        .core
-        .file_roots()?
-        .into_iter()
-        .find(|(_, path)| folder.starts_with(path))
-        .ok_or("a disk root holds the engine's folder")?;
-    let path = folder
-        .strip_prefix(&base)?
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/");
-    Ok((id, path))
-}
 
 /// A desktop forced onto its own stream carries a large picture and the
 /// cursor's image and moves beside it, and asks the host for a keyframe;
@@ -56,8 +22,8 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() -> TestRes
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     controller.set_cursor_receiver(true)?;
-    host.set_capture(Box::new(CursorCapture))?;
-    let (root, folder) = whole_disk(&pair.host)?;
+    host.set_capture(Box::new(MonitorCapture::new(SCREEN).separate_cursor(true)))?;
+    let (root, folder) = whole_disk(&pair.host, "")?;
     host.set_service_sharing(ServiceKind::Files, true)?;
     let connection = pair.connect_services();
     let desktop = pair.controller.open_desktop(&connection)?;

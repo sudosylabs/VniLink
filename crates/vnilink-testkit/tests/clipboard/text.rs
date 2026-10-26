@@ -4,21 +4,10 @@
 
 use expect_test::expect;
 
-use super::{assert_unrecorded, paired, sharing, Copied};
+use super::{paired, publish_once_open, sharing, Copied};
 use vnilink::{usage, CoreEvent, Error, InputEvent, SessionPhase, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{InputLog, RecordingClipboard};
 use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
-
-/// Retries the host's `publish` until its side of the clipboard stream is
-/// open: a controller sends Ready before the host installs its sender.
-/// Every other failure fails at once.
-fn publish_once_open(what: &str, mut publish: impl FnMut() -> Result<(), Error>) {
-    wait_for(what, DEFAULT_WAIT, || match publish() {
-        Ok(()) => Some(()),
-        Err(Error::Unsupported("clipboard stream is not open")) => None,
-        Err(error) => panic!("the host's publication failed: {error}"),
-    });
-}
 
 /// Without the clipboard grant a paste is refused and the session carries
 /// on, keys and all; the adapter cannot be swapped under the session, and
@@ -111,7 +100,7 @@ fn a_paste_needs_the_grant_and_the_session_lives_without_it() -> TestResult {
           clipboard: clipboard received amount=12 kind=text
           clipboard: clipboard received amount=0 kind=text
     "#]].assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["secret-paste", "secret-nope"]);
+    trace.assert_unrecorded("copied content", &["secret-paste", "secret-nope"]);
     Ok(())
 }
 
@@ -232,7 +221,7 @@ fn the_hosts_text_reaches_the_controller_under_the_grant() -> TestResult {
           clipboard: clipboard sent amount=16 kind=text
           clipboard: clipboard sent amount=0 kind=text
     "#]].assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["secret-from-host", "secret-nope"]);
+    trace.assert_unrecorded("copied content", &["secret-from-host", "secret-nope"]);
     Ok(())
 }
 
@@ -274,7 +263,7 @@ fn a_host_without_a_clipboard_refuses_a_paste_and_the_session_lives() -> TestRes
         host:
           clipboard: clipboard received amount=12 kind=text reason=no clipboard adapter is installed refused=unsupported
     "#]].assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["secret-paste"]);
+    trace.assert_unrecorded("copied content", &["secret-paste"]);
     Ok(())
 }
 
@@ -379,6 +368,9 @@ fn the_clipboard_follows_the_hosts_session_from_one_controller_to_the_next() -> 
           clipboard: clipboard stream opened dial=true
           clipboard: clipboard received amount=11 kind=text
     "#]].assert_eq(&trace.tell(&["clipboard"]).only(super::CROSSINGS).to_string());
-    assert_unrecorded(&trace, &["from-first", "from-second", "stale-text"]);
+    trace.assert_unrecorded(
+        "copied content",
+        &["from-first", "from-second", "stale-text"],
+    );
     Ok(())
 }

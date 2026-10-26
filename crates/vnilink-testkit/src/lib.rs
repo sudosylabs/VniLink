@@ -9,8 +9,14 @@
 //! [`audio`] stand-in sound sources, [`camera`] a stand-in camera,
 //! [`desktop`] a scripted screen, a stand-in encoder and a recording
 //! desktop driving the host's real picture pipeline, [`terminal`] the
-//! platform's real shell, [`relay`] a relay on this computer, [`system`] an operating system that records the
-//! actions asked of it.
+//! platform's real shell, [`relay`] a relay on this computer, [`system`]
+//! operating systems that record the actions asked of them, [`power`] power
+//! leases that count themselves.
+//!
+//! What every suite waits on lives once here too: [`session`] what a
+//! session does, [`events`] what an engine publishes, [`store`]
+//! installations whose store the test holds, and [`Traced`] what the
+//! engines recorded.
 //!
 //! Every test starts with [`traced`]: when it fails, it prints the events
 //! the engines recorded while it ran (`vnilink::trace`), so a failure
@@ -26,18 +32,28 @@ pub mod bench;
 pub mod camera;
 pub mod desktop;
 mod engine;
+pub mod events;
 pub mod files;
+pub mod power;
 pub mod relay;
 mod scratch;
+pub mod session;
+pub mod store;
 pub mod system;
 pub mod terminal;
 mod trace;
 mod wait;
 
-pub use engine::{Engine, Pair, FILES};
+pub use engine::{pair_cores, pair_cores_for_control, Engine, Pair, FILES, SEEN_AND_CONTROLLED};
 pub use scratch::Scratch;
 pub use trace::{traced, Story, Traced};
 pub use wait::{holds, wait_for, DEFAULT_WAIT};
+
+/// `mutex`'s guard, even after a thread panicked holding it: a test that
+/// failed leaves its record readable to the one reporting it.
+pub fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
 
 /// What a test returns: setup that fails with `?` fails the test with its
 /// error, and asserts state the contract.

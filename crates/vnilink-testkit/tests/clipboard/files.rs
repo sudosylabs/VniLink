@@ -4,7 +4,7 @@
 
 use expect_test::expect;
 
-use super::{assert_unrecorded, paired, sharing};
+use super::{paired, publish_once_open, sharing};
 use vnilink::{
     ClipboardFileEntry, CoreEvent, Error, FileSelection, SessionPhase, MAX_CLIPBOARD_FILES,
 };
@@ -22,19 +22,12 @@ fn selection(entries: Vec<ClipboardFileEntry>) -> FileSelection {
     FileSelection { entries }
 }
 
-/// Publishes `offer` from `host` on its session `hosted`, retrying until
-/// its side of the clipboard stream is open: a controller sends Ready
-/// before the host installs its sender. Every other failure fails at once.
-fn publish_once_open(host: &Engine, hosted: u64, offer: &FileSelection) {
-    wait_for(
-        "the host's selection to be sent",
-        DEFAULT_WAIT,
-        || match host.core.publish_clipboard_files(hosted, offer) {
-            Ok(()) => Some(()),
-            Err(Error::Unsupported("clipboard stream is not open")) => None,
-            Err(error) => panic!("the host's publication failed: {error}"),
-        },
-    );
+/// Publishes `offer` from `host` on its session `hosted` once its side of
+/// the clipboard stream is open.
+fn publish_files(host: &Engine, hosted: u64, offer: &FileSelection) {
+    publish_once_open("the host's selection to be sent", || {
+        host.core.publish_clipboard_files(hosted, offer)
+    });
 }
 
 /// Waits until `controller` holds a selection from its host.
@@ -109,7 +102,7 @@ fn a_selection_needs_the_grant_and_the_session_lives_without_it() -> TestResult 
         "a refused offer's revision is never reused"
     );
     assert_eq!(stored.selection, offer, "the host stores the offer");
-    publish_once_open(&pair.host, hosted.id, &offer);
+    publish_files(&pair.host, hosted.id, &offer);
     wait_for("the host's selection to arrive", DEFAULT_WAIT, || {
         controller
             .clipboard_files()
@@ -134,7 +127,7 @@ fn a_selection_needs_the_grant_and_the_session_lives_without_it() -> TestResult 
           clipboard: clipboard received amount=1 kind=files
           clipboard: clipboard sent amount=1 kind=files
     "#]].assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["report"]);
+    trace.assert_unrecorded("copied content", &["report"]);
     Ok(())
 }
 
@@ -199,7 +192,7 @@ fn replacing_and_clearing_a_selection_keeps_its_revisions_rising() -> TestResult
           clipboard: clipboard received amount=1 kind=files
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["a.txt", "nested", "empty-dir"]);
+    trace.assert_unrecorded("copied content", &["a.txt", "nested", "empty-dir"]);
     Ok(())
 }
 
@@ -289,7 +282,10 @@ fn a_selection_out_of_bounds_is_refused_before_it_is_sent() -> TestResult {
           clipboard: clipboard not delivered direction=to the controller kind=files reason=clipboard directory selection must report size zero refused=invalid setting
           clipboard: clipboard not delivered direction=to the controller kind=files reason=clipboard file selection is larger than 64 KiB refused=invalid setting
     "#]].assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["same.txt", "outside", "/etc/hosts", "xxxxxxxx"]);
+    trace.assert_unrecorded(
+        "copied content",
+        &["same.txt", "outside", "/etc/hosts", "xxxxxxxx"],
+    );
     Ok(())
 }
 
@@ -307,7 +303,7 @@ fn withdrawing_the_grant_drops_the_hosts_offer_and_the_session_lives() -> TestRe
     let from_controller = selection(vec![entry("up.bin", 8)]);
     let from_host = selection(vec![entry("down.bin", 9)]);
     controller.submit_clipboard_files(session.id, session.generation, &from_controller)?;
-    publish_once_open(&pair.host, hosted.id, &from_host);
+    publish_files(&pair.host, hosted.id, &from_host);
     wait_for_selection(&pair.controller, "the host's selection to arrive");
     host.set_desktop_sharing(sharing(false))?;
     assert!(
@@ -351,7 +347,7 @@ fn withdrawing_the_grant_drops_the_hosts_offer_and_the_session_lives() -> TestRe
           clipboard: clipboard received amount=1 kind=files
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["up.bin", "down.bin"]);
+    trace.assert_unrecorded("copied content", &["up.bin", "down.bin"]);
     Ok(())
 }
 
@@ -395,7 +391,7 @@ fn a_revoked_peer_loses_its_offer() -> TestResult {
             .only(super::CROSSINGS)
             .to_string(),
     );
-    assert_unrecorded(&trace, &["up.bin"]);
+    trace.assert_unrecorded("copied content", &["up.bin"]);
     Ok(())
 }
 
@@ -420,7 +416,7 @@ fn the_hosts_selection_reaches_only_the_newest_session() -> TestResult {
         ),
         "the older session does not hold the clipboard"
     );
-    publish_once_open(host, newer, &offer);
+    publish_files(host, newer, &offer);
     wait_for_selection(&second, "the newest controller's selection");
     assert!(
         first.core.clipboard_files()?.is_none(),
@@ -438,7 +434,7 @@ fn the_hosts_selection_reaches_only_the_newest_session() -> TestResult {
           clipboard: clipboard received amount=1 kind=files
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["new.bin"]);
+    trace.assert_unrecorded("copied content", &["new.bin"]);
     Ok(())
 }
 
@@ -507,7 +503,7 @@ fn each_side_is_told_a_selection_arrived_without_its_names() -> TestResult {
     let controller_events = controller.subscribe()?;
     let secret = selection(vec![entry("secret-plan.pdf", 100)]);
     controller.submit_clipboard_files(session.id, session.generation, &secret)?;
-    publish_once_open(&pair.host, hosted.id, &secret);
+    publish_files(&pair.host, hosted.id, &secret);
     wait_for_selection(&pair.controller, "the host's selection to arrive");
     let told = |events: &vnilink::EventSubscription, session: u64, side: &str| {
         let mut told = false;
@@ -537,6 +533,6 @@ fn each_side_is_told_a_selection_arrived_without_its_names() -> TestResult {
           clipboard: clipboard sent amount=1 kind=files
     "#]]
     .assert_eq(&trace.story(&["clipboard"]));
-    assert_unrecorded(&trace, &["secret-plan"]);
+    trace.assert_unrecorded("copied content", &["secret-plan"]);
     Ok(())
 }

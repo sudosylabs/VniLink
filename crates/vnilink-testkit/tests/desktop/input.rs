@@ -4,13 +4,11 @@
 
 use expect_test::expect;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use vnilink::{
-    usage, CoreEvent, DisplayInfo, Error, EventSubscription, HostDesktop, InputEvent,
-    PointerButton, SessionPhase, SessionRole,
+    usage, DisplayInfo, Error, HostDesktop, InputEvent, PointerButton, SessionPhase, SessionRole,
 };
-use vnilink_testkit::desktop::InputLog;
+use vnilink_testkit::desktop::{input_failed, InputLog};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 use super::keyboard::records_nothing_typed;
@@ -65,36 +63,6 @@ fn arm_display(pair: &Pair, id: u64, generation: u64) -> Result<(), Error> {
             .then_some(())
     });
     Ok(())
-}
-
-/// The next input failure the host reports: the session it names and why.
-fn input_failed(events: &EventSubscription) -> (u64, &'static str) {
-    wait_for(
-        "the host to report an input failure",
-        DEFAULT_WAIT,
-        || match events.recv_timeout(Duration::from_millis(20))? {
-            CoreEvent::InputFailed { id, message } => Some((id, message)),
-            _ => None,
-        },
-    )
-}
-
-/// Waits until `engine`'s session in `role` is closed.
-fn wait_closed(engine: &Engine, role: SessionRole) {
-    wait_for(
-        &format!("the {role:?} session to close"),
-        DEFAULT_WAIT,
-        || {
-            let snapshot = engine.core.snapshot().ok()?;
-            let session = match role {
-                SessionRole::Host => snapshot.incoming,
-                SessionRole::Controller => snapshot.outgoing,
-            };
-            session
-                .is_some_and(|session| session.phase == SessionPhase::Closed)
-                .then_some(())
-        },
-    );
 }
 
 /// A desktop of one `monitor`-sized display that logs what it applies, and
@@ -285,8 +253,8 @@ fn key_up_and_each_button_are_applied_and_not_released_again() -> TestResult {
         "each press and release applies as sent"
     );
     host.stop_hosted_session()?;
-    wait_closed(&pair.host, SessionRole::Host);
-    wait_closed(&pair.controller, SessionRole::Controller);
+    pair.host.wait_closed(SessionRole::Host);
+    pair.controller.wait_closed(SessionRole::Controller);
     assert_eq!(
         applied.events(),
         expected,
@@ -382,7 +350,7 @@ fn a_failed_release_is_reported_on_the_hosted_session() -> TestResult {
         (session.id, "a held key or button could not be released"),
         "the host reports the failed release on the session"
     );
-    wait_closed(&pair.host, SessionRole::Host);
+    pair.host.wait_closed(SessionRole::Host);
     assert_eq!(
         applied.events(),
         held,

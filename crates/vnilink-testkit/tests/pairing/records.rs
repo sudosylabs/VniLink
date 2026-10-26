@@ -5,9 +5,10 @@
 
 use vnilink::{Error, RelaySettings};
 use vnilink_testkit::relay::LocalRelay;
+use vnilink_testkit::store::{start_storeless, Fault, Installed, TestStore};
 use vnilink_testkit::{traced, TestResult};
 
-use super::support::{credentialed_relay, start_storeless, Fault, Installed, TestStore};
+use super::support::credentialed_relay;
 
 /// A store's failures say what the owner must do, and a store that is
 /// locked or unavailable opens no engine and is written nothing.

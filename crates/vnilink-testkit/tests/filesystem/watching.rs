@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use vnilink_testkit::{traced, Scratch, TestResult};
 
-use super::{no_change, settle, wait_for_change, Location};
+use vnilink_testkit::files::{no_change, settle, wait_for_change, Location};
 
 /// How long a change takes to be reported, at most.
 const REPORTED: Duration = Duration::from_secs(5);

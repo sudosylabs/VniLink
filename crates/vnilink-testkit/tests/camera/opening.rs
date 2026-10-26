@@ -12,9 +12,10 @@ use vnilink::{
     SessionInfo,
 };
 use vnilink_testkit::camera::{config, CameraHost, StandInCameras};
+use vnilink_testkit::desktop::keyframe;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::{first_picture, keyframe, unshared};
+use super::{first_picture, unshared};
 
 /// The host's camera is offered before it is shared, but its cameras are
 /// listed only once the host shares it.
@@ -259,7 +260,7 @@ fn recording_a_camera_follows_the_hosts_consent() -> TestResult {
     wait_for("the recording to ask for a keyframe", DEFAULT_WAIT, || {
         source.take_keyframe_request().then_some(())
     });
-    source.publish(keyframe(2, 64)?)?;
+    source.publish(keyframe(2, vec![7; 64]))?;
     wait_for("the recording to begin on a keyframe", DEFAULT_WAIT, || {
         tap.try_recv()
             .is_some_and(|frame| frame.keyframe)

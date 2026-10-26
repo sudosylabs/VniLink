@@ -8,70 +8,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use vnilink::power::{
-    HostPowerFactory, PowerInhibitor, PowerKind, PowerPhase, PowerPolicy, PowerStatus,
-};
+use vnilink::power::{HostPowerFactory, PowerInhibitor, PowerKind, PowerPhase, PowerPolicy};
 use vnilink::{
-    usage, BackendStartup, Core, CoreEvent, DesktopControlState, Error, EventSubscription,
-    HostSessionState, HostSystemActions, InputEvent, RemoteDesktopService, ServiceKind,
-    SessionPhase, SystemSupport,
+    usage, BackendStartup, CoreEvent, DesktopControlState, Error, HostSessionState,
+    HostSystemActions, InputEvent, RemoteDesktopService, ServiceKind, SessionPhase, SystemSupport,
 };
 use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture, SCREEN};
+use vnilink_testkit::events::next_event;
+use vnilink_testkit::power::{active, lease, status, Counts, Leases, Refusing};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
-
-/// Where a kind's counts are kept.
-fn slot(kind: PowerKind) -> usize {
-    match kind {
-        PowerKind::Display => 0,
-        PowerKind::System => 1,
-    }
-}
-
-/// How many leases of each kind an engine's OS gave and took back.
-#[derive(Default)]
-struct Counts {
-    acquired: [AtomicUsize; 2],
-    released: [AtomicUsize; 2],
-}
-
-impl Counts {
-    fn acquired(&self, kind: PowerKind) -> usize {
-        self.acquired[slot(kind)].load(Ordering::SeqCst)
-    }
-    fn released(&self, kind: PowerKind) -> usize {
-        self.released[slot(kind)].load(Ordering::SeqCst)
-    }
-}
-
-/// An OS lease that keeps a display or the system awake while held.
-struct Lease(Arc<Counts>, PowerKind);
-
-impl PowerInhibitor for Lease {}
-
-impl Drop for Lease {
-    fn drop(&mut self) {
-        self.0.released[slot(self.1)].fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-fn lease(counts: &Arc<Counts>, kind: PowerKind) -> Box<dyn PowerInhibitor> {
-    counts.acquired[slot(kind)].fetch_add(1, Ordering::SeqCst);
-    Box::new(Lease(Arc::clone(counts), kind))
-}
-
-/// An OS that gives each lease at once and counts it.
-struct Leases(Arc<Counts>);
-
-impl HostPowerFactory for Leases {
-    fn acquire(
-        &self,
-        kind: PowerKind,
-        startup: &BackendStartup,
-    ) -> Result<Box<dyn PowerInhibitor>, Error> {
-        startup.check()?;
-        Ok(lease(&self.0, kind))
-    }
-}
 
 /// A host that may be seen and controlled, capturing one monitor, and a
 /// controller paired with it.
@@ -79,7 +24,7 @@ fn seen() -> Result<Pair, Error> {
     let pair = Pair::for_desktop();
     pair.host
         .core
-        .set_capture(Box::new(MonitorCapture(SCREEN)))?;
+        .set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
     Ok(pair)
 }
 
@@ -87,19 +32,6 @@ fn seen() -> Result<Pair, Error> {
 /// `host`.
 fn open(host: &Engine, controller: &Engine) -> Result<RemoteDesktopService, Error> {
     controller.open_desktop(&controller.connect_services(host)?)
-}
-
-fn status(core: &Core, kind: PowerKind) -> Option<PowerStatus> {
-    core.power_status()
-        .ok()?
-        .into_iter()
-        .find(|status| status.kind == kind)
-}
-
-/// `core` keeps `kind` awake for `owners` desktops.
-fn active(core: &Core, kind: PowerKind, owners: u32) -> bool {
-    status(core, kind)
-        .is_some_and(|status| status.owners == owners && status.phase == PowerPhase::Active)
 }
 
 /// A host keeps its display and system awake once for all its live
@@ -296,24 +228,13 @@ fn cancelled_native_acquisition_drops_late_success_and_shutdown_releases_live_le
 /// on every tick; with no OS backend it is unavailable.
 #[test]
 fn rejected_power_adapter_is_reported_without_retrying_every_tick() -> TestResult {
-    struct Rejected(Arc<AtomicUsize>);
-    impl HostPowerFactory for Rejected {
-        fn acquire(
-            &self,
-            _: PowerKind,
-            _: &BackendStartup,
-        ) -> Result<Box<dyn PowerInhibitor>, Error> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(Error::Unsupported("the lease was refused by the OS"))
-        }
-    }
     let _trace = traced();
     let pair = seen()?;
     let (host, controller) = (&pair.host, &pair.controller);
     let calls = Arc::new(AtomicUsize::new(0));
     controller
         .core
-        .set_power_factory(Some(Arc::new(Rejected(Arc::clone(&calls)))))?;
+        .set_power_factory(Some(Arc::new(Refusing(Arc::clone(&calls)))))?;
     controller.core.set_power_policy(PowerPolicy {
         outgoing_system: true,
         ..Default::default()
@@ -598,15 +519,6 @@ fn controlling(desktop: &RemoteDesktopService) {
     });
 }
 
-/// Waits for the event `wanted` picks, as the original's two-second budget.
-fn next_event(events: &EventSubscription, what: &str, wanted: impl Fn(&CoreEvent) -> bool) {
-    wait_for(what, Duration::from_secs(2), || {
-        events
-            .recv_timeout(Duration::from_millis(20))
-            .filter(|event| wanted(event))
-    });
-}
-
 /// Control granted and never used ends without locking. Used, an explicit
 /// close with a live connection locks at once; relinquished control locks
 /// too; a disabled policy never locks; an OS failure reports
@@ -633,9 +545,12 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() -> TestResult {
     wait_for("the host to lock", DEFAULT_WAIT, || {
         (host.system.locks() == 1).then_some(())
     });
-    next_event(&events, "the host to say it locked", |event| {
-        matches!(event, CoreEvent::HostLocked { locked: true })
-    });
+    next_event(
+        &events,
+        "the host to say it locked",
+        Duration::from_secs(2),
+        |event| matches!(event, CoreEvent::HostLocked { locked: true }),
+    );
     // Relinquishing control with the owner still viewing ends control.
     let second = host.pair.add_viewer("second");
     let viewing = host.open(&second)?;
@@ -668,9 +583,12 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() -> TestResult {
     let failed = host.open(&fourth)?;
     host.use_control(&failed)?;
     failed.close();
-    next_event(&events, "the host to say it did not lock", |event| {
-        matches!(event, CoreEvent::HostLocked { locked: false })
-    });
+    next_event(
+        &events,
+        "the host to say it did not lock",
+        Duration::from_secs(2),
+        |event| matches!(event, CoreEvent::HostLocked { locked: false }),
+    );
     holds(
         "a refused lock is not tried again",
         Duration::from_millis(200),

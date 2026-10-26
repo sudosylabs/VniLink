@@ -6,9 +6,11 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{CoreEvent, Error, OperatingSystem};
+use vnilink_testkit::events::drain;
+use vnilink_testkit::store::Installed;
 use vnilink_testkit::{traced, Engine, TestResult};
 
-use super::support::{credentialed_relay, drain, Installed, EVERYTHING};
+use super::support::{credentialed_relay, EVERYTHING};
 
 const LIFETIME: Duration = Duration::from_secs(60);
 

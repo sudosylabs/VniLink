@@ -12,8 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use vnilink::camera::{CameraConfig, CameraEnd, CameraSource, HostCameraFactory};
-use vnilink::{EncodedFrame, Error, ServiceKind, ServicePhase, SessionPhase};
+use vnilink::{Error, ServiceKind, SessionPhase};
 use vnilink_testkit::camera::{config, CameraHost, StandInCameras};
+use vnilink_testkit::desktop::{delta, keyframe};
+use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 /// Why `camera` ended, once it says; it says it once, and its owner on the
@@ -27,19 +29,10 @@ fn ended(controller: &vnilink::Core, camera: &vnilink::RemoteCameraService) -> C
         .controller_service(camera.info().id)
         .expect("the camera's owner");
     assert!(
-        matches!(
-            owner.phase,
-            ServicePhase::Closed(_) | ServicePhase::Failed(_)
-        ),
+        service_ended(&owner.phase),
         "an ended camera still holds its owner: {owner:?}"
     );
     end
-}
-
-/// A keyframe stamped `timestamp_us` of `size` bytes, as a camera's
-/// encoder hands one over.
-fn keyframe(timestamp_us: u64, size: usize) -> Result<EncodedFrame, Error> {
-    EncodedFrame::h264(true, timestamp_us, vec![7; size])
 }
 
 /// A host whose stand-in camera is installed but not shared, and a
@@ -71,9 +64,7 @@ fn connection_active(host: &CameraHost) -> bool {
 /// The latest source's first picture reaches `camera`.
 fn first_picture(host: &CameraHost, camera: &vnilink::RemoteCameraService) -> Arc<CameraSource> {
     let source = host.cameras.latest();
-    source
-        .publish(keyframe(1, 64).expect("a keyframe"))
-        .expect("a picture");
+    source.publish(keyframe(1, vec![7; 64])).expect("a picture");
     assert!(
         camera.recv_timeout(Duration::from_secs(5)).is_some(),
         "the camera's first picture arrives"
@@ -108,12 +99,12 @@ fn pictures_start_at_a_keyframe_and_arrive_whole() -> TestResult {
         source.take_keyframe_request(),
         "a new viewer asks for a keyframe"
     );
-    source.publish(EncodedFrame::h264(false, 1, vec![1; 5])?)?;
+    source.publish(delta(1, vec![1; 5]))?;
     assert!(
         camera.recv_timeout(Duration::from_millis(100)).is_none(),
         "a delta before the keyframe was shown"
     );
-    let large = keyframe(2, 512 * 1024)?;
+    let large = keyframe(2, vec![7; 512 * 1024]);
     source.publish(large.clone())?;
     assert_eq!(
         camera.recv_timeout(Duration::from_secs(5)),

@@ -74,6 +74,74 @@ impl Traced {
             || (self.named(message).len() >= count).then_some(()),
         );
     }
+
+    /// The events whose message is `message` and whose every field in
+    /// `fields` is the text given, as `("engine", "host")` for one engine's.
+    pub fn named_with(&self, message: &str, fields: &[(&str, &str)]) -> Vec<serde_json::Value> {
+        self.named(message)
+            .into_iter()
+            .filter(|event| {
+                fields
+                    .iter()
+                    .all(|(field, value)| event[*field].as_str() == Some(*value))
+            })
+            .collect()
+    }
+
+    /// As [`Self::wait_for_records`], counting only the records
+    /// [`Self::named_with`] picks: for a record one engine makes at a moment
+    /// of its own.
+    pub fn wait_for_records_with(&self, message: &str, fields: &[(&str, &str)], count: usize) {
+        crate::wait_for(
+            &format!("{count} \"{message}\" records with {fields:?}"),
+            crate::DEFAULT_WAIT,
+            || (self.named_with(message, fields).len() >= count).then_some(()),
+        );
+    }
+}
+
+impl Traced {
+    /// Fails if any event recorded during this test holds one of `content`:
+    /// `what`, as \"terminal content\", is the person's, never the record's.
+    pub fn assert_unrecorded(&self, what: &str, content: &[&str]) {
+        for event in self.events() {
+            for text in content {
+                assert!(
+                    !event.contains(text),
+                    "{what} is never recorded, yet {text:?} was: {event}"
+                );
+            }
+        }
+    }
+
+    /// How `engine` recorded each hosted service it served ending, by
+    /// service id: the phase it ended in, whichever path recorded it. A
+    /// connection's close and a serve task's own end race to record a lost
+    /// parent, under different messages and the same cause.
+    pub fn hosted_ends(&self, engine: &str) -> Vec<(u64, String)> {
+        let mut ends: Vec<(u64, String)> = self
+            .events()
+            .iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event["engine"] == engine)
+            .filter_map(|event| {
+                let phase = match event["message"].as_str()? {
+                    "service phase" if event["target"] == "vnilink::service" => {
+                        event["to"].as_str()?
+                    }
+                    "service closed" | "service ended without closing" => {
+                        event["phase"].as_str()?
+                    }
+                    _ => return None,
+                };
+                (phase.starts_with("closed") || phase.starts_with("failed"))
+                    .then(|| (event["service"].as_u64(), phase.to_owned()))
+                    .and_then(|(service, phase)| Some((service?, phase)))
+            })
+            .collect();
+        ends.sort();
+        ends
+    }
 }
 
 /// Fields a story leaves out: they differ from run to run, as times and

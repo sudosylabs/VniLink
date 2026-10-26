@@ -8,10 +8,11 @@ use vnilink::{
     usage, CoreEvent, DesktopControlState, DisplayInfo, Error, EventSubscription, InputEvent,
     Quality, ServiceKind, SessionInfo, SessionPhase, SessionRole,
 };
-use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture};
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::desktop::{input_failed, keyframe, next_picture, InputLog, MonitorCapture};
+use vnilink_testkit::events::next_event;
+use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-use super::streams::{display, hosted_showing, input_failure, SCREEN};
+use super::streams::{display, hosted_showing, SCREEN};
 
 /// A display anywhere on the host's desktop, turned and scaled, at
 /// revision 1.
@@ -26,16 +27,6 @@ fn placed(id: u64, x: i32, (width, height): (u16, u16), rotation: u16, scale: u1
         scale_percent: scale,
         revision: 1,
     }
-}
-
-/// The host's session with `viewer`.
-fn hosted_session(host: &Engine, viewer: &Engine) -> Result<SessionInfo, Error> {
-    let peer = viewer.endpoint();
-    host.core
-        .hosted_sessions()?
-        .into_iter()
-        .find(|session| session.peer_id == peer)
-        .ok_or(Error::NoSession)
 }
 
 /// Whether the host's desktop applied `event`.
@@ -64,15 +55,13 @@ fn refused_before_key(
         !has_applied(applied_events, &pointer),
         "a pointer refused as {why:?} applied"
     );
-    wait_for(
+    next_event(
+        events,
         &format!("the host to refuse a pointer: {why}"),
         DEFAULT_WAIT,
-        || match events.recv_timeout(Duration::from_millis(20))? {
-            CoreEvent::InputFailed {
-                id: failed,
-                message,
-            } if failed == id && message == why => Some(()),
-            _ => None,
+        |event| {
+            matches!(event, CoreEvent::InputFailed { id: failed, message }
+                if *failed == id && *message == why)
         },
     );
 }
@@ -87,7 +76,7 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
+    host.set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
     host.set_topology(1, &[display(1, 0, 1920, 1), display(2, 1920, 1280, 1)])?;
     let connection = pair.connect_services();
     // A second Desktop owner on the same connection is admitted, not Busy.
@@ -216,7 +205,7 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
     let events = host.subscribe()?;
     desktop_b.select_displays(&[1])?;
     assert_eq!(
-        input_failure(&events),
+        input_failed(&events).1,
         "the display is not in the current topology",
         "a selection of the removed monitor is refused"
     );
@@ -308,8 +297,8 @@ fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
     second
         .core
         .select_displays(second_session.id, second_session.generation, &[2])?;
-    let first_host = hosted_session(&pair.host, first)?;
-    let second_host = hosted_session(&pair.host, second)?;
+    let first_host = pair.host.hosted_session(first).ok_or(Error::NoSession)?;
+    let second_host = pair.host.hosted_session(second).ok_or(Error::NoSession)?;
     assert!(
         first_host.id < second_host.id,
         "the host numbers sessions in the order they arrived"
@@ -474,7 +463,7 @@ fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
     wait_for(
         "the second viewer's quality to arrive",
         DEFAULT_WAIT,
-        || (hosted_session(&pair.host, second).ok()?.quality == Some(marker)).then_some(()),
+        || (pair.host.hosted_session(second)?.quality == Some(marker)).then_some(()),
     );
     assert!(
         !has_applied(&applied_events, &other),
@@ -535,8 +524,8 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
     });
     first_desktop.select_displays(&[1])?;
     second_desktop.select_displays(&[2])?;
-    let first_remote = pair.host.serving(ServiceKind::Desktop, &first);
-    let second_remote = pair.host.serving(ServiceKind::Desktop, &second);
+    let first_remote = pair.host.serving(ServiceKind::Desktop, first);
+    let second_remote = pair.host.serving(ServiceKind::Desktop, second);
     assert!(
         first_remote.connection_id < second_remote.connection_id,
         "the host numbers connections in the order they arrived"
@@ -663,17 +652,14 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
     let other = InputEvent::pointer(-1800, 20, 2, 2);
     second_desktop.submit_input(other)?;
     second_desktop.select_displays(&[9])?;
-    wait_for(
+    next_event(
+        &events,
         "the host to refuse the unknown display",
         DEFAULT_WAIT,
-        || match events.recv_timeout(Duration::from_millis(20))? {
-            CoreEvent::InputFailed { id, message }
-                if id == second_remote.connection_id
-                    && message == "the display is not in the current topology" =>
-            {
-                Some(())
-            }
-            _ => None,
+        |event| {
+            matches!(event, CoreEvent::InputFailed { id, message }
+                if *id == second_remote.connection_id
+                    && *message == "the display is not in the current topology")
         },
     );
     assert!(

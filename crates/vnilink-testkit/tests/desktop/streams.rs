@@ -9,11 +9,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use vnilink::{
-    AdaptationReason, Condition, CoreEvent, DesktopControlState, DesktopEnd, DisplayInfo,
-    EncodedFrame, EncoderImplementation, Error, EventSubscription, InputEvent, ServiceInfo,
-    ServiceKind, SessionPhase, StreamEnd, StreamFailure, VideoCodecCaps,
+    AdaptationReason, Condition, DesktopControlState, DesktopEnd, DisplayInfo, EncodedFrame,
+    EncoderImplementation, Error, InputEvent, ServiceInfo, ServiceKind, SessionPhase, StreamEnd,
+    StreamFailure, VideoCodecCaps,
 };
-use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture};
+use vnilink_testkit::desktop::{input_failed, keyframe, next_picture, InputLog, MonitorCapture};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 /// The size of the host's screens.
@@ -48,18 +48,6 @@ pub(super) fn hosted_showing(host: &Engine, display: u64) -> ServiceInfo {
                         .as_deref()
                         == Some(&[display][..])
                 })
-        },
-    )
-}
-
-/// The next input failure the host reports, by its message.
-pub(super) fn input_failure(events: &EventSubscription) -> &'static str {
-    wait_for(
-        "the host to report an input failure",
-        DEFAULT_WAIT,
-        || match events.recv_timeout(Duration::from_millis(20))? {
-            CoreEvent::InputFailed { message, .. } => Some(message),
-            _ => None,
         },
     )
 }
@@ -99,7 +87,7 @@ fn capture_startup_serves_only_the_desktops_open_when_it_began() -> TestResult {
     let timeout = Duration::from_secs(5);
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
+    host.set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
     let stop = Arc::new(AtomicBool::new(false));
     let alone = host.desktop_capture_startup(0, Arc::clone(&stop), timeout);
     assert!(
@@ -399,7 +387,7 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     let events = host.subscribe()?;
     desktop_a.submit_input(InputEvent::pointer(2000, 100, 2, 5))?;
     assert_eq!(
-        input_failure(&events),
+        input_failed(&events).1,
         "that display is not selected",
         "a pointer on the other twin is refused for this owner"
     );
@@ -718,7 +706,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     // The kit's engines share a folder; this host offers only its screen.
     host.set_file_roots(Vec::new())?;
-    host.set_capture(Box::new(MonitorCapture((1280, 720))))?;
+    host.set_capture(Box::new(MonitorCapture::new((1280, 720))))?;
     host.set_video_codecs(VideoCodecCaps::encode_only(4096, 4096, "testkit"))?;
     let capture_only = host.capabilities();
     assert!(
@@ -757,7 +745,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
     );
     assert!(
         matches!(
-            host.set_capture(Box::new(MonitorCapture((1, 1)))),
+            host.set_capture(Box::new(MonitorCapture::new((1, 1)))),
             Err(Error::Busy)
         ),
         "the capture is not swapped during a session"
@@ -860,7 +848,7 @@ fn a_zero_capture_size_falls_back_to_the_desktop() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    host.set_capture(Box::new(MonitorCapture((0, 0))))?;
+    host.set_capture(Box::new(MonitorCapture::new((0, 0))))?;
     host.set_video_codecs(VideoCodecCaps::encode_only(4096, 4096, "testkit"))?;
     InputLog::install(&pair.host, (100, 80))?;
     let capabilities = host.capabilities();

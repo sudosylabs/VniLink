@@ -1,11 +1,12 @@
 //! What several files modules share: a sender's serve parked with its source
-//! open, and a computer sharing its whole disk.
+//! open. A computer sharing its whole disk is the kit's
+//! ([`vnilink_testkit::files::whole_disk`]).
 
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use vnilink::Core;
-use vnilink_testkit::Engine;
+use vnilink_testkit::lock;
 
 /// The serve to park: its engine ([`Core::engine_key`]) and job.
 static TARGET: Mutex<Option<(usize, u64)>> = Mutex::new(None);
@@ -13,10 +14,6 @@ static TARGET: Mutex<Option<(usize, u64)>> = Mutex::new(None);
 static PARKED: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 /// Set when the test lets the target serve go on, and woken.
 static RELEASED: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
-}
 
 /// Called by every serve once it opened its verified source: parks the
 /// target's until released, and lets every other pass.
@@ -81,26 +78,4 @@ impl Drop for ServeProbe {
         *lock(&TARGET) = None;
         self.release();
     }
-}
-
-/// Shares `engine`'s whole disk rather than its one folder, and names
-/// `inside` (a path in its folder) from the disk's root: the root's id and
-/// the path within it.
-pub fn whole_disk(engine: &Engine, inside: &str) -> Result<(u64, String), vnilink::Error> {
-    engine.core.enable_filesystem_access()?;
-    let folder = engine.root().join(inside);
-    let (id, base) = engine
-        .core
-        .file_roots()?
-        .into_iter()
-        .find(|(_, path)| folder.starts_with(path))
-        .expect("a disk root holds the engine's folder");
-    let path = folder
-        .strip_prefix(&base)
-        .expect("inside the root")
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/");
-    Ok((id, path))
 }

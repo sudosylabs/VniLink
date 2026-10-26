@@ -11,14 +11,14 @@
 use expect_test::expect;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use vnilink::probes::PrestageHooks;
 use vnilink::{Core, Grants, JobState};
 use vnilink_testkit::files::{self, payload};
-use vnilink_testkit::{traced, wait_for, Pair, TestResult, FILES};
+use vnilink_testkit::{lock, traced, wait_for, Pair, TestResult, FILES};
 
 /// How long a barrier waits to be reached.
 const REACHED_WITHIN: Duration = Duration::from_secs(8);
@@ -27,10 +27,6 @@ const REACHED_WITHIN: Duration = Duration::from_secs(8);
 /// that waits on a lock the publication holds fails here instead of
 /// hanging.
 const UNBLOCKED_WITHIN: Duration = Duration::from_secs(5);
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
-}
 
 /// One point a publication parks at, the first time it gets there, until
 /// released.

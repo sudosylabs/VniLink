@@ -33,9 +33,9 @@ use vnilink::{
     CoreEvent, DevicePresence, Error, EventSubscription, OperatingSystem, SessionPhase,
     SessionRole, SharingPolicy,
 };
+use vnilink_testkit::events::drain;
+use vnilink_testkit::session::{wait_closed, wait_request};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
-
-use support::wait_closed;
 
 const FILE_LIFETIME: Duration = Duration::from_secs(60);
 
@@ -45,7 +45,7 @@ const FILE_LIFETIME: Duration = Duration::from_secs(60);
 fn pairing_counts(events: &EventSubscription) -> (usize, usize) {
     let mut paired = 0;
     let mut authorized = 0;
-    for event in support::drain(events) {
+    for event in drain(events) {
         match event {
             CoreEvent::DevicePaired { .. } => paired += 1,
             CoreEvent::DeviceAuthorized { .. } => authorized += 1,
@@ -112,7 +112,7 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
     let host_events = host.core.subscribe()?;
     let session = std::thread::scope(|scope| {
         let connecting = scope.spawn(|| controller.connect_services(&host));
-        let request = support::wait_request(&host.core, Duration::from_secs(5));
+        let request = wait_request(&host.core, Duration::from_secs(5));
         assert_eq!(
             request.endpoint_id,
             controller.endpoint(),
@@ -216,11 +216,7 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
         Some(8),
         "{accepted}"
     );
-    let everything = trace.events().join("\n");
-    assert!(
-        !everything.contains(&host.endpoint()),
-        "a full peer identity was recorded"
-    );
+    trace.assert_unrecorded("a full peer identity", &[&host.endpoint()]);
     Ok(())
 }
 

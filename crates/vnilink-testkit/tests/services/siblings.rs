@@ -13,10 +13,10 @@ use vnilink::{
 };
 use vnilink_testkit::camera::{config, StandInCameras};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
+use vnilink_testkit::events::service_changes;
+use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::terminal::{shell, SIZE};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
-
-use super::support::{reaches, service_changes, whole_disk};
 
 /// Work a backend owns, which says when it was dropped.
 struct Resource(Arc<AtomicBool>);
@@ -167,7 +167,7 @@ fn unsupported_kinds_and_the_record_limit_leave_the_connection_as_it_was() -> Te
         ..Grants::default()
     })?;
     let pending = controller.begin_connect_files(&pair.host.endpoint())?;
-    let session = reaches(&pair.controller, pending.id, SessionPhase::Active);
+    let session = pair.controller.wait_phase(pending.id, SessionPhase::Active);
     let support = controller.controller_service_support(session.id)?;
     assert!(
         !support.desktop && support.files && !support.terminal && !support.camera,
@@ -233,9 +233,9 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
         ServiceKind::Camera,
     ]);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    whole_disk(&pair.host)?;
+    whole_disk(&pair.host, "")?;
     InputLog::install(&pair.host, (1920, 1080))?;
-    host.set_capture(Box::new(MonitorCapture((1920, 1080))))?;
+    host.set_capture(Box::new(MonitorCapture::new((1920, 1080))))?;
     host.set_terminal_factory(Some(shell(&pair.host.root())))?;
     let cameras = Arc::new(StandInCameras::default());
     host.set_camera_factory(Some(cameras))?;
@@ -393,7 +393,7 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
         ServiceKind::Camera,
     ]);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host)?;
+    let (root, folder) = whole_disk(&pair.host, "")?;
     host.set_terminal_factory(Some(shell(&pair.host.root())))?;
     // No capture, no desktop adapter, no H.264 encoder on the host.
     host.set_video_codecs(vnilink::VideoCodecCaps::default())?;
@@ -466,7 +466,7 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     // Capture and camera backends exist, so an empty target list proves the
     // core never asked, not that no backend was registered.
-    host.set_capture(Box::new(MonitorCapture((1920, 1080))))?;
+    host.set_capture(Box::new(MonitorCapture::new((1920, 1080))))?;
     let cameras = Arc::new(StandInCameras::default());
     host.set_camera_factory(Some(Arc::clone(&cameras) as _))?;
     host.set_terminal_factory(Some(shell(&pair.host.root())))?;
@@ -477,7 +477,7 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
 
     // Files-only: the session carries jobs, never video.
     let pending = controller.begin_connect_files(&pair.host.endpoint())?;
-    let files = reaches(&pair.controller, pending.id, SessionPhase::Active);
+    let files = pair.controller.wait_phase(pending.id, SessionPhase::Active);
     assert!(
         host.video_targets()?.is_empty(),
         "a files connection asks for no capture"
@@ -494,7 +494,7 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
         "a files connection serves no Desktop"
     );
     controller.disconnect_session(files.id)?;
-    reaches(&pair.controller, files.id, SessionPhase::Closed);
+    pair.controller.wait_phase(files.id, SessionPhase::Closed);
 
     // Terminal-only: a live shell with output, still no capture target.
     host.set_service_sharing(ServiceKind::Terminal, true)?;
@@ -582,7 +582,7 @@ fn concurrent_services_connects_share_one_connection_and_keep_its_services() -> 
         1,
         "the controller keeps one connection"
     );
-    let session = reaches(&pair.controller, ids[0], SessionPhase::Active);
+    let session = pair.controller.wait_phase(ids[0], SessionPhase::Active);
     let files = pair.attach(&session, ServiceKind::Files);
     let lease = controller.service_lease(files.id, files.generation)?;
     let reused = controller.begin_connect_services(&pair.host.endpoint())?;

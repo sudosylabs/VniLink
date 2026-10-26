@@ -111,20 +111,25 @@ impl Engine {
     /// computers do once paired. After [`Self::restart`] it tells `viewer`
     /// where it now listens too.
     pub fn pair_with(&self, viewer: &Engine) -> Result<(), Error> {
-        let invitation = Duration::from_secs(60);
-        self.core.start_hosting()?;
-        viewer
-            .core
-            .accept_invitation(&self.core.create_invitation(invitation)?)?;
-        self.core
-            .accept_invitation(&viewer.core.create_invitation(invitation)?)?;
-        Ok(())
+        pair_cores(&self.core, &viewer.core)
+    }
+
+    /// As [`Self::pair_with`], this engine sharing itself to be seen and
+    /// controlled ([`SEEN_AND_CONTROLLED`]): a [`Pair`] for several engines.
+    pub fn pair_for_control(&self, viewer: &Engine) -> Result<(), Error> {
+        pair_cores_for_control(&self.core, &viewer.core)
     }
 
     /// This engine's services connection to `host`, as the application
     /// opens one, once `host` admitted it; the refusal when it was refused.
     pub fn connect_services(&self, host: &Engine) -> Result<SessionInfo, Error> {
-        let pending = self.core.begin_connect_services(&host.endpoint())?;
+        self.connect_services_to(&host.endpoint())
+    }
+
+    /// As [`Self::connect_services`], to the host whose endpoint is
+    /// `endpoint`, for a host the kit did not start.
+    pub fn connect_services_to(&self, endpoint: &str) -> Result<SessionInfo, Error> {
+        let pending = self.core.begin_connect_services(endpoint)?;
         self.settled(pending.id, "the services connection to be admitted")
     }
 
@@ -259,6 +264,31 @@ fn configure(name: &str, core: &Core, scratch: &Scratch) {
     .expect("a resource policy");
 }
 
+/// `host` hosts, and it and `viewer` trust each other, as two computers do
+/// once paired: [`Engine::pair_with`] for engines the kit did not start.
+pub fn pair_cores(host: &Core, viewer: &Core) -> Result<(), Error> {
+    let invitation = Duration::from_secs(60);
+    host.start_hosting()?;
+    viewer.accept_invitation(&host.create_invitation(invitation)?)?;
+    host.accept_invitation(&viewer.create_invitation(invitation)?)?;
+    Ok(())
+}
+
+/// As [`pair_cores`], `host` sharing itself to be seen and controlled.
+pub fn pair_cores_for_control(host: &Core, viewer: &Core) -> Result<(), Error> {
+    pair_cores(host, viewer)?;
+    host.set_desktop_sharing(SEEN_AND_CONTROLLED)
+}
+
+/// What a host shares once paired for control: it may be seen and
+/// controlled, and no more.
+pub const SEEN_AND_CONTROLLED: Grants = Grants {
+    view: true,
+    control: true,
+    clipboard: false,
+    transfer: false,
+};
+
 /// What the host and the controller grant so files move both ways; a
 /// session opens under view and control.
 pub const FILES: (Grants, Grants) = (
@@ -383,19 +413,14 @@ impl Pair {
 
     /// The host may be seen and controlled.
     pub fn for_desktop() -> Self {
-        let none = Grants {
-            view: false,
-            control: false,
-            clipboard: false,
-            transfer: false,
-        };
         Self::new(
+            SEEN_AND_CONTROLLED,
             Grants {
-                view: true,
-                control: true,
-                ..none
+                view: false,
+                control: false,
+                clipboard: false,
+                transfer: false,
             },
-            none,
         )
     }
 }

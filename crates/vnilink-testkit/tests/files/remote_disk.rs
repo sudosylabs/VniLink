@@ -5,29 +5,8 @@ use expect_test::expect;
 use std::path::Path;
 
 use vnilink::{Error, Grants};
+use vnilink_testkit::files::{identity, set_aside};
 use vnilink_testkit::{traced, Pair, TestResult};
-
-/// The names a delete set aside in `folder` and did not remove.
-fn aside_names(folder: &Path) -> Vec<String> {
-    std::fs::read_dir(folder)
-        .expect("a readable folder")
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(".vnldelete."))
-        .collect()
-}
-
-/// The object `path` names, where the platform says.
-#[cfg(unix)]
-fn identity(path: &Path) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::symlink_metadata(path).ok().map(|meta| meta.ino())
-}
-
-#[cfg(not(unix))]
-fn identity(_path: &Path) -> Option<u64> {
-    None
-}
 
 /// Replaces the file at `path` with another object holding `bytes`. The
 /// replacement is made before the original goes, so a recycled identity
@@ -162,7 +141,7 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
         Some(&b"kept-bytes"[..]),
         "the file stayed"
     );
-    assert!(aside_names(&root).is_empty(), "nothing was set aside");
+    assert!(set_aside(&root).is_empty(), "nothing was set aside");
 
     let current = session.generation;
     assert!(
@@ -369,7 +348,7 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
         b"transfer-bytes",
         "the served file stayed"
     );
-    assert!(aside_names(&root).is_empty(), "nothing was set aside");
+    assert!(set_aside(&root).is_empty(), "nothing was set aside");
 
     pair.controller.core.job_cancel(job)?;
     let ended = host.job_list()?[0].state;
@@ -429,7 +408,7 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
         b"replacement-bytes",
         "the replacement stayed"
     );
-    assert!(aside_names(&root).is_empty(), "nothing was set aside");
+    assert!(set_aside(&root).is_empty(), "nothing was set aside");
 
     let fresh = controller.fs_list(id, generation, files, "", 0, 50)?;
     let current = token_of(&fresh, "report.txt")?;
@@ -437,7 +416,7 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
     controller.fs_delete(id, generation, files, "", "pack", Some(pack))?;
     assert!(!root.join("report.txt").exists(), "the file was deleted");
     assert!(!root.join("pack").exists(), "the folder tree was deleted");
-    assert!(aside_names(&root).is_empty(), "nothing was left aside");
+    assert!(set_aside(&root).is_empty(), "nothing was left aside");
     trace.wait_for_records("file request answered", 5);
     expect![[r#"
         host:

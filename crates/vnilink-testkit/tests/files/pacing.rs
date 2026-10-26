@@ -265,17 +265,7 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
     );
     // The receiver's story: the sender mirrors it whenever it next asks,
     // through serving or straight to complete.
-    wait_for(
-        "the receiver to record its completion",
-        DEFAULT_WAIT,
-        || {
-            trace
-                .named("job state")
-                .iter()
-                .any(|event| event["engine"] == "host" && event["to"] == "complete")
-                .then_some(())
-        },
-    );
+    trace.wait_for_records_with("job state", &[("engine", "host"), ("to", "complete")], 1);
     expect![[r#"
         host:
           files: job state from=transferring job=1 sender=false to=waiting-decision

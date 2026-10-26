@@ -5,10 +5,9 @@
 use vnilink::Error;
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 
-use super::{
-    aside_names, ino_of, is_message, is_stale, names_in, past_the_tick_of, read, token_of,
-    Location, DELETE_FAILED,
-};
+use vnilink_testkit::files::{identity, set_aside, token_of, Location};
+
+use super::{is_message, is_stale, names_in, past_the_tick_of, read, DELETE_FAILED};
 
 /// An engine with its whole file system shared, and `folder` addressed in
 /// it.
@@ -77,7 +76,7 @@ fn rename_file_keeps_identity_and_bytes() -> TestResult {
     let (engine, files) = sharing_the_disk(&root)?;
     let core = &engine.core;
 
-    let before_ino = ino_of(&root.join("before.txt"));
+    let before_ino = identity(&root.join("before.txt"));
     let token = token_of(core, files.root, &files.path(""), "before.txt");
     core.rename_entry(
         files.root,
@@ -94,7 +93,7 @@ fn rename_file_keeps_identity_and_bytes() -> TestResult {
         "the bytes are kept"
     );
     assert_eq!(
-        ino_of(&root.join("after.txt")),
+        identity(&root.join("after.txt")),
         before_ino,
         "the file is the same object"
     );
@@ -118,7 +117,7 @@ fn rename_folder_moves_children_without_transfer() -> TestResult {
     let (engine, files) = sharing_the_disk(&root)?;
     let core = &engine.core;
 
-    let child = ino_of(&root.join("pack/sub/a.txt"));
+    let child = identity(&root.join("pack/sub/a.txt"));
     let token = token_of(core, files.root, &files.path(""), "pack");
     core.rename_entry(files.root, &files.path(""), "pack", Some(token), "box")?;
 
@@ -135,7 +134,7 @@ fn rename_folder_moves_children_without_transfer() -> TestResult {
         "a child moves with its bytes"
     );
     assert_eq!(
-        ino_of(&root.join("box/sub/a.txt")),
+        identity(&root.join("box/sub/a.txt")),
         child,
         "a child is the same object, not a copy"
     );
@@ -281,7 +280,7 @@ fn case_only_rename_keeps_the_object() -> TestResult {
     let (engine, files) = sharing_the_disk(&root)?;
     let core = &engine.core;
 
-    let before = ino_of(&root.join("Case.txt"));
+    let before = identity(&root.join("Case.txt"));
     let token = token_of(core, files.root, &files.path(""), "Case.txt");
     match core.rename_entry(
         files.root,
@@ -297,7 +296,7 @@ fn case_only_rename_keeps_the_object() -> TestResult {
                 "the bytes are kept"
             );
             assert_eq!(
-                ino_of(&root.join("CASE.txt")),
+                identity(&root.join("CASE.txt")),
                 before,
                 "the file is the same object"
             );
@@ -337,7 +336,7 @@ fn delete_removes_a_file_and_a_folder_tree() -> TestResult {
     let folder = token_of(core, files.root, &files.path(""), "pack");
     core.delete_entry(files.root, &files.path(""), "pack", Some(folder))?;
     assert!(!root.join("pack").exists(), "the folder tree is deleted");
-    assert!(aside_names(&root).is_empty(), "nothing is left set aside");
+    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
     let names = names_in(&root);
     assert!(names.is_empty(), "nothing is left: {names:?}");
     Ok(())
@@ -370,7 +369,7 @@ fn delete_against_a_replaced_source_is_refused() -> TestResult {
         b"replacement-bytes",
         "the replacement is kept"
     );
-    assert!(aside_names(&root).is_empty(), "nothing is left set aside");
+    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
 
     core.delete_entry(files.root, &files.path(""), "note.txt", None)?;
     assert!(
@@ -408,7 +407,7 @@ fn delete_missing_source_and_bad_names_fail_cleanly() -> TestResult {
         "a name with a separator is refused"
     );
     assert_eq!(read(&root.join("kept.txt")), b"kept", "the file is kept");
-    assert!(aside_names(&root).is_empty(), "nothing is left set aside");
+    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
     assert!(
         !scratch.join("kept.txt").exists(),
         "nothing left the folder"
@@ -472,7 +471,7 @@ fn delete_folder_unlinks_symlink_children_without_following() -> TestResult {
     let token = token_of(core, files.root, &files.path(""), "pack");
     core.delete_entry(files.root, &files.path(""), "pack", Some(token))?;
     assert!(!root.join("pack").exists(), "the folder is deleted");
-    assert!(aside_names(&root).is_empty(), "nothing is left set aside");
+    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
     assert_eq!(
         read(&outside.join("secret.txt")),
         b"secret-bytes",

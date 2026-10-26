@@ -8,9 +8,10 @@ use std::time::Duration;
 use vnilink::{
     Capability, Core, CoreEvent, DevicePresence, Error, Grants, RemoteStatus, SessionPhase,
 };
+use vnilink_testkit::events::drain;
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult};
 
-use super::support::{device, drain};
+use super::support::device;
 
 /// How long presence takes to follow the host, at most.
 const FOLLOWING: Duration = Duration::from_secs(20);

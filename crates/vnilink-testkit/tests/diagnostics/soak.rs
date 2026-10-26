@@ -6,8 +6,9 @@
 //! most one finished. Linux also prints resident memory and thread counts
 //! as CI evidence; this file asserts counts, not artifacts.
 
-use vnilink::{EncodedFrame, InputEvent, ServiceKind, ServicePhase, SessionPhase};
+use vnilink::{EncodedFrame, InputEvent, ServiceKind, SessionPhase};
 use vnilink_testkit::desktop::InputLog;
+use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 const CYCLES: u32 = 25;
@@ -122,7 +123,7 @@ fn soak_cycle(pair: &Pair) -> TestResult {
             .controller_service(desktop.id)
             .expect("the desktop's record")
             .phase;
-        matches!(phase, ServicePhase::Closed(_) | ServicePhase::Failed(_)).then_some(())
+        service_ended(&phase).then_some(())
     });
     controller.forget_controller_service(desktop.id)?;
     controller.disconnect_session(session.id)?;

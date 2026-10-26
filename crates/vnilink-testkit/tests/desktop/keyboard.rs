@@ -4,123 +4,22 @@
 //! person's own: no engine records them.
 
 use expect_test::expect;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use vnilink::{
-    usage, Error, EventSubscription, HostDesktop, InputEvent, KeyboardMode, LocalKey,
-    PointerSettings, SessionInfo, SessionPhase, MAX_KEY_TEXT,
+    usage, Error, EventSubscription, InputEvent, KeyboardMode, LocalKey, PointerSettings,
+    SessionInfo, SessionPhase, MAX_KEY_TEXT,
 };
+use vnilink_testkit::desktop::{input_failed, Typed, Typing};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, Traced, DEFAULT_WAIT};
 
-use super::lifecycle::pair;
-use super::streams::{input_failure, SCREEN};
-
-/// What a host's desktop was asked to do: an input event, text typed as
-/// characters, or text typed as the host layout's keys.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum Seen {
-    Event(InputEvent),
-    Text(String),
-    Chord(String),
-}
-
-/// A desktop that records what it is asked to type, and refuses text or
-/// translated keys where told to, as an operating system can.
-struct TypingDesktop {
-    seen: Arc<Mutex<Vec<Seen>>>,
-    fail_text: bool,
-    fail_chord: bool,
-}
-
-impl TypingDesktop {
-    fn record(&self, seen: Seen) {
-        self.seen
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(seen);
-    }
-}
-
-impl HostDesktop for TypingDesktop {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
-        self.record(Seen::Event(event));
-        Ok(())
-    }
-
-    fn type_text(&mut self, text: &str) -> Result<(), Error> {
-        if self.fail_text {
-            return Err(Error::InputFailed(
-                "the operating system rejected the event",
-            ));
-        }
-        self.record(Seen::Text(text.to_owned()));
-        Ok(())
-    }
-
-    fn type_chord(&mut self, text: &str) -> Result<(), Error> {
-        if self.fail_chord {
-            return Err(Error::InputFailed("translated keys are not available"));
-        }
-        self.record(Seen::Chord(text.to_owned()));
-        Ok(())
-    }
-
-    fn monitor(&self) -> (u16, u16) {
-        SCREEN
-    }
-}
-
-/// What a [`TypingDesktop`] was asked to do.
-#[derive(Clone, Default)]
-struct Typed(Arc<Mutex<Vec<Seen>>>);
-
-impl Typed {
-    /// Installs on `host` a desktop that records what it is asked to type,
-    /// refusing text when `fail_text` and translated keys when
-    /// `fail_chord`.
-    fn install(host: &Engine, fail_text: bool, fail_chord: bool) -> Result<Self, Error> {
-        let typed = Self::default();
-        host.core.set_desktop(Box::new(TypingDesktop {
-            seen: Arc::clone(&typed.0),
-            fail_text,
-            fail_chord,
-        }))?;
-        Ok(typed)
-    }
-
-    fn seen(&self) -> Vec<Seen> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone()
-    }
-
-    /// Waits until the host was asked exactly `expected`, in order, for the
-    /// contract `what`: one more, or one fewer, fails.
-    fn wait(&self, expected: &[Seen], what: &str) {
-        let got = wait_for(
-            &format!("the host to be asked {} things", expected.len()),
-            DEFAULT_WAIT,
-            || {
-                let got = self.seen();
-                (got.len() >= expected.len()).then_some(got)
-            },
-        );
-        assert_eq!(got, expected, "{what}");
-    }
-}
+use super::streams::SCREEN;
 
 /// States that no engine recorded any of `typed`, and that no record names
 /// a key or a character: what a person types is theirs.
 pub(super) fn records_nothing_typed(trace: &Traced, typed: &[&str]) {
+    trace.assert_unrecorded("the text typed", typed);
     for event in trace.events() {
-        for text in typed {
-            assert!(
-                !event.contains(text),
-                "an engine recorded the text typed, {text:?}: {event}"
-            );
-        }
         let event: serde_json::Value = serde_json::from_str(&event).expect("a JSON record");
         for field in ["usage", "key", "text", "character", "chord"] {
             assert!(
@@ -201,7 +100,7 @@ fn a_swapped_command_is_the_key_the_host_releases() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let typed = Typed::install(&pair.host, false, false)?;
+    let typed = Typing::install(&pair.host, SCREEN, false, false)?;
     controller.set_swap_control_and_command(true)?;
     let session = desktop_session(&pair);
     controller.submit_input(
@@ -215,15 +114,15 @@ fn a_swapped_command_is_the_key_the_host_releases() -> TestResult {
         InputEvent::key_down(usage::LEFT_SHIFT),
     )?;
     let pressed = [
-        Seen::Event(InputEvent::key_down(usage::LEFT_CONTROL)),
-        Seen::Event(InputEvent::key_down(usage::LEFT_SHIFT)),
+        Typed::Event(InputEvent::key_down(usage::LEFT_CONTROL)),
+        Typed::Event(InputEvent::key_down(usage::LEFT_SHIFT)),
     ];
     typed.wait(&pressed, "a swapped Command reaches the host as Control");
     host.stop_hosted_session()?;
     let mut released = pressed.to_vec();
     released.extend([
-        Seen::Event(InputEvent::key_up(usage::LEFT_SHIFT)),
-        Seen::Event(InputEvent::key_up(usage::LEFT_CONTROL)),
+        Typed::Event(InputEvent::key_up(usage::LEFT_SHIFT)),
+        Typed::Event(InputEvent::key_up(usage::LEFT_CONTROL)),
     ]);
     typed.wait(
         &released,
@@ -242,7 +141,7 @@ fn finished_text_is_typed_in_order_and_is_not_logged() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let typed = Typed::install(&pair.host, false, false)?;
+    let typed = Typing::install(&pair.host, SCREEN, false, false)?;
     let session = desktop_session(&pair);
     let events = controller.subscribe()?;
     let host_events = host.subscribe()?;
@@ -273,9 +172,9 @@ fn finished_text_is_typed_in_order_and_is_not_logged() -> TestResult {
     controller.submit_input(id, generation, InputEvent::key_down(usage::ENTER))?;
     typed.wait(
         &[
-            Seen::Event(InputEvent::key_down(usage::LEFT_META)),
-            Seen::Text("café".to_owned()),
-            Seen::Event(InputEvent::key_down(usage::ENTER)),
+            Typed::Event(InputEvent::key_down(usage::LEFT_META)),
+            Typed::Text("café".to_owned()),
+            Typed::Event(InputEvent::key_down(usage::ENTER)),
         ],
         "finished text is typed between the keys sent around it",
     );
@@ -302,12 +201,12 @@ fn a_refused_text_leaves_the_keys_working() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let typed = Typed::install(&pair.host, true, false)?;
+    let typed = Typing::install(&pair.host, SCREEN, true, false)?;
     let session = desktop_session(&pair);
     let events = host.subscribe()?;
     controller.submit_text(session.id, session.generation, "nope")?;
     assert_eq!(
-        input_failure(&events),
+        input_failed(&events).1,
         "the operating system rejected the event",
         "the host reports the text its system refused"
     );
@@ -317,7 +216,7 @@ fn a_refused_text_leaves_the_keys_working() -> TestResult {
         InputEvent::key_down(usage::A),
     )?;
     typed.wait(
-        &[Seen::Event(InputEvent::key_down(usage::A))],
+        &[Typed::Event(InputEvent::key_down(usage::A))],
         "a key after a refused text applies",
     );
     assert_eq!(
@@ -344,11 +243,11 @@ fn a_dropped_session_does_not_replay_finished_text() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let controller = &pair.controller.core;
-    let typed = Typed::install(&pair.host, false, false)?;
+    let typed = Typing::install(&pair.host, SCREEN, false, false)?;
     let session = desktop_session(&pair);
     controller.submit_text(session.id, session.generation, "first words")?;
     typed.wait(
-        &[Seen::Text("first words".to_owned())],
+        &[Typed::Text("first words".to_owned())],
         "the first text is typed",
     );
     controller.drop_link()?;
@@ -375,8 +274,8 @@ fn a_dropped_session_does_not_replay_finished_text() -> TestResult {
     controller.submit_text(again.id, again.generation, "second words")?;
     typed.wait(
         &[
-            Seen::Text("first words".to_owned()),
-            Seen::Text("second words".to_owned()),
+            Typed::Text("first words".to_owned()),
+            Typed::Text("second words".to_owned()),
         ],
         "a reconnected session types only what was sent on it",
     );
@@ -402,7 +301,7 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let typed = Typed::install(&pair.host, false, false)?;
+    let typed = Typing::install(&pair.host, SCREEN, false, false)?;
     assert_eq!(
         controller.keyboard_mode()?,
         KeyboardMode::Character,
@@ -422,7 +321,7 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
         controller.submit_local_key(session.id, session.generation, key)?;
     }
     typed.wait(
-        &[Seen::Text("@".to_owned()), Seen::Text("@".to_owned())],
+        &[Typed::Text("@".to_owned()), Typed::Text("@".to_owned())],
         "each keyboard's @ is typed as the character",
     );
     hides(&events, "@");
@@ -443,7 +342,7 @@ fn map_and_translate_are_optional_and_a_held_key_blocks_the_change() -> TestResu
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let typed = Typed::install(&pair.host, false, false)?;
+    let typed = Typing::install(&pair.host, SCREEN, false, false)?;
     let session = desktop_session(&pair);
     let (id, generation) = (session.id, session.generation);
     controller.submit_local_key(id, generation, local(usage::LEFT_SHIFT, true, ""))?;
@@ -460,7 +359,7 @@ fn map_and_translate_are_optional_and_a_held_key_blocks_the_change() -> TestResu
     controller.set_keyboard_mode(KeyboardMode::Map)?;
     controller.submit_local_key(id, generation, local(usage::GRAVE, true, "@"))?;
     typed.wait(
-        &[Seen::Event(InputEvent::key_down(usage::GRAVE))],
+        &[Typed::Event(InputEvent::key_down(usage::GRAVE))],
         "Map sends the key, not the character",
     );
     controller.submit_local_key(id, generation, local(usage::GRAVE, false, ""))?;
@@ -468,9 +367,9 @@ fn map_and_translate_are_optional_and_a_held_key_blocks_the_change() -> TestResu
     controller.submit_local_key(id, generation, local(usage::GRAVE, true, "@"))?;
     typed.wait(
         &[
-            Seen::Event(InputEvent::key_down(usage::GRAVE)),
-            Seen::Event(InputEvent::key_up(usage::GRAVE)),
-            Seen::Chord("@".to_owned()),
+            Typed::Event(InputEvent::key_down(usage::GRAVE)),
+            Typed::Event(InputEvent::key_up(usage::GRAVE)),
+            Typed::Chord("@".to_owned()),
         ],
         "Translate types the character as the host layout's keys",
     );
@@ -492,7 +391,7 @@ fn a_refused_chord_leaves_the_keys_working() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let typed = Typed::install(&pair.host, false, true)?;
+    let typed = Typing::install(&pair.host, SCREEN, false, true)?;
     let session = desktop_session(&pair);
     controller.set_keyboard_mode(KeyboardMode::Translate)?;
     let events = host.subscribe()?;
@@ -502,7 +401,7 @@ fn a_refused_chord_leaves_the_keys_working() -> TestResult {
         local(usage::GRAVE, true, "@"),
     )?;
     assert_eq!(
-        input_failure(&events),
+        input_failed(&events).1,
         "translated keys are not available",
         "the host reports the translated keys it could not type"
     );
@@ -512,7 +411,7 @@ fn a_refused_chord_leaves_the_keys_working() -> TestResult {
         InputEvent::key_down(usage::A),
     )?;
     typed.wait(
-        &[Seen::Event(InputEvent::key_down(usage::A))],
+        &[Typed::Event(InputEvent::key_down(usage::A))],
         "a key after a refused chord applies",
     );
     assert_eq!(
@@ -546,8 +445,8 @@ fn input_defaults_cover_live_and_future_connections_and_refuse_held_input_atomic
         Engine::start("third-host"),
     ];
     for host in &hosts {
-        Typed::install(host, false, false)?;
-        pair(host, &controller)?;
+        Typing::install(host, SCREEN, false, false)?;
+        host.pair_for_control(&controller)?;
     }
     let first = controller.connect_control(&hosts[0])?;
     let second = controller.connect_control(&hosts[1])?;

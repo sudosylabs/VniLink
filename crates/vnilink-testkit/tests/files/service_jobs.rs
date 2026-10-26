@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use vnilink::{Error, JobSnapshot, JobState, ServiceInfo, ServiceKind, SessionPhase};
 use vnilink_testkit::files::{self, drive_to_end, job_on, payload};
+use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, Traced, DEFAULT_WAIT, FILES};
 
 const TRANSFER: Duration = Duration::from_secs(30);
@@ -441,10 +442,7 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
     );
     // An ambiguous refusal ends only that service, so that a lost reply
     // cannot leave an admitted job without one; the retry opens another.
-    if !matches!(
-        controller.controller_service(unopened.id)?.phase,
-        vnilink::ServicePhase::Closed(_) | vnilink::ServicePhase::Failed(_)
-    ) {
+    if !service_ended(&controller.controller_service(unopened.id)?.phase) {
         controller.close_controller_service(unopened.id, unopened.generation)?;
     }
     let (files, pipe) = pair.controller.open_files(&session)?;

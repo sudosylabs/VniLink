@@ -11,10 +11,12 @@ use vnilink::{
     CoreEvent, Error, Grants, InputEvent, JobState, KeyboardMode, LocalKey, Quality, SessionPhase,
     SessionRole,
 };
-use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, RecordingClipboard};
+use vnilink_testkit::desktop::{
+    keyframe, next_picture, InputLog, MonitorCapture, RecordingClipboard,
+};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
-use super::support::{active, cursor_at, pair, wait_phase, CursorCapture, INVITATION};
+use super::support::{cursor_at, INVITATION};
 
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
@@ -40,8 +42,10 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
             texts: Arc::clone(&clip),
         }))?;
         clips.push(clip);
-        host.core.set_capture(Box::new(CursorCapture))?;
-        pair(host, &controller)?;
+        host.core.set_capture(Box::new(
+            MonitorCapture::new((1920, 1080)).separate_cursor(true),
+        ))?;
+        host.pair_for_control(&controller)?;
         host.core.set_desktop_sharing(Grants {
             view: true,
             control: true,
@@ -60,8 +64,8 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
     let pending_a = controller.core.begin_connect(&a.endpoint())?;
     let pending_b = controller.core.begin_connect(&b.endpoint())?;
     assert_ne!(pending_a.id, pending_b.id, "each host has its own handle");
-    let sa = active(&controller, pending_a.id);
-    let mut sb = active(&controller, pending_b.id);
+    let sa = controller.active(pending_a.id);
+    let mut sb = controller.active(pending_b.id);
     let ha = a.core.snapshot()?.incoming.ok_or("host a's session")?;
     let hb = b.core.snapshot()?.incoming.ok_or("host b's session")?;
     assert_eq!(
@@ -253,7 +257,7 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
     }
 
     controller.core.disconnect_session(sa.id)?;
-    wait_phase(&controller, sa.id, SessionPhase::Closed);
+    controller.wait_phase(sa.id, SessionPhase::Closed);
     assert_eq!(
         controller.core.controller_session(sb.id)?,
         sb,
@@ -323,8 +327,8 @@ fn a_failed_connection_has_its_own_handle_and_can_be_forgotten() -> TestResult {
     let controller = Engine::start("controller");
     let a = Engine::start("host-a");
     let b = Engine::start("host-b");
-    pair(&a, &controller)?;
-    pair(&b, &controller)?;
+    a.pair_for_control(&controller)?;
+    b.pair_for_control(&controller)?;
     let sa = controller.connect_control(&a)?;
     b.core.stop_hosting()?;
     let pending = controller.core.begin_connect(&b.endpoint())?;
@@ -344,7 +348,7 @@ fn a_failed_connection_has_its_own_handle_and_can_be_forgotten() -> TestResult {
     b.core.start_hosting()?;
     let retry = controller.core.begin_connect(&b.endpoint())?;
     assert_ne!(retry.id, pending.id, "a retry gets a new handle");
-    active(&controller, retry.id);
+    controller.active(retry.id);
     assert_eq!(
         controller.core.controller_session(sa.id)?,
         sa,
@@ -371,8 +375,8 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
     let controller = Engine::start("controller");
     let a = Engine::start("host-a");
     let b = Engine::start("host-b");
-    pair(&a, &controller)?;
-    pair(&b, &controller)?;
+    a.pair_for_control(&controller)?;
+    b.pair_for_control(&controller)?;
     let sa = controller.connect_control(&a)?;
     b.core.unpair(&controller.endpoint())?;
     b.core.export_pairing_file(INVITATION, true)?;
@@ -381,7 +385,7 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
         b.core.control_request().ok().flatten()
     });
     controller.core.disconnect_session(pending.id)?;
-    wait_phase(&controller, pending.id, SessionPhase::Closed);
+    controller.wait_phase(pending.id, SessionPhase::Closed);
     assert_eq!(
         controller.core.controller_session(sa.id)?,
         sa,
@@ -441,7 +445,7 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
         "the old generation's subscriber gets nothing"
     );
     controller.core.unpair(&a.endpoint())?;
-    wait_phase(&controller, sa.id, SessionPhase::Closed);
+    controller.wait_phase(sa.id, SessionPhase::Closed);
     assert_eq!(
         controller.core.controller_session(sb.id)?,
         sb,
@@ -466,13 +470,10 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
         ..Grants::default()
     };
     for host in [&a, &b] {
-        pair(host, &controller)?;
+        host.pair_for_control(&controller)?;
         host.core.set_desktop_sharing(transfer)?;
         controller.core.set_desktop_sharing(transfer)?;
-        active(
-            &controller,
-            controller.core.begin_connect_files(&host.endpoint())?.id,
-        );
+        controller.active(controller.core.begin_connect_files(&host.endpoint())?.id);
     }
     let download = |host: &Engine, name: &str| {
         controller.core.job_submit_download(
@@ -585,7 +586,7 @@ fn a_fifth_outgoing_connection_is_busy_until_one_closes() -> TestResult {
         .map(|n| Engine::start(&format!("host-{n}")))
         .collect();
     for host in &hosts {
-        pair(host, &controller)?;
+        host.pair_for_control(&controller)?;
     }
     let mut live = Vec::new();
     for host in &hosts[..4] {
@@ -609,7 +610,7 @@ fn a_fifth_outgoing_connection_is_busy_until_one_closes() -> TestResult {
         "the refused host left no session record"
     );
     controller.core.disconnect_session(live[0].id)?;
-    wait_phase(&controller, live[0].id, SessionPhase::Closed);
+    controller.wait_phase(live[0].id, SessionPhase::Closed);
     let fifth = controller.connect_control(&hosts[4])?;
     assert_eq!(
         fifth.peer_id,

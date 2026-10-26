@@ -5,7 +5,10 @@
 use vnilink::{Error, FolderKind};
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 
-use super::{deep_folder, is_message, only_root, read, Location, Unshared, UNSAFE_PATH};
+use vnilink_testkit::files::Location;
+use vnilink_testkit::store::Installed;
+
+use super::{deep_folder, is_message, only_root, read, UNSAFE_PATH};
 
 #[test]
 fn whole_filesystem_browses_siblings_without_folder_configuration() -> TestResult {
@@ -16,7 +19,7 @@ fn whole_filesystem_browses_siblings_without_folder_configuration() -> TestResul
     std::fs::create_dir(&left)?;
     std::fs::create_dir(&right)?;
     std::fs::write(right.join("note.txt"), b"sibling bytes")?;
-    let engine = Unshared::start("engine");
+    let engine = Installed::start("engine");
     let core = &engine.core;
     assert!(
         core.file_roots()?.is_empty(),
@@ -62,7 +65,7 @@ fn whole_filesystem_browses_siblings_without_folder_configuration() -> TestResul
 fn roots_start_empty_and_jail_traversal() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
-    let engine = Unshared::start("engine");
+    let engine = Installed::start("engine");
     let core = &engine.core;
     assert!(
         core.file_roots()?.is_empty(),
@@ -218,7 +221,7 @@ fn approved_root_replaced_by_symlink_cannot_escape() -> TestResult {
 #[test]
 fn places_name_home_and_its_folders_by_root() -> TestResult {
     let _trace = traced();
-    let engine = Unshared::start("engine");
+    let engine = Installed::start("engine");
     let core = &engine.core;
     assert!(core.places()?.roots.is_empty(), "nothing is shared yet");
     core.enable_filesystem_access()?;

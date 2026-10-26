@@ -5,8 +5,6 @@
 
 #[path = "system/actions.rs"]
 mod actions;
-#[path = "system/backends.rs"]
-mod backends;
 #[path = "system/power.rs"]
 mod power;
 #[path = "system/privacy.rs"]
@@ -16,20 +14,8 @@ mod restoring;
 
 use std::sync::Arc;
 
-use vnilink::{
-    Core, Error, HostSystemActions, RemoteSystemService, ServiceKind, SessionInfo, SystemPolicy,
-};
+use vnilink::{Error, HostSystemActions, ServiceKind, SystemPolicy};
 use vnilink_testkit::Pair;
-
-/// A System service opened on `connection`.
-fn open_system(controller: &Core, connection: &SessionInfo) -> Result<RemoteSystemService, Error> {
-    let owner = controller.attach_controller_service(
-        connection.id,
-        connection.generation,
-        ServiceKind::System,
-    )?;
-    controller.open_system_service(owner.id, owner.generation)
-}
 
 /// A host sharing its system actions, with `system` as its operating
 /// system, and a controller paired with it.

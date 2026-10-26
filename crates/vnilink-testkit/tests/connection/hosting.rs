@@ -13,8 +13,6 @@ use vnilink::{
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
-use super::support::{pair, wait_closed};
-
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
 
@@ -25,7 +23,7 @@ fn input_for_the_wrong_session_or_generation_is_rejected() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
     let key = InputEvent::key_down(usage::A);
     assert!(
@@ -79,7 +77,7 @@ fn stopping_hosting_disables_new_sessions_even_when_none_is_active() -> TestResu
 
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     assert!(
         matches!(host.core.stop_hosted_session(), Err(Error::NoSession)),
         "there is no hosted session to stop"
@@ -116,7 +114,7 @@ fn stopping_hosting_ends_the_active_session_and_releases_keys() -> TestResult {
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let applied = InputLog::install(&host, MONITOR)?;
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
     let held = [
         InputEvent::key_down(usage::A),
@@ -139,8 +137,8 @@ fn stopping_hosting_ends_the_active_session_and_releases_keys() -> TestResult {
         ],
         "stopping hosting lifts the held button, then the held key"
     );
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
+    host.wait_closed(SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
     let snapshot = host.core.snapshot()?;
     assert!(!snapshot.hosting, "the host no longer hosts");
     assert!(
@@ -184,7 +182,7 @@ fn disconnect_closes_both_sides_and_releases_held_input() -> TestResult {
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let applied = InputLog::install(&host, MONITOR)?;
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
     let held = [
         InputEvent::key_down(usage::A),
@@ -197,8 +195,8 @@ fn disconnect_closes_both_sides_and_releases_held_input() -> TestResult {
     }
     assert_eq!(applied.wait_for(2), held, "the controller's input applies");
     controller.core.disconnect()?;
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
+    host.wait_closed(SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
     assert_eq!(
         applied.wait_for(4),
         [
@@ -255,7 +253,7 @@ fn revoke_stops_the_session_releases_input_and_blocks_reconnect() -> TestResult 
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let applied = InputLog::install(&host, MONITOR)?;
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
     let held = [
         InputEvent::key_down(usage::LEFT_SHIFT),
@@ -278,8 +276,8 @@ fn revoke_stops_the_session_releases_input_and_blocks_reconnect() -> TestResult 
         ],
         "revoking lifts the held button, then the held key"
     );
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
+    host.wait_closed(SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
     assert!(
         host.core.snapshot()?.devices.is_empty(),
         "a revoked controller is forgotten"
@@ -330,7 +328,7 @@ fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestRes
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let applied = InputLog::install(&host, MONITOR)?;
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
     let shift = InputEvent::key_down(usage::LEFT_SHIFT);
     controller
@@ -343,8 +341,8 @@ fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestRes
         [shift, InputEvent::key_up(usage::LEFT_SHIFT)],
         "unpairing lifts the held key, as any local stop does"
     );
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
+    host.wait_closed(SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
     assert!(
         host.core.snapshot()?.devices.is_empty(),
         "an unpaired controller is forgotten, not kept without grants"
@@ -401,14 +399,14 @@ fn unpairing_an_unknown_device_reports_not_paired() -> TestResult {
         ),
         "an unknown peer is not paired"
     );
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     assert_eq!(
         controller.core.connect(&host.endpoint())?.phase,
         SessionPhase::Active,
         "pairing still works afterwards"
     );
     controller.core.unpair(&host.endpoint())?;
-    wait_closed(&controller, SessionRole::Controller);
+    controller.wait_closed(SessionRole::Controller);
     assert!(
         matches!(
             controller.core.connect(&host.endpoint()),
@@ -427,15 +425,15 @@ fn a_controller_unpair_ends_its_outgoing_session() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     controller.core.connect(&host.endpoint())?;
     controller.core.unpair(&host.endpoint())?;
     assert!(
         controller.core.snapshot()?.devices.is_empty(),
         "the controller forgets its host"
     );
-    wait_closed(&controller, SessionRole::Controller);
-    wait_closed(&host, SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
+    host.wait_closed(SessionRole::Host);
     assert_eq!(
         host.core.snapshot()?.devices.len(),
         1,
@@ -467,7 +465,7 @@ fn removing_control_mid_session_stops_applying_input() -> TestResult {
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let applied = InputLog::install(&host, MONITOR)?;
-    pair(&host, &controller)?;
+    host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
     let pressed = InputEvent::key_down(usage::A);
     controller
@@ -546,7 +544,7 @@ fn stopping_hosting_stops_every_peer() -> TestResult {
     let host = Engine::start("host");
     let peers = [Engine::start("viewer-a"), Engine::start("viewer-b")];
     for peer in &peers {
-        pair(&host, peer)?;
+        host.pair_for_control(peer)?;
         peer.connect_services(&host)?;
     }
     let live = || -> Result<usize, Error> {
@@ -576,9 +574,10 @@ fn stop_hosting_cancels_live_owners_and_refuses_new_sessions() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let peers = [Engine::start("viewer-a"), Engine::start("viewer-b")];
-    host.core.set_capture(Box::new(MonitorCapture(MONITOR)))?;
+    host.core
+        .set_capture(Box::new(MonitorCapture::new(MONITOR)))?;
     for peer in &peers {
-        pair(&host, peer)?;
+        host.pair_for_control(peer)?;
     }
     host.core.set_desktop_sharing(Grants {
         view: true,

@@ -2,16 +2,15 @@
 //! and the picture quality, at connect and afterwards.
 
 use expect_test::expect;
-use std::time::Duration;
 
 use vnilink::{
     CodecSupport, CoreEvent, EncodedFrame, Error, EventSubscription, Quality, ServiceKind,
     SessionRole, VideoCodec, VideoCodecCaps,
 };
 use vnilink_testkit::desktop::{next_picture, MonitorCapture};
+use vnilink_testkit::events::next_picked;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::lifecycle::pair;
 use super::streams::SCREEN;
 
 /// The size of the host's screen where only the codec matters.
@@ -23,19 +22,22 @@ fn pair_with_screen(monitor: (u16, u16)) -> Result<Pair, Error> {
     let pair = Pair::for_desktop();
     pair.host
         .core
-        .set_capture(Box::new(MonitorCapture(monitor)))?;
+        .set_capture(Box::new(MonitorCapture::new(monitor)))?;
     Ok(pair)
 }
 
 /// The next quality update `events` brings: the session it names and the
 /// quality.
 fn quality_update(events: &EventSubscription) -> (u64, Quality) {
-    wait_for("a quality update", DEFAULT_WAIT, || {
-        match events.recv_timeout(Duration::from_millis(20))? {
+    next_picked(
+        events,
+        "a quality update",
+        DEFAULT_WAIT,
+        |event| match event {
             CoreEvent::QualityUpdated { id, quality } => Some((id, quality)),
             _ => None,
-        }
-    })
+        },
+    )
 }
 
 /// A 1080p monitor with 640x480 codec limits admits the session, and both
@@ -161,8 +163,9 @@ fn saved_quality_defaults_start_new_connections_and_leave_live_limits_alone() ->
     let controller = Engine::start("controller");
     let hosts = [Engine::start("host"), Engine::start("second-host")];
     for host in &hosts {
-        host.core.set_capture(Box::new(MonitorCapture(SCREEN)))?;
-        pair(host, &controller)?;
+        host.core
+            .set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
+        host.pair_for_control(&controller)?;
     }
     let first = controller.connect_control(&hosts[0])?;
     let defaults = Quality::new(1500, 24, 1280, 720)?;

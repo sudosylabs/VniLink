@@ -6,18 +6,11 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{usage, Error, Grants, InputEvent, Quality, ServiceKind, SessionPhase, SessionRole};
-use vnilink_testkit::desktop::{keyframe, InputLog};
+use vnilink_testkit::desktop::{delta, keyframe, InputLog, MonitorCapture};
 use vnilink_testkit::{holds, traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
-
-use super::support::{active, hosted_id, pair, wait_hosted};
 
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
-
-/// A frame stamped `timestamp_us` that depends on the frames before it.
-fn delta(timestamp_us: u64, payload: Vec<u8>) -> vnilink::EncodedFrame {
-    vnilink::EncodedFrame::h264(false, timestamp_us, payload).expect("an H.264 frame")
-}
 
 /// Two viewers and a files peer are hosted at once with their own records,
 /// only the viewers consuming the capture. The earliest viewer holds input
@@ -33,7 +26,7 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
     let worker = Engine::start("worker");
     let extra = [Engine::start("extra-a"), Engine::start("extra-b")];
     for peer in viewers.iter().chain([&worker]).chain(extra.iter()) {
-        pair(&host, peer)?;
+        host.pair_for_control(peer)?;
     }
     let applied = InputLog::install(&host, MONITOR)?;
     host.core.set_service_sharing(ServiceKind::Files, true)?;
@@ -134,10 +127,10 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
         "the busy peer leaves the live sessions"
     );
     extra[0].core.disconnect()?;
-    wait_hosted(&host, 3);
+    host.wait_hosted(3);
 
     viewers[0].core.disconnect()?;
-    wait_hosted(&host, 2);
+    host.wait_hosted(2);
     let c_down = InputEvent::key_down(usage::C);
     viewers[1].core.submit_input(vb.id, vb.generation, c_down)?;
     assert_eq!(
@@ -147,7 +140,7 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
     );
 
     host.core.revoke(&worker.endpoint())?;
-    wait_hosted(&host, 1);
+    host.wait_hosted(1);
     assert_eq!(
         viewers[1].core.controller_session(vb.id)?.phase,
         SessionPhase::Active,
@@ -175,8 +168,8 @@ fn quality_updates_select_the_role_with_both_directions_active() -> TestResult {
     let _trace = traced();
     let a = Engine::start("a");
     let b = Engine::start("b");
-    pair(&a, &b)?;
-    pair(&b, &a)?;
+    a.pair_for_control(&b)?;
+    b.pair_for_control(&a)?;
     let b_out = b.core.connect(&a.endpoint())?;
     let a_out = a.core.connect(&b.endpoint())?;
     let a_host_id = a.core.snapshot()?.incoming.ok_or("a hosts b")?.id;
@@ -231,7 +224,7 @@ fn a_saturated_viewer_does_not_slow_another_viewer() -> TestResult {
     let slow = Engine::start("slow");
     let fast = Engine::start("fast");
     for viewer in [&slow, &fast] {
-        pair(&host, viewer)?;
+        host.pair_for_control(viewer)?;
         host.core.set_desktop_sharing(Grants {
             view: true,
             ..Grants::default()
@@ -246,8 +239,8 @@ fn a_saturated_viewer_does_not_slow_another_viewer() -> TestResult {
         2,
         "both viewers are hosted"
     );
-    let ha = hosted_id(&host, &slow);
-    let hb = hosted_id(&host, &fast);
+    let ha = host.hosted_id(&slow);
+    let hb = host.hosted_id(&fast);
     // Past the slow viewer's outbox of eight frames.
     host.core.publish_video(ha, keyframe(1, vec![7]))?;
     for stamp in 2..=41 {
@@ -294,8 +287,9 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     let files = Engine::start("files");
     let term = Engine::start("terminal");
     InputLog::install(&host, MONITOR)?;
-    host.core
-        .set_capture(Box::new(super::support::CursorCapture))?;
+    host.core.set_capture(Box::new(
+        MonitorCapture::new((1920, 1080)).separate_cursor(true),
+    ))?;
     host.core
         .set_terminal_factory(Some(shell(&std::env::temp_dir())))?;
     std::fs::write(files.root().join("note.txt"), b"combined-scenario")?;
@@ -303,7 +297,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     // The viewers open sessions under the view grant; the services peers
     // connect neutrally and are authorized per feature.
     for peer in [&fast, &slow, &files, &term] {
-        pair(&host, peer)?;
+        host.pair_for_control(peer)?;
     }
     host.core.set_desktop_sharing(Grants {
         view: true,
@@ -318,7 +312,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
 
     let sa = fast.connect_control(&host)?;
     let sb = slow.connect_control(&host)?;
-    let sc = active(&files, files.core.begin_connect_files(&host.endpoint())?.id);
+    let sc = files.active(files.core.begin_connect_files(&host.endpoint())?.id);
     let sd = term.connect_services(&host)?;
     assert_eq!(
         host.core.hosted_sessions()?.len(),
@@ -330,8 +324,8 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     // frames.
     let va = fast.core.subscribe_session_video(sa.id, sa.generation)?;
     let _vb = slow.core.subscribe_session_video(sb.id, sb.generation)?;
-    let ha = hosted_id(&host, &fast);
-    let hb = hosted_id(&host, &slow);
+    let ha = host.hosted_id(&fast);
+    let hb = host.hosted_id(&slow);
     host.core.publish_video(hb, keyframe(1, vec![7]))?;
     for stamp in 2..=41u64 {
         host.core.publish_video(hb, delta(stamp, vec![7]))?;
@@ -448,7 +442,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     );
     let vb2 = slow.core.subscribe_session_video(sb2.id, sb2.generation)?;
     host.core
-        .publish_video(hosted_id(&host, &slow), keyframe(779, vec![8]))?;
+        .publish_video(host.hosted_id(&slow), keyframe(779, vec![8]))?;
     assert_eq!(
         vb2.recv_timeout(Duration::from_secs(3))
             .ok_or("the reconnected viewer's keyframe within 3 s")?

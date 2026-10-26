@@ -7,10 +7,10 @@ use expect_test::expect;
 use std::sync::Arc;
 
 use vnilink::{HostSystemActions, PrivacyState};
+use vnilink_testkit::system::FakeSystem;
 use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
 
-use super::backends::FakeSystem;
-use super::{open_system, sharing, PRIVACY};
+use super::{sharing, PRIVACY};
 
 /// Removing the host's backend while privacy is held gives privacy back
 /// on that backend, exactly once per facility.
@@ -22,7 +22,7 @@ fn backend_removal_restores_original_privacy_exactly_once() -> TestResult {
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     host.set_system_actions(None)?;
     wait_for("privacy to be given back", DEFAULT_WAIT, || {
@@ -66,7 +66,7 @@ fn backend_replacement_restores_original_and_leaves_new_untouched() -> TestResul
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     let replacement = Arc::new(FakeSystem::full());
     host.set_system_actions(Some(Arc::clone(&replacement) as Arc<dyn HostSystemActions>))?;
@@ -116,7 +116,7 @@ fn failed_native_restore_keeps_lease_and_reports_held() -> TestResult {
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     host.set_system_actions(None)?;
     // The teardown restore fails: wait for the attempt, then the host must
@@ -125,9 +125,7 @@ fn failed_native_restore_keeps_lease_and_reports_held() -> TestResult {
         let calls = fake.calls();
         (calls.display.restores_asked() + calls.input.restores_asked() >= 1).then_some(())
     });
-    wait_for("the host to end its services", DEFAULT_WAIT, || {
-        host.hosted_services().ok()?.is_empty().then_some(())
-    });
+    pair.host.wait_released(None);
     let held = host.system_privacy()?;
     assert!(
         held.display_private && held.input_blocked,
@@ -186,7 +184,7 @@ fn refused_enable_applies_nothing_and_reports_default() -> TestResult {
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     assert!(
         system.set_privacy(true, true).is_err(),
         "privacy the OS refuses in part fails"
@@ -232,7 +230,7 @@ fn stuck_fresh_apply_retains_acknowledged_remainder() -> TestResult {
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     assert!(
         system.set_privacy(true, true).is_err(),
         "privacy the OS refuses in part fails"
@@ -272,7 +270,7 @@ fn input_only_owner_close_restores_without_touching_display() -> TestResult {
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(false, true)?;
     system.close();
     wait_for("input to be given back", DEFAULT_WAIT, || {
@@ -315,7 +313,7 @@ fn partial_restore_keeps_remainder_and_repeated_narrowing_retries() -> TestResul
     let host = &pair.host.core;
     host.set_system_policy(PRIVACY)?;
     let connection = pair.connect_services();
-    let system = open_system(&pair.controller.core, &connection)?;
+    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     let narrowed = vnilink::SystemPolicy {
         allow_privacy: false,

@@ -176,20 +176,16 @@ fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
         .unwrap();
     // Once the viewer knows, a key it sends reaches the host, which decides;
     // input queued before is the viewer's to drop.
-    wait_for("the viewer to learn it only views", DEFAULT_WAIT, || {
-        trace
-            .named("control changed")
-            .iter()
-            .any(|event| event["engine"] == "controller" && event["state"] == "Viewing")
-            .then_some(())
-    });
+    trace.wait_for_records_with(
+        "control changed",
+        &[("engine", "controller"), ("state", "Viewing")],
+        1,
+    );
     session
         .service
         .submit_input(InputEvent::key_down(usage::A))
         .expect("the viewer sends the key; the host decides");
-    wait_for("the host to discard the key", DEFAULT_WAIT, || {
-        (!trace.named("input discarded").is_empty()).then_some(())
-    });
+    trace.wait_for_records("input discarded", 1);
     expect![[r#"
         controller:
           input: control changed epoch=2 service=1 state=Viewing

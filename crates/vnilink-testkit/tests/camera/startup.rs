@@ -11,9 +11,8 @@ use std::time::{Duration, Instant};
 use vnilink::camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory};
 use vnilink::{BackendStartup, Error, ServiceInfo, ServiceKind};
 use vnilink_testkit::camera::{config, StandInCameras};
+use vnilink_testkit::desktop::keyframe;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
-
-use super::keyframe;
 
 /// How soon a starting backend learns its camera is no longer wanted.
 const NOTICED_WITHIN: Duration = Duration::from_secs(1);
@@ -215,7 +214,7 @@ fn a_camera_that_opens_after_its_grant_is_withdrawn_is_closed_unused() -> TestRe
         source.is_cancelled().then_some(())
     });
     assert!(
-        source.publish(keyframe(1, 1)?).is_err(),
+        source.publish(keyframe(1, vec![7; 1])).is_err(),
         "a late capture takes no pictures"
     );
     assert!(

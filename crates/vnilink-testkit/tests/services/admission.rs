@@ -9,9 +9,10 @@ use vnilink::{
     CloseCause, Error, Grants, InputEvent, ServiceKind, ServicePhase, SessionPhase, SharingPolicy,
     VideoCodecCaps,
 };
+use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{hosted_ends, phase, reaches, redialed, whole_disk};
+use super::support::phase;
 
 /// The host forgets the controller and asks its owner before admitting it
 /// again, as a pairing file with the control switch does.
@@ -20,13 +21,6 @@ fn ask_before_admitting(pair: &Pair) -> TestResult {
     host.unpair(&pair.controller.endpoint())?;
     host.export_pairing_file(Duration::from_secs(60), true)?;
     Ok(())
-}
-
-/// Waits until the host's owner is asked to admit a controller.
-fn wait_asked(host: &Engine) {
-    wait_for("the host to ask its owner", DEFAULT_WAIT, || {
-        host.core.control_request().ok().flatten().map(|_| ())
-    });
 }
 
 /// Services attached while the host's owner decides wait; closing one does
@@ -39,7 +33,7 @@ fn a_waiting_service_closes_without_withdrawing_the_request() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     ask_before_admitting(&pair)?;
     let pending = controller.begin_connect(&pair.host.endpoint())?;
-    wait_asked(&pair.host);
+    pair.host.wait_request();
     let service = pair.attach(&pending, ServiceKind::Desktop);
     assert_eq!(
         service.phase,
@@ -60,7 +54,7 @@ fn a_waiting_service_closes_without_withdrawing_the_request() -> TestResult {
         "closing a waiting service leaves the request"
     );
     host.confirm_control_request(&controller.control_check())?;
-    let session = reaches(&pair.controller, pending.id, SessionPhase::Active);
+    let session = pair.controller.wait_phase(pending.id, SessionPhase::Active);
     assert_eq!(
         phase(&pair.controller, &service),
         ServicePhase::Closed(CloseCause::OwnerClose),
@@ -106,7 +100,7 @@ fn a_rejected_connection_fails_its_attached_services() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     ask_before_admitting(&pair)?;
     let pending = controller.begin_connect(&pair.host.endpoint())?;
-    wait_asked(&pair.host);
+    pair.host.wait_request();
     let service = pair.attach(&pending, ServiceKind::Desktop);
     host.reject_control_request()?;
     wait_for("the connection to fail", DEFAULT_WAIT, || {
@@ -153,7 +147,7 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host)?;
+    let (root, folder) = whole_disk(&pair.host, "")?;
     host.set_desktop_sharing(Grants::default())?;
     host.set_video_codecs(VideoCodecCaps::default())?;
     controller.set_video_codecs(VideoCodecCaps::default())?;
@@ -239,7 +233,7 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
     );
     let old_lease = controller.service_lease(owner.id, owner.generation)?;
     controller.drop_controller_link(session.id)?;
-    redialed(&pair.controller, &session);
+    pair.controller.redialed(&session);
     assert!(old_lease.is_cancelled(), "the redial ends the old lease");
     let fresh = controller.controller_service(owner.id)?;
     let next = controller.open_files_service(fresh.id, fresh.generation)?;
@@ -264,7 +258,7 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
         "withdrawing Files leaves the connection"
     );
     assert_eq!(
-        hosted_ends(&trace, "host"),
+        trace.hosted_ends("host"),
         [
             (1, "closed: ParentLoss".to_owned()),
             (2, "closed: Revoked".to_owned())
@@ -309,10 +303,10 @@ fn a_neutral_connection_needs_the_hosts_consent_and_shares_nothing() -> TestResu
         .export_pairing_file(Duration::from_secs(60), true)?;
     let events = host.core.subscribe()?;
     let pending = controller.core.begin_connect_services(&host.endpoint())?;
-    wait_asked(&host);
+    host.wait_request();
     host.core
         .confirm_control_request(&controller.core.control_check())?;
-    reaches(&controller, pending.id, SessionPhase::Active);
+    controller.wait_phase(pending.id, SessionPhase::Active);
     assert_eq!(
         host.core.snapshot()?.devices.len(),
         1,
