@@ -1,13 +1,15 @@
 /**
  * `npm run doctor`: checks everything `build/prerequisites.json` lists for
- * this OS and reports each task as ready, missing what, or unsupported here.
+ * this OS and reports each task as ready, missing what, unsupported here, or
+ * unknown: nothing is missing, but a permission only the run can confirm.
+ * Every task runs on this computer; a second computer is optional.
  *
  *   --task <name>      only these tasks (repeatable)
  *   --require <names>  exit 1 unless these comma-separated tasks are ready (CI)
  *   --json             the reports as JSON
  */
 import { homedir } from 'node:os';
-import { checkTasks, detectHost, firstBuildDownloads, fixLines, loadManifest, systemProbe, type CheckResult, type Probe, type TaskReport } from './prerequisites.ts';
+import { checkTasks, detectHost, firstBuildDownloads, fixLines, loadManifest, systemProbe, type CheckResult, type Probe, type RequirementKind, type TaskReport } from './prerequisites.ts';
 
 interface DoctorOptions {
 	readonly tasks: readonly string[];
@@ -36,11 +38,14 @@ function parse(args: readonly string[]): DoctorOptions {
 const labels: Readonly<Record<CheckResult['status'], string>> = { ready: 'ok', missing: 'MISSING', unsupported: 'unsupported', unknown: 'unknown' };
 
 function requirementLine(result: CheckResult): string {
-	const label = result.status === 'missing' && result.optional ? 'optional' : labels[result.status];
+	const label = (result.status === 'missing' || result.status === 'unknown') && result.optional ? 'optional' : labels[result.status];
 	return `  ${label.padEnd(12)}${result.title}${result.detail ? `: ${result.detail}` : ''}`;
 }
 
-/** The report as text: every requirement once, then every task by status. */
+/** Each kind of requirement under its own heading. */
+const sections: readonly (readonly [RequirementKind, string])[] = [['tool', 'Requirements'], ['permission', 'Permissions'], ['computer', 'Other computers']];
+
+/** The report as text: every requirement once by kind, then every task by status. */
 export function formatDoctor(reports: readonly TaskReport[], header: string, fixes: readonly string[], downloads: readonly string[]): string {
 	const requirements = new Map<string, CheckResult>();
 	for (const report of reports) {
@@ -48,15 +53,22 @@ export function formatDoctor(reports: readonly TaskReport[], header: string, fix
 			requirements.set(result.id, result);
 		}
 	}
-	const lines = [header, '', 'Requirements'];
-	for (const result of requirements.values()) {
-		lines.push(requirementLine(result));
-		if (result.note) {
-			lines.push(`  ${''.padEnd(12)}note: ${result.note}`);
+	const lines = [header];
+	for (const [kind, heading] of sections) {
+		const selected = [...requirements.values()].filter(result => result.kind === kind);
+		if (!selected.length) {
+			continue;
+		}
+		lines.push('', heading);
+		for (const result of selected) {
+			lines.push(requirementLine(result));
+			if (result.note) {
+				lines.push(`  ${''.padEnd(12)}note: ${result.note}`);
+			}
 		}
 	}
 	lines.push('', 'Tasks');
-	for (const status of ['ready', 'missing', 'unsupported'] as const) {
+	for (const status of ['ready', 'unknown', 'missing', 'unsupported'] as const) {
 		const selected = reports.filter(report => report.status === status);
 		if (!selected.length) {
 			continue;
@@ -65,7 +77,7 @@ export function formatDoctor(reports: readonly TaskReport[], header: string, fix
 			lines.push(`  ${'ready'.padEnd(12)}${selected.map(report => report.name).join(', ')}`);
 		} else {
 			for (const report of selected) {
-				lines.push(`  ${(status === 'missing' ? 'missing' : 'unsupported').padEnd(12)}${report.name}: ${report.reason ?? ''}`);
+				lines.push(`  ${status.padEnd(12)}${report.name}: ${report.reason ?? ''}`);
 			}
 		}
 	}
@@ -95,7 +107,8 @@ export async function doctor(root: string, args: readonly string[], probe: Probe
 		const missing = new Map<string, CheckResult>();
 		for (const report of reports) {
 			for (const result of report.results) {
-				if (result.status === 'missing' || result.status === 'unknown') {
+				// An optional requirement nothing here can check needs no step.
+				if (result.status === 'missing' || (result.status === 'unknown' && !result.optional)) {
 					missing.set(result.id, result);
 				}
 			}

@@ -16,7 +16,7 @@ const end = '<!-- prerequisites:end -->';
 const coreTasks = ['build', 'start', 'test:ui', 'test:rust'];
 
 /** Tasks whose extra needs are listed separately. */
-const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'package:installers', 'assets:tray', 'sandbox:linux'];
+const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'measure:perceived', 'package:installers', 'assets:tray', 'sandbox:linux'];
 
 function applies(requirement: Requirement, platform: Platform): boolean {
 	return !requirement.platforms || requirement.platforms.includes(platform);
@@ -100,8 +100,10 @@ function otherTaskLines(manifest: Manifest, platform: Platform, core: ReadonlySe
 		}
 		const needs = extra.map(id => {
 			const requirement = manifest.requirements[id];
-			const how = platform === 'linux' ? linuxInstruction(manifest, requirement) : instruction(manifest, id, requirement, platform);
-			return how ? `${requirement.title}: ${how}` : requirement.title;
+			// Joined with semicolons, so no step ends its own sentence.
+			const how = (platform === 'linux' ? linuxInstruction(manifest, requirement) : instruction(manifest, id, requirement, platform)).replace(/\.$/, '');
+			const title = `${requirement.title}${requirement.optional ? ' (optional)' : ''}`;
+			return how ? `${title}: ${how}` : title;
 		});
 		lines.push(`| \`npm run ${task}\` | ${needs.join('; ')} |`);
 	}

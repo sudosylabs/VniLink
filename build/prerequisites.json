@@ -164,9 +164,9 @@
         "default": "`winget install MSYS2.MSYS2`, then in the MSYS2 shell `pacman -S --needed {msys2}`. Put `C:\\msys64\\mingw64\\bin` on PATH or set `VNILINK_MSYS_ROOT` to the MSYS2 root."
       }
     },
-    "download-tools": {
-      "title": "git and curl",
-      "purpose": "The first native build clones and downloads codec and CMake sources with them.",
+    "git": {
+      "title": "git",
+      "purpose": "The first native build clones codec sources, check:hygiene lists the repository's files, and the VS Code import reads the upstream checkout's commit.",
       "check": {
         "commands": {
           "git": {
@@ -174,7 +174,15 @@
             "fedora": "git",
             "darwin": "`xcode-select --install`",
             "win32": "`winget install Git.Git`"
-          },
+          }
+        }
+      }
+    },
+    "curl": {
+      "title": "curl",
+      "purpose": "The first native build downloads codec and CMake sources with it.",
+      "check": {
+        "commands": {
           "curl": {
             "debian": "curl",
             "fedora": "curl",
@@ -501,7 +509,7 @@
     "ssh": {
       "title": "OpenSSH client",
       "optional": true,
-      "purpose": "Measuring latency against another computer drives it over SSH.",
+      "purpose": "Only `--remote` measurements use it, to drive a second computer over SSH.",
       "check": {
         "commands": {
           "ssh": {
@@ -516,14 +524,94 @@
     "ffmpeg": {
       "title": "FFmpeg",
       "platforms": ["darwin"],
-      "optional": true,
-      "purpose": "Scores the sharpness of the test card in perceived-quality runs.",
+      "purpose": "Scores the sharpness of the test card in every perceived-quality run.",
       "check": {
         "commands": {
           "ffmpeg": {
             "darwin": "`brew install ffmpeg`"
           }
         }
+      }
+    },
+    "root": {
+      "title": "Root",
+      "kind": "permission",
+      "platforms": ["linux"],
+      "purpose": "The impaired-network harness creates network namespaces and shapes their links.",
+      "check": {
+        "custom": "root"
+      },
+      "fix": {
+        "default": "Run it as root (`sudo node build/run.ts measure:impaired:linux`), or run `npm run measure:impaired`, which runs it in a container."
+      }
+    },
+    "screen-recording": {
+      "title": "Screen Recording for the application running the task",
+      "kind": "permission",
+      "platforms": ["darwin"],
+      "purpose": "The perceived-quality driver captures the display as the application that started the task, a terminal or an editor.",
+      "check": {
+        "custom": "screen-recording"
+      },
+      "fix": {
+        "default": "Allow that application in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen it."
+      }
+    },
+    "accessibility": {
+      "title": "Accessibility for the application running the task",
+      "kind": "permission",
+      "platforms": ["darwin"],
+      "purpose": "The perceived-quality driver moves the pointer and types with Core Graphics events, which macOS delivers only from an application allowed to control the computer.",
+      "check": {
+        "custom": "accessibility"
+      },
+      "fix": {
+        "default": "Allow that application in System Settings > Privacy & Security > Accessibility."
+      }
+    },
+    "vnilink-screen-recording": {
+      "title": "Screen Recording for the development VniLink",
+      "kind": "permission",
+      "platforms": ["darwin"],
+      "purpose": "The latency harness's host and reader capture the display as the development VniLink in `.build/electron`, which macOS asks about by its own identity.",
+      "check": {
+        "custom": "vnilink-screen-recording"
+      },
+      "fix": {
+        "default": "Run the task; on its first run macOS asks and the run stops. Allow VniLink in System Settings > Privacy & Security > Screen & System Audio Recording, then run it again."
+      }
+    },
+    "screen-portal": {
+      "title": "Screen sharing through the desktop portal",
+      "kind": "permission",
+      "platforms": ["linux"],
+      "purpose": "The latency harness's host and reader share the display through the XDG desktop portal, which asks someone at this computer.",
+      "check": {
+        "custom": "screen-portal"
+      },
+      "fix": {
+        "default": "Run the task in the graphical session and choose the display in both portal dialogs; the answers are kept in `.build/latency` for later runs."
+      }
+    },
+    "signed-in-desktop": {
+      "title": "Signed-in desktop",
+      "kind": "permission",
+      "platforms": ["win32"],
+      "purpose": "Desktop Duplication captures only the desktop of the signed-in user, which a process started over SSH or as a service is not in.",
+      "check": {
+        "custom": "signed-in-desktop"
+      },
+      "fix": {
+        "default": "Run the task from a terminal on the signed-in desktop."
+      }
+    },
+    "second-computer": {
+      "title": "A second computer",
+      "kind": "computer",
+      "optional": true,
+      "purpose": "Measurements run on this computer; with `--remote` they run one side on a second, Linux computer with a built checkout, reached over SSH.",
+      "check": {
+        "custom": "second-computer"
       }
     }
   },
@@ -543,7 +631,8 @@
         "rust-windows-host",
         "xcode-tools",
         "mingw",
-        "download-tools",
+        "git",
+        "curl",
         "cmake",
         "linux-build-tools",
         "libclang",
@@ -629,17 +718,27 @@
       "description": "Measure sessions over impaired networks on this Linux host",
       "platforms": ["linux"],
       "same": "build",
-      "requires": ["network-namespaces"]
+      "requires": ["network-namespaces", "root"]
     },
     "measure:latency": {
-      "description": "Measure glass-to-glass latency",
+      "description": "Measure glass-to-glass latency on this computer",
       "same": "build",
-      "requires": ["linux-runtime-libraries", "desktop-session", "linux-sandbox", "ssh"]
+      "requires": [
+        "linux-runtime-libraries",
+        "desktop-session",
+        "linux-sandbox",
+        "vnilink-screen-recording",
+        "screen-portal",
+        "signed-in-desktop",
+        "second-computer",
+        "ssh"
+      ]
     },
     "measure:perceived": {
-      "description": "Measure what a remote desktop application's viewer shows",
+      "description": "Measure what this Mac shows and how fast it answers input",
       "platforms": ["darwin"],
-      "requires": ["platform", "node", "rust", "xcode-tools", "ssh", "ffmpeg"]
+      "same": "build",
+      "requires": ["screen-recording", "accessibility", "ffmpeg", "second-computer", "ssh"]
     },
     "check:product": {
       "description": "Check the product metadata",
@@ -651,7 +750,7 @@
     },
     "check:hygiene": {
       "description": "Reject personal details in the repository",
-      "requires": ["node"]
+      "requires": ["node", "git"]
     },
     "assets:tray": {
       "description": "Render the tray icons",
@@ -663,7 +762,7 @@
     },
     "vscode": {
       "description": "Import VS Code sources",
-      "requires": ["node"]
+      "requires": ["node", "git"]
     },
     "doctor": {
       "description": "Report what every task needs here",

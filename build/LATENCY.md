@@ -1,6 +1,6 @@
 # Glass-to-glass latency on one computer
 
-`npm run measure:latency` measures how long a change on this computer's screen takes to appear in a VniLink viewer on the same screen. It runs on macOS, Windows and Linux. Use it to record numbers before and after a capture, encode, transport, decode or drawing change.
+`npm run measure:latency` measures how long a change on this computer's screen takes to appear in a VniLink viewer on the same screen. It runs on macOS, Windows and Linux, on one computer: host, viewer and reader all run on it. Use it to record numbers before and after a capture, encode, transport, decode or drawing change. A second computer is optional (`--remote`, below) and never required.
 
 ## How it works
 
@@ -32,10 +32,14 @@ To check the reader, film the screen once with a 240 fps camera and compare a fe
 
 ## Running it
 
+At the computer, in its signed-in desktop or graphical session:
+
 ```bash
 npm run build
 npm run measure:latency -- --seconds 20
 ```
+
+Capturing the screen needs a permission each OS grants its own way, below; `npm run doctor` says what it can check before a run.
 
 ### macOS
 
@@ -49,11 +53,11 @@ Only the host prepares native video on macOS; the viewer's window decodes with i
 
 ### Windows
 
-Run it in the signed-in desktop: Desktop Duplication fails in the session SSH opens (session 0). From SSH, start it through a temporary interactive scheduled task (`schtasks /Create ... /IT`), and delete the task afterwards. Windows asks no permission to capture. The sides start the development Electron in `.build/electron` directly; `--app` is macOS only. The reader is `target/x86_64-pc-windows-gnu/release/examples/glass_latency.exe`, built with the GNU toolchain `scripts/test-windows.ps1` sets up.
+Run it from a terminal on the signed-in desktop: Desktop Duplication captures only that desktop, and fails in a session that has none, such as the one SSH opens (session 0). Windows asks no permission to capture. To start it from another computer over SSH, which is optional, go through a temporary interactive scheduled task (`schtasks /Create ... /IT`), and delete the task afterwards. The sides start the development Electron in `.build/electron` directly; `--app` is macOS only. The reader is `target/x86_64-pc-windows-gnu/release/examples/glass_latency.exe`, built with the GNU toolchain `scripts/test-windows.ps1` sets up.
 
 ### Linux
 
-Run it in the graphical session: the sides and the reader need its session bus and the desktop portal. From SSH, start it as a transient user unit, which runs in the user's session environment:
+Run it from a terminal in the graphical session: the sides and the reader need its session bus and the desktop portal. To start it from another computer over SSH, which is optional, run it as a transient user unit, which runs in the user's session environment:
 
 ```bash
 systemd-run --user --wait --collect --working-directory="$PWD" npm run measure:latency -- --seconds 20
@@ -89,14 +93,14 @@ The reader prints the p50, p95, p99 and maximum when it finishes.
 | `--fps` | the default quality | The viewer's frame rate, at the Smooth preset's 12 Mb/s and 1920x1080. |
 | `--bitrate` | 12000 | With `--fps`: the viewer's bitrate limit in kb/s; 50000 is Automatic. |
 | `--busy` | off | With `--remote`: the stimulus fills the host's work area with detail that changes every frame, so the stream uses the bitrate it is given. Without it the strip is nearly all that changes and a stream uses a fraction of its limit. |
-| `--remote` | | Two computers: the other one's SSH destination. |
+| `--remote` | | Optional second computer: its SSH destination. |
 | `--remote-root` | | With `--remote`: the absolute path of a built checkout there. |
 | `--hosts` | `here` | With `--remote`: which computer hosts its screen, `here` or `remote`. |
 | `--ssh-config` | the user's | With `--remote`: an SSH configuration file for every connection. |
 
-### Two computers
+### With a second computer (optional)
 
-`--remote <destination> --remote-root <path>` runs one side here and the other on a Linux computer over SSH, the pair a person uses, so each side has its own CPU, GPU and media engine and the stream crosses a real network. The viewer picks the codec it would pick in use: a Linux window offers no HEVC, so a Mac host sends it H.264.
+Every run above needs one computer. `--remote <destination> --remote-root <path>` runs one side here and the other on a Linux computer over SSH, the pair a person uses, so each side has its own CPU, GPU and media engine and the stream crosses a real network. The viewer picks the codec it would pick in use: a Linux window offers no HEVC, so a Mac host sends it H.264.
 
 No screen shows both strips, so there is no glass-to-glass total and no reader. Each side reports itself once a second instead:
 - the host's capture and encode times (`PipelineSummary.capture_us`, `encode_us`; encode includes scaling and copies), its encoder, keyframes, reopens and drops, in `host-stages.jsonl`;
@@ -104,7 +108,7 @@ No screen shows both strips, so there is no glass-to-glass total and no reader. 
 
 Both viewers prepare native video, as the product's do: a Mac viewer whose engine had no decoders of its own offered nothing, and a Linux host refused it. The network leg is the round trip: the clocks differ, so a picture's one-way time is not read. The stimulus still runs on the host: a strip that changes every frame, the motion the stream carries.
 
-The remote side runs as a transient unit of the user's session there (`systemd-run --user`), so it has the graphical session's bus and portal. Its checkout must be built (`npm run build` there). The two sides' rendezvous files are copied over one shared SSH connection, and the remote side's evidence is copied back into the output and removed there, with its profile and rendezvous. A Linux host's portal asks someone there on the first run, as on one computer; its answer is kept in that checkout's `.build/latency/`.
+The remote side is reached over SSH and runs as a transient unit of the user's session there (`systemd-run --user`), so it has the graphical session's bus and portal. A later change replaces SSH with a test agent that pairs like the application; until then, this path needs SSH. Its checkout must be built (`npm run build` there). The two sides' rendezvous files are copied over one shared SSH connection, and the remote side's evidence is copied back into the output and removed there, with its profile and rendezvous. A Linux host's portal asks someone there on the first run, as on one computer; its answer is kept in that checkout's `.build/latency/`.
 
 ```bash
 npm run measure:latency -- --remote someone@studio.local --remote-root /home/someone/vnilink --hosts here --fps 60 --seconds 30

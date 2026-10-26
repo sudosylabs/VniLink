@@ -1,11 +1,15 @@
 /**
- * Perceived quality of a remote desktop application, measured from the
- * screen of the computer viewing with it (`npm run measure:perceived`).
+ * Perceived quality, measured from this Mac's screen
+ * (`npm run measure:perceived`).
  *
- * The page in `test/perceived/stimulus.ts` runs full screen on the computer
- * being controlled, started here over SSH. Someone opens the application
- * under test on this computer, full screen, showing that computer; VniLink
- * and RustDesk are measured the same way, as black boxes. The driver
+ * By default everything runs on this Mac: the page in
+ * `test/perceived/stimulus.ts` opens maximised here, and the run measures
+ * this computer's own floor (synthetic input, the browser, the display and
+ * capture), the baseline every remote desktop application adds to. With
+ * `--remote`, the page runs on a second computer, started over SSH, and
+ * someone opens the application under test on this Mac, full screen,
+ * showing that computer; VniLink and RustDesk are measured the same way, as
+ * black boxes. In both, the driver
  * (`crates/vnilink-macos/examples/perceived.rs`) reads the page back from
  * this screen and moves and clicks the real pointer:
  * - the methods are established ones: timecodes drawn on screen and read
@@ -17,27 +21,53 @@
  * - it does not cover the display panel's own latency, which a photodiode
  *   tester measures.
  *
- * The viewer side runs on macOS; the controlled computer runs Linux.
+ * The viewer side runs on macOS; a second, controlled computer runs Linux.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { perceivedCard, perceivedLayout } from '../../test/perceived/stimulus.ts';
+import { electronExecutable } from './electron.ts';
 import { ProcessRunner } from './processes.ts';
 import { loadProduct } from './product.ts';
 import { remoteShell, shellWord, type SshTarget } from './remote.ts';
 
+/** A second computer being controlled, and its built checkout. */
+type ControlledComputer = SshTarget & { readonly root: string };
+
 export interface PerceivedOptions {
-	/** The computer being controlled, and its built checkout. */
-	readonly remote: SshTarget & { readonly root: string };
-	/** The application under test, as the summary names it. */
+	/** The second computer; undefined runs the page on this Mac. */
+	readonly remote: ControlledComputer | undefined;
+	/** What is measured, as the summary names it: the application under test, or this Mac's floor. */
 	readonly label: string;
 	/** How long the driver waits for the page to appear on this screen. */
 	readonly waitSeconds: number;
 	readonly output: string;
 }
+
+/** The label of a run on this Mac alone. */
+export const LOCAL_LABEL = 'This Mac';
+
+export const perceivedUsage = `npm run measure:perceived -- [options]
+npm run measure:perceived -- --compare <directory> <directory>...
+
+By default the page runs on this Mac and the run measures this computer's own
+floor: synthetic input, the browser, the display and capture. Build first
+(npm run build).
+
+  --label <name>          what the summary calls the run (default: ${LOCAL_LABEL})
+  --wait <seconds>        how long to wait for the page on this screen, 10..1800 (default: 300)
+  --output <directory>    where the evidence goes (default: .build/perceived/<label>-<time>)
+
+Optional, a second computer: the page runs on a Linux computer with a built
+checkout, reached over SSH, and the application under test shows it here.
+
+  --remote <destination>  that computer's SSH destination
+  --remote-root <path>    the absolute path of its built checkout
+  --ssh-config <file>     an SSH configuration file for every connection
+  --label <name>          required with --remote: the application under test`;
 
 export function perceivedOptions(root: string, args: readonly string[]): PerceivedOptions {
 	const { values } = parseArgs({
@@ -49,12 +79,18 @@ export function perceivedOptions(root: string, args: readonly string[]): Perceiv
 		strict: true,
 	});
 	const remoteRoot = values['remote-root'];
-	if (values.remote === undefined || !remoteRoot?.startsWith('/')) {
+	if (values.remote === undefined && (remoteRoot !== undefined || values['ssh-config'] !== undefined)) {
+		throw new Error('--remote-root and --ssh-config need --remote; without them the page runs on this Mac');
+	}
+	if (values.remote !== undefined && !remoteRoot?.startsWith('/')) {
 		throw new Error('--remote names the computer being controlled and --remote-root its built checkout, an absolute path');
 	}
-	const label = values.label?.trim();
+	if (values.remote !== undefined && values.label === undefined) {
+		throw new Error('--label names the application under test, which --remote measures');
+	}
+	const label = (values.label ?? LOCAL_LABEL).trim();
 	if (!label || !/^[\w .-]{1,40}$/.test(label)) {
-		throw new Error('--label names the application under test (letters, digits, space, dot, dash)');
+		throw new Error('--label names what is measured (letters, digits, space, dot, dash)');
 	}
 	const waitSeconds = Number(values.wait);
 	if (!Number.isInteger(waitSeconds) || waitSeconds < 10 || waitSeconds > 1800) {
@@ -62,7 +98,9 @@ export function perceivedOptions(root: string, args: readonly string[]): Perceiv
 	}
 	const stamp = new Date().toISOString().replaceAll(':', '-');
 	return {
-		remote: { destination: values.remote, root: remoteRoot, sshConfig: values['ssh-config'] === undefined ? undefined : resolve(values['ssh-config']) },
+		remote: values.remote === undefined || remoteRoot === undefined
+			? undefined
+			: { destination: values.remote, root: remoteRoot, sshConfig: values['ssh-config'] === undefined ? undefined : resolve(values['ssh-config']) },
 		label,
 		waitSeconds,
 		output: resolve(values.output ?? join(root, '.build/perceived', `${label.replaceAll(/\W+/g, '-')}-${stamp}`)),
@@ -437,33 +475,94 @@ export async function analysePerceived(directory: string, label: string, signal:
 	return summary;
 }
 
+/** The stimulus page, running until the run stops it. */
+interface Stimulus {
+	/** What to tell the person at this Mac before the driver starts. */
+	readonly instructions: string;
+	/** Rejects when the page quits before the run ends. */
+	readonly exited: Promise<never>;
+	stop(): Promise<void>;
+}
+
+/**
+ * The page on this Mac, in the development Electron `npm run build`
+ * prepared, as a child of this task: it needs no permission of its own, and
+ * stopping the task stops it.
+ */
+async function localStimulus(root: string, options: PerceivedOptions, processes: ProcessRunner, signal: AbortSignal): Promise<Stimulus> {
+	const entry = join(root, 'out/perceived.cjs');
+	await access(entry).catch(() => {
+		throw new Error('out/perceived.cjs is missing: run npm run build first');
+	});
+	const page = processes.start(await electronExecutable(root, signal), [entry], { stdio: 'ignore' });
+	const exited = page.result.then(
+		() => Promise.reject(new Error('The stimulus window closed before the run finished')),
+		(error: unknown) => Promise.reject(new Error(`The stimulus stopped: ${error instanceof Error ? error.message : String(error)}`)),
+	);
+	exited.catch(() => undefined);
+	return {
+		instructions: `The stimulus is maximised on this Mac. Leave it in front and the mouse and keyboard alone: measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves and keys are typed by themselves for about a minute.`,
+		exited,
+		stop: () => Promise.resolve(),
+	};
+}
+
+/** The page on the second computer, started over SSH as a transient unit of the user's session there. */
+async function remoteStimulus(root: string, options: PerceivedOptions, remote: ControlledComputer, work: string, signal: AbortSignal): Promise<Stimulus> {
+	const shell = remoteShell(remote, work, signal);
+	const unit = `vnilink-perceived-${String(process.pid)}`;
+	const stop = async (): Promise<void> => {
+		await shell.output(`systemctl --user stop ${shellWord(unit)} 2>/dev/null; true`).catch(() => undefined);
+		await shell.close();
+	};
+	try {
+		const electron = `${remote.root}/.build/electron/${(await loadProduct(root)).applicationName}`;
+		await shell.output(`test -x ${shellWord(electron)} && test -f ${shellWord(`${remote.root}/out/perceived.cjs`)}`).catch(() => {
+			throw new Error(`${remote.destination}:${remote.root} has no built stimulus: run npm run build there first`);
+		});
+		await shell.output([
+			'systemd-run', '--user', '--collect', '--quiet', `--unit=${unit}`, `--working-directory=${remote.root}`,
+			electron, '--ozone-platform=x11', `${remote.root}/out/perceived.cjs`,
+		].map(shellWord).join(' '));
+	} catch (error) {
+		await stop();
+		throw error;
+	}
+	return {
+		instructions: `The stimulus is maximised on ${remote.destination}. Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about a minute.`,
+		// The unit is not watched: the driver times out when the page is gone.
+		exited: new Promise<never>(() => undefined),
+		stop,
+	};
+}
+
 export async function measurePerceived(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	if (args.includes('--help')) {
+		console.log(perceivedUsage);
+		return;
+	}
 	if (process.platform !== 'darwin') {
 		throw new Error('measure:perceived views from macOS');
 	}
 	const options = perceivedOptions(root, args);
 	const processes = new ProcessRunner(signal);
 	const work = await mkdtemp(join(tmpdir(), 'vp-'));
-	const shell = remoteShell(options.remote, work, signal);
-	const unit = `vnilink-perceived-${String(process.pid)}`;
+	let stimulus: Stimulus | undefined;
 	try {
 		await mkdir(options.output, { recursive: true });
 		await processes.run('cargo', ['build', '--release', '--locked', '-p', 'vnilink-macos', '--example', 'perceived'], { cwd: root });
 		const pixels = await displayPixels(signal);
-		const electron = `${options.remote.root}/.build/electron/${(await loadProduct(root)).applicationName}`;
-		await shell.output(`test -x ${shellWord(electron)} && test -f ${shellWord(`${options.remote.root}/out/perceived.cjs`)}`).catch(() => {
-			throw new Error(`${options.remote.destination}:${options.remote.root} has no built stimulus: run npm run build there first`);
-		});
-		await shell.output([
-			'systemd-run', '--user', '--collect', '--quiet', `--unit=${unit}`, `--working-directory=${options.remote.root}`,
-			electron, '--ozone-platform=x11', `${options.remote.root}/out/perceived.cjs`,
-		].map(shellWord).join(' '));
-		console.log(`The stimulus is maximised on ${options.remote.destination}. Open ${options.label} on this Mac to it now, full screen, showing its whole screen; measuring starts when the page is found (up to ${String(options.waitSeconds)} s), then the pointer moves by itself for about a minute.`);
-		await processes.run(join(root, 'target/release/examples/perceived'), [options.output, String(options.waitSeconds), ...(pixels ? [String(pixels)] : [])]);
+		stimulus = options.remote
+			? await remoteStimulus(root, options, options.remote, work, signal)
+			: await localStimulus(root, options, processes, signal);
+		console.log(stimulus.instructions);
+		await Promise.race([
+			processes.run(join(root, 'target/release/examples/perceived'), [options.output, String(options.waitSeconds), ...(pixels ? [String(pixels)] : [])]),
+			stimulus.exited,
+		]);
 		await analysePerceived(options.output, options.label, signal);
 	} finally {
-		await shell.output(`systemctl --user stop ${shellWord(unit)} 2>/dev/null; true`).catch(() => undefined);
-		await shell.close();
+		await stimulus?.stop();
 		await processes.stop();
 		await rm(work, { recursive: true, force: true });
 	}

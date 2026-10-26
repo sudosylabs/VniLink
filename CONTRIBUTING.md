@@ -58,7 +58,8 @@ Architectures: arm64 supported; x64 unsupported (Intel Macs cannot build VniLink
 - **Node.js**: Install the version in `.nvmrc` with a version manager: `nvm install` (macOS, Linux), `nvm install $(Get-Content .nvmrc)` (nvm-windows), or Volta, which takes it from `package.json`; or from https://nodejs.org.
 - **Rust toolchain**: Builds the native addon (crates/vnilink-node). Install rustup from https://rustup.rs; `npm ci` then installs the toolchain `rust-toolchain.toml` names.
 - **Xcode Command Line Tools**: Clang, the SDK and the system frameworks the addon links. `xcode-select --install`.
-- **git and curl**: The first native build clones and downloads codec and CMake sources with them. `xcode-select --install`.
+- **git**: The first native build clones codec sources, check:hygiene lists the repository's files, and the VS Code import reads the upstream checkout's commit. `xcode-select --install`.
+- **curl**: The first native build downloads codec and CMake sources with it. `xcode-select --install`.
 - **CMake**: Builds Opus for the audio codec (opusic-sys); the AV1 build downloads its own CMake. `brew install cmake`.
 - **Liquid Glass prebuild (@vnilink/elg)**: The optional npm dependency the main process loads for window material. `npm ci` prepares it.
 - **Xcode (actool)** (optional): Compiles the Icon Composer icon of the development app; without it the flat icon is used. Install Xcode from the App Store, then `sudo xcode-select -s /Applications/Xcode.app`.
@@ -69,7 +70,8 @@ Some tasks need more:
 | --- | --- |
 | `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
-| `npm run measure:latency` | OpenSSH client: included in macOS |
+| `npm run measure:latency` | Screen Recording for the development VniLink: Run the task; on its first run macOS asks and the run stops. Allow VniLink in System Settings > Privacy & Security > Screen & System Audio Recording, then run it again; A second computer (optional); OpenSSH client (optional): included in macOS |
+| `npm run measure:perceived` | Screen Recording for the application running the task: Allow that application in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen it; Accessibility for the application running the task: Allow that application in System Settings > Privacy & Security > Accessibility; FFmpeg: `brew install ffmpeg`; A second computer (optional); OpenSSH client (optional): included in macOS |
 | `npm run assets:tray` | rsvg-convert: `brew install librsvg` |
 
 ### Windows
@@ -81,7 +83,8 @@ Architectures: x64 supported; arm64 unsupported (Windows on Arm has no GNU (MinG
 - **Rust GNU Windows target**: The addon builds for x86_64-pc-windows-gnu with MSYS2's MinGW, not MSVC. `npm ci` prepares it.
 - **Rust host toolchain without MSVC**: Build scripts run on the host toolchain: a GNU host needs only MinGW, an MSVC host also needs Visual Studio's linker. `rustup set default-host x86_64-pc-windows-gnu`, then `rustup toolchain install`.
 - **MSYS2 MinGW-w64 tools**: Links the addon and builds its C dependencies (gcc, dlltool, libclang, nasm, mingw32-make). `winget install MSYS2.MSYS2`, then in the MSYS2 shell `pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-clang mingw-w64-x86_64-nasm mingw-w64-x86_64-make`. Put `C:\msys64\mingw64\bin` on PATH or set `VNILINK_MSYS_ROOT` to the MSYS2 root.
-- **git and curl**: The first native build clones and downloads codec and CMake sources with them. `winget install Git.Git`; included in Windows 10 and later.
+- **git**: The first native build clones codec sources, check:hygiene lists the repository's files, and the VS Code import reads the upstream checkout's commit. `winget install Git.Git`.
+- **curl**: The first native build downloads codec and CMake sources with it. Included in Windows 10 and later.
 - **CMake**: Builds Opus for the audio codec (opusic-sys); the AV1 build downloads its own CMake. `pacman -S mingw-w64-x86_64-cmake` in the MSYS2 shell, or `winget install Kitware.CMake`.
 
 Some tasks need more:
@@ -90,7 +93,7 @@ Some tasks need more:
 | --- | --- |
 | `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
-| `npm run measure:latency` | OpenSSH client: Settings > System > Optional features > OpenSSH Client |
+| `npm run measure:latency` | Signed-in desktop: Run the task from a terminal on the signed-in desktop; A second computer (optional); OpenSSH client (optional): Settings > System > Optional features > OpenSSH Client |
 | `npm run assets:tray` | rsvg-convert: `pacman -S mingw-w64-x86_64-librsvg` in the MSYS2 shell |
 
 ### Linux
@@ -120,8 +123,8 @@ Some tasks need more:
 | --- | --- |
 | `npm run test:linux` | Docker: Ubuntu and Debian: `sudo apt-get install docker.io && sudo usermod -aG docker $USER`, then log in again; Fedora: `sudo dnf install moby-engine && sudo systemctl enable --now docker && sudo usermod -aG docker $USER`, then log in again |
 | `npm run measure:impaired` | Docker: Ubuntu and Debian: `sudo apt-get install docker.io && sudo usermod -aG docker $USER`, then log in again; Fedora: `sudo dnf install moby-engine && sudo systemctl enable --now docker && sudo usermod -aG docker $USER`, then log in again |
-| `npm run measure:impaired:linux` | ip and tc: Ubuntu and Debian: `iproute2`; Fedora: `iproute iproute-tc` |
-| `npm run measure:latency` | OpenSSH client: Ubuntu and Debian: `openssh-client`; Fedora: `openssh-clients` |
+| `npm run measure:impaired:linux` | ip and tc: Ubuntu and Debian: `iproute2`; Fedora: `iproute iproute-tc`; Root: Run it as root (`sudo node build/run.ts measure:impaired:linux`), or run `npm run measure:impaired`, which runs it in a container |
+| `npm run measure:latency` | Screen sharing through the desktop portal: Run the task in the graphical session and choose the display in both portal dialogs; the answers are kept in `.build/latency` for later runs; A second computer (optional); OpenSSH client (optional): Ubuntu and Debian: `openssh-client`; Fedora: `openssh-clients` |
 | `npm run package:installers` | rpmbuild: Ubuntu and Debian: `rpm`; Fedora: `rpm-build` |
 | `npm run assets:tray` | rsvg-convert: Ubuntu and Debian: `librsvg2-bin`; Fedora: `librsvg2-tools` |
 | `npm run sandbox:linux` | AppArmor |
@@ -312,6 +315,14 @@ For Electron changes, run `npm run build` and `npm test`, then inspect the
 affected flow in `npm start`. Validate platform-specific window/input/media
 behavior on its real OS. Capture/input checks can access devices or request
 OS permissions; use a test environment you control.
+
+Every task runs on one computer. The measurements
+(`npm run measure:latency`, `npm run measure:perceived`, `npm run measure:impaired`)
+run on this computer by default; `--remote` adds a second computer to the
+latency and perceived-quality runs and is never required. `npm run doctor`
+reports the OS permissions a task needs, as granted, missing, or unknown until
+the run asks for them. [LATENCY.md](build/LATENCY.md) and
+[PERCEIVED.md](build/PERCEIVED.md) describe each run and what it proves.
 
 A build on macOS does not exercise Windows or Linux native code. Synthetic
 frames and loopback sessions do not prove an interactive remote desktop across

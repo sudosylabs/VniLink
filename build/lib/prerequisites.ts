@@ -24,6 +24,12 @@ export type Distribution = 'debian' | 'fedora';
 
 export type Status = 'ready' | 'missing' | 'unsupported' | 'unknown';
 
+/**
+ * What a requirement is: something to install (the default), a permission
+ * the OS grants a process, or another computer a task can use.
+ */
+export type RequirementKind = 'tool' | 'permission' | 'computer';
+
 /** Where one command, library or pkg-config module comes from on each OS. */
 interface Source {
 	readonly debian?: string;
@@ -49,6 +55,7 @@ interface Check {
 
 export interface Requirement {
 	readonly title: string;
+	readonly kind?: RequirementKind;
 	readonly purpose?: string;
 	readonly platforms?: readonly Platform[];
 	readonly optional?: boolean;
@@ -120,6 +127,8 @@ export interface Host {
 	readonly osName: string;
 	readonly distribution?: Distribution | undefined;
 	readonly env: NodeJS.ProcessEnv;
+	/** The process's user id where the OS has one; 0 is root. */
+	readonly uid?: number | undefined;
 }
 
 export interface ProbeResult {
@@ -139,6 +148,7 @@ export interface Probe {
 export interface CheckResult {
 	readonly id: string;
 	readonly title: string;
+	readonly kind: RequirementKind;
 	readonly status: Status;
 	readonly optional: boolean;
 	/** What was found, or what is missing. */
@@ -154,7 +164,8 @@ export interface CheckResult {
 export interface TaskReport {
 	readonly name: string;
 	readonly description: string;
-	readonly status: 'ready' | 'missing' | 'unsupported';
+	/** `unknown`: nothing is missing, but a requirement cannot be checked before the task runs. */
+	readonly status: 'ready' | 'missing' | 'unsupported' | 'unknown';
 	readonly reason?: string;
 	readonly results: readonly CheckResult[];
 }
@@ -200,7 +211,9 @@ export function distributionOf(manifest: Manifest, text: string): Distribution |
 }
 
 export async function detectHost(root: string, manifest: Manifest, probe: Probe = systemProbe): Promise<Host> {
-	const base = { root, platform: process.platform, architecture: process.arch, nodeVersion: process.versions.node, env: process.env };
+	const base = {
+		root, platform: process.platform, architecture: process.arch, nodeVersion: process.versions.node, env: process.env, uid: process.getuid?.(),
+	};
 	if (process.platform === 'darwin') {
 		// Rosetta hides the processor from Node; the kernel still reports it.
 		// By path: a user's PATH may leave out sbin, and a failed query would read as Intel.
@@ -429,6 +442,35 @@ async function secretService(host: Host, probe: Probe): Promise<Outcome> {
 	return { status: 'unknown', detail: 'busctl is unavailable to ask the session bus' };
 }
 
+/**
+ * Whether macOS grants the application this task runs under a permission,
+ * asked without prompting: the preflight functions only read the grant,
+ * where their requesting counterparts would ask. macOS attributes a child
+ * process to the application that started the chain (the terminal or
+ * editor), so osascript's answer is the one a driver started by the task
+ * gets. Undefined when osascript does not answer.
+ */
+async function macPermission(probe: Probe, framework: string, preflight: string): Promise<boolean | undefined> {
+	const script = `ObjC.import('${framework}'); ObjC.bindFunction('${preflight}', ['bool', []]); $.${preflight}()`;
+	const result = await probe.run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script]);
+	const answer = result.stdout.trim();
+	return result.ok && (answer === 'true' || answer === 'false') ? answer === 'true' : undefined;
+}
+
+function macPermissionOutcome(granted: boolean | undefined): Outcome {
+	if (granted === undefined) {
+		return { status: 'unknown', detail: 'macOS did not answer whether the application running this task has it' };
+	}
+	return granted
+		? { status: 'ready', detail: 'granted to the application running this task' }
+		: { status: 'missing', detail: 'not granted to the application running this task (the terminal or editor that started it)' };
+}
+
+/** Files in which `measure:latency` keeps the desktop portal's answers, host's and reader's. */
+export function latencyPortalGrants(root: string): string[] {
+	return ['host-screen-grant', 'reader-screen-grant'].map(name => join(root, '.build/latency', name));
+}
+
 type CustomCheck = (requirement: Requirement, manifest: Manifest, host: Host, probe: Probe) => Promise<Outcome>;
 
 const customChecks: Readonly<Record<string, CustomCheck>> = {
@@ -567,6 +609,26 @@ const customChecks: Readonly<Record<string, CustomCheck>> = {
 			? { status: 'ready' }
 			: { status: 'missing', detail: 'apparmor_parser is missing', ...host.distribution === 'debian' ? { packages: ['apparmor'] } : {} };
 	},
+	'screen-recording': async (_requirement, _manifest, _host, probe) => macPermissionOutcome(await macPermission(probe, 'CoreGraphics', 'CGPreflightScreenCaptureAccess')),
+	accessibility: async (_requirement, _manifest, _host, probe) => macPermissionOutcome(await macPermission(probe, 'ApplicationServices', 'AXIsProcessTrusted')),
+	// macOS asks for the development application by its own identity, and
+	// only that application can ask whether it holds the grant.
+	'vnilink-screen-recording': () => Promise.resolve({ status: 'unknown', detail: 'macOS asks for the development VniLink when a run starts; nothing here can read its grant beforehand' }),
+	'screen-portal': async (_requirement, _manifest, host, probe) => {
+		const grants = latencyPortalGrants(host.root);
+		for (const grant of grants) {
+			if (!await probe.exists(grant)) {
+				return { status: 'unknown', detail: 'the desktop portal asks someone at this computer when a run starts, until a run keeps its answer' };
+			}
+		}
+		return { status: 'ready', detail: 'an earlier run kept the portal\'s answers in .build/latency' };
+	},
+	'signed-in-desktop': (_requirement, _manifest, host) => Promise.resolve(host.env.SESSIONNAME
+		? { status: 'ready', detail: `session ${host.env.SESSIONNAME}` }
+		: { status: 'missing', detail: 'this process is in no signed-in desktop (SESSIONNAME is unset, as over SSH or in a service)' }),
+	root: (_requirement, _manifest, host) => Promise.resolve(host.uid === 0 ? { status: 'ready' } : { status: 'missing', detail: 'not running as root' }),
+	// Nothing here can reach another computer before a run names one.
+	'second-computer': () => Promise.resolve({ status: 'unknown', detail: 'only --remote runs use one; every task runs on this computer without it' }),
 	docker: async (_requirement, _manifest, host, probe) => {
 		if (!await findCommand(host, probe, 'docker')) {
 			return { status: 'missing', detail: 'docker is not installed' };
@@ -613,7 +675,7 @@ export async function checkRequirement(id: string, manifest: Manifest, host: Hos
 	const own = packages.length || steps.length ? [] : requirementFix(requirement, host, failed.find(outcome => outcome.fixKey)?.fixKey);
 	const fix = status === 'missing' || status === 'unknown' ? [...new Set([...steps, ...own])] : [];
 	const optional = requirement.optional === true;
-	return { id, title: requirement.title, status, optional, ...detail ? { detail } : {}, ...note ? { note } : {}, fix, packages };
+	return { id, title: requirement.title, kind: requirement.kind ?? 'tool', status, optional, ...detail ? { detail } : {}, ...note ? { note } : {}, fix, packages };
 }
 
 /** The requirement ids of `task`, including those of the task it is `same` as. */
@@ -653,7 +715,12 @@ export async function checkTasks(manifest: Manifest, host: Host, probe: Probe, t
 			return { ...report, status: 'unsupported', reason: unsupported.detail ?? unsupported.title };
 		}
 		const missing = checked.filter(item => item.status === 'missing' && !item.optional);
-		return missing.length ? { ...report, status: 'missing', reason: missing.map(item => item.title).join(', ') } : { ...report, status: 'ready' };
+		if (missing.length) {
+			return { ...report, status: 'missing', reason: missing.map(item => item.title).join(', ') };
+		}
+		// Ready only when every requirement it cannot do without was confirmed.
+		const unknown = checked.filter(item => item.status === 'unknown' && !item.optional);
+		return unknown.length ? { ...report, status: 'unknown', reason: `cannot be checked before it runs: ${unknown.map(item => item.title).join(', ')}` } : { ...report, status: 'ready' };
 	}));
 }
 
@@ -682,7 +749,9 @@ export function fixLines(manifest: Manifest, host: Host, results: readonly Check
 
 /**
  * Throws, naming what is missing and how to get it, unless `task` can run
- * here. `VNILINK_SKIP_PREFLIGHT=1` skips the check for setups it misjudges.
+ * here. What only the run can confirm, such as a permission the OS asks for
+ * when it starts, is named with how to grant it, and the task runs.
+ * `VNILINK_SKIP_PREFLIGHT=1` skips the check for setups it misjudges.
  */
 export async function assertTaskReady(root: string, task: string, probe: Probe = systemProbe): Promise<void> {
 	if (process.env.VNILINK_SKIP_PREFLIGHT === '1') {
@@ -698,8 +767,12 @@ export async function assertTaskReady(root: string, task: string, probe: Probe =
 		if (result.status === 'ready' && result.note) {
 			console.warn(`[${task}] ${result.title}: ${result.note}`);
 		}
+		// What only the run can confirm is said before it, with how to grant it.
+		if (report.status === 'unknown' && result.status === 'unknown' && !result.optional) {
+			console.warn([`[${task}] ${result.title}: ${result.detail ?? 'cannot be checked here'}`, ...result.fix.map(step => `[${task}]   ${step}`)].join('\n'));
+		}
 	}
-	if (report.status === 'ready') {
+	if (report.status === 'ready' || report.status === 'unknown') {
 		if (taskRequirements(manifest, task).includes('rust')) {
 			const downloads = await firstBuildDownloads(manifest, host.platform, root, homedir(), probe);
 			if (downloads.length) {

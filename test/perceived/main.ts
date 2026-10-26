@@ -1,8 +1,9 @@
 /**
  * The perceived-quality stimulus window (`npm run measure:perceived`): the
- * page in `stimulus.ts`, maximised above everything on the computer being
- * controlled, until the runner stops this process. It needs nothing of
- * VniLink's own: the remote desktop application under test only has to show
+ * page in `stimulus.ts`, maximised above everything, until the runner stops
+ * this process. It runs on the Mac doing the measuring by default, or on the
+ * second computer being controlled with `--remote`. It needs nothing of
+ * VniLink's own: a remote desktop application under test only has to show
  * this screen.
  *
  * Maximised, not full screen: on GNOME a full-screen window stops RustDesk's
@@ -23,6 +24,9 @@ app.whenReady().then(async () => {
 	await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(perceivedPage())}`);
 	window.maximize();
 	window.show();
+	// The driver's keys go to the active application: started from a
+	// terminal, this one would otherwise stay behind it.
+	app.focus({ steal: true });
 }).catch((error: unknown) => {
 	console.error(error);
 	app.exit(1);
