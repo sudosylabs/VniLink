@@ -237,27 +237,26 @@ async fn watch_link(shared: &Shared, id: u64, peer: &[u8; 32], display_id: &str)
 }
 
 fn set_presence(shared: &Shared, display_id: &str, presence: DevicePresence) {
-    let changed = {
-        let mut state = lock(&shared.state);
-        if !state.presence_links {
-            return;
-        }
-        state.presence.insert(display_id.to_owned(), presence) != Some(presence)
-    };
-    if changed {
-        tracing::debug!(
-            target: crate::trace::RELAY,
-            peer = super::parse_endpoint_id(display_id)
-                .map(|key| crate::diagnostics::fingerprint(&key))
-                .unwrap_or_default(),
-            presence = ?presence,
-            "presence"
-        );
-        shared.events.publish(CoreEvent::PresenceChanged {
-            endpoint_id: display_id.to_owned(),
-            presence,
-        });
+    let mut state = lock(&shared.state);
+    if !state.presence_links
+        || state.presence.insert(display_id.to_owned(), presence) == Some(presence)
+    {
+        return;
     }
+    tracing::debug!(
+        target: crate::trace::RELAY,
+        peer = super::parse_endpoint_id(display_id)
+            .map(|key| crate::diagnostics::fingerprint(&key))
+            .unwrap_or_default(),
+        presence = ?presence,
+        "presence"
+    );
+    // Published under the state, so no reader sees a presence before its
+    // change is published.
+    shared.events.publish(CoreEvent::PresenceChanged {
+        endpoint_id: display_id.to_owned(),
+        presence,
+    });
 }
 
 impl Core {

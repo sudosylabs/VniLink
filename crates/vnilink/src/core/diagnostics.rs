@@ -9,7 +9,7 @@ use crate::diagnostics::{
 };
 use crate::{ServiceKind, ServicePhase, SessionPhase, SessionRole};
 
-fn session_phase(phase: &SessionPhase) -> &'static str {
+pub(super) fn session_phase(phase: &SessionPhase) -> &'static str {
     match phase {
         SessionPhase::Connecting => "connecting",
         SessionPhase::Authenticated => "authenticated",

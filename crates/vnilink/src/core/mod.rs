@@ -287,6 +287,27 @@ struct LiveSession {
 }
 
 impl LiveSession {
+    /// Moves to `phase`, recording the change: each session's life reads
+    /// from its records, as each service's and job's does. A failure's text
+    /// is not recorded, since it may name addresses; its caller records the
+    /// failure by name.
+    fn enter(&mut self, phase: SessionPhase) {
+        if self.phase == phase {
+            return;
+        }
+        tracing::info!(
+            target: crate::trace::SESSION,
+            session = self.id,
+            generation = self.generation,
+            role = ?self.role,
+            peer = crate::diagnostics::fingerprint(&self.peer_key),
+            from = diagnostics::session_phase(&self.phase),
+            to = diagnostics::session_phase(&phase),
+            "session phase"
+        );
+        self.phase = phase;
+    }
+
     /// Active, on a link still open. A stream that ends on such a session
     /// was ended by its peer; a lost link ends streams too, before the
     /// session's phase learns of it, which its link already says.

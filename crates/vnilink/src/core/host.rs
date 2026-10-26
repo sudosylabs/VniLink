@@ -63,7 +63,7 @@ impl Core {
                 .values_mut()
                 .filter(|session| !finished(&session.phase))
                 .map(|session| {
-                    session.phase = SessionPhase::Stopping;
+                    session.enter(SessionPhase::Stopping);
                     session.stop.clone()
                 })
                 .collect::<Vec<_>>()
@@ -100,7 +100,7 @@ impl Core {
             if finished(&session.phase) {
                 return Err(Error::NoSession);
             }
-            session.phase = SessionPhase::Stopping;
+            session.enter(SessionPhase::Stopping);
             session.stop.clone()
         };
         crate::ignored!(
@@ -118,7 +118,7 @@ impl Core {
             if finished(&session.phase) {
                 return Err(Error::NoSession);
             }
-            session.phase = SessionPhase::Stopping;
+            session.enter(SessionPhase::Stopping);
             session.stop.clone()
         };
         state.generation = state.generation.saturating_add(1);
@@ -784,7 +784,7 @@ pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     }
     let session = state.incoming.get_mut(&session_id).expect("checked");
     let info = session_info(session);
-    session.phase = SessionPhase::Closed;
+    session.enter(SessionPhase::Closed);
     session.cursor_outbox.send_replace(None);
     session.incoming_slot = None;
     // Hand clipboard selection to the lowest remaining live hosted session,

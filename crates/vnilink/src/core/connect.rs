@@ -86,7 +86,7 @@ impl Core {
                 state.generation = state.generation.saturating_add(1);
                 for id in live {
                     if let Some(session) = state.incoming.get_mut(&id) {
-                        session.phase = SessionPhase::Stopping;
+                        session.enter(SessionPhase::Stopping);
                         incoming_stop.push(session.stop.clone());
                     }
                 }
@@ -96,7 +96,7 @@ impl Core {
                 .values_mut()
                 .filter(|s| s.peer_key == key && !finished(&s.phase))
             {
-                session.phase = SessionPhase::Stopping;
+                session.enter(SessionPhase::Stopping);
                 outgoing_stop = Some(session.stop.clone());
             }
             super::services::synchronize(&mut state, &self.shared.events);
@@ -240,7 +240,7 @@ impl Core {
         if finished(&session.phase) {
             return Err(Error::NoSession);
         }
-        session.phase = SessionPhase::Stopping;
+        session.enter(SessionPhase::Stopping);
         crate::ignored!(
             crate::trace::SESSION,
             "work that already ended needs no stop",
@@ -808,7 +808,7 @@ pub(super) async fn establish(
             }
             return Err(Error::NoSession);
         }
-        session.phase = SessionPhase::Active;
+        session.enter(SessionPhase::Active);
         super::services::synchronize(&mut state, &shared.events);
     }
     crate::session::announce_progression(
@@ -1117,7 +1117,7 @@ pub(super) fn finish_outgoing(shared: &Shared, local_id: u64) {
         link.close(0u8.into(), b"controller stopped");
     }
     session.clipboard = None;
-    session.phase = SessionPhase::Closed;
+    session.enter(SessionPhase::Closed);
     drop(state);
     settle_outgoing(shared, &info, SessionPhase::Closed, &peer_key);
 }
@@ -1134,7 +1134,14 @@ pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
         link.close(0u8.into(), b"controller failed");
     }
     session.clipboard = None;
-    session.phase = SessionPhase::Failed(error.to_string());
+    tracing::info!(
+        target: crate::trace::SESSION,
+        session = local_id,
+        failure = error.name(),
+        reason = error.reason(),
+        "session failed"
+    );
+    session.enter(SessionPhase::Failed(error.to_string()));
     if link_session {
         if matches!(error, Error::NotHosting) {
             state.link_refused.insert(peer_key);
@@ -1161,7 +1168,7 @@ pub(super) fn mark_reconnecting(shared: &Shared, local_id: u64) {
     }
     session.clipboard = None;
     session.link = None;
-    session.phase = SessionPhase::Reconnecting;
+    session.enter(SessionPhase::Reconnecting);
     let info = session_info(session);
     let peer_key = session.peer_key;
     drop(state);
