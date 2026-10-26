@@ -117,12 +117,15 @@ impl Engine {
 
     /// The id of [`Self::root`] among its file roots.
     pub fn root_id(&self) -> u64 {
-        let root = self.root();
+        // Roots are kept resolved, which on Windows is the `\\?\` form.
+        let root = std::fs::canonicalize(self.root()).expect("the engine's root exists");
         self.core
             .file_roots()
             .expect("file roots")
             .into_iter()
-            .find_map(|(id, path)| (path == root).then_some(id))
+            .find_map(|(id, path)| {
+                (std::fs::canonicalize(&path).is_ok_and(|path| path == root)).then_some(id)
+            })
             .expect("the engine's root is one of its file roots")
     }
 

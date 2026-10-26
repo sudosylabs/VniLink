@@ -200,11 +200,14 @@ fn rename_against_a_replaced_source_is_refused() -> TestResult {
     assert_ne!(stale, fresh, "two live objects have two identities");
     std::fs::remove_file(root.join("note.txt"))?;
     std::fs::rename(root.join("note.tmp"), root.join("note.txt"))?;
-    assert_eq!(
-        token_of(core, files.root, &files.path(""), "note.txt"),
-        fresh,
-        "the name now lists the replacement"
-    );
+    let listed = token_of(core, files.root, &files.path(""), "note.txt");
+    // Windows gives a file renamed onto a name deleted moments before that
+    // file's creation time ("tunnelling"), so its token there carries the
+    // replacement's identity with another birth; what matters is that it
+    // is not the original's.
+    #[cfg(not(windows))]
+    assert_eq!(listed, fresh, "the name now lists the replacement");
+    assert_ne!(listed, stale, "the name no longer lists the original");
 
     let result = core.rename_entry(
         files.root,

@@ -365,12 +365,14 @@ pub fn link_folder(target: &Path, link: &Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
+        // cmd takes only backslashes; a path joined from "a/b" carries one.
+        let native = |path: &Path| path.to_string_lossy().replace('/', "\\");
         let status = std::process::Command::new("cmd")
             .arg("/C")
             .arg("mklink")
             .arg("/J")
-            .arg(link)
-            .arg(target)
+            .arg(native(link))
+            .arg(native(target))
             .stdout(std::process::Stdio::null())
             .status()?;
         if status.success() {

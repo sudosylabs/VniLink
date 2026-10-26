@@ -33,7 +33,7 @@ fn setting_roots_is_refused_during_an_active_session() -> TestResult {
     );
     let roots = pair.host.core.file_roots()?;
     assert!(
-        roots.len() == 1 && roots[0].1 == pair.host.root(),
+        roots.len() == 1 && roots[0].0 == pair.host.root_id(),
         "the refused roots left the host's own: {roots:?}"
     );
     Ok(())
