@@ -147,9 +147,6 @@ impl Core {
                 && !session.files_only
                 && routes_to_source(&session.selected_displays)
             {
-                session
-                    .input_epoch
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 session.desktop_stop.send_replace(true);
                 session.quality = None;
                 session.video = None;

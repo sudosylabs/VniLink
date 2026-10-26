@@ -339,12 +339,13 @@ enum DesktopClose {
     HandleDropped,
 }
 
-/// Every way an adopted Desktop ends releases the keys and buttons it held,
-/// stops its pictures and input, names who closed it, and leaves the
-/// connection and its Files service; a redial after it stays neutral and
-/// keeps the first close's cause.
+/// Every way an adopted Desktop ends stops its pictures, names who closed
+/// it, and leaves the connection and its Files service; a redial after it
+/// stays neutral and keeps the first close's cause. (An adopted Desktop
+/// carries no input; what a Desktop service's close releases is
+/// [`a_desktop_close_releases_what_it_held_for_every_close`].)
 #[test]
-fn an_adopted_desktop_close_releases_input_and_keeps_files_for_every_close() -> TestResult {
+fn an_adopted_desktop_close_keeps_files_for_every_close() -> TestResult {
     for close in [
         DesktopClose::HandleClose,
         DesktopClose::OwnerClose,
@@ -362,7 +363,7 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let (root, folder) = whole_disk(&pair.host, "")?;
-    let applied = InputLog::install(&pair.host, (1920, 1080))?;
+    InputLog::install(&pair.host, (1920, 1080))?;
     host.set_service_sharing(ServiceKind::Files, true)?;
     let session = controller.connect(&pair.host.endpoint())?;
     let incoming = host.snapshot()?.incoming.ok_or("the host's session")?;
@@ -390,11 +391,6 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         vec![7],
         "{close:?}: the Desktop carries the host's pictures"
     );
-    let key = InputEvent::key_down(usage::A);
-    let button = InputEvent::button_down(PointerButton::Left);
-    controller.submit_input(session.id, session.generation, key)?;
-    controller.submit_input(session.id, session.generation, button)?;
-    applied.exactly(2);
     let remote = pair
         .host
         .hosted_for(ServiceKind::Desktop, &pair.controller)
@@ -419,22 +415,16 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         DEFAULT_WAIT,
         || (phase(&pair.controller, &desktop) == expected).then_some(()),
     );
-    assert_eq!(
-        applied.wait_for(4),
-        vec![
-            key,
-            button,
-            InputEvent::button_up(PointerButton::Left),
-            InputEvent::key_up(usage::A)
-        ],
-        "{close:?}: the close releases what the Desktop held, latest first"
-    );
-    assert!(
-        matches!(
-            controller.submit_input(session.id, session.generation, key),
-            Err(Error::Unsupported(_))
-        ),
-        "{close:?}: a closed Desktop takes no input"
+    // The host ends its side of the desktop just after the controller's.
+    wait_for(
+        &format!("{close:?}: the host's desktop to end"),
+        DEFAULT_WAIT,
+        || {
+            (!host
+                .host_desktop_active(incoming.id, incoming.generation)
+                .unwrap_or(false))
+            .then_some(())
+        },
     );
     assert!(
         matches!(
@@ -514,5 +504,82 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
         "{close:?}: closing the old pipe leaves the new one"
     );
     fresh_pipe.mkdir(root, &folder, "after-reconnect")?;
+    Ok(())
+}
+
+/// Every way a Desktop service ends releases the keys and buttons it held
+/// on the host, latest first, and the ended desktop takes no input.
+#[test]
+fn a_desktop_close_releases_what_it_held_for_every_close() -> TestResult {
+    let _trace = traced();
+    for close in [
+        DesktopClose::HandleClose,
+        DesktopClose::OwnerClose,
+        DesktopClose::HostClose,
+        DesktopClose::HostStopsSharing,
+        DesktopClose::HandleDropped,
+    ] {
+        let pair = Pair::for_desktop();
+        let (host, controller) = (&pair.host.core, &pair.controller.core);
+        let applied = InputLog::install(&pair.host, (1920, 1080))?;
+        let connection = pair.connect_services();
+        let owner = pair.attach(&connection, ServiceKind::Desktop);
+        let handle = controller.open_desktop_service(owner.id, owner.generation)?;
+        let key = InputEvent::key_down(usage::A);
+        let button = InputEvent::button_down(PointerButton::Left);
+        handle.submit_input(key)?;
+        handle.submit_input(button)?;
+        applied.exactly(2);
+        let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+        let ended = match close {
+            DesktopClose::HandleClose => {
+                handle.close();
+                Some(handle)
+            }
+            DesktopClose::OwnerClose => {
+                controller.close_controller_service(owner.id, owner.generation)?;
+                Some(handle)
+            }
+            DesktopClose::HostClose => {
+                host.close_hosted_service(remote.id, remote.generation)?;
+                Some(handle)
+            }
+            DesktopClose::HostStopsSharing => {
+                host.set_service_sharing(ServiceKind::Desktop, false)?;
+                Some(handle)
+            }
+            DesktopClose::HandleDropped => {
+                drop(handle);
+                None
+            }
+        };
+        assert_eq!(
+            applied.wait_for(4),
+            vec![
+                key,
+                button,
+                InputEvent::button_up(PointerButton::Left),
+                InputEvent::key_up(usage::A)
+            ],
+            "{close:?}: the close releases what the Desktop held, latest first"
+        );
+        if let Some(handle) = ended {
+            wait_for(
+                &format!("{close:?}: the desktop to end"),
+                DEFAULT_WAIT,
+                || handle.is_cancelled().then_some(()),
+            );
+            assert!(
+                handle.submit_input(key).is_err(),
+                "{close:?}: a closed Desktop takes no input"
+            );
+        }
+        pair.host.wait_released(Some(ServiceKind::Desktop));
+        assert_eq!(
+            applied.events().len(),
+            4,
+            "{close:?}: the close releases each held key and button once"
+        );
+    }
     Ok(())
 }

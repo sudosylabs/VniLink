@@ -1,7 +1,7 @@
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
-import { deviceName, engineErrorCategory, type DisplayInfo, type EngineCommand, type QualityLimits, type RemoteStatus, type VideoCodec, type WindowDecoder } from '../../../platform/engine/common/engine.js';
+import { deviceName, engineErrorCategory, type DesktopInputCommand, type DisplayInfo, type QualityLimits, type RemoteStatus, type VideoCodec, type WindowDecoder } from '../../../platform/engine/common/engine.js';
 import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
 import { createWebCodecsDecoder, webCodecsSupport } from '../camera/webCodecsDecoder.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
@@ -14,7 +14,7 @@ export type DesktopChannelOpener = (
 	request: Omit<DataChannelRequest, 'requestId'>,
 	consume: (packet: DataPacket) => Promise<void>,
 	onError: (error: Error) => void,
-) => Promise<DesktopVideoChannel & { input(command: EngineCommand): void }>;
+) => Promise<DesktopVideoChannel & { input(command: DesktopInputCommand): void }>;
 
 /** What the other computer reports about its screen, as a reason it can't be opened. */
 export function desktopRefusal(status: RemoteStatus | undefined): DesktopFailure | undefined {

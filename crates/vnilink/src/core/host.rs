@@ -4,7 +4,7 @@
 use super::*;
 
 use super::clipboard::{apply_clipboard, apply_clipboard_files, clipboard_selected};
-use super::keys::host_input_loop;
+use super::keys::host_command_loop;
 use super::link::{remember_link, write_addresses};
 use super::pairing::{wait_for_control_approval, ControlAnswer};
 use super::transfer::{is_files_connection, serve_files_connection};
@@ -332,7 +332,7 @@ fn admission(
     }
     session::admit(
         state.hosting,
-        state.incoming_admission_count() >= MAX_LIVE_INCOMING,
+        state.live_incoming_count() >= MAX_LIVE_INCOMING,
         state.trust.granted(peer.as_bytes(), Grant::View),
         state.trust.granted(peer.as_bytes(), Grant::Transfer),
         files_only,
@@ -604,7 +604,7 @@ pub(super) async fn handle_host_request(
                                     }
                                 })
                             });
-                            let local_stop = host_input_loop(
+                            let local_stop = host_command_loop(
                                 shared, info.id, peer, &mut send, &mut recv, stop_rx,
                             )
                             .await;
@@ -709,7 +709,7 @@ pub(super) fn register_incoming(
         {
             old.stop.send_replace(true);
         }
-    } else if state.incoming_admission_count() >= MAX_LIVE_INCOMING {
+    } else if state.live_incoming_count() >= MAX_LIVE_INCOMING {
         return Err(Error::Busy);
     }
     state.generation = state.generation.saturating_add(1);
@@ -728,15 +728,6 @@ pub(super) fn register_incoming(
         monitor_width,
         monitor_height,
     };
-    // Links hold no admission slot: they are outside the live-session cap.
-    let incoming_slot = (!services_only).then(|| {
-        state
-            .incoming_slots
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        Arc::new(super::input_cleanup::AdmissionSlot(
-            state.incoming_slots.clone(),
-        ))
-    });
     state.incoming.insert(
         id,
         LiveSession {
@@ -755,10 +746,7 @@ pub(super) fn register_incoming(
             files_only,
             services_only,
             desktop_stop: tokio::sync::watch::channel(false).0,
-            host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
-            incoming_slot,
             cursor_outbox: tokio::sync::watch::channel(None).0,
-            input_epoch: Arc::new(AtomicU64::new(1)),
             desktop_owner: None,
             monitor_width,
             monitor_height,
@@ -808,7 +796,6 @@ pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     let info = session_info(session);
     session.enter(SessionPhase::Closed);
     session.cursor_outbox.send_replace(None);
-    session.incoming_slot = None;
     // Hand clipboard selection to the lowest remaining live hosted session,
     // if any, so sync never points at a closed session.
     if state.clipboard_owner == Some(session_id) {

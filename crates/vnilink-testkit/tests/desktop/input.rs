@@ -1,28 +1,32 @@
-//! Input on a desktop session: what the host's desktop applies, what it
-//! lifts when the session ends, and what it reports when its operating
-//! system refuses an event.
+//! Input on a desktop: what the host's desktop applies, what it lifts when
+//! the desktop's connection ends, what it reports when its operating system
+//! refuses an event or is slow to take one, and what it holds when input is
+//! lost on the way.
 
 use expect_test::expect;
-use std::sync::{Arc, Mutex};
 
 use vnilink::{
-    usage, DisplayInfo, Error, HostDesktop, InputEvent, PointerButton, SessionPhase, SessionRole,
+    usage, DisplayInfo, Error, InputEvent, PointerButton, RemoteDesktopService, ServiceKind,
+    ServicePhase, SessionInfo,
 };
-use vnilink_testkit::desktop::{input_failed, InputLog};
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::desktop::{input_failed, releases_settled, InputLog, Scripted, Step, Typed};
+use vnilink_testkit::drops::{DropPoint, SeededDrops};
+use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 use super::keyboard::records_nothing_typed;
 use super::streams::SCREEN;
 
-/// The display a session's pointer moves on: the host's one monitor.
+/// The display a desktop's pointer moves on: the host's one monitor.
 const DISPLAY: u64 = 1;
 
-/// The host publishes its one display, the viewer learns it and selects
-/// it, and the host applies that selection: pointer input has a display to
-/// land on.
-fn arm_display(pair: &Pair, id: u64, generation: u64) -> Result<(), Error> {
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    host.set_topology(
+/// What the operating system says when it refuses an event.
+const REFUSED: &str = "the operating system rejected the event";
+
+/// The host publishes its one display before the viewer opens its desktop,
+/// which then selects it: the selection goes before any pointer on the
+/// desktop's stream, so pointer input has a display to land on.
+fn publish_display(pair: &Pair) -> Result<(), Error> {
+    pair.host.core.set_topology(
         1,
         &[DisplayInfo {
             id: DISPLAY,
@@ -34,128 +38,32 @@ fn arm_display(pair: &Pair, id: u64, generation: u64) -> Result<(), Error> {
             scale_percent: 100,
             revision: 1,
         }],
-    )?;
-    wait_for(
-        "the viewer to learn the host's display",
-        DEFAULT_WAIT,
-        || {
-            controller
-                .session_topology(id, generation)
-                .ok()?
-                .iter()
-                .any(|display| display.id == DISPLAY)
-                .then_some(())
-        },
-    );
-    controller.select_displays(id, generation, &[DISPLAY])?;
-    wait_for("the host to apply the selection", DEFAULT_WAIT, || {
-        host.video_targets()
-            .ok()?
-            .iter()
-            .any(|target| {
-                !target.service
-                    && host
-                        .incoming_display_selection(target.id, target.generation)
-                        .ok()
-                        .as_deref()
-                        == Some(&[DISPLAY][..])
-            })
-            .then_some(())
-    });
-    Ok(())
+    )
 }
 
-/// A desktop of one `monitor`-sized display that logs what it applies, and
-/// refuses a press of `fail_key_down`, or every release when
-/// `fail_release`, as an operating system can.
-struct RefusingDesktop {
-    monitor: (u16, u16),
-    applied: Arc<Mutex<Vec<InputEvent>>>,
-    fail_key_down: Option<u16>,
-    fail_release: bool,
+/// The controller's services connection to the host and a Desktop on it,
+/// as the application opens them.
+fn open_desktop(pair: &Pair) -> Result<(SessionInfo, RemoteDesktopService), Error> {
+    let connection = pair.connect_services();
+    let desktop = pair.controller.open_desktop(&connection)?;
+    Ok((connection, desktop))
 }
 
-impl HostDesktop for RefusingDesktop {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
-        match event {
-            InputEvent::Key { down: false, .. } | InputEvent::Button { down: false, .. }
-                if self.fail_release =>
-            {
-                return Err(Error::InputFailed(
-                    "the operating system rejected the event",
-                ));
-            }
-            InputEvent::Key { usage, down: true } if self.fail_key_down == Some(usage) => {
-                return Err(Error::InputFailed(
-                    "the operating system rejected the event",
-                ));
-            }
-            _ => {}
-        }
-        self.applied
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(event);
-        Ok(())
-    }
-
-    fn monitor(&self) -> (u16, u16) {
-        self.monitor
-    }
-}
-
-/// What a [`RefusingDesktop`] applied.
-#[derive(Clone, Default)]
-struct Applied(Arc<Mutex<Vec<InputEvent>>>);
-
-impl Applied {
-    fn install(
-        host: &Engine,
-        monitor: (u16, u16),
-        fail_key_down: Option<u16>,
-        fail_release: bool,
-    ) -> Result<Self, Error> {
-        let applied = Self::default();
-        host.core.set_desktop(Box::new(RefusingDesktop {
-            monitor,
-            applied: Arc::clone(&applied.0),
-            fail_key_down,
-            fail_release,
-        }))?;
-        Ok(applied)
-    }
-
-    fn events(&self) -> Vec<InputEvent> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone()
-    }
-
-    /// Waits until as many events as `expected` were applied, and states
-    /// they are `expected`, for the contract `what`.
-    fn wait(&self, expected: &[InputEvent], what: &str) {
-        let got = wait_for(
-            &format!("the host to apply {} events", expected.len()),
-            DEFAULT_WAIT,
-            || {
-                let got = self.events();
-                (got.len() >= expected.len()).then_some(got)
-            },
-        );
-        assert_eq!(got, expected, "{what}");
-    }
+/// The id the host knows the controller's connection by, which its input
+/// failures name.
+fn hosted_connection(pair: &Pair) -> u64 {
+    pair.host.hosted_id(&pair.controller)
 }
 
 /// A host with a desktop offers keyboard, pointer and its one monitor; the
 /// keys, pointer moves, button and wheel a viewer sends apply in order,
 /// pointer moves still queued together coalescing to the last, and ending
-/// the session lifts the held button and key, last pressed first.
+/// the connection lifts the held button and key, last pressed first.
 #[test]
 fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let host = &pair.host.core;
     let applied = InputLog::install(&pair.host, SCREEN)?;
     let capabilities = host.capabilities();
     assert!(
@@ -163,13 +71,15 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
         "a host with a desktop offers keyboard and pointer"
     );
     assert_eq!(capabilities.monitors, 1, "the host offers its one monitor");
-    let session = pair.connect_control();
+    publish_display(&pair)?;
+    let (_, desktop) = open_desktop(&pair)?;
+    let info = desktop.desktop_info()?;
     assert_eq!(
-        (session.monitor_width, session.monitor_height),
+        (info.monitor_width, info.monitor_height),
         SCREEN,
         "the viewer learns the host's monitor"
     );
-    arm_display(&pair, session.id, session.generation)?;
+    desktop.select_displays(&[DISPLAY])?;
     let key = InputEvent::key_down(usage::A);
     let moves = [
         InputEvent::pointer(1, 1, 1, 1),
@@ -181,7 +91,7 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
         InputEvent::wheel(0, -1),
     ];
     for event in [key].iter().chain(&moves).chain(&tail) {
-        controller.submit_input(session.id, session.generation, *event)?;
+        desktop.submit_input(*event)?;
     }
     // Coalescing drops moves still queued together; a running sender may
     // already have sent either earlier move.
@@ -219,7 +129,7 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
     assert_eq!(
         ends_with(InputEvent::key_up(usage::A)),
         expected,
-        "ending the session lifts the held button, then the held key"
+        "ending the connection lifts the held button, then the held key"
     );
     records_nothing_typed(&trace, &[]);
     expect![[r#""#]].assert_eq(&trace.story(&["input"]));
@@ -227,14 +137,13 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
 }
 
 /// A key and buttons pressed and released apply as sent, and ending the
-/// session lifts nothing more: none is still held.
+/// connection lifts nothing more: none is still held.
 #[test]
 fn key_up_and_each_button_are_applied_and_not_released_again() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
     let applied = InputLog::install(&pair.host, SCREEN)?;
-    let session = pair.connect_control();
+    let (_, desktop) = open_desktop(&pair)?;
     let expected = [
         InputEvent::key_down(usage::A),
         InputEvent::key_up(usage::A),
@@ -245,118 +154,323 @@ fn key_up_and_each_button_are_applied_and_not_released_again() -> TestResult {
         InputEvent::wheel(2, -3),
     ];
     for event in expected {
-        controller.submit_input(session.id, session.generation, event)?;
+        desktop.submit_input(event)?;
     }
     assert_eq!(
         applied.exactly(expected.len()),
         expected,
         "each press and release applies as sent"
     );
-    host.stop_hosted_session()?;
-    pair.host.wait_closed(SessionRole::Host);
-    pair.controller.wait_closed(SessionRole::Controller);
+    pair.host.core.stop_hosted_session()?;
+    pair.host.wait_released(Some(ServiceKind::Desktop));
     assert_eq!(
         applied.events(),
         expected,
-        "ending the session releases nothing already released"
+        "ending the connection releases nothing already released"
     );
     records_nothing_typed(&trace, &[]);
     expect![[r#""#]].assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
-/// A key the host's operating system refuses is reported on the host, and
-/// the session stays open: the keys and pointer moves after it apply.
+/// A key the host's operating system refuses is reported on the host, on
+/// the desktop's connection, and recorded with why; the desktop stays open
+/// and the keys and pointer moves after it apply.
 #[test]
-fn an_apply_failure_is_reported_and_the_session_stays_open() -> TestResult {
+fn an_apply_failure_is_reported_and_the_desktop_stays_open() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let applied = Applied::install(&pair.host, (640, 480), Some(usage::B), false)?;
+    let host = &pair.host.core;
+    let scripted = Scripted::install(&pair.host, (640, 480), &[(1, Step::Fail(REFUSED))])?;
     let events = host.subscribe()?;
-    let session = pair.connect_control();
+    publish_display(&pair)?;
+    let (_, desktop) = open_desktop(&pair)?;
     assert_eq!(
-        (session.monitor_width, session.monitor_height),
+        {
+            let info = desktop.desktop_info()?;
+            (info.monitor_width, info.monitor_height)
+        },
         (640, 480),
         "the viewer learns the host's monitor"
     );
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::B),
-    )?;
+    desktop.submit_input(InputEvent::key_down(usage::B))?;
     assert_eq!(
         input_failed(&events),
-        (session.id, "the operating system rejected the event"),
-        "the host reports the key its system refused, on the session"
+        (hosted_connection(&pair), REFUSED),
+        "the host reports the key its system refused, on the connection"
     );
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::A),
-    )?;
-    arm_display(&pair, session.id, session.generation)?;
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::pointer(3, 4, 1, 1),
-    )?;
-    applied.wait(
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
+    desktop.select_displays(&[DISPLAY])?;
+    desktop.submit_input(InputEvent::pointer(3, 4, 1, 1))?;
+    scripted.wait(
         &[
-            InputEvent::key_down(usage::A),
-            InputEvent::pointer(3, 4, 1, 1),
+            Typed::Event(InputEvent::key_down(usage::A)),
+            Typed::Event(InputEvent::pointer(3, 4, 1, 1)),
         ],
         "the key and pointer after a refused key apply",
     );
     assert_eq!(
-        host.snapshot()?.incoming.ok_or("the host's session")?.phase,
-        SessionPhase::Active,
-        "a refused key leaves the session open"
+        pair.host
+            .hosted_for(ServiceKind::Desktop, &pair.controller)
+            .ok_or("the host's desktop")?
+            .phase,
+        ServicePhase::Active,
+        "a refused key leaves the desktop open"
     );
-    controller.submit_input(session.id, session.generation, InputEvent::key_up(usage::A))?;
+    desktop.submit_input(InputEvent::key_up(usage::A))?;
     records_nothing_typed(&trace, &[]);
-    trace.wait_for_records("input failed", 1);
+    trace.wait_for_records("input refused", 1);
     expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
         host:
-          warn input: input failed reason=the operating system rejected the event session=1
+          warn input: input refused kind=key down reason=the operating system rejected the event service=1
     "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    .assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
-/// When the session ends and the host's system refuses to lift what was
-/// held, the host reports it on the session, and the session still closes.
+/// When the connection ends and the host's system refuses to lift what was
+/// held, the host reports it on the connection, and the desktop still
+/// closes.
 #[test]
-fn a_failed_release_is_reported_on_the_hosted_session() -> TestResult {
+fn a_failed_release_is_reported_on_the_connection() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let applied = Applied::install(&pair.host, (800, 600), None, true)?;
+    let host = &pair.host.core;
+    // The two presses apply; both releases are refused.
+    let scripted = Scripted::install(
+        &pair.host,
+        (800, 600),
+        &[(3, Step::Fail(REFUSED)), (4, Step::Fail(REFUSED))],
+    )?;
     let events = host.subscribe()?;
-    let session = pair.connect_control();
+    let (_, desktop) = open_desktop(&pair)?;
     let held = [
         InputEvent::key_down(usage::A),
         InputEvent::button_down(PointerButton::Left),
     ];
     for event in held {
-        controller.submit_input(session.id, session.generation, event)?;
+        desktop.submit_input(event)?;
     }
-    applied.wait(&held, "the key and button apply");
+    scripted.wait(&held.map(Typed::Event), "the key and button apply");
+    let connection = hosted_connection(&pair);
     host.stop_hosted_session()?;
     assert_eq!(
         input_failed(&events),
-        (session.id, "a held key or button could not be released"),
-        "the host reports the failed release on the session"
+        (connection, "a held key or button could not be released"),
+        "the host reports the failed release on the connection"
     );
-    pair.host.wait_closed(SessionRole::Host);
+    pair.host.wait_released(Some(ServiceKind::Desktop));
     assert_eq!(
-        applied.events(),
-        held,
+        scripted.seen(),
+        held.map(Typed::Event),
         "a refused release applies nothing more"
+    );
+    assert_eq!(
+        scripted.calls(),
+        4,
+        "each held key and button was released once"
     );
     records_nothing_typed(&trace, &[]);
     expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    Ok(())
+}
+
+/// A backend still applying a key when control is withdrawn finishes it,
+/// and the host lifts that key at once: the viewer that pressed it can no
+/// longer release it.
+#[test]
+fn a_key_the_backend_applies_as_control_is_withdrawn_is_released_at_once() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let scripted = Scripted::install(&pair.host, SCREEN, &[(1, Step::Park)])?;
+    let (_, desktop) = open_desktop(&pair)?;
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
+    scripted.wait_parked();
+    pair.host.core.set_desktop_sharing(vnilink::Grants {
+        view: true,
+        control: false,
+        clipboard: false,
+        transfer: false,
+    })?;
+    scripted.unpark();
+    let released = [
+        Typed::Event(InputEvent::key_down(usage::A)),
+        Typed::Event(InputEvent::key_up(usage::A)),
+    ];
+    scripted.wait(&released, "the key applied as its lease ended is released");
+    releases_settled(&pair.host);
+    assert_eq!(
+        scripted.seen(),
+        released,
+        "the key is released once, by the call that applied it or the withdrawal, not both"
+    );
+    records_nothing_typed(&trace, &[]);
+    trace.wait_for_records("control changed", 1);
+    expect![[r#"
+        controller:
+          input: control changed epoch=2 service=1 state=Viewing
+    "#]]
+    .assert_eq(&trace.story(&["input"]));
+    Ok(())
+}
+
+/// A slow backend keeps the order the viewer sent: the keys behind a slow
+/// one wait for it, and what it still holds is lifted, once, when the
+/// connection ends.
+#[test]
+fn a_slow_backend_keeps_the_order_and_what_it_holds() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let scripted = Scripted::install(&pair.host, SCREEN, &[(1, Step::Park)])?;
+    let (_, desktop) = open_desktop(&pair)?;
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
+    scripted.wait_parked();
+    desktop.submit_input(InputEvent::key_down(usage::B))?;
+    desktop.submit_input(InputEvent::key_up(usage::B))?;
+    assert_eq!(
+        scripted.calls(),
+        1,
+        "nothing reaches the backend while it is still applying a key"
+    );
+    scripted.unpark();
+    let applied = [
+        Typed::Event(InputEvent::key_down(usage::A)),
+        Typed::Event(InputEvent::key_down(usage::B)),
+        Typed::Event(InputEvent::key_up(usage::B)),
+    ];
+    scripted.wait(
+        &applied,
+        "the keys behind the slow one apply after it, in order",
+    );
+    pair.host.core.stop_hosted_session()?;
+    pair.host.wait_released(Some(ServiceKind::Desktop));
+    let mut released = applied.to_vec();
+    released.push(Typed::Event(InputEvent::key_up(usage::A)));
+    scripted.wait(&released, "ending the connection lifts the key still held");
+    releases_settled(&pair.host);
+    assert_eq!(
+        scripted.seen(),
+        released,
+        "the key still held is lifted once"
+    );
+    records_nothing_typed(&trace, &[]);
+    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    Ok(())
+}
+
+/// A backend that cannot apply a kind of input says so to the host's user
+/// once, not for every input it refuses, and again only after an input
+/// applied; each refusal is still recorded.
+#[test]
+fn a_fault_is_reported_once_until_an_input_applies() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let missing = Step::Unavailable("this desktop cannot press keys");
+    let mut script: Vec<(usize, Step)> = (1..=8).map(|call| (call, missing)).collect();
+    script.push((10, missing));
+    let scripted = Scripted::install(&pair.host, SCREEN, &script)?;
+    let events = pair.host.core.subscribe()?;
+    let (_, desktop) = open_desktop(&pair)?;
+    for _ in 0..4 {
+        desktop.submit_input(InputEvent::key_down(usage::A))?;
+        desktop.submit_input(InputEvent::key_up(usage::A))?;
+    }
+    desktop.submit_input(InputEvent::key_down(usage::B))?;
+    desktop.submit_input(InputEvent::key_down(usage::C))?;
+    scripted.wait(
+        &[Typed::Event(InputEvent::key_down(usage::B))],
+        "the key after the refused ones applies",
+    );
+    trace.wait_for_records("input refused", 9);
+    let mut told = 0;
+    wait_for("the host to tell its user twice", DEFAULT_WAIT, || {
+        told += vnilink_testkit::events::drain(&events)
+            .into_iter()
+            .filter(|event| matches!(event, vnilink::CoreEvent::InputFailed { .. }))
+            .count();
+        (told >= 2).then_some(())
+    });
+    assert_eq!(
+        told, 2,
+        "eight refusals are told once, and the one after an applied key once more"
+    );
+    records_nothing_typed(&trace, &[]);
+    expect![[r#"
+        host:
+          warn input: input refused kind=key down reason=this desktop cannot press keys service=1
+          input: input refused kind=key up reason=this desktop cannot press keys service=1
+          input: input refused kind=key down reason=this desktop cannot press keys service=1
+          input: input refused kind=key up reason=this desktop cannot press keys service=1
+          input: input refused kind=key down reason=this desktop cannot press keys service=1
+          input: input refused kind=key up reason=this desktop cannot press keys service=1
+          input: input refused kind=key down reason=this desktop cannot press keys service=1
+          input: input refused kind=key up reason=this desktop cannot press keys service=1
+          warn input: input refused kind=key down reason=this desktop cannot press keys service=1
+    "#]]
+    .assert_eq(&trace.tell(&["input"]).only(&["input refused"]).to_string());
+    Ok(())
+}
+
+/// Input lost on the way, before it leaves the viewer, before the host
+/// admits it or once admitted, never leaves the host holding a key the
+/// viewer let go: releasing input lifts what the host applied and nothing
+/// it did not. Each loss is recorded with where, never which key.
+#[test]
+fn input_lost_on_the_way_leaves_nothing_held_once_released() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let applied = InputLog::install(&pair.host, SCREEN)?;
+    let viewer_drops = SeededDrops::new()
+        .nth(DropPoint::Outbox, &[2])
+        .install(&pair.controller);
+    let host_drops = SeededDrops::new()
+        .nth(DropPoint::BeforeAdmission, &[2])
+        .nth(DropPoint::AfterAdmission, &[2])
+        .install(&pair.host);
+    let (_, desktop) = open_desktop(&pair)?;
+    // A's release is lost leaving the viewer, B before the host admits it,
+    // C once admitted; D applies.
+    for event in [
+        InputEvent::key_down(usage::A),
+        InputEvent::key_up(usage::A),
+        InputEvent::key_down(usage::B),
+        InputEvent::key_down(usage::C),
+        InputEvent::key_down(usage::D),
+    ] {
+        desktop.submit_input(event)?;
+    }
+    assert_eq!(
+        applied.wait_for(2),
+        [
+            InputEvent::key_down(usage::A),
+            InputEvent::key_down(usage::D)
+        ],
+        "only what was not lost applies"
+    );
+    desktop.release_input()?;
+    assert_eq!(
+        applied.exactly(4)[2..],
+        [InputEvent::key_up(usage::D), InputEvent::key_up(usage::A)],
+        "releasing lifts the keys the host holds, A whose release was lost among them"
+    );
+    assert_eq!(
+        (
+            viewer_drops.tally(DropPoint::Outbox).lost,
+            host_drops.tally(DropPoint::BeforeAdmission).lost,
+            host_drops.tally(DropPoint::AfterAdmission).lost,
+        ),
+        (1, 1, 1),
+        "one input was lost at each point"
+    );
+    records_nothing_typed(&trace, &[]);
+    trace.wait_for_records("input dropped for a test", 3);
+    expect![[r#"
+        controller:
+          input: input dropped for a test at=outbox kind=key up service=1
+        host:
+          input: input dropped for a test at=before admission kind=key down service=1
+          input: input dropped for a test at=after admission kind=key down service=1
+    "#]]
+    .assert_eq(&trace.story(&["input"]));
     Ok(())
 }

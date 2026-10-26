@@ -1,5 +1,4 @@
-import { isEngineCommand, record } from './engine.js';
-import type { EngineCommand } from './engine.js';
+import { record } from './engine.js';
 
 export type DataChannelKind = 'video' | 'terminal' | 'input' | 'files' | 'camera' | 'audio' | 'snapshot';
 
@@ -54,24 +53,6 @@ export function id(value: unknown): value is string {
 
 export function dimension(value: unknown): value is number {
 	return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535;
-}
-
-export function isInputCommand(value: unknown): value is EngineCommand {
-	return (
-		isEngineCommand(value) &&
-		[
-			'submitKey',
-			'submitPointer',
-			'submitButton',
-			'submitWheel',
-			'submitMotion',
-			'submitPreciseWheel',
-			'submitText',
-			'submitLocalKey',
-			'releaseSessionInput',
-			'selectDisplays',
-		].includes(value.type)
-	);
 }
 
 export function isDataPacket(value: unknown): value is DataPacket {

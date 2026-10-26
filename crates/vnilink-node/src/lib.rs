@@ -601,28 +601,6 @@ enum Command {
         endpoint_id: String,
     },
     ClipboardOwnerSession,
-    SessionKeyboardMode {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    SetSessionKeyboardMode {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        mode: String,
-    },
-    SessionSwapControlAndCommand {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    SetSessionSwapControlAndCommand {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        enabled: bool,
-    },
     ControllerSessionPaths {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -749,6 +727,9 @@ enum Command {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
+    /// Desktop input, from `SubmitKey` to `ReleaseSessionInput` save
+    /// `SubmitClipboard`: decoded on a desktop's data channel only
+    /// (`data.rs`), naming the desktop's connection and generation.
     SubmitKey {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -945,17 +926,6 @@ enum Command {
     SetSwapControlAndCommand {
         enabled: bool,
     },
-    SessionPointerSettings {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    SetSessionPointerSettings {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        settings: TransferPointerSettings,
-    },
     SessionClipboardText {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -1144,9 +1114,6 @@ enum Reply {
     },
     Swap {
         enabled: bool,
-    },
-    PointerSettings {
-        settings: TransferPointerSettings,
     },
     Displays {
         displays: Vec<TransferDisplay>,
@@ -1734,135 +1701,10 @@ impl EngineBridge {
 }
 
 impl EngineBridge {
-    /// Commands that inject input and read per-session input state.
+    /// A session's clipboard, the input defaults the controller's desktops
+    /// open with, and this computer's own files.
     fn input(core: &VnilinkCore, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::SessionKeyboardMode {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                Reply::KeyboardMode {
-                    mode: keyboard_mode_name(
-                        core.session_keyboard_mode(id, gen).map_err(core_error)?,
-                    )
-                    .to_string(),
-                }
-            }
-            Command::SetSessionKeyboardMode {
-                session_id,
-                generation,
-                mode,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.set_session_keyboard_mode(id, gen, keyboard_mode(mode)?)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SessionSwapControlAndCommand {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                Reply::Swap {
-                    enabled: core
-                        .session_swap_control_and_command(id, gen)
-                        .map_err(core_error)?,
-                }
-            }
-            Command::SetSessionSwapControlAndCommand {
-                session_id,
-                generation,
-                enabled,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.set_session_swap_control_and_command(id, gen, *enabled)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitKey {
-                session_id,
-                generation,
-                usage,
-                down,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_key(id, gen, *usage, *down)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitPointer {
-                session_id,
-                generation,
-                x,
-                y,
-                display,
-                revision,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_pointer(
-                    id,
-                    gen,
-                    *x,
-                    *y,
-                    parse_id(display, "Invalid display ID")?,
-                    parse_id(revision, "Invalid topology revision")?,
-                )
-                .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitButton {
-                session_id,
-                generation,
-                button,
-                down,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_button(id, gen, pointer_button(button)?, *down)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitWheel {
-                session_id,
-                generation,
-                dx,
-                dy,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_wheel(id, gen, *dx, *dy).map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitMotion {
-                session_id,
-                generation,
-                dx,
-                dy,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_motion(id, gen, *dx, *dy).map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitPreciseWheel {
-                session_id,
-                generation,
-                dx,
-                dy,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_precise_wheel(id, gen, *dx, *dy)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitText {
-                session_id,
-                generation,
-                text,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_text(id, gen, text.clone())
-                    .map_err(core_error)?;
-                Reply::Done
-            }
             Command::SubmitClipboard {
                 session_id,
                 generation,
@@ -1871,27 +1713,6 @@ impl EngineBridge {
                 let (id, gen) = session_target(session_id, generation)?;
                 core.submit_clipboard(id, gen, text.clone())
                     .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitLocalKey {
-                session_id,
-                generation,
-                usage,
-                down,
-                text,
-                composing,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_local_key(id, gen, *usage, *down, text.clone(), *composing)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::ReleaseSessionInput {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.release_session_input(id, gen).map_err(core_error)?;
                 Reply::Done
             }
             Command::SetInputDefaults {
@@ -2006,38 +1827,6 @@ impl EngineBridge {
             Command::SetSwapControlAndCommand { enabled } => {
                 core.set_swap_control_and_command(*enabled)
                     .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SessionPointerSettings {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let settings = core.session_pointer_settings(id, gen).map_err(core_error)?;
-                Reply::PointerSettings {
-                    settings: TransferPointerSettings {
-                        sensitivity_percent: settings.sensitivity_percent,
-                        reverse_wheel: settings.reverse_wheel,
-                        swap_buttons: settings.swap_buttons,
-                    },
-                }
-            }
-            Command::SetSessionPointerSettings {
-                session_id,
-                generation,
-                settings,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.set_session_pointer_settings(
-                    id,
-                    gen,
-                    vnilink_app::FfiPointerSettings {
-                        sensitivity_percent: settings.sensitivity_percent,
-                        reverse_wheel: settings.reverse_wheel,
-                        swap_buttons: settings.swap_buttons,
-                    },
-                )
-                .map_err(core_error)?;
                 Reply::Done
             }
             Command::SessionClipboardText {
@@ -2545,20 +2334,7 @@ impl EngineBridge {
                 let core = &state.core;
                 Self::sessions(core, command)
             }
-            Command::SessionKeyboardMode { .. }
-            | Command::SetSessionKeyboardMode { .. }
-            | Command::SessionSwapControlAndCommand { .. }
-            | Command::SetSessionSwapControlAndCommand { .. }
-            | Command::SubmitKey { .. }
-            | Command::SubmitPointer { .. }
-            | Command::SubmitButton { .. }
-            | Command::SubmitWheel { .. }
-            | Command::SubmitMotion { .. }
-            | Command::SubmitPreciseWheel { .. }
-            | Command::SubmitText { .. }
-            | Command::SubmitClipboard { .. }
-            | Command::SubmitLocalKey { .. }
-            | Command::ReleaseSessionInput { .. }
+            Command::SubmitClipboard { .. }
             | Command::SetInputDefaults { .. }
             | Command::EnableFilesystemAccess
             | Command::SetTransferDirectory { .. }
@@ -2574,13 +2350,25 @@ impl EngineBridge {
             | Command::SetKeyboardMode { .. }
             | Command::SwapControlAndCommand
             | Command::SetSwapControlAndCommand { .. }
-            | Command::SessionPointerSettings { .. }
-            | Command::SetSessionPointerSettings { .. }
             | Command::SessionClipboardText { .. }
             | Command::ClipboardText => {
                 let core = &state.core;
                 Self::input(core, command)
             }
+            // Desktop input goes on its desktop's data channel (`data.rs`),
+            // which decodes these shapes; no command carries it.
+            Command::SubmitKey { .. }
+            | Command::SubmitPointer { .. }
+            | Command::SubmitButton { .. }
+            | Command::SubmitWheel { .. }
+            | Command::SubmitMotion { .. }
+            | Command::SubmitPreciseWheel { .. }
+            | Command::SubmitText { .. }
+            | Command::SubmitLocalKey { .. }
+            | Command::ReleaseSessionInput { .. } => Err(Error::new(
+                Status::InvalidArg,
+                "Desktop input goes on its data channel",
+            )),
             Command::SaveCustomRelays { .. }
             | Command::StartHosting
             | Command::StopHosting
@@ -2798,8 +2586,6 @@ impl CommandShape {
             | "subscribeSessionVideo"
             | "sessionKeyboardMode"
             | "sessionSwapControlAndCommand" => &["type", "sessionId", "generation"],
-            "setSessionKeyboardMode" => &["type", "sessionId", "generation", "mode"],
-            "setSessionSwapControlAndCommand" => &["type", "sessionId", "generation", "enabled"],
             "reportNativePermissions" => &["type", "screen", "input", "camera", "microphone"],
             "startNativeScreenSharing" => &[
                 "type",
@@ -2882,7 +2668,6 @@ impl CommandShape {
             "deleteLocal" => &["type", "root", "path", "name", "token", "trash"],
             "setKeyboardMode" => &["type", "mode"],
             "setSwapControlAndCommand" => &["type", "enabled"],
-            "setSessionPointerSettings" => &["type", "sessionId", "generation", "settings"],
             "setRelayCustom" => &["type", "urls"],
             "confirmControlRequest" => &["type", "digits"],
             "controllerSession"

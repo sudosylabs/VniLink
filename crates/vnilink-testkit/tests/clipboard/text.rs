@@ -5,12 +5,12 @@
 use expect_test::expect;
 
 use super::{paired, publish_once_open, sharing, Copied};
-use vnilink::{usage, CoreEvent, Error, InputEvent, SessionPhase, MAX_CLIPBOARD_TEXT};
+use vnilink::{CoreEvent, Error, SessionPhase, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{InputLog, RecordingClipboard};
 use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
 
 /// Without the clipboard grant a paste is refused and the session carries
-/// on, keys and all; the adapter cannot be swapped under the session, and
+/// on; the adapter cannot be swapped under the session, and
 /// once the grant is given the paste, empty text too, reaches the host.
 /// A clipboard alone does not make the host offer files.
 #[test]
@@ -21,7 +21,7 @@ fn a_paste_needs_the_grant_and_the_session_lives_without_it() -> TestResult {
     // The host shares no folders, so only the clipboard could offer files.
     host.set_file_roots(Vec::new())?;
     let copied = Copied::install(&pair.host)?;
-    let keys = InputLog::install(&pair.host, (1920, 1080))?;
+    InputLog::install(&pair.host, (1920, 1080))?;
     assert!(
         host.capabilities().clipboard,
         "an installed clipboard is a capability"
@@ -52,16 +52,6 @@ fn a_paste_needs_the_grant_and_the_session_lives_without_it() -> TestResult {
         controller.snapshot()?.outgoing.ok_or("the session")?.phase,
         SessionPhase::Active,
         "a refused paste leaves the session up"
-    );
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::A),
-    )?;
-    assert_eq!(
-        keys.exactly(1),
-        [InputEvent::key_down(usage::A)],
-        "control goes on after a refused paste"
     );
     assert!(
         matches!(

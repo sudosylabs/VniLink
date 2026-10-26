@@ -3,7 +3,7 @@
 // trace: records every ignored failure
 use super::*;
 type Job = Box<dyn FnOnce() + Send>;
-const CAPACITY: usize = 32; // 16 scoped Desktop slots plus at most 4 legacy peers.
+const CAPACITY: usize = 32; // Above the 16 Desktop admission slots, each with one release at a time.
 pub(super) struct Executor(std::sync::mpsc::SyncSender<Job>);
 impl Executor {
     pub(super) fn new(span: tracing::Span) -> std::io::Result<Self> {
@@ -37,13 +37,12 @@ impl Drop for AdmissionSlot {
 /// Settle bookkeeping even if a native backend panics during cleanup.
 pub(super) struct Reservation {
     pub(super) pending: Arc<AtomicUsize>,
-    pub(super) releasing: Option<Arc<AtomicBool>>,
+    pub(super) releasing: Arc<AtomicBool>,
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
-        if let Some(releasing) = &self.releasing {
-            releasing.store(false, std::sync::atomic::Ordering::Release);
-        }
+        self.releasing
+            .store(false, std::sync::atomic::Ordering::Release);
         self.pending
             .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }

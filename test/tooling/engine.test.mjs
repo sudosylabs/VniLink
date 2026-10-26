@@ -53,12 +53,8 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'peerHostname', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'peerHostname' }), false);
 	assert.equal(isEngineCommand({ type: 'connectFiles', endpointId: 'peer' }), false, 'Files rides the services connection');
-	assert.equal(isEngineCommand({ type: 'sessionKeyboardMode', sessionId: '1', generation: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Map' }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Dvorak' }), false);
-	assert.equal(isEngineCommand({ type: 'sessionSwapControlAndCommand', sessionId: '1', generation: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionSwapControlAndCommand', sessionId: '1', generation: '2', enabled: true }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionSwapControlAndCommand', sessionId: '1', generation: '2', enabled: 'yes' }), false);
+	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Map' }), false, 'a session carries no input to configure');
+	assert.equal(isEngineCommand({ type: 'setSessionPointerSettings', sessionId: '1', generation: '2', settings: { sensitivity_percent: 100, reverse_wheel: false, swap_buttons: false } }), false, 'a session carries no input to configure');
 	assert.equal(isEngineCommand({ type: 'controllerSessionPaths', sessionId: '1' }), true);
 	assert.equal(isEngineCommand({ type: 'controllerSessionPaths', sessionId: 'nope' }), false);
 	assert.equal(isEngineCommand({ type: 'pollEvents', subscriptionId: '1', maxEvents: 32 }), true);

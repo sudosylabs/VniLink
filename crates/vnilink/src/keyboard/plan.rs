@@ -31,7 +31,6 @@ pub(crate) struct KeyPlan {
     swap: bool,
     local: Vec<u16>,
     sent: Vec<u16>,
-    generation: u64,
 }
 
 impl KeyPlan {
@@ -40,7 +39,6 @@ impl KeyPlan {
             swap: false,
             local: Vec::new(),
             sent: Vec::new(),
-            generation: 0,
         }
     }
 
@@ -51,15 +49,6 @@ impl KeyPlan {
     pub(crate) fn clear(&mut self) {
         self.local.clear();
         self.sent.clear();
-    }
-
-    /// Drops held state when the controlling session changes. The old host
-    /// releases its own keys. This does not send those releases again.
-    pub(crate) fn reset_if_generation(&mut self, generation: u64) {
-        if self.generation != generation {
-            self.clear();
-            self.generation = generation;
-        }
     }
 
     pub(crate) fn apply(

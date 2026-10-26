@@ -617,6 +617,154 @@ impl HostDesktop for TypingDesktop {
     }
 }
 
+/// What a [`Scripted`] desktop does on one call, in place of applying it
+/// at once.
+#[derive(Clone, Copy, Debug)]
+pub enum Step {
+    /// The operating system refuses it (`Error::InputFailed`).
+    Fail(&'static str),
+    /// The desktop cannot apply it (`Error::Unsupported`).
+    Unavailable(&'static str),
+    /// It waits, holding the backend, until [`Scripted::unpark`]; then
+    /// applies: a slow operating system, as slow as the test says.
+    Park,
+}
+
+/// A desktop that records what it is asked, as [`Typing`] does, and on
+/// the calls its script names (counting every event, text and chord from
+/// 1) fails or parks instead: a backend a suite drives.
+#[derive(Clone)]
+pub struct Scripted {
+    typing: Typing,
+    script: Arc<Mutex<Vec<(usize, Step)>>>,
+    calls: Arc<AtomicUsize>,
+    /// Calls parked now, and whether they may go on.
+    park: Arc<(Mutex<(usize, bool)>, std::sync::Condvar)>,
+}
+
+impl Scripted {
+    /// Installs on `host` a desktop of one `monitor`-sized display that
+    /// follows `script`.
+    pub fn install(
+        host: &crate::Engine,
+        monitor: (u16, u16),
+        script: &[(usize, Step)],
+    ) -> Result<Self, vnilink::Error> {
+        let scripted = Self {
+            typing: Typing::default(),
+            script: Arc::new(Mutex::new(script.to_vec())),
+            calls: Arc::new(AtomicUsize::new(0)),
+            park: Arc::new((Mutex::new((0, false)), std::sync::Condvar::new())),
+        };
+        host.core.set_desktop(Box::new(ScriptedDesktop {
+            scripted: scripted.clone(),
+            monitor,
+        }))?;
+        Ok(scripted)
+    }
+
+    /// Everything it was asked and applied, in order.
+    pub fn seen(&self) -> Vec<Typed> {
+        self.typing.seen()
+    }
+
+    /// As [`Typing::wait`].
+    pub fn wait(&self, expected: &[Typed], what: &str) {
+        self.typing.wait(expected, what);
+    }
+
+    /// The calls made so far, refused ones too.
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::Acquire)
+    }
+
+    /// Waits until a call is parked, holding the backend.
+    pub fn wait_parked(&self) {
+        crate::wait_for("a call to park", crate::DEFAULT_WAIT, || {
+            (crate::lock(&self.park.0).0 > 0).then_some(())
+        });
+    }
+
+    /// Lets every parked call, and every later one, go on.
+    pub fn unpark(&self) {
+        crate::lock(&self.park.0).1 = true;
+        self.park.1.notify_all();
+    }
+
+    /// What the script says of the call `call`, if anything.
+    fn step(&self, call: usize) -> Option<Step> {
+        crate::lock(&self.script)
+            .iter()
+            .find(|(at, _)| *at == call)
+            .map(|(_, step)| *step)
+    }
+
+    /// Follows the script for the next call; `Ok` when it applies.
+    fn follow(&self) -> Result<(), vnilink::Error> {
+        let call = self.calls.fetch_add(1, Ordering::AcqRel) + 1;
+        match self.step(call) {
+            None => Ok(()),
+            Some(Step::Fail(reason)) => Err(vnilink::Error::InputFailed(reason)),
+            Some(Step::Unavailable(reason)) => Err(vnilink::Error::Unsupported(reason)),
+            Some(Step::Park) => {
+                let (gate, wake) = &*self.park;
+                let mut parked = crate::lock(gate);
+                parked.0 += 1;
+                // Bounded, so a test that never unparks fails rather than
+                // hanging its engine; a call that waited too long applies
+                // nothing.
+                let (mut parked, waited) = wake
+                    .wait_timeout_while(parked, crate::DEFAULT_WAIT, |(_, go)| !*go)
+                    .unwrap_or_else(|poison| poison.into_inner());
+                parked.0 -= 1;
+                assert!(
+                    !waited.timed_out(),
+                    "call {call} stayed parked for {:?}; the test never unparked it",
+                    crate::DEFAULT_WAIT
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
+struct ScriptedDesktop {
+    scripted: Scripted,
+    monitor: (u16, u16),
+}
+
+impl HostDesktop for ScriptedDesktop {
+    fn apply(&mut self, event: InputEvent) -> Result<(), vnilink::Error> {
+        self.scripted.follow()?;
+        self.scripted.typing.record(Typed::Event(event));
+        Ok(())
+    }
+
+    fn type_text(&mut self, text: &str) -> Result<(), vnilink::Error> {
+        self.scripted.follow()?;
+        self.scripted.typing.record(Typed::Text(text.to_owned()));
+        Ok(())
+    }
+
+    fn type_chord(&mut self, text: &str) -> Result<(), vnilink::Error> {
+        self.scripted.follow()?;
+        self.scripted.typing.record(Typed::Chord(text.to_owned()));
+        Ok(())
+    }
+
+    fn monitor(&self) -> (u16, u16) {
+        self.monitor
+    }
+}
+
+/// Waits until `host` has no release of held input still queued, so what
+/// its desktop applied is all it will apply.
+pub fn releases_settled(host: &crate::Engine) {
+    crate::wait_for("the host's releases to settle", crate::DEFAULT_WAIT, || {
+        (host.core.input_releases_pending() == 0).then_some(())
+    });
+}
+
 /// The next picture `video` brings, within the kit's wait, failing naming
 /// `what`.
 pub fn next_picture(video: &vnilink::VideoSubscription, what: &str) -> EncodedFrame {

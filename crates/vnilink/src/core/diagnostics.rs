@@ -121,11 +121,11 @@ impl Core {
             }
         }
         services.sort_by_key(|summary| (summary.connection_id, summary.id));
-        let input_queued: usize = state
-            .outgoing
-            .values()
-            .filter_map(|session| session.outbox.as_ref())
-            .map(|outbox| outbox.depth())
+        // Input waits only in the viewer's desktops; a session carries none.
+        let input_queued: usize = runtimes
+            .iter()
+            .filter(|(_, hosted, _)| !hosted)
+            .map(|(_, _, desktop)| desktop.input_queued())
             .sum();
         let resources = ResourceCounts {
             incoming_connections: state.incoming.len() as u32,

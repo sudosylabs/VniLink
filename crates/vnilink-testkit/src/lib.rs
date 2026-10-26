@@ -7,8 +7,9 @@
 //! host and a controller paired as the application pairs them. Each service
 //! module adds what its suites share: [`files`] its trees and transfers,
 //! [`audio`] stand-in sound sources, [`camera`] a stand-in camera,
-//! [`desktop`] a scripted screen, a stand-in encoder and a recording
-//! desktop driving the host's real picture pipeline, [`terminal`] the
+//! [`desktop`] a scripted screen, a stand-in encoder and recording or
+//! scripted desktops driving the host's real picture pipeline, [`drops`]
+//! seeded losses on a desktop's stream, [`terminal`] the
 //! platform's real shell, [`relay`] a relay on this computer, [`system`]
 //! operating systems that record the actions asked of them, [`power`] power
 //! leases that count themselves.
@@ -31,6 +32,7 @@ pub mod audio;
 pub mod bench;
 pub mod camera;
 pub mod desktop;
+pub mod drops;
 mod engine;
 pub mod events;
 pub mod files;

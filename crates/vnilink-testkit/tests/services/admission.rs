@@ -6,7 +6,7 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{
-    CloseCause, Error, Grants, InputEvent, ServiceKind, ServicePhase, SessionPhase, SharingPolicy,
+    CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase, SharingPolicy,
     VideoCodecCaps,
 };
 use vnilink_testkit::files::whole_disk;
@@ -166,17 +166,6 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
     assert!(
         session.quality.is_none() && incoming.quality.is_none(),
         "neither side has a picture quality"
-    );
-    assert!(
-        matches!(
-            controller.submit_input(
-                session.id,
-                session.generation,
-                InputEvent::pointer(1, 1, 1, 1)
-            ),
-            Err(Error::Unsupported(_))
-        ),
-        "a neutral connection carries no input"
     );
     assert!(
         matches!(

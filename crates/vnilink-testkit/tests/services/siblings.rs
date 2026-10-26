@@ -541,6 +541,7 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
           session: session phase from=stopping generation=1 role=Controller session=1 to=closed
           session: session phase from=connecting generation=3 role=Controller session=2 to=active
         host:
+          session: the session's control stream ended error=network session=1
           session: session phase from=active generation=1 role=Host session=1 to=closed
           hosting: service opened connection=2 kind=Some(Terminal) service=1
     "#]]

@@ -201,9 +201,6 @@ export type EngineCommand =
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
 	| { type: 'peerHostname'; endpointId: string }
-	| { type: 'sessionKeyboardMode' | 'sessionSwapControlAndCommand'; sessionId: string; generation: string }
-	| { type: 'setSessionKeyboardMode'; sessionId: string; generation: string; mode: 'Character' | 'Map' | 'Translate' }
-	| { type: 'setSessionSwapControlAndCommand'; sessionId: string; generation: string; enabled: boolean }
 	| { type: 'controllerSessionPaths'; sessionId: string }
 	| { type: 'pollEvents'; subscriptionId: string; maxEvents: number }
 	| { type: 'releaseEvents'; subscriptionId: string }
@@ -235,15 +232,7 @@ export type EngineCommand =
 	| { type: 'disconnect' }
 	| { type: 'disconnectSession'; sessionId: string }
 	| { type: 'stopHostedPeer'; sessionId: string }
-	| { type: 'submitKey'; sessionId: string; generation: string; usage: number; down: boolean }
-	| { type: 'submitPointer'; sessionId: string; generation: string; x: number; y: number; display: string; revision: string }
-	| { type: 'submitButton'; sessionId: string; generation: string; button: 'Left' | 'Right' | 'Middle' | 'Back' | 'Forward'; down: boolean }
-	| { type: 'submitWheel' | 'submitMotion'; sessionId: string; generation: string; dx: number; dy: number }
-	| { type: 'submitPreciseWheel'; sessionId: string; generation: string; dx: number; dy: number }
-	| { type: 'submitText' | 'submitClipboard'; sessionId: string; generation: string; text: string }
-	/** `composing`: a dead key or input-method step that has not typed a character yet. */
-	| { type: 'submitLocalKey'; sessionId: string; generation: string; usage: number; down: boolean; text: string; composing: boolean }
-	| { type: 'releaseSessionInput'; sessionId: string; generation: string }
+	| { type: 'submitClipboard'; sessionId: string; generation: string; text: string }
 	| { type: 'setInputDefaults'; mode: 'Character' | 'Map' | 'Translate'; swap: boolean; pointer: PointerSettings }
 	| { type: 'enableFilesystemAccess' }
 	| { type: 'setTransferDirectory'; path: string }
@@ -272,8 +261,6 @@ export type EngineCommand =
 	| { type: 'setKeyboardMode'; mode: 'Character' | 'Map' | 'Translate' }
 	| { type: 'swapControlAndCommand' }
 	| { type: 'setSwapControlAndCommand'; enabled: boolean }
-	| { type: 'sessionPointerSettings'; sessionId: string; generation: string }
-	| { type: 'setSessionPointerSettings'; sessionId: string; generation: string; settings: PointerSettings }
 	| { type: 'sessionClipboardText'; sessionId: string; generation: string }
 	| { type: 'clipboardText' }
 	| { type: 'startHosting' | 'stopHosting' | 'stopHostedSession' | 'resetIdentity' }
@@ -331,7 +318,6 @@ export type EngineReply =
 	| { type: 'nativeRuntime'; backends: NativeBackend[]; capabilities: NativeCapability[] }
 	| { type: 'keyboardMode'; mode: 'Character' | 'Map' | 'Translate' }
 	| { type: 'swap'; enabled: boolean }
-	| { type: 'pointerSettings'; settings: PointerSettings }
 	| { type: 'displays'; displays: DisplayInfo[] }
 	| { type: 'displayIds'; displays: string[] }
 	| { type: 'paths'; paths: SessionPath[] }
@@ -723,6 +709,48 @@ function diagnosticRecorder(value: unknown): value is string {
 	});
 }
 
+/**
+ * Desktop input, carried on a desktop's data channel (`dataChannel.ts`) and
+ * never as an engine command: `sessionId` and `generation` name the
+ * desktop's connection, which the data channel checks against its own.
+ */
+export type DesktopInputCommand =
+	| { type: 'submitKey'; sessionId: string; generation: string; usage: number; down: boolean }
+	| { type: 'submitPointer'; sessionId: string; generation: string; x: number; y: number; display: string; revision: string }
+	| { type: 'submitButton'; sessionId: string; generation: string; button: 'Left' | 'Right' | 'Middle' | 'Back' | 'Forward'; down: boolean }
+	| { type: 'submitWheel' | 'submitMotion'; sessionId: string; generation: string; dx: number; dy: number }
+	| { type: 'submitPreciseWheel'; sessionId: string; generation: string; dx: number; dy: number }
+	| { type: 'submitText'; sessionId: string; generation: string; text: string }
+	/** `composing`: a dead key or input-method step that has not typed a character yet. */
+	| { type: 'submitLocalKey'; sessionId: string; generation: string; usage: number; down: boolean; text: string; composing: boolean }
+	| { type: 'releaseSessionInput'; sessionId: string; generation: string }
+	/** The display the pointer lands on, sent in order with it. */
+	| { type: 'selectDisplays'; sessionId: string; generation: string; ids: string[] };
+
+export function isDesktopInputCommand(value: unknown): value is DesktopInputCommand {
+	if (!record(value)) {
+		return false;
+	}
+	let keys: string[];
+	let valid = false;
+	switch (value.type) {
+		case 'submitKey': keys = ['sessionId', 'generation', 'usage', 'down']; valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean'; break;
+		case 'submitPointer': keys = ['sessionId', 'generation', 'x', 'y', 'display', 'revision']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.x, -2147483648, 2147483647) && int(value.y, -2147483648, 2147483647) && decimal(value.display) && decimal(value.revision); break;
+		case 'submitButton': keys = ['sessionId', 'generation', 'button', 'down']; valid = decimal(value.sessionId) && decimal(value.generation) && pointerButton(value.button) && typeof value.down === 'boolean'; break;
+		case 'submitWheel': case 'submitMotion': keys = ['sessionId', 'generation', 'dx', 'dy']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.dx, -32768, 32767) && int(value.dy, -32768, 32767); break;
+		case 'submitPreciseWheel': keys = ['sessionId', 'generation', 'dx', 'dy']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.dx, -2147483648, 2147483647) && int(value.dy, -2147483648, 2147483647); break;
+		case 'submitText': keys = ['sessionId', 'generation', 'text']; valid = decimal(value.sessionId) && decimal(value.generation) && longText(value.text); break;
+		case 'submitLocalKey':
+			keys = ['sessionId', 'generation', 'usage', 'down', 'text', 'composing'];
+			valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean' && text(value.text) && typeof value.composing === 'boolean';
+			break;
+		case 'releaseSessionInput': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
+		case 'selectDisplays': keys = ['sessionId', 'generation', 'ids']; valid = decimal(value.sessionId) && decimal(value.generation) && decimals(value.ids); break;
+		default: return false;
+	}
+	return valid && Object.keys(value).length === keys.length + 1 && Object.keys(value).every(key => key === 'type' || keys.includes(key));
+}
+
 export function isEngineCommand(value: unknown): value is EngineCommand {
 	if (!record(value)) {
 		return false;
@@ -750,17 +778,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'connect': case 'beginConnect': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'disconnect': keys = []; valid = true; break;
 		case 'disconnectSession': case 'stopHostedPeer': keys = ['sessionId']; valid = decimal(value.sessionId); break;
-		case 'submitKey': keys = ['sessionId', 'generation', 'usage', 'down']; valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean'; break;
-		case 'submitPointer': keys = ['sessionId', 'generation', 'x', 'y', 'display', 'revision']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.x, -2147483648, 2147483647) && int(value.y, -2147483648, 2147483647) && decimal(value.display) && decimal(value.revision); break;
-		case 'submitButton': keys = ['sessionId', 'generation', 'button', 'down']; valid = decimal(value.sessionId) && decimal(value.generation) && pointerButton(value.button) && typeof value.down === 'boolean'; break;
-		case 'submitWheel': case 'submitMotion': keys = ['sessionId', 'generation', 'dx', 'dy']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.dx, -32768, 32767) && int(value.dy, -32768, 32767); break;
-		case 'submitPreciseWheel': keys = ['sessionId', 'generation', 'dx', 'dy']; valid = decimal(value.sessionId) && decimal(value.generation) && int(value.dx, -2147483648, 2147483647) && int(value.dy, -2147483648, 2147483647); break;
-		case 'submitText': case 'submitClipboard': keys = ['sessionId', 'generation', 'text']; valid = decimal(value.sessionId) && decimal(value.generation) && longText(value.text); break;
-		case 'submitLocalKey':
-			keys = ['sessionId', 'generation', 'usage', 'down', 'text', 'composing'];
-			valid = decimal(value.sessionId) && decimal(value.generation) && uint(value.usage, 65535) && typeof value.down === 'boolean' && text(value.text) && typeof value.composing === 'boolean';
-			break;
-		case 'releaseSessionInput': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
+		case 'submitClipboard': keys = ['sessionId', 'generation', 'text']; valid = decimal(value.sessionId) && decimal(value.generation) && longText(value.text); break;
 		case 'setInputDefaults': keys = ['mode', 'swap', 'pointer']; valid = keyboardMode(value.mode) && typeof value.swap === 'boolean' && pointerSettings(value.pointer); break;
 		case 'enableFilesystemAccess': keys = []; break;
 		case 'setTransferDirectory': keys = ['path']; valid = typeof value.path === 'string' && value.path.length > 0 && value.path.length <= 4096 && !value.path.includes('\0'); break;
@@ -788,13 +806,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'reportNativePermissions': keys = ['screen', 'input', 'camera', 'microphone']; valid = [value.screen, value.input, value.camera, value.microphone].every(flag => typeof flag === 'boolean'); break;
 		case 'keyboardMode': keys = []; valid = true; break;
 		case 'setKeyboardMode': keys = ['mode']; valid = keyboardMode(value.mode); break;
-		case 'sessionKeyboardMode': case 'sessionSwapControlAndCommand': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
-		case 'setSessionKeyboardMode': keys = ['sessionId', 'generation', 'mode']; valid = decimal(value.sessionId) && decimal(value.generation) && keyboardMode(value.mode); break;
-		case 'setSessionSwapControlAndCommand': keys = ['sessionId', 'generation', 'enabled']; valid = decimal(value.sessionId) && decimal(value.generation) && typeof value.enabled === 'boolean'; break;
 		case 'swapControlAndCommand': keys = []; valid = true; break;
 		case 'setSwapControlAndCommand': keys = ['enabled']; valid = typeof value.enabled === 'boolean'; break;
-		case 'sessionPointerSettings': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
-		case 'setSessionPointerSettings': keys = ['sessionId', 'generation', 'settings']; valid = decimal(value.sessionId) && decimal(value.generation) && pointerSettings(value.settings); break;
 		case 'sessionClipboardText': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'clipboardText': keys = []; valid = true; break;
 		case 'startHosting': case 'stopHosting': case 'stopHostedSession': case 'resetIdentity': keys = []; valid = true; break;
@@ -871,7 +884,6 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'nativeRuntime': return nativeRuntime(value) && Object.keys(value).length === 3;
 		case 'keyboardMode': return keyboardMode(value.mode) && Object.keys(value).length === 2;
 		case 'swap': return typeof value.enabled === 'boolean' && Object.keys(value).length === 2;
-		case 'pointerSettings': return pointerSettings(value.settings) && Object.keys(value).length === 2;
 		case 'displays': return displays(value.displays) && Object.keys(value).length === 2;
 		case 'displayIds': return decimals(value.displays) && Object.keys(value).length === 2;
 		case 'paths': return Array.isArray(value.paths) && value.paths.every((item: unknown) => sessionPath(item)) && Object.keys(value).length === 2;

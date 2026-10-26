@@ -1,6 +1,8 @@
 //! Desktop instances on a neutral parent. Every instance owns its stream,
 //! queues and datagram epoch; session APIs cannot publish into this backend.
 // trace: records every ignored failure
+use super::drops::{dropped, input_dropped, DropPoint};
+use super::host_input::{Facts, Holder, HostInputSession, InFlight, InputOutcome, Lease, Refusal};
 use super::*;
 use crate::input::{HeldInput, Outbound};
 use crate::protocol::{ControlMessage, SessionStamp};
@@ -140,11 +142,9 @@ pub(super) struct DesktopRuntime {
     control_state: tokio::sync::watch::Sender<(DesktopControlState, u64)>,
     control_commands: Mutex<std::collections::VecDeque<(u8, u64)>>,
     control_notify: tokio::sync::Notify,
-    /// Actual host-applied input, separate from controller queue state.
-    host_held: Arc<Mutex<HeldInput>>,
-    releasing: Arc<std::sync::atomic::AtomicBool>,
-    in_flight: AtomicUsize,
-    cleanup_slot: Mutex<Option<Arc<super::input_cleanup::AdmissionSlot>>>,
+    /// Host: the input it applied under this desktop's leases and has not
+    /// released, apart from the viewer's own plan.
+    pub(super) host_input: HostInputSession,
     retired: std::sync::atomic::AtomicBool,
     /// The one display this owner shows. Empty means none, never a substitute.
     pub(super) selected: Mutex<Vec<u64>>,
@@ -236,10 +236,7 @@ impl DesktopRuntime {
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
             control_notify: tokio::sync::Notify::new(),
-            host_held: Arc::new(Mutex::new(HeldInput::default())),
-            releasing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            in_flight: AtomicUsize::new(0),
-            cleanup_slot: Mutex::new(None),
+            host_input: HostInputSession::new(),
             retired: std::sync::atomic::AtomicBool::new(false),
             selected: Mutex::new(Vec::new()),
             display_fault: Mutex::new(None),
@@ -408,6 +405,10 @@ impl DesktopRuntime {
             }
         }
     }
+    /// Viewer: input queued to send, for diagnostics.
+    pub(super) fn input_queued(&self) -> usize {
+        self.input.depth()
+    }
     pub(super) fn metadata(&self) -> DesktopInfo {
         let mut info = self.info.clone();
         info.quality = *lock(&self.quality);
@@ -416,7 +417,10 @@ impl DesktopRuntime {
     /// A picture arrived for the viewer, by datagrams or on the stream.
     /// Pictures its number says are missing or late are counted lost and
     /// reported to the host; see [`crate::video::ViewerPictures::picture`].
-    fn receive_video(&self, body: crate::video::VideoBody) {
+    fn receive_video(&self, shared: &Shared, body: crate::video::VideoBody) {
+        if dropped(shared, DropPoint::Inbox) {
+            return;
+        }
         let order =
             lock(&self.pictures).picture(body.sequence, body.frame, &self.inbox, &self.keyframe);
         let lost = match order {
@@ -666,6 +670,9 @@ async fn route_desktop_datagrams(
                 owners.clear();
             }
             owners.insert(key, Arc::clone(&desktop));
+            if dropped(shared, DropPoint::Datagram) {
+                continue;
+            }
             let arrival = lock(&desktop.pictures).datagram(fragment, std::time::Instant::now());
             desktop.report.fragments(arrival.fragments);
             if arrival.body.is_some() {
@@ -686,7 +693,7 @@ async fn route_desktop_datagrams(
                     {
                         continue;
                     }
-                    desktop.receive_video(body);
+                    desktop.receive_video(shared, body);
                 }
             }
         }
@@ -909,7 +916,7 @@ impl Core {
 }
 
 /// Reconcile a durable grant change while holding the same state lock used
-/// for input application. Release held keys before another owner can acquire.
+/// for input admission. Release held keys before another owner can acquire.
 pub(super) fn reconcile_grants(
     shared: &Shared,
     state: &mut State,
@@ -955,51 +962,13 @@ pub(super) fn reconcile_grants(
             }
         }
     }
-    if !grants.view || !grants.control {
+    // A desktop session that may no longer be seen stops its pictures; it
+    // carries no input to release.
+    if !grants.view {
         for id in incoming {
             if let Some(session) = state.incoming.get_mut(&id) {
-                // Fence an in-flight native operation even when it has not
-                // yet recorded its key-down in the held set.
-                session
-                    .input_epoch
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                if lock(&session.host_held).release_events().is_empty() {
-                    if !grants.view && !session.services_only && !session.files_only {
-                        session.desktop_stop.send_replace(true);
-                    }
-                    continue;
-                }
-                // The worker owns this snapshot; late native work settles its
-                // own newly held input under the same adapter guard.
-                let slot = session.incoming_slot.clone();
-                let held = std::mem::take(&mut *lock(&session.host_held));
-                let adapter = shared.desktop.clone();
-                let pending = shared.input_cleanup.clone();
-                let events = shared.events.clone();
-                pending.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                let reservation = super::input_cleanup::Reservation {
-                    pending,
-                    releasing: None,
-                };
-                shared.cleanup_executor.submit(move || {
-                    let _slot = slot;
-                    let mut adapter = lock(&adapter);
-                    if let Some(adapter) = adapter.as_mut() {
-                        for event in held.release_events() {
-                            if adapter.apply(event).is_err() {
-                                events.publish(CoreEvent::InputFailed {
-                                    id,
-                                    message: "a held key or button could not be released",
-                                });
-                            }
-                        }
-                    }
-                    drop(reservation);
-                });
                 if !session.services_only && !session.files_only {
-                    if !grants.view {
-                        session.desktop_stop.send_replace(true);
-                    }
+                    session.desktop_stop.send_replace(true);
                 }
             }
         }
@@ -1173,6 +1142,9 @@ impl RemoteDesktopService {
         Ok(())
     }
     pub fn release_input(&self) -> Result<(), Error> {
+        // What the release discards is recorded as this engine's.
+        let span = self.shared.upgrade().map(|shared| shared.span.clone());
+        let _engine = span.as_ref().map(tracing::Span::enter);
         self.active_desktop()?.release_input();
         Ok(())
     }
@@ -1450,7 +1422,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             ));
                             let control = async {
                                 tokio::select! {
-                                    result = client_send(&link, &desktop, &mut send) => result,
+                                    result = client_send(&shared, &link, &desktop, &mut send) => result,
                                     result = client_receive(&shared, &desktop, &mut recv) => result,
                                 }
                             };
@@ -1552,6 +1524,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
 }
 
 async fn client_send(
+    shared: &Shared,
     link: &Connection,
     desktop: &DesktopRuntime,
     send: &mut SendStream,
@@ -1608,6 +1581,15 @@ async fn client_send(
         let notified = desktop.input.notified();
         tokio::pin!(notified);
         for command in commands {
+            let kind = match &command {
+                Outbound::Event(event) => Some(event.kind()),
+                Outbound::Text(_) | Outbound::Chord(_) => Some("typed text"),
+                Outbound::Quality(_) | Outbound::Displays(_) => None,
+            };
+            if let Some(kind) = kind.filter(|_| dropped(shared, DropPoint::Outbox)) {
+                input_dropped(desktop.info.service.id, kind, DropPoint::Outbox);
+                continue;
+            }
             let message = match command {
                 Outbound::Event(event) => ControlMessage::Input {
                     stamp: desktop.stamp,
@@ -1777,7 +1759,7 @@ async fn client_receive(
                     {
                         return Err(Error::Malformed);
                     }
-                    desktop.receive_video(body);
+                    desktop.receive_video(shared, body);
                 }
                 TOPOLOGY => {
                     let ControlMessage::Topology {
@@ -1873,47 +1855,9 @@ impl Drop for StreamCount<'_> {
 }
 
 fn release_desktop_input(shared: &Shared, desktop: &DesktopRuntime) {
-    use std::sync::atomic::Ordering;
-    // Called under state, which also admits native work. Do not block on a
-    // held-set lock that a late native release might currently own.
-    if desktop.in_flight.load(Ordering::Acquire) == 0
-        && desktop
-            .host_held
-            .try_lock()
-            .is_ok_and(|held| held.release_events().is_empty())
-    {
-        return;
-    }
-    if desktop.releasing.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    shared.input_cleanup.fetch_add(1, Ordering::AcqRel);
-    let reservation = super::input_cleanup::Reservation {
-        pending: shared.input_cleanup.clone(),
-        releasing: Some(desktop.releasing.clone()),
-    };
-    let slot = lock(&desktop.cleanup_slot).clone();
-    let adapter = shared.desktop.clone();
-    let held = desktop.host_held.clone();
-    let events = shared.events.clone();
-    let id = desktop.info.service.connection_id;
-    shared.cleanup_executor.submit(move || {
-        let mut adapter = lock(&adapter);
-        let releases = std::mem::take(&mut *lock(&held));
-        if let Some(adapter) = adapter.as_mut() {
-            for event in releases.release_events() {
-                if adapter.apply(event).is_err() {
-                    events.publish(CoreEvent::InputFailed {
-                        id,
-                        message: "a held key or button could not be released",
-                    });
-                }
-            }
-        }
-        // Both reservation and owner slot settle before the adapter is yielded.
-        drop(reservation);
-        drop(slot);
-    });
+    desktop
+        .host_input
+        .release(shared, desktop.info.service.connection_id);
 }
 
 pub(super) async fn serve(
@@ -2027,9 +1971,11 @@ pub(super) async fn serve(
                 shared
                     .desktop_owners
                     .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                *lock(&desktop.cleanup_slot) = Some(Arc::new(super::input_cleanup::AdmissionSlot(
-                    shared.desktop_owners.clone(),
-                )));
+                desktop
+                    .host_input
+                    .keep_slot(Arc::new(super::input_cleanup::AdmissionSlot(
+                        shared.desktop_owners.clone(),
+                    )));
                 desktop.set_recording_allowed(
                     state.trust.get(&peer).is_some() && state.trust.sharing.recording,
                 );
@@ -2234,12 +2180,38 @@ fn wait_input_cleanup(shared: &Shared) {
     }
 }
 
-/// Wait for the adapter and old cleanup on a blocking worker. Never wait for
-/// Core state while holding the adapter: state transactions may inspect held
-/// input and must remain responsive. Recheck exact owner, permission and epoch at native admission.
+/// What admission reads of `state` and `desktop` for input sent under
+/// `sent_under`.
+fn input_facts(state: &State, desktop: &DesktopRuntime, sent_under: u64) -> Result<Facts, Error> {
+    let peer = parse_endpoint_id(&desktop.info.service.peer_id)?;
+    Ok(Facts {
+        permitted: state.trust.service_granted(&peer, ServiceKind::Desktop)
+            && state.trust.granted(&peer, crate::session::Grant::Control),
+        holder: match state.desktop_control {
+            Some(holder) if holder == desktop.stamp => Holder::This,
+            Some(_) => Holder::Another,
+            None => Holder::Nobody,
+        },
+        sent_under,
+        lease: *desktop.control_state.borrow(),
+        retired: desktop.retired.load(std::sync::atomic::Ordering::Acquire),
+    })
+}
+
+/// Whether `lease` is still `desktop`'s.
+fn holds(desktop: &DesktopRuntime, lease: Lease) -> bool {
+    lease.holds(
+        *desktop.control_state.borrow(),
+        desktop.retired.load(std::sync::atomic::Ordering::Acquire),
+    )
+}
+
+/// The adapter, taken for one native call. Waiting for it and for old
+/// cleanup happens on a blocking worker, never while holding Core state:
+/// state transactions may inspect held input and must remain responsive.
 struct NativeInputGuard<'a> {
     adapter: std::sync::MutexGuard<'a, Option<Box<dyn crate::HostDesktop>>>,
-    in_flight: &'a AtomicUsize,
+    _call: InFlight<'a>,
 }
 impl std::ops::Deref for NativeInputGuard<'_> {
     type Target = Option<Box<dyn crate::HostDesktop>>;
@@ -2252,19 +2224,16 @@ impl std::ops::DerefMut for NativeInputGuard<'_> {
         &mut self.adapter
     }
 }
-impl Drop for NativeInputGuard<'_> {
-    fn drop(&mut self) {
-        self.in_flight
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-    }
-}
 
+/// Takes the adapter once old cleanup has finished, readmitting the input
+/// sent under `epoch` (and rechecking a `pointer` against the topology)
+/// while holding the adapter and Core state together.
 fn native_input_adapter<'a>(
     shared: &'a Shared,
     desktop: &'a DesktopRuntime,
     epoch: u64,
     pointer: Option<crate::InputEvent>,
-) -> Result<Option<NativeInputGuard<'a>>, Error> {
+) -> Result<Result<(NativeInputGuard<'a>, Lease), Refusal>, Error> {
     loop {
         #[cfg(test)]
         if std::thread::current().name() == Some("v9-pointer-probe") {
@@ -2286,15 +2255,10 @@ fn native_input_adapter<'a>(
             desktop.info.service.generation,
             true,
         )?;
-        let peer = parse_endpoint_id(&desktop.info.service.peer_id)?;
-        if !state.trust.service_granted(&peer, ServiceKind::Desktop)
-            || !state.trust.granted(&peer, crate::session::Grant::Control)
-            || state.desktop_control != Some(desktop.stamp)
-            || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            || desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Ok(None);
-        }
+        let lease = match super::host_input::readmit(input_facts(&state, desktop, epoch)?) {
+            Ok(lease) => lease,
+            Err(reason) => return Ok(Err(reason)),
+        };
         if shared
             .input_cleanup
             .load(std::sync::atomic::Ordering::Acquire)
@@ -2303,22 +2267,18 @@ fn native_input_adapter<'a>(
             if let Some(event) = pointer {
                 let selected = lock(&desktop.selected);
                 if let Err(error) = super::topology::accept_pointer(shared, event, &selected) {
-                    super::keys::note_input_failure(
-                        shared,
-                        desktop.info.service.connection_id,
-                        &error,
-                    );
-                    return Ok(None);
+                    return Ok(Err(pointer_refusal(&error)));
                 }
             }
-            desktop
-                .in_flight
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let call = desktop.host_input.enter();
             drop(state);
-            return Ok(Some(NativeInputGuard {
-                adapter,
-                in_flight: &desktop.in_flight,
-            }));
+            return Ok(Ok((
+                NativeInputGuard {
+                    adapter,
+                    _call: call,
+                },
+                lease,
+            )));
         }
         drop(state);
         drop(adapter);
@@ -2326,52 +2286,121 @@ fn native_input_adapter<'a>(
     }
 }
 
-fn release_late_input(
+/// A pointer the host's topology does not take, as one on a display it does
+/// not show.
+fn pointer_refusal(error: &Error) -> Refusal {
+    Refusal::PointerOutside(crate::input::InputFault::from_error(error).message())
+}
+
+/// One input a viewer sent on its desktop stream.
+enum HostInput {
+    Event(crate::InputEvent),
+    Text(String),
+    Chord(String),
+}
+
+impl HostInput {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Event(event) => event.kind(),
+            Self::Text(_) | Self::Chord(_) => "typed text",
+        }
+    }
+}
+
+/// Admits one input under Core state: under the lease it was sent with,
+/// a pointer on a display the host shows, text a viewer may send. Gives
+/// the pointer to recheck once the backend is free, or why not.
+/// Input refused here is discarded without applying or observing held
+/// state; viewers stay connected and ask for control once the current
+/// controller yields.
+fn admit_host_input(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    state: &State,
+    epoch: u64,
+    input: &HostInput,
+) -> Result<Result<Option<crate::InputEvent>, Refusal>, Error> {
+    if let Err(reason) = super::host_input::admit(input_facts(state, desktop, epoch)?) {
+        return Ok(Err(reason));
+    }
+    Ok(match input {
+        HostInput::Event(event) => {
+            let selected = lock(&desktop.selected).clone();
+            match super::topology::accept_pointer(shared, *event, &selected) {
+                Ok(()) => Ok(Some(*event)),
+                Err(error) => Err(pointer_refusal(&error)),
+            }
+        }
+        HostInput::Text(text) | HostInput::Chord(text) => {
+            // A viewer never sends empty text; one that does has nothing typed.
+            match crate::input::key_text_problem(text) {
+                Some(problem) => Err(Refusal::InvalidText(problem)),
+                None if text.is_empty() => Err(Refusal::InvalidText("text entry is empty")),
+                None => Ok(None),
+            }
+        }
+    })
+}
+
+/// Applies one admitted input, Core state released: the adapter is taken
+/// with the lease rechecked, and input applied as that lease ended is
+/// released under the same adapter guard.
+fn apply_host_input(
     shared: &Shared,
     desktop: &DesktopRuntime,
     epoch: u64,
-    adapter: &mut dyn crate::HostDesktop,
-) -> bool {
-    let stale = desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-        || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch);
-    if stale {
-        let mut held = lock(&desktop.host_held);
-        for event in held.release_events() {
-            if let Err(error) = adapter.apply(event) {
-                super::keys::note_input_failure(shared, desktop.info.service.connection_id, &error);
+    pointer: Option<crate::InputEvent>,
+    input: &HostInput,
+) -> Result<InputOutcome, Error> {
+    let refused = |reason| Ok(InputOutcome::Refused { reason });
+    let (mut adapter, lease) = match native_input_adapter(shared, desktop, epoch, pointer)? {
+        Ok(taken) => taken,
+        Err(reason) => return refused(reason),
+    };
+    if !holds(desktop, lease) {
+        return refused(
+            if desktop.retired.load(std::sync::atomic::Ordering::Acquire) {
+                Refusal::Ended
+            } else {
+                Refusal::ControlChanged
+            },
+        );
+    }
+    let Some(adapter) = adapter.as_mut() else {
+        return refused(Refusal::Unavailable("no desktop adapter is installed"));
+    };
+    let session = &desktop.host_input;
+    let failed = |error: &Error| {
+        super::keys::note_input_failure(shared, desktop.info.service.connection_id, error)
+    };
+    match input {
+        HostInput::Event(event) => {
+            if let Err(error) = adapter.apply(*event) {
+                session.settle(holds(desktop, lease), adapter.as_mut(), failed);
+                return refused(Refusal::of_backend(error)?);
+            }
+            if session.applied(*event, holds(desktop, lease), adapter.as_mut(), failed) {
+                lock(&desktop.activity).input(*event, std::time::Instant::now());
+                super::power::note_control_used(shared);
             }
         }
-        *held = HeldInput::default();
+        HostInput::Text(text) | HostInput::Chord(text) => {
+            let typed = match input {
+                HostInput::Chord(_) => adapter.type_chord(text),
+                _ => adapter.type_text(text),
+            };
+            let ended = session.settle(holds(desktop, lease), adapter.as_mut(), failed);
+            if let Err(error) = typed {
+                return refused(Refusal::of_backend(error)?);
+            }
+            if !ended {
+                lock(&desktop.activity).touch(std::time::Instant::now());
+                super::power::note_control_used(shared);
+            }
+        }
     }
-    stale
-}
-
-/// Records input the host received but did not apply, and why. Input is
-/// never dropped without one of these (`crate::trace`).
-fn discarded(desktop: &DesktopRuntime, kind: &'static str, why: &'static str) {
-    tracing::debug!(
-        target: crate::trace::INPUT,
-        service = desktop.info.service.id,
-        kind,
-        why,
-        "input discarded"
-    );
-}
-
-/// Why this Desktop's input is contended now; `taken` says another viewer
-/// holds control.
-fn contention(input_allowed: bool, controlling: bool, taken: bool, current: bool) -> &'static str {
-    if !input_allowed {
-        "the peer may not control this computer"
-    } else if taken {
-        "another viewer controls this computer"
-    } else if !controlling {
-        "this viewer does not hold control"
-    } else if !current {
-        "it was sent under an earlier control lease"
-    } else {
-        "contended"
-    }
+    Ok(InputOutcome::Applied)
 }
 
 /// Validate under Core state, take the adapter without waiting, then release
@@ -2496,91 +2525,52 @@ fn process_host_command(
         desktop.info.service.generation,
         true,
     )?;
-    // Contended input is discarded without applying or observing held
-    // state; viewers stay connected and request acquisition after the
-    // current controller yields. Release/keyframe/quality are unaffected.
-    let controlling = state.desktop_control == Some(desktop.stamp);
-    let contended = !input_allowed || !controlling || epoch != current_epoch;
-    let taken = state.desktop_control.is_some() && !controlling;
-    let contended_why = contention(input_allowed, controlling, taken, epoch == current_epoch);
-    match command {
+    let input = match command {
         ControlMessage::Input { stamp, event } if stamp == desktop.stamp => {
-            if contended {
-                discarded(desktop, event.kind(), contended_why);
-                return Ok(());
-            }
-            let selected = lock(&desktop.selected).clone();
-            if let Err(error) = super::topology::accept_pointer(shared, event, &selected) {
-                super::keys::note_input_failure(shared, desktop.info.service.connection_id, &error);
-                return Ok(());
-            }
-            drop(state);
-            let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, Some(event))?
-            else {
-                discarded(
-                    desktop,
-                    event.kind(),
-                    "control changed before it could apply",
-                );
-                return Ok(());
-            };
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                discarded(
-                    desktop,
-                    event.kind(),
-                    "the service ended before it could apply",
-                );
-                return Ok(());
-            }
-            match adapter.as_mut() {
-                None => return Err(Error::Unsupported("desktop input adapter")),
-                Some(adapter) => {
-                    let started = std::time::Instant::now();
-                    let applied = adapter.apply(event);
-                    tracing::trace!(
-                        target: crate::trace::INPUT,
-                        service = desktop.info.service.id,
-                        kind = event.kind(),
-                        failed = applied.as_ref().err().map(Error::name),
-                        took_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-                        "input applied"
-                    );
-                    if let Err(error) = applied {
-                        release_late_input(shared, desktop, epoch, adapter.as_mut());
-                        super::keys::note_input_failure(
-                            shared,
-                            desktop.info.service.connection_id,
-                            &error,
-                        );
-                        if matches!(error, Error::InputFailed(_)) {
-                            return Ok(());
-                        }
-                        return Err(error);
-                    }
-                }
-            }
-            let mut held = lock(&desktop.host_held);
-            held.observe(event);
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                if let Some(adapter) = adapter.as_mut() {
-                    for release in held.release_events() {
-                        crate::ignored!(
-                            crate::trace::INPUT,
-                            "a key or button left held by ended control is released at best",
-                            adapter.apply(release)
-                        );
-                    }
-                }
-                *held = HeldInput::default();
-            } else {
-                lock(&desktop.activity).input(event, std::time::Instant::now());
-                super::power::note_control_used(shared);
-            }
+            Some(HostInput::Event(event))
         }
+        ControlMessage::Text { stamp, ref text } if stamp == desktop.stamp => {
+            Some(HostInput::Text(text.0.clone()))
+        }
+        ControlMessage::Chord { stamp, ref text } if stamp == desktop.stamp => {
+            Some(HostInput::Chord(text.0.clone()))
+        }
+        _ => None,
+    };
+    if let Some(input) = input {
+        if dropped(shared, DropPoint::BeforeAdmission) {
+            input_dropped(
+                desktop.info.service.id,
+                input.kind(),
+                DropPoint::BeforeAdmission,
+            );
+            return Ok(());
+        }
+        let outcome = match admit_host_input(shared, desktop, &state, epoch, &input)? {
+            Err(reason) => InputOutcome::Refused { reason },
+            Ok(_) if dropped(shared, DropPoint::AfterAdmission) => {
+                input_dropped(
+                    desktop.info.service.id,
+                    input.kind(),
+                    DropPoint::AfterAdmission,
+                );
+                return Ok(());
+            }
+            Ok(pointer) => {
+                drop(state);
+                apply_host_input(shared, desktop, epoch, pointer, &input)?
+            }
+        };
+        super::host_input::record(
+            shared,
+            &desktop.info.service,
+            &desktop.host_input,
+            input.kind(),
+            outcome,
+        );
+        return Ok(());
+    }
+    match command {
         ControlMessage::SelectDisplays { stamp, displays } if stamp == desktop.stamp => {
             let snapshot = lock(&shared.topology).clone();
             match super::topology::apply_selection(&snapshot.displays, &displays) {
@@ -2601,90 +2591,6 @@ fn process_host_command(
                     desktop.info.service.connection_id,
                     &error,
                 ),
-            }
-        }
-        ControlMessage::Text { stamp, text } if stamp == desktop.stamp => {
-            if contended {
-                discarded(desktop, "typed text", contended_why);
-                return Ok(());
-            }
-            if let Some(problem) = crate::input::key_text_problem(&text.0) {
-                return Err(Error::InputFailed(problem));
-            }
-            drop(state);
-            let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, None)? else {
-                discarded(
-                    desktop,
-                    "typed text",
-                    "control changed before it could apply",
-                );
-                return Ok(());
-            };
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                discarded(
-                    desktop,
-                    "typed text",
-                    "the service ended before it could apply",
-                );
-                return Ok(());
-            }
-            let adapter = adapter
-                .as_mut()
-                .ok_or(Error::Unsupported("desktop input adapter"))?;
-            let result = if text.0.is_empty() {
-                Ok(())
-            } else {
-                adapter.type_text(&text.0)
-            };
-            let stale = release_late_input(shared, desktop, epoch, adapter.as_mut());
-            result?;
-            if !stale && !text.0.is_empty() {
-                lock(&desktop.activity).touch(std::time::Instant::now());
-                super::power::note_control_used(shared);
-            }
-        }
-        ControlMessage::Chord { stamp, text } if stamp == desktop.stamp => {
-            if contended {
-                discarded(desktop, "typed text", contended_why);
-                return Ok(());
-            }
-            if let Some(problem) = crate::input::key_text_problem(&text.0) {
-                return Err(Error::InputFailed(problem));
-            }
-            drop(state);
-            let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, None)? else {
-                discarded(
-                    desktop,
-                    "typed text",
-                    "control changed before it could apply",
-                );
-                return Ok(());
-            };
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                discarded(
-                    desktop,
-                    "typed text",
-                    "the service ended before it could apply",
-                );
-                return Ok(());
-            }
-            let adapter = adapter
-                .as_mut()
-                .ok_or(Error::Unsupported("desktop input adapter"))?;
-            let result = if text.0.is_empty() {
-                Ok(())
-            } else {
-                adapter.type_chord(&text.0)
-            };
-            let stale = release_late_input(shared, desktop, epoch, adapter.as_mut());
-            result?;
-            if !stale && !text.0.is_empty() {
-                lock(&desktop.activity).touch(std::time::Instant::now());
-                super::power::note_control_used(shared);
             }
         }
         ControlMessage::Keyframe { stamp } if stamp == desktop.stamp => desktop.keyframe.request(),
@@ -2987,11 +2893,13 @@ async fn host_send(
                     pictured = true;
                     continue;
                 }
-                if !gate.admits(
-                    link.datagram_send_buffer_space(),
-                    wire,
-                    send_budget(desktop),
-                ) {
+                if dropped(shared, DropPoint::Gate)
+                    || !gate.admits(
+                        link.datagram_send_buffer_space(),
+                        wire,
+                        send_budget(desktop),
+                    )
+                {
                     // The link is behind: sending would queue stale video, or
                     // make the transport drop older fragments and so split
                     // frames. Drop this one whole and start again from a
@@ -3890,7 +3798,9 @@ mod v10_cleanup_churn_probe {
                 true,
             )
             .unwrap();
-            lock(&desktop.host_held).observe(crate::InputEvent::key_down(crate::input::usage::A));
+            desktop
+                .host_input
+                .hold(crate::InputEvent::key_down(crate::input::usage::A));
             drop(desktop);
             peer.close_controller_service(owner.id, owner.generation)
                 .unwrap();

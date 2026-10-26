@@ -7,10 +7,7 @@ use expect_test::expect;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use vnilink::{
-    CoreEvent, Error, Grants, InputEvent, JobState, KeyboardMode, LocalKey, Quality, SessionPhase,
-    SessionRole,
-};
+use vnilink::{CoreEvent, Error, Grants, JobState, Quality, SessionPhase, SessionRole};
 use vnilink_testkit::desktop::{
     keyframe, next_picture, InputLog, MonitorCapture, RecordingClipboard,
 };
@@ -22,10 +19,9 @@ use super::support::{cursor_at, INVITATION};
 const MONITOR: (u16, u16) = (1920, 1080);
 
 /// Two hosts number their sessions alike, yet the controller keeps two
-/// handles with their own video, cursor, quality, keyboard settings, input
-/// and clipboard. Closing one leaves the other as it was, a live session
-/// cannot be forgotten, and the controller shutting down releases what the
-/// other host held.
+/// handles with their own video, cursor, quality and clipboard (each
+/// desktop's own keyboard settings are `desktop/control.rs`'s). Closing one leaves the other as it was, a live session cannot
+/// be forgotten, and the controller shutting down ends the other.
 #[test]
 fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> TestResult {
     let _trace = traced();
@@ -33,10 +29,9 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
     let a = Engine::start("host-a");
     let b = Engine::start("host-b");
     controller.core.set_cursor_receiver(true)?;
-    let mut keys = Vec::new();
     let mut clips = Vec::new();
     for host in [&a, &b] {
-        keys.push(InputLog::install(host, MONITOR)?);
+        InputLog::install(host, MONITOR)?;
         let clip = Arc::new(Mutex::new(Vec::new()));
         host.core.set_clipboard(Box::new(RecordingClipboard {
             texts: Arc::clone(&clip),
@@ -53,7 +48,6 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
             transfer: false,
         })?;
     }
-    let (keys_a, keys_b) = (&keys[0], &keys[1]);
     let clipped = |index: usize| -> Vec<String> {
         clips[index]
             .lock()
@@ -158,61 +152,6 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
         "one session's quality leaves the other's"
     );
     sb = controller.core.controller_session(sb.id)?;
-    controller
-        .core
-        .set_session_keyboard_mode(sa.id, sa.generation, KeyboardMode::Map)?;
-    assert_eq!(
-        controller
-            .core
-            .session_keyboard_mode(sb.id, sb.generation)?,
-        KeyboardMode::Character,
-        "one session's keyboard mode leaves the other's"
-    );
-    controller
-        .core
-        .set_session_swap_control_and_command(sa.id, sa.generation, true)?;
-    assert!(
-        !controller
-            .core
-            .session_swap_control_and_command(sb.id, sb.generation)?,
-        "one session's shortcut swap leaves the other's"
-    );
-
-    for session in [&sa, &sb] {
-        controller.core.set_session_keyboard_mode(
-            session.id,
-            session.generation,
-            KeyboardMode::Map,
-        )?;
-        controller.core.submit_local_key(
-            session.id,
-            session.generation,
-            LocalKey::new(4, true, "a"),
-        )?;
-    }
-    assert_eq!(
-        keys_a.wait_for(1),
-        [InputEvent::key_down(4)],
-        "a session's key reaches its own host"
-    );
-    assert_eq!(
-        keys_b.wait_for(1),
-        [InputEvent::key_down(4)],
-        "a session's key reaches its own host"
-    );
-    controller
-        .core
-        .release_session_input(sa.id, sa.generation)?;
-    assert_eq!(
-        keys_a.exactly(2)[1],
-        InputEvent::key_up(4),
-        "releasing one session lifts its host's key"
-    );
-    assert_eq!(
-        keys_b.events().len(),
-        1,
-        "releasing one session leaves the other host's key held"
-    );
 
     controller
         .core
@@ -310,11 +249,6 @@ fn two_hosts_with_identical_wire_ids_have_independent_channels_and_cleanup() -> 
     wait_for("host b's session to close", DEFAULT_WAIT, || {
         (b.core.snapshot().ok()?.incoming?.phase == SessionPhase::Closed).then_some(())
     });
-    assert_eq!(
-        keys_b.exactly(2)[1],
-        InputEvent::key_up(4),
-        "the controller shutting down lifts host b's held key"
-    );
     Ok(())
 }
 
@@ -422,10 +356,10 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
     );
     assert!(
         matches!(
-            controller.core.submit_text(sa.id, sa.generation, "stale"),
+            controller.core.select_displays(sa.id, sa.generation, &[1]),
             Err(Error::StaleSession)
         ),
-        "the old generation takes no input"
+        "the old generation takes no command"
     );
     let fresh = controller
         .core

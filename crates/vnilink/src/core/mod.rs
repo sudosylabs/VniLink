@@ -29,7 +29,6 @@ use crate::events::{CoreEvent, EventHub};
 use crate::input::{HostDesktop, InputOutbox};
 use crate::installation::{self, InstallationStore};
 use crate::invitation::ReplayCache;
-use crate::keyboard::{self};
 use crate::protocol::{Capabilities, Quality};
 use crate::relay::RelaySettings;
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
@@ -50,12 +49,16 @@ mod cursor;
 mod desktop_clipboard;
 mod desktop_service;
 mod desktop_stream;
+mod drops;
+#[cfg(any(test, feature = "test-probes"))]
+pub use drops::{DropPoint, Drops};
 mod diagnostics;
 mod file_resources;
 mod fs;
 #[cfg(test)]
 pub(crate) use fs::LIST_DELAY;
 mod host;
+mod host_input;
 mod job_journal;
 mod jobs;
 #[cfg(all(unix, any(test, feature = "test-probes")))]
@@ -75,6 +78,7 @@ mod service_jobs;
 mod service_permissions;
 pub(crate) mod service_stream;
 mod services;
+mod session_commands;
 mod sharing;
 pub(crate) mod snapshot;
 pub use audio_stream::RemoteAudioService;
@@ -249,15 +253,10 @@ struct LiveSession {
     services_only: bool,
     /// A desktop may retire without ending its parent connection.
     desktop_stop: tokio::sync::watch::Sender<bool>,
-    host_held: Arc<Mutex<crate::input::HeldInput>>,
-    /// Native workers and cleanup retain admission after parent closure.
-    incoming_slot: Option<Arc<input_cleanup::AdmissionSlot>>,
     /// One latest sample for this exact owner generation, never another peer.
     cursor_outbox: tokio::sync::watch::Sender<
         Option<(crate::protocol::SessionStamp, Arc<crate::CursorState>)>,
     >,
-    /// Fences legacy native work across revoke/regrant and retirement.
-    input_epoch: Arc<AtomicU64>,
     desktop_owner: Option<u64>,
     monitor_width: u16,
     monitor_height: u16,
@@ -268,7 +267,8 @@ struct LiveSession {
     /// Set when a selected display disappears. Not cleared by a later pointer.
     display_fault: Option<&'static str>,
     stop: tokio::sync::watch::Sender<bool>,
-    outbox: Option<Arc<InputOutbox>>,
+    /// A controller's commands to its host: quality and display selection.
+    outbox: Option<Arc<session_commands::SessionCommands>>,
     video: Option<Arc<VideoOutbox>>,
     /// Live connection. A test can close it without asking the session to stop.
     link: Option<iroh::endpoint::Connection>,
@@ -343,15 +343,10 @@ struct ControllerState {
     /// Next own-offer revision minus one. Monotonic across clears and
     /// revokes so a revision is never reused within the session.
     published_rev: AtomicU64,
-    keyboard: Mutex<keyboard::KeyPlan>,
-    held: Mutex<crate::input::HeldInput>,
-    pointer: Mutex<crate::input::PointerPlan>,
-    mode: AtomicU8,
-    swap: AtomicBool,
     auto: Mutex<AutoState>,
 }
 impl ControllerState {
-    fn new(inbox: Arc<VideoInbox>, mode: u8, swap: bool, pointer: crate::PointerSettings) -> Self {
+    fn new(inbox: Arc<VideoInbox>) -> Self {
         Self {
             inbox,
             subscriber: Mutex::new(Weak::new()),
@@ -360,11 +355,6 @@ impl ControllerState {
             clipboard_files: Mutex::new(None),
             published_files: Mutex::new(None),
             published_rev: AtomicU64::new(0),
-            keyboard: Mutex::new(keyboard::KeyPlan::new()),
-            held: Mutex::new(crate::input::HeldInput::default()),
-            pointer: Mutex::new(crate::input::PointerPlan::with_settings(pointer)),
-            mode: AtomicU8::new(mode),
-            swap: AtomicBool::new(swap),
             auto: Mutex::new(AutoState::default()),
         }
     }
@@ -401,8 +391,8 @@ impl State {
                 && s.phase == SessionPhase::Active
         })
     }
-    /// Explicit service input ownership precedes legacy desktop admission.
-    /// A retiring service keeps its reservation until held input is released.
+    /// The connection whose desktop holds control. A retiring desktop keeps
+    /// its reservation until its held input is released.
     fn input_holder(&self) -> Option<u64> {
         if self
             .input_cleanup
@@ -418,23 +408,7 @@ impl State {
                 }
             }
         }
-        let mut holder: Option<u64> = None;
-        let mut consider = |id: u64| {
-            holder = Some(holder.map_or(id, |current| current.min(id)));
-        };
-        for session in self.incoming.values() {
-            if session.phase == SessionPhase::Active
-                && !session.files_only
-                && !session.services_only
-                && !*session.desktop_stop.borrow()
-                && self
-                    .trust
-                    .granted(&session.peer_key, crate::session::Grant::Control)
-            {
-                consider(session.id);
-            }
-        }
-        holder
+        None
     }
     /// A live hosted session, for legacy single-view callers. New code that
     /// already knows the session id must use `incoming.get(&id)` instead.
@@ -456,12 +430,6 @@ impl State {
             .values()
             .filter(|s| !finished(&s.phase) && !s.services_only)
             .count()
-    }
-    fn incoming_admission_count(&self) -> usize {
-        self.live_incoming_count().max(
-            self.incoming_slots
-                .load(std::sync::atomic::Ordering::Acquire),
-        )
     }
     fn live_outgoing_count(&self) -> usize {
         self.outgoing
@@ -496,8 +464,6 @@ struct State {
     /// lookup carries the session id, never a global current session.
     /// Capacity is enforced at admission (`MAX_LIVE_INCOMING`).
     incoming: HashMap<u64, LiveSession>,
-    /// Live parents plus reservations retained by uncancellable native work.
-    incoming_slots: Arc<AtomicUsize>,
     outgoing: HashMap<u64, LiveSession>,
     /// Hosted session selected for legacy session-clipboard sync. Host OS
     /// clipboard changes publish only to this session, and peer text applies
@@ -580,6 +546,9 @@ struct Shared {
     teardown_cv: Condvar,
     #[cfg(any(test, feature = "test-probes"))]
     close_count: AtomicUsize,
+    /// What a test asks this engine to lose on its desktops' streams.
+    #[cfg(any(test, feature = "test-probes"))]
+    drops: Mutex<Option<Arc<dyn drops::Drops>>>,
     /// Where channels to the test agent go while it listens (`agent`).
     #[cfg(feature = "test-probes")]
     agent: Mutex<Option<std::sync::mpsc::Sender<agent::AgentChannel>>>,

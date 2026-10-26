@@ -1,8 +1,8 @@
 import { Buffer } from 'node:buffer';
-import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDesktopMediaStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
+import { dimension, isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDesktopMediaStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import { isFileOperation } from '../common/files.js';
-import { record } from '../common/engine.js';
+import { isDesktopInputCommand, record } from '../common/engine.js';
 
 export interface NativeDataChannel {
 	desktopAudio(operation: string): string;
@@ -190,7 +190,7 @@ export class DataChannelHost {
 			if (
 				message.type === 'input' &&
 				this.request.kind === 'input' &&
-				isInputCommand(message.command) &&
+				isDesktopInputCommand(message.command) &&
 				'sessionId' in message.command &&
 				message.command.sessionId === this.request.sessionId &&
 				'generation' in message.command &&

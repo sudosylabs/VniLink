@@ -1,22 +1,21 @@
-//! One host, several peers at once: each has its own session, one holds
-//! input control at a time, a viewer that never reads slows no other, and
-//! what ends one peer's session leaves the others'.
+//! One host, several peers at once: each has its own session, a viewer
+//! that never reads slows no other, and what ends one peer's session leaves
+//! the others'. Which desktop holds control is the desktop suite's
+//! (`desktop/control.rs`).
 
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{usage, Error, Grants, InputEvent, Quality, ServiceKind, SessionPhase, SessionRole};
+use vnilink::{Error, Grants, Quality, ServiceKind, SessionPhase, SessionRole};
 use vnilink_testkit::desktop::{delta, keyframe, InputLog, MonitorCapture};
-use vnilink_testkit::{holds, traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
 
 /// Two viewers and a files peer are hosted at once with their own records,
-/// only the viewers consuming the capture. The earliest viewer holds input
-/// control; another viewer's input is discarded while its session stays
-/// active, and the files peer works alongside. A fifth peer is busy; the
-/// holder leaving passes control on, and revoking a peer ends only its
+/// only the viewers consuming the capture, and the files peer works
+/// alongside. A fifth peer is busy, and revoking a peer ends only its
 /// session.
 #[test]
 fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
@@ -28,7 +27,7 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
     for peer in viewers.iter().chain([&worker]).chain(extra.iter()) {
         host.pair_for_control(peer)?;
     }
-    let applied = InputLog::install(&host, MONITOR)?;
+    InputLog::install(&host, MONITOR)?;
     host.core.set_service_sharing(ServiceKind::Files, true)?;
     host.core.set_desktop_sharing(Grants {
         view: true,
@@ -37,7 +36,7 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
         transfer: true,
     })?;
 
-    let va = viewers[0].core.connect(&host.endpoint())?;
+    viewers[0].core.connect(&host.endpoint())?;
     let vb = viewers[1].core.connect(&host.endpoint())?;
     let files_session = worker.core.connect_files(&host.endpoint())?;
     let hosted = host.core.hosted_sessions()?;
@@ -69,35 +68,6 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
         );
     }
 
-    // Each transition is awaited before the next is sent, so the order the
-    // shared desktop applies is exact.
-    let a_down = InputEvent::key_down(usage::A);
-    let a_up = InputEvent::key_up(usage::A);
-    viewers[0].core.submit_input(va.id, va.generation, a_down)?;
-    assert_eq!(
-        applied.wait_for(1),
-        [a_down],
-        "the earliest viewer controls"
-    );
-    viewers[0].core.submit_input(va.id, va.generation, a_up)?;
-    assert_eq!(
-        applied.wait_for(2),
-        [a_down, a_up],
-        "the controlling viewer's release applies"
-    );
-    viewers[1]
-        .core
-        .submit_input(vb.id, vb.generation, InputEvent::key_down(usage::B))?;
-    holds(
-        "contended input staying off the desktop",
-        Duration::from_millis(300),
-        || applied.events() == [a_down, a_up],
-    );
-    assert_eq!(
-        viewers[1].core.controller_session(vb.id)?.phase,
-        SessionPhase::Active,
-        "a viewer without control stays connected"
-    );
     worker.core.fs_mkdir(
         files_session.id,
         files_session.generation,
@@ -131,13 +101,6 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
 
     viewers[0].core.disconnect()?;
     host.wait_hosted(2);
-    let c_down = InputEvent::key_down(usage::C);
-    viewers[1].core.submit_input(vb.id, vb.generation, c_down)?;
-    assert_eq!(
-        applied.wait_for(3),
-        [a_down, a_up, c_down],
-        "the holder leaving passes control to the next viewer"
-    );
 
     host.core.revoke(&worker.endpoint())?;
     host.wait_hosted(1);
@@ -151,13 +114,7 @@ fn concurrent_peers_operate_independently_within_capacity() -> TestResult {
         viewers[1].endpoint(),
         "only the revoked peer's session ended"
     );
-    expect![[r#"
-        host:
-          input: input discarded stamp=2 what=key down why=another viewer controls this computer
-          input: the session's control stream ended error=network session=4
-          input: the session's control stream ended error=network session=1
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    expect![""].assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 

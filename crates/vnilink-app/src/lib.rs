@@ -114,7 +114,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use std::sync::Arc;
-use vnilink::{Core, CoreConfig, CustomRelay, Listen, LocalKey, RelaySettings};
+use vnilink::{Core, CoreConfig, CustomRelay, Listen, RelaySettings};
 
 use error::map_error;
 
@@ -590,55 +590,6 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    pub fn release_session_input(&self, session_id: u64, generation: u64) -> Result<(), FfiError> {
-        self.inner
-            .release_session_input(session_id, generation)
-            .map_err(map_error)
-    }
-
-    pub fn session_keyboard_mode(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<FfiKeyboardMode, FfiError> {
-        self.inner
-            .session_keyboard_mode(session_id, generation)
-            .map(types::keyboard_mode)
-            .map_err(map_error)
-    }
-
-    pub fn session_swap_control_and_command(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<bool, FfiError> {
-        self.inner
-            .session_swap_control_and_command(session_id, generation)
-            .map_err(map_error)
-    }
-
-    pub fn set_session_keyboard_mode(
-        &self,
-        session_id: u64,
-        generation: u64,
-        mode: FfiKeyboardMode,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .set_session_keyboard_mode(session_id, generation, types::to_keyboard_mode(mode))
-            .map_err(map_error)
-    }
-
-    pub fn set_session_swap_control_and_command(
-        &self,
-        session_id: u64,
-        generation: u64,
-        enabled: bool,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .set_session_swap_control_and_command(session_id, generation, enabled)
-            .map_err(map_error)
-    }
-
     pub fn controller_session_paths(
         &self,
         session_id: u64,
@@ -657,40 +608,6 @@ impl VnilinkCore {
         self.inner
             .session_paths(session_id)
             .map(|paths| paths.iter().map(types::session_path).collect())
-            .map_err(map_error)
-    }
-
-    pub fn submit_key(
-        &self,
-        session_id: u64,
-        generation: u64,
-        usage: u16,
-        down: bool,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::Key { usage, down },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn submit_pointer(
-        &self,
-        session_id: u64,
-        generation: u64,
-        x: i32,
-        y: i32,
-        display: u64,
-        revision: u64,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::pointer(x, y, display, revision),
-            )
             .map_err(map_error)
     }
 
@@ -742,130 +659,6 @@ impl VnilinkCore {
 
     pub fn capture_displays(&self) -> Result<Vec<u64>, FfiError> {
         self.inner.capture_displays().map_err(map_error)
-    }
-
-    pub fn submit_button(
-        &self,
-        session_id: u64,
-        generation: u64,
-        button: FfiPointerButton,
-        down: bool,
-    ) -> Result<(), FfiError> {
-        let button = match button {
-            FfiPointerButton::Left => vnilink::PointerButton::Left,
-            FfiPointerButton::Right => vnilink::PointerButton::Right,
-            FfiPointerButton::Middle => vnilink::PointerButton::Middle,
-            FfiPointerButton::Back => vnilink::PointerButton::Back,
-            FfiPointerButton::Forward => vnilink::PointerButton::Forward,
-        };
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::Button { button, down },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn submit_wheel(
-        &self,
-        session_id: u64,
-        generation: u64,
-        dx: i16,
-        dy: i16,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::Wheel { dx, dy },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn session_pointer_settings(
-        &self,
-        id: u64,
-        generation: u64,
-    ) -> Result<FfiPointerSettings, FfiError> {
-        self.inner
-            .session_pointer_settings(id, generation)
-            .map(Into::into)
-            .map_err(map_error)
-    }
-    pub fn set_session_pointer_settings(
-        &self,
-        id: u64,
-        generation: u64,
-        settings: FfiPointerSettings,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .set_session_pointer_settings(id, generation, settings.into())
-            .map_err(map_error)
-    }
-
-    /// Fractional wheel units: 120 per detent; positive down/right.
-    pub fn submit_precise_wheel(
-        &self,
-        session_id: u64,
-        generation: u64,
-        dx: i32,
-        dy: i32,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::precise_wheel(dx, dy),
-            )
-            .map_err(map_error)
-    }
-
-    /// Relative device counts, not absolute screen coordinates.
-    pub fn submit_motion(
-        &self,
-        session_id: u64,
-        generation: u64,
-        dx: i16,
-        dy: i16,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(session_id, generation, vnilink::InputEvent::motion(dx, dy))
-            .map_err(map_error)
-    }
-
-    pub fn submit_local_key(
-        &self,
-        session_id: u64,
-        generation: u64,
-        usage: u16,
-        down: bool,
-        text: String,
-        composing: bool,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_local_key(
-                session_id,
-                generation,
-                LocalKey {
-                    usage,
-                    down,
-                    text: &text,
-                    composing,
-                },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn submit_text(
-        &self,
-        session_id: u64,
-        generation: u64,
-        text: String,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_text(session_id, generation, &text)
-            .map_err(map_error)
     }
 
     pub fn keyboard_mode(&self) -> Result<FfiKeyboardMode, FfiError> {

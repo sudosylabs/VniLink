@@ -102,8 +102,7 @@ pub(crate) enum LockDecision {
 }
 
 impl LockAfterControl {
-    /// `controlling` is any live remote-control owner (hosted Controlling
-    /// or legacy control session); `used` is whether control was used since
+    /// `controlling` is whether a hosted desktop holds control; `used` is whether control was used since
     /// the last tick, which arms even when control already ended within
     /// it; `parent_live` is any Active incoming session. Disabling the
     /// policy disarms immediately.

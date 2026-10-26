@@ -5,9 +5,7 @@
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{
-    CoreConfig, CoreEvent, EncodedFrame, Error, Grants, InputEvent, Quality, SessionRole,
-};
+use vnilink::{CoreConfig, CoreEvent, EncodedFrame, Error, Grants, Quality, SessionRole};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::relay::LocalRelay;
 use vnilink_testkit::store::start_storeless;
@@ -53,10 +51,6 @@ fn shutdown_is_idempotent_and_later_calls_report_it() -> TestResult {
     );
     shut(core.connect(&other.endpoint()).map(drop), "connect");
     shut(core.disconnect(), "disconnect");
-    shut(
-        core.submit_input(1, 1, InputEvent::pointer(0, 0, 1, 1)),
-        "submit_input",
-    );
     shut(InputLog::install(&engine, (0, 0)).map(drop), "set_desktop");
     shut(
         core.set_desktop_sharing(Grants::default()),

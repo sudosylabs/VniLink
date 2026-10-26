@@ -12,11 +12,11 @@ use super::wire::{read_frame_within, read_session_frame, write_frame};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::session_commands::{SessionCommand, SessionCommands};
 use crate::address::Announcement;
 use crate::error::Error;
 use crate::events::CoreEvent;
-use crate::input::{InputOutbox, Outbound};
-use crate::protocol::{ControlMessage, KeyText, SessionStamp, ALPN};
+use crate::protocol::{ControlMessage, SessionStamp, ALPN};
 use crate::reconnect::{self, LinkEnd};
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::Device;
@@ -345,7 +345,7 @@ pub(super) fn start_outgoing(
 > {
     let key = parse_endpoint_id(endpoint_id)?;
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
-    let outbox = Arc::new(InputOutbox::new());
+    let outbox = Arc::new(SessionCommands::new());
     // Gate and reserve in one critical section: concurrent connects cannot
     // overwrite each other or open two control sessions to the same peer.
     let (pending, peer_key) =
@@ -407,16 +407,7 @@ pub(super) fn start_outgoing(
             } else {
                 Arc::new(crate::video::VideoInbox::new())
             };
-            let controller = Arc::new(ControllerState::new(
-                inbox,
-                shared
-                    .keyboard_mode
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                shared
-                    .swap_control_command
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                *lock(&shared.pointer_defaults),
-            ));
+            let controller = Arc::new(ControllerState::new(inbox));
             if legacy {
                 *lock(&controller.subscriber) = lock(&shared.video_subscriber).clone();
             }
@@ -440,10 +431,7 @@ pub(super) fn start_outgoing(
                 files_only,
                 services_only,
                 desktop_stop: tokio::sync::watch::channel(false).0,
-                host_held: Arc::new(Mutex::new(crate::input::HeldInput::default())),
-                incoming_slot: None,
                 cursor_outbox: tokio::sync::watch::channel(None).0,
-                input_epoch: Arc::new(AtomicU64::new(1)),
                 desktop_owner: None,
                 monitor_width: 0,
                 monitor_height: 0,
@@ -495,7 +483,7 @@ pub(super) async fn run_controller(
     local_id: u64,
     peer_key: [u8; 32],
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
-    outbox: Arc<InputOutbox>,
+    outbox: Arc<SessionCommands>,
     ready_tx: std::sync::mpsc::SyncSender<Result<SessionInfo, Error>>,
     files_only: bool,
     services_only: bool,
@@ -599,7 +587,7 @@ pub(super) async fn establish(
     local_id: u64,
     device: Device,
     stop_rx: &mut tokio::sync::watch::Receiver<bool>,
-    outbox: &Arc<InputOutbox>,
+    outbox: &Arc<SessionCommands>,
     ready: &mut Option<std::sync::mpsc::SyncSender<Result<SessionInfo, Error>>>,
     files_only: bool,
     services_only: bool,
@@ -718,14 +706,10 @@ pub(super) async fn establish(
                             return Err(Error::network("desktop retired during admission"));
                         }
                         if session.generation > 0 {
-                            let previous = session.controller.as_ref().ok_or(Error::NoSession)?;
-                            let pointer = lock(&previous.pointer).settings;
-                            session.controller = Some(Arc::new(ControllerState::new(
-                                Arc::new(crate::video::VideoInbox::new()),
-                                previous.mode.load(std::sync::atomic::Ordering::Relaxed),
-                                previous.swap.load(std::sync::atomic::Ordering::Relaxed),
-                                pointer,
-                            )));
+                            session.controller.as_ref().ok_or(Error::NoSession)?;
+                            session.controller = Some(Arc::new(ControllerState::new(Arc::new(
+                                crate::video::VideoInbox::new(),
+                            ))));
                         }
                         session.wire_stamp = stamp;
                         session.files_only = files_only;
@@ -913,7 +897,7 @@ pub(super) async fn command_loop(
     connection: iroh::endpoint::Connection,
     mut send: iroh::endpoint::SendStream,
     mut recv: iroh::endpoint::RecvStream,
-    outbox: Arc<InputOutbox>,
+    outbox: Arc<SessionCommands>,
     stamp: SessionStamp,
     local_id: u64,
     peer_key: [u8; 32],
@@ -1026,16 +1010,18 @@ pub(super) async fn command_loop(
                                 quality,
                             });
                         }
+                        // The host refuses a session command only as it ends
+                        // the session: what is queued is never sent.
                         Some(Ok(ControlMessage::Reject(code))) => {
                             let error = code.to_error();
+                            tracing::warn!(
+                                target: crate::trace::SESSION,
+                                session = local_id,
+                                refused = error.name(),
+                                "the host refused a session command"
+                            );
                             outbox.fail(&error);
-                            shared.events.publish(CoreEvent::InputFailed {
-                                id: local_id,
-                                message: crate::input::InputFault::from_error(&error).message(),
-                            });
-                            if !matches!(error, Error::Unsupported(_)) {
-                                break;
-                            }
+                            break;
                         }
                         Some(Ok(ControlMessage::Topology {
                             stamp: msg_stamp,
@@ -1069,17 +1055,8 @@ pub(super) async fn command_loop(
                     break;
                 }
                 let message = match item {
-                    Outbound::Event(event) => ControlMessage::Input { stamp, event },
-                    Outbound::Text(text) => ControlMessage::Text {
-                        stamp,
-                        text: KeyText(text),
-                    },
-                    Outbound::Chord(text) => ControlMessage::Chord {
-                        stamp,
-                        text: KeyText(text),
-                    },
-                    Outbound::Quality(quality) => ControlMessage::Quality { stamp, quality },
-                    Outbound::Displays(displays) => {
+                    SessionCommand::Quality(quality) => ControlMessage::Quality { stamp, quality },
+                    SessionCommand::Displays(displays) => {
                         ControlMessage::SelectDisplays { stamp, displays }
                     }
                 };
@@ -1196,9 +1173,6 @@ fn settle_outgoing(shared: &Shared, info: &SessionInfo, phase: SessionPhase, pee
         *lock(&controller.clipboard) = None;
         *lock(&controller.cursor) = None;
         controller.inbox.reset();
-        lock(&controller.keyboard).clear();
-        *lock(&controller.held) = crate::input::HeldInput::default();
-        lock(&controller.pointer).reset();
         *lock(&controller.auto) = AutoState::default();
     }
     // A session that is redialing leaves its jobs to retry until it is

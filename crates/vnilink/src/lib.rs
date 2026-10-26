@@ -9,12 +9,14 @@
 //! [`Core::set_clipboard`] so a granted controller can paste text. Call
 //! [`Core::set_file_roots`] so a granted peer can browse and receive files.
 //! Call [`Core::publish_video`] with encoded H.264 frames and
-//! [`Core::subscribe_video`] to receive them. [`Core::submit_local_key`] is
-//! the key path. The default mode inserts the character the controller
-//! produced. Map mode sends the physical HID position, and Translate mode
-//! asks the host to press the chord in its own layout.
-//! [`Core::submit_text`] types a finished string, and
-//! [`Core::set_swap_control_and_command`] exchanges Control and Command.
+//! [`Core::subscribe_video`] to receive them. Input goes on a Desktop
+//! service ([`Core::open_desktop_service`]):
+//! [`RemoteDesktopService::submit_local_key`] is the key path. The default
+//! mode inserts the character the controller produced. Map mode sends the
+//! physical HID position, and Translate mode asks the host to press the
+//! chord in its own layout. [`RemoteDesktopService::submit_text`] types a
+//! finished string, and [`Core::set_swap_control_and_command`] exchanges
+//! Control and Command on the desktops opened after it.
 //! The keyboard steps are in `crates/vnilink/KEYBOARD.md`.
 //!
 //! # Relay
@@ -124,7 +126,7 @@ pub mod probes {
     /// The test agent's channel, which only the `test-probes` build has.
     #[cfg(feature = "test-probes")]
     pub use crate::core::{AgentChannel, AgentListener, AGENT_ALPN, MAX_AGENT_FRAME};
-    pub use crate::core::{MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
+    pub use crate::core::{DropPoint, Drops, MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
     pub use crate::manifest::ScanHooks;
 }
 mod transfer;

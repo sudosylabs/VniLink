@@ -10,7 +10,7 @@ const result = await build({
 			export { Emitter } from './src/base/common/event.js';
 			export { isDesktopCursor } from './src/platform/engine/common/dataChannel.js';
 			export { hidUsage } from './src/platform/engine/common/keyUsage.js';
-			export { isInputCommand } from './src/platform/engine/common/dataChannel.js';
+			export { isDesktopInputCommand, isEngineCommand } from './src/platform/engine/common/engine.js';
 		`,
 		loader: 'ts',
 		resolveDir: process.cwd(),
@@ -22,7 +22,7 @@ const result = await build({
 	tsconfig: 'tsconfig.json',
 });
 
-const { EngineDesktopSession, DesktopLatency, desktopCodec, pointerShape, Emitter, isDesktopCursor, hidUsage, isInputCommand } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { EngineDesktopSession, DesktopLatency, desktopCodec, pointerShape, Emitter, isDesktopCursor, hidUsage, isDesktopInputCommand, isEngineCommand } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 /** An H.264 keyframe's start: a start code, then an SPS with profile 0x64, flags 0x00, level 0x28. */
 const keyframe = new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac]);
@@ -128,10 +128,31 @@ test('keys are named by where they are, as HID usages', () => {
 
 test('the input channel takes keys with their composing state and the display the pointer lands on', () => {
 	const target = { sessionId: '4', generation: '2' };
-	assert(isInputCommand({ type: 'submitLocalKey', ...target, usage: 0x2f, down: true, text: '', composing: true }));
-	assert(!isInputCommand({ type: 'submitLocalKey', ...target, usage: 4, down: true, text: 'a' }), 'a key says whether it composes');
-	assert(isInputCommand({ type: 'selectDisplays', ...target, ids: ['7'] }));
-	assert(!isInputCommand({ type: 'updateSessionQuality', ...target, role: 'Controller', quality: { max_bitrate_kbps: 1, max_frame_rate: 1, max_width: 1, max_height: 1 } }), 'only input and display selection');
+	assert(isDesktopInputCommand({ type: 'submitLocalKey', ...target, usage: 0x2f, down: true, text: '', composing: true }));
+	assert(!isDesktopInputCommand({ type: 'submitLocalKey', ...target, usage: 4, down: true, text: 'a' }), 'a key says whether it composes');
+	assert(isDesktopInputCommand({ type: 'selectDisplays', ...target, ids: ['7'] }));
+	assert(!isDesktopInputCommand({ type: 'updateSessionQuality', ...target, role: 'Controller', quality: { max_bitrate_kbps: 1, max_frame_rate: 1, max_width: 1, max_height: 1 } }), 'only input and display selection');
+	assert(!isDesktopInputCommand({ type: 'submitKey', ...target, usage: 4, down: true, extra: 1 }), 'an input with an extra field is refused');
+});
+
+test('input is no engine command: it goes on the desktop\'s data channel, and a session still selects its display', () => {
+	const target = { sessionId: '4', generation: '2' };
+	for (const command of [
+		{ type: 'submitKey', ...target, usage: 4, down: true },
+		{ type: 'submitPointer', ...target, x: 1, y: 2, display: '7', revision: '1' },
+		{ type: 'submitButton', ...target, button: 'Left', down: true },
+		{ type: 'submitWheel', ...target, dx: 0, dy: -1 },
+		{ type: 'submitMotion', ...target, dx: 1, dy: 0 },
+		{ type: 'submitPreciseWheel', ...target, dx: 15, dy: -30 },
+		{ type: 'submitText', ...target, text: 'a' },
+		{ type: 'submitLocalKey', ...target, usage: 4, down: true, text: 'a', composing: false },
+		{ type: 'releaseSessionInput', ...target },
+	]) {
+		assert(isDesktopInputCommand(command), `${command.type} is desktop input`);
+		assert(!isEngineCommand(command), `${command.type} is not an engine command`);
+	}
+	assert(isEngineCommand({ type: 'selectDisplays', ...target, ids: ['7'] }), 'a session selects its display by command');
+	assert(isEngineCommand({ type: 'submitClipboard', ...target, text: 'a' }), 'a session pastes by command');
 });
 
 test('a decoder that loses the picture asks for a keyframe and starts again from it', async () => {

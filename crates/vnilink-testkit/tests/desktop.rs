@@ -185,12 +185,12 @@ fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
         .service
         .submit_input(InputEvent::key_down(usage::A))
         .expect("the viewer sends the key; the host decides");
-    trace.wait_for_records("input discarded", 1);
+    trace.wait_for_records("input refused", 1);
     expect![[r#"
         controller:
           input: control changed epoch=2 service=1 state=Viewing
         host:
-          input: input discarded kind=key down service=1 why=the peer may not control this computer
+          input: input refused kind=key down reason=the peer may not control this computer service=1
     "#]]
     .assert_eq(&trace.story(&["input"]));
     assert!(

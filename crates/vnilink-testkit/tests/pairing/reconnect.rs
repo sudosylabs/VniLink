@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use vnilink::{
-    usage, CoreEvent, CustomRelay, Error, Grants, InputEvent, RelaySettings, SessionPhase,
+    usage, CoreEvent, CustomRelay, Grants, InputEvent, RelaySettings, ServiceKind, SessionPhase,
     SessionRole,
 };
 use vnilink_testkit::desktop::InputLog;
@@ -52,75 +52,46 @@ fn a_custom_home_relay_is_what_the_peer_stores() -> TestResult {
     Ok(())
 }
 
-/// A dropped link is dialled again without a new file: input on the old
-/// session is refused, the session comes back under a new generation, and
-/// the host released the key held across the drop before applying input
-/// again. The controller publishes that it was reconnecting.
+/// A dropped link is dialled again without a new file: the connection
+/// comes back under a new generation, the desktop of the lost one ends and
+/// takes no input, and the host released the key held across the drop
+/// before a desktop on the new generation applies input again. The
+/// controller publishes that it was reconnecting.
 #[test]
-fn a_dropped_session_dials_again_without_a_new_file() -> TestResult {
+fn a_dropped_connection_dials_again_without_a_new_file() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let controller = &pair.controller.core;
     let applied = InputLog::install(&pair.host, (1920, 1080))?;
-    let session = controller.connect(&pair.host.endpoint())?;
+    let connection = pair.connect_services();
+    let desktop = pair.controller.open_desktop(&connection)?;
     let events = controller.subscribe()?;
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::A),
-    )?;
-    let first = wait_for("the host to apply the key", SETTLING, || {
-        let events = applied.events();
-        (!events.is_empty()).then_some(events)
-    });
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
     assert_eq!(
-        first,
+        applied.wait_for(1),
         [InputEvent::key_down(usage::A)],
         "the host applies the key once"
     );
-    controller.drop_link()?;
-    wait_for("the session to leave active", SETTLING, || {
-        (controller
-            .snapshot()
-            .expect("a snapshot")
-            .outgoing
-            .expect("the outgoing session stays while it dials again")
-            .phase
-            != SessionPhase::Active)
-            .then_some(())
+    controller.drop_controller_link(connection.id)?;
+    let again = pair.controller.redialed(&connection);
+    assert_eq!(
+        again.id, connection.id,
+        "the connection keeps its handle across the redial"
+    );
+    wait_for("the lost generation's desktop to end", SETTLING, || {
+        desktop.is_cancelled().then_some(())
     });
     assert!(
-        matches!(
-            controller.submit_input(
-                session.id,
-                session.generation,
-                InputEvent::key_down(usage::B)
-            ),
-            Err(Error::NoSession | Error::StaleSession)
-        ),
-        "input on the dropped session is refused"
+        desktop
+            .submit_input(InputEvent::key_down(usage::B))
+            .is_err(),
+        "the lost generation's desktop takes no input"
     );
-    let again = wait_for("the session to be dialled again", SETTLING, || {
-        let outgoing = controller
-            .snapshot()
-            .expect("a snapshot")
-            .outgoing
-            .expect("the outgoing session stays while it dials again");
-        (outgoing.phase == SessionPhase::Active
-            && (outgoing.id != session.id || outgoing.generation != session.generation))
-            .then_some(outgoing)
-    });
-    assert_ne!(
-        again.generation, session.generation,
-        "the session comes back under a new generation"
-    );
-    controller.submit_input(again.id, again.generation, InputEvent::key_down(usage::C))?;
-    let all = wait_for("the host to apply the new input", SETTLING, || {
-        let events = applied.events();
-        (events.len() >= 3).then_some(events)
-    });
+    pair.host.wait_released(Some(ServiceKind::Desktop));
+    let fresh = pair.controller.open_desktop(&again)?;
+    fresh.submit_input(InputEvent::key_down(usage::C))?;
     assert_eq!(
-        all,
+        applied.wait_for(3),
         [
             InputEvent::key_down(usage::A),
             InputEvent::key_up(usage::A),

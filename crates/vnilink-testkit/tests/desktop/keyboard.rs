@@ -1,16 +1,16 @@
-//! What a viewer types into a desktop session: the keyboard modes, the
-//! Control and Command swap, finished text, and what the host does when its
-//! desktop refuses a character. Typed text and key identities are the
-//! person's own: no engine records them.
+//! What a viewer types into a desktop: the keyboard modes, the Control and
+//! Command swap, finished text, and what the host does when its desktop
+//! refuses a character or cannot type at all. Typed text and key identities
+//! are the person's own: no engine records them.
 
 use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{
     usage, Error, EventSubscription, InputEvent, KeyboardMode, LocalKey, PointerSettings,
-    SessionInfo, SessionPhase, MAX_KEY_TEXT,
+    RemoteDesktopService, ServiceKind, ServicePhase, MAX_KEY_TEXT,
 };
-use vnilink_testkit::desktop::{input_failed, Typed, Typing};
+use vnilink_testkit::desktop::{input_failed, Scripted, Step, Typed, Typing};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, Traced, DEFAULT_WAIT};
 
 use super::streams::SCREEN;
@@ -48,10 +48,17 @@ fn local(usage: u16, down: bool, text: &str) -> LocalKey<'_> {
     LocalKey::new(usage, down, text)
 }
 
-/// The controller's control session to `host`, a desktop session as a
+/// A Desktop on the controller's services connection to the host, as a
 /// window opens one.
-fn desktop_session(pair: &Pair) -> SessionInfo {
-    pair.connect_control()
+fn open_desktop(pair: &Pair) -> Result<RemoteDesktopService, Error> {
+    pair.controller.open_desktop(&pair.connect_services())
+}
+
+/// Whether the host still serves the controller's Desktop.
+fn desktop_active(pair: &Pair) -> bool {
+    pair.host
+        .hosted_for(ServiceKind::Desktop, &pair.controller)
+        .is_some_and(|service| service.phase == ServicePhase::Active)
 }
 
 /// The Control and Command swap waits for held keys, as the keyboard mode
@@ -60,41 +67,30 @@ fn desktop_session(pair: &Pair) -> SessionInfo {
 fn the_swap_waits_for_held_keys_like_the_mode_switch() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let controller = &pair.controller.core;
-    let session = desktop_session(&pair);
-    controller.submit_local_key(session.id, session.generation, local(usage::A, true, "a"))?;
+    Typing::install(&pair.host, SCREEN, false, false)?;
+    let desktop = open_desktop(&pair)?;
+    desktop.submit_local_key(local(usage::A, true, "a"))?;
     assert!(
         matches!(
-            controller.set_swap_control_and_command(true),
+            desktop.set_swap_control_and_command(true),
             Err(Error::InvalidSetting(_))
         ),
         "the swap does not change while a key is held"
     );
-    controller.submit_local_key(session.id, session.generation, local(usage::A, false, "a"))?;
-    controller.set_swap_control_and_command(true)?;
+    desktop.submit_local_key(local(usage::A, false, "a"))?;
+    desktop.set_swap_control_and_command(true)?;
     assert!(
-        controller.swap_control_and_command()?,
+        desktop.swap_control_and_command()?,
         "the swap changes once no key is held"
     );
     records_nothing_typed(&trace, &[]);
-    trace.wait_for_records(
-        "input on this session closed: this computer cannot apply it",
-        1,
-    );
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-        host:
-          warn input: input failed reason=no desktop adapter is installed session=1
-          warn input: input on this session closed: this computer cannot apply it session=1
-    "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
 /// With Control and Command swapped, a Command pressed on the viewer reaches
-/// the host as Control, and Control is what the host lifts when the session
-/// ends.
+/// the host as Control, and Control is what the host lifts when the
+/// connection ends.
 #[test]
 fn a_swapped_command_is_the_key_the_host_releases() -> TestResult {
     let trace = traced();
@@ -102,17 +98,9 @@ fn a_swapped_command_is_the_key_the_host_releases() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
     controller.set_swap_control_and_command(true)?;
-    let session = desktop_session(&pair);
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::LEFT_META),
-    )?;
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::LEFT_SHIFT),
-    )?;
+    let desktop = open_desktop(&pair)?;
+    desktop.submit_input(InputEvent::key_down(usage::LEFT_META))?;
+    desktop.submit_input(InputEvent::key_down(usage::LEFT_SHIFT))?;
     let pressed = [
         Typed::Event(InputEvent::key_down(usage::LEFT_CONTROL)),
         Typed::Event(InputEvent::key_down(usage::LEFT_SHIFT)),
@@ -142,34 +130,33 @@ fn finished_text_is_typed_in_order_and_is_not_logged() -> TestResult {
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
-    let session = desktop_session(&pair);
+    let desktop = open_desktop(&pair)?;
     let events = controller.subscribe()?;
     let host_events = host.subscribe()?;
-    let (id, generation) = (session.id, session.generation);
     assert!(
         matches!(
-            controller.submit_text(id, generation, ""),
+            desktop.submit_text(""),
             Err(Error::InvalidSetting("text entry is empty"))
         ),
         "empty text is refused"
     );
     assert!(
         matches!(
-            controller.submit_text(id, generation, &"a".repeat(MAX_KEY_TEXT + 1)),
+            desktop.submit_text(&"a".repeat(MAX_KEY_TEXT + 1)),
             Err(Error::InvalidSetting("text entry is longer than 128 bytes"))
         ),
         "text longer than the bound is refused"
     );
     assert!(
         matches!(
-            controller.submit_text(id, generation, "a\0b"),
+            desktop.submit_text("a\0b"),
             Err(Error::InvalidSetting("text entry contains a null byte"))
         ),
         "text with a null byte is refused"
     );
-    controller.submit_input(id, generation, InputEvent::key_down(usage::LEFT_META))?;
-    controller.submit_text(id, generation, "café")?;
-    controller.submit_input(id, generation, InputEvent::key_down(usage::ENTER))?;
+    desktop.submit_input(InputEvent::key_down(usage::LEFT_META))?;
+    desktop.submit_text("café")?;
+    desktop.submit_input(InputEvent::key_down(usage::ENTER))?;
     typed.wait(
         &[
             Typed::Event(InputEvent::key_down(usage::LEFT_META)),
@@ -180,117 +167,129 @@ fn finished_text_is_typed_in_order_and_is_not_logged() -> TestResult {
     );
     hides(&events, "café");
     hides(&host_events, "café");
-    assert_eq!(
-        host.snapshot()?.incoming.ok_or("the host's session")?.phase,
-        SessionPhase::Active,
-        "typing text leaves the session open"
-    );
+    assert!(desktop_active(&pair), "typing text leaves the desktop open");
     records_nothing_typed(&trace, &["café", "caf"]);
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-    "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
-/// Text the host's operating system refuses is reported on the host, and the
-/// keys sent after it still apply.
+/// Text the host's operating system refuses is reported on the host and
+/// recorded with why, never what; the keys sent after it still apply.
 #[test]
 fn a_refused_text_leaves_the_keys_working() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let host = &pair.host.core;
     let typed = Typing::install(&pair.host, SCREEN, true, false)?;
-    let session = desktop_session(&pair);
+    let desktop = open_desktop(&pair)?;
     let events = host.subscribe()?;
-    controller.submit_text(session.id, session.generation, "nope")?;
+    desktop.submit_text("nope")?;
     assert_eq!(
         input_failed(&events).1,
         "the operating system rejected the event",
         "the host reports the text its system refused"
     );
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::A),
-    )?;
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
     typed.wait(
         &[Typed::Event(InputEvent::key_down(usage::A))],
         "a key after a refused text applies",
     );
-    assert_eq!(
-        host.snapshot()?.incoming.ok_or("the host's session")?.phase,
-        SessionPhase::Active,
-        "a refused text leaves the session open"
+    assert!(
+        desktop_active(&pair),
+        "a refused text leaves the desktop open"
     );
     records_nothing_typed(&trace, &["nope"]);
-    trace.wait_for_records("input failed", 1);
+    trace.wait_for_records("input refused", 1);
     expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
         host:
-          warn input: input failed reason=the operating system rejected the event session=1
+          warn input: input refused kind=typed text reason=the operating system rejected the event service=1
     "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    .assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
-/// Text typed before the link dropped is not typed again after the session
-/// reconnects, and text sent on the old generation is refused.
+/// A host whose desktop cannot type text at all refuses it, says why, and
+/// keeps the desktop: the keys sent after it apply.
 #[test]
-fn a_dropped_session_does_not_replay_finished_text() -> TestResult {
+fn text_the_host_cannot_type_is_refused_and_the_desktop_stays() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let host = &pair.host.core;
+    let scripted = Scripted::install(
+        &pair.host,
+        SCREEN,
+        &[(1, Step::Unavailable("typed text is not available"))],
+    )?;
+    let desktop = open_desktop(&pair)?;
+    let events = host.subscribe()?;
+    desktop.submit_text("unseen")?;
+    assert_eq!(
+        input_failed(&events).1,
+        "typed text is not available",
+        "the host reports it cannot type"
+    );
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
+    scripted.wait(
+        &[Typed::Event(InputEvent::key_down(usage::A))],
+        "a key after text the host could not type applies",
+    );
+    assert!(
+        desktop_active(&pair) && !desktop.is_cancelled(),
+        "text the host cannot type leaves the desktop open"
+    );
+    records_nothing_typed(&trace, &["unseen"]);
+    trace.wait_for_records("input refused", 1);
+    expect![[r#"
+        host:
+          warn input: input refused kind=typed text reason=typed text is not available service=1
+    "#]]
+    .assert_eq(&trace.story(&["input"]));
+    Ok(())
+}
+
+/// Text typed before the link dropped is not typed again on the connection
+/// dialled again, and the desktop of the lost generation takes no more.
+#[test]
+fn a_dropped_connection_does_not_replay_finished_text() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let controller = &pair.controller.core;
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
-    let session = desktop_session(&pair);
-    controller.submit_text(session.id, session.generation, "first words")?;
+    let connection = pair.connect_services();
+    let desktop = pair.controller.open_desktop(&connection)?;
+    desktop.submit_text("first words")?;
     typed.wait(
         &[Typed::Text("first words".to_owned())],
         "the first text is typed",
     );
-    controller.drop_link()?;
-    wait_for("the dropped session to leave Active", DEFAULT_WAIT, || {
-        controller
-            .snapshot()
-            .ok()?
-            .outgoing
-            .is_some_and(|outgoing| outgoing.phase != SessionPhase::Active)
-            .then_some(())
+    controller.drop_controller_link(connection.id)?;
+    let again = pair.controller.redialed(&connection);
+    wait_for("the old desktop to end", DEFAULT_WAIT, || {
+        desktop.is_cancelled().then_some(())
     });
     assert!(
-        matches!(
-            controller.submit_text(session.id, session.generation, "replayed words"),
-            Err(Error::NoSession | Error::StaleSession)
-        ),
-        "text sent on a dropped session is refused"
+        desktop.submit_text("replayed words").is_err(),
+        "text sent on the lost generation's desktop is refused"
     );
-    let again = wait_for("the session to reconnect", DEFAULT_WAIT, || {
-        controller.snapshot().ok()?.outgoing.filter(|outgoing| {
-            outgoing.phase == SessionPhase::Active && outgoing.generation != session.generation
-        })
-    });
-    controller.submit_text(again.id, again.generation, "second words")?;
+    pair.host.wait_released(Some(ServiceKind::Desktop));
+    let fresh = pair.controller.open_desktop(&again)?;
+    fresh.submit_text("second words")?;
     typed.wait(
         &[
             Typed::Text("first words".to_owned()),
             Typed::Text("second words".to_owned()),
         ],
-        "a reconnected session types only what was sent on it",
+        "the desktop on the redialled connection types only what was sent on it",
     );
     records_nothing_typed(&trace, &["first words", "second words", "replayed words"]);
-    trace.wait_for_records("the session's control stream ended", 1);
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=reconnecting
-          session: session phase from=reconnecting generation=3 role=Controller session=1 to=active
-        host:
-          input: the session's control stream ended error=network session=1
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-    "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    // How the host's side of the lost link ends is the link's story; this
+    // one is that nothing typed was refused or lost.
+    expect![[r#""#]].assert_eq(
+        &trace
+            .tell(&["input"])
+            .only(&["input refused", "input dropped for a test"])
+            .to_string(),
+    );
     Ok(())
 }
 
@@ -307,7 +306,12 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
         KeyboardMode::Character,
         "Character is the default mode"
     );
-    let session = desktop_session(&pair);
+    let desktop = open_desktop(&pair)?;
+    assert_eq!(
+        desktop.keyboard_mode()?,
+        KeyboardMode::Character,
+        "a desktop opens in the default mode"
+    );
     let events = controller.subscribe()?;
     let host_events = host.subscribe()?;
     for key in [
@@ -318,7 +322,7 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
         local(usage::DIGIT_0, false, ""),
         local(usage::RIGHT_ALT, false, ""),
     ] {
-        controller.submit_local_key(session.id, session.generation, key)?;
+        desktop.submit_local_key(key)?;
     }
     typed.wait(
         &[Typed::Text("@".to_owned()), Typed::Text("@".to_owned())],
@@ -327,11 +331,7 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
     hides(&events, "@");
     hides(&host_events, "@");
     records_nothing_typed(&trace, &["@"]);
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-    "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
@@ -341,30 +341,29 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
 fn map_and_translate_are_optional_and_a_held_key_blocks_the_change() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let host = &pair.host.core;
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
-    let session = desktop_session(&pair);
-    let (id, generation) = (session.id, session.generation);
-    controller.submit_local_key(id, generation, local(usage::LEFT_SHIFT, true, ""))?;
+    let desktop = open_desktop(&pair)?;
+    desktop.submit_local_key(local(usage::LEFT_SHIFT, true, ""))?;
     assert!(
         matches!(
-            controller.set_keyboard_mode(KeyboardMode::Map),
+            desktop.set_keyboard_mode(KeyboardMode::Map),
             Err(Error::InvalidSetting(
-                "release held keys before changing the keyboard mode"
+                "release held input before changing keyboard mode"
             ))
         ),
         "the mode does not change while a key is held"
     );
-    controller.submit_local_key(id, generation, local(usage::LEFT_SHIFT, false, ""))?;
-    controller.set_keyboard_mode(KeyboardMode::Map)?;
-    controller.submit_local_key(id, generation, local(usage::GRAVE, true, "@"))?;
+    desktop.submit_local_key(local(usage::LEFT_SHIFT, false, ""))?;
+    desktop.set_keyboard_mode(KeyboardMode::Map)?;
+    desktop.submit_local_key(local(usage::GRAVE, true, "@"))?;
     typed.wait(
         &[Typed::Event(InputEvent::key_down(usage::GRAVE))],
         "Map sends the key, not the character",
     );
-    controller.submit_local_key(id, generation, local(usage::GRAVE, false, ""))?;
-    controller.set_keyboard_mode(KeyboardMode::Translate)?;
-    controller.submit_local_key(id, generation, local(usage::GRAVE, true, "@"))?;
+    desktop.submit_local_key(local(usage::GRAVE, false, ""))?;
+    desktop.set_keyboard_mode(KeyboardMode::Translate)?;
+    desktop.submit_local_key(local(usage::GRAVE, true, "@"))?;
     typed.wait(
         &[
             Typed::Event(InputEvent::key_down(usage::GRAVE)),
@@ -376,67 +375,51 @@ fn map_and_translate_are_optional_and_a_held_key_blocks_the_change() -> TestResu
     let events = host.subscribe()?;
     hides(&events, "@");
     records_nothing_typed(&trace, &["@"]);
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-    "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
-/// Translated keys the host cannot type are reported on the host, and the
-/// keys sent after them still apply.
+/// Translated keys the host cannot type are reported on the host and
+/// recorded with why, and the keys sent after them still apply.
 #[test]
 fn a_refused_chord_leaves_the_keys_working() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let host = &pair.host.core;
     let typed = Typing::install(&pair.host, SCREEN, false, true)?;
-    let session = desktop_session(&pair);
-    controller.set_keyboard_mode(KeyboardMode::Translate)?;
+    let desktop = open_desktop(&pair)?;
+    desktop.set_keyboard_mode(KeyboardMode::Translate)?;
     let events = host.subscribe()?;
-    controller.submit_local_key(
-        session.id,
-        session.generation,
-        local(usage::GRAVE, true, "@"),
-    )?;
+    desktop.submit_local_key(local(usage::GRAVE, true, "@"))?;
     assert_eq!(
         input_failed(&events).1,
         "translated keys are not available",
         "the host reports the translated keys it could not type"
     );
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::A),
-    )?;
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
     typed.wait(
         &[Typed::Event(InputEvent::key_down(usage::A))],
         "a key after a refused chord applies",
     );
-    assert_eq!(
-        host.snapshot()?.incoming.ok_or("the host's session")?.phase,
-        SessionPhase::Active,
-        "a refused chord leaves the session open"
+    assert!(
+        desktop_active(&pair),
+        "a refused chord leaves the desktop open"
     );
     records_nothing_typed(&trace, &["@"]);
-    trace.wait_for_records("input failed", 1);
+    trace.wait_for_records("input refused", 1);
     expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
         host:
-          warn input: input failed reason=translated keys are not available session=1
+          warn input: input refused kind=typed text reason=translated keys are not available service=1
     "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    .assert_eq(&trace.story(&["input"]));
     Ok(())
 }
 
-/// The controller's input defaults reach its open sessions, connecting or
-/// active, and the ones it opens later; a held key refuses the whole change,
-/// and an invalid pointer setting changes nothing.
+/// The controller's input defaults reach its open desktops and the ones it
+/// opens later; a held key refuses the whole change, and an invalid
+/// pointer setting changes nothing.
 #[test]
-fn input_defaults_cover_live_and_future_connections_and_refuse_held_input_atomically() -> TestResult
-{
+fn input_defaults_cover_open_and_future_desktops_and_refuse_held_input_atomically() -> TestResult {
     let trace = traced();
     let controller = Engine::start("controller");
     let hosts = [
@@ -448,8 +431,8 @@ fn input_defaults_cover_live_and_future_connections_and_refuse_held_input_atomic
         Typing::install(host, SCREEN, false, false)?;
         host.pair_for_control(&controller)?;
     }
-    let first = controller.connect_control(&hosts[0])?;
-    let second = controller.connect_control(&hosts[1])?;
+    let first = controller.open_desktop(&controller.connect_services(&hosts[0])?)?;
+    let second = controller.open_desktop(&controller.connect_services(&hosts[1])?)?;
     let pointer = PointerSettings {
         sensitivity_percent: 175,
         reverse_wheel: true,
@@ -457,27 +440,23 @@ fn input_defaults_cover_live_and_future_connections_and_refuse_held_input_atomic
     };
     let core = &controller.core;
     core.set_input_defaults(KeyboardMode::Map, true, pointer)?;
-    for session in [&first, &second] {
+    for desktop in [&first, &second] {
         assert_eq!(
-            core.session_keyboard_mode(session.id, session.generation)?,
+            desktop.keyboard_mode()?,
             KeyboardMode::Map,
-            "an open session takes the default keyboard mode"
+            "an open desktop takes the default keyboard mode"
         );
         assert!(
-            core.session_swap_control_and_command(session.id, session.generation)?,
-            "an open session takes the default shortcut swap"
+            desktop.swap_control_and_command()?,
+            "an open desktop takes the default shortcut swap"
         );
         assert_eq!(
-            core.session_pointer_settings(session.id, session.generation)?,
+            desktop.pointer_settings()?,
             pointer,
-            "an open session takes the default pointer settings"
+            "an open desktop takes the default pointer settings"
         );
     }
-    core.submit_local_key(
-        first.id,
-        first.generation,
-        local(usage::LEFT_CONTROL, true, ""),
-    )?;
+    first.submit_local_key(local(usage::LEFT_CONTROL, true, ""))?;
     assert!(
         core.set_input_defaults(KeyboardMode::Character, false, PointerSettings::default())
             .is_err(),
@@ -489,21 +468,21 @@ fn input_defaults_cover_live_and_future_connections_and_refuse_held_input_atomic
         "a refused change leaves the default mode"
     );
     assert_eq!(
-        core.session_pointer_settings(second.id, second.generation)?,
+        second.pointer_settings()?,
         pointer,
-        "a refused change leaves another session's pointer settings"
+        "a refused change leaves another desktop's pointer settings"
     );
-    core.release_session_input(first.id, first.generation)?;
-    let third = controller.connect_control(&hosts[2])?;
+    first.release_input()?;
+    let third = controller.open_desktop(&controller.connect_services(&hosts[2])?)?;
     assert_eq!(
-        core.session_pointer_settings(third.id, third.generation)?,
+        third.pointer_settings()?,
         pointer,
-        "a session opened later takes the default pointer settings"
+        "a desktop opened later takes the default pointer settings"
     );
     assert_eq!(
-        core.session_keyboard_mode(third.id, third.generation)?,
+        third.keyboard_mode()?,
         KeyboardMode::Map,
-        "a session opened later takes the default keyboard mode"
+        "a desktop opened later takes the default keyboard mode"
     );
     assert!(
         core.set_input_defaults(
@@ -518,17 +497,13 @@ fn input_defaults_cover_live_and_future_connections_and_refuse_held_input_atomic
         "an invalid pointer setting refuses the change"
     );
     assert_eq!(
-        core.session_pointer_settings(third.id, third.generation)?,
+        third.pointer_settings()?,
         pointer,
-        "a refused change leaves the session's pointer settings"
+        "a refused change leaves the desktop's pointer settings"
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=connecting generation=1 role=Controller session=2 to=active
-          session: session phase from=connecting generation=1 role=Controller session=3 to=active
-    "#]]
-    .assert_eq(&trace.story(&["input", "session"]));
+    // Whether the release found the held key still queued depends on when
+    // the desktop's sender ran; nothing reached the host refused.
+    expect![[r#""#]].assert_eq(&trace.tell(&["input"]).only(&["input refused"]).to_string());
     Ok(())
 }

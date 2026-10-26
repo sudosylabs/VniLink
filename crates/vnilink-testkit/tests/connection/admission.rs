@@ -6,12 +6,10 @@
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{
-    usage, CoreEvent, Error, Grants, InputEvent, Quality, SessionPhase, SessionRole, VideoCodecCaps,
-};
+use vnilink::{CoreEvent, Error, Grants, Quality, SessionPhase, SessionRole, VideoCodecCaps};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::next_event;
-use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED};
+use vnilink_testkit::{traced, Engine, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED};
 
 use super::support::{introduce, INVITATION};
 
@@ -25,9 +23,9 @@ const CLIPBOARD_ONLY: Grants = Grants {
 
 /// Pairing grants no control, an invitation is accepted once, and a grant
 /// runs one way: the controller's grant lets it reach the host, never the
-/// host it. Clipboard alone admits nothing; once admitted, input without a
-/// desktop is refused, the host sets its session's quality, and a session
-/// the host stopped or a revoked peer reaches nothing.
+/// host it. Clipboard alone admits nothing; once admitted, the host sets
+/// its session's quality, and a session the host stopped or a revoked peer
+/// reaches nothing.
 #[test]
 fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
     let trace = traced();
@@ -77,30 +75,6 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
         SessionPhase::Active,
         "view and control admit a session"
     );
-    controller.core.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::A),
-    )?;
-    let mut sent = 0;
-    wait_for(
-        "the host to refuse input without a desktop",
-        Duration::from_secs(2),
-        || match controller.core.submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_up(usage::A),
-        ) {
-            Err(Error::Unsupported(_)) => Some(()),
-            Ok(()) => {
-                sent += 1;
-                None
-            }
-            Err(error) => panic!("input without a desktop adapter returned {error}"),
-        },
-    );
-    // Each key sent before the refusal arrived reaches the host, which
-    // discards it, also once the host is stopping the session.
     let quality = Quality::new(2_000, 30, 1920, 1080)?;
     let hosted = host.core.snapshot()?.incoming.ok_or("a hosted session")?;
     host.core
@@ -120,14 +94,12 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
     controller.wait_closed(SessionRole::Controller);
     assert!(
         matches!(
-            controller.core.submit_input(
-                session.id,
-                session.generation,
-                InputEvent::key_down(usage::A),
-            ),
+            controller
+                .core
+                .select_displays(session.id, session.generation, &[1]),
             Err(Error::NoSession | Error::StaleSession)
         ),
-        "a stopped session takes no input"
+        "a stopped session takes no command"
     );
 
     host.core.revoke(&controller.endpoint())?;

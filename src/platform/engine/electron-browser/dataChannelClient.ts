@@ -4,13 +4,13 @@ import { Emitter } from '../../../base/common/event.js';
 import { isFileAnswer, type FileAnswer, type FileOperation } from '../common/files.js';
 import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { record } from '../common/engine.js';
-import type { EngineCommand } from '../common/engine.js';
+import type { DesktopInputCommand } from '../common/engine.js';
 import { DATA_CHANNEL_PORT_RESPONSE, type IEngineService } from '../common/engineService.js';
 
 /** Owns the renderer end; payloads arrive outside contextBridge's copied values. */
 export class DataChannelClient {
 	private closed = false;
-	private readonly inputQueue: EngineCommand[] = [];
+	private readonly inputQueue: DesktopInputCommand[] = [];
 	private inputFlight = false;
 	private pointerTimer: ReturnType<typeof setTimeout> | undefined;
 	private expectedSequence = 1;
@@ -234,7 +234,7 @@ export class DataChannelClient {
 		}
 	}
 
-	public input(command: EngineCommand): void {
+	public input(command: DesktopInputCommand): void {
 		if (this.closed) {
 			throw new Error('Data channel closed');
 		}

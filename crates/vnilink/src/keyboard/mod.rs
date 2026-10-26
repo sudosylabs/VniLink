@@ -11,7 +11,8 @@ mod plan;
 pub(crate) use layout::layout_steps;
 pub use layout::{HostLayout, LayoutStep, ModifierLevel};
 
-/// How [`crate::Core::submit_local_key`] turns one local key into host input.
+/// How [`crate::RemoteDesktopService::submit_local_key`] turns one local key
+/// into host input.
 ///
 /// The choice belongs to this process and is not saved. Character is the
 /// default. Release held keys before changing it.

@@ -14,6 +14,7 @@ use vnilink::{
     StreamFailure, VideoCodecCaps,
 };
 use vnilink_testkit::desktop::{input_failed, keyframe, next_picture, InputLog, MonitorCapture};
+use vnilink_testkit::drops::{DropPoint, SeededDrops};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 /// The size of the host's screens.
@@ -444,7 +445,7 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     expect![[r#"
         host:
           input: control asked for epoch=1 service=1 state=Controlling
-          warn input: input failed reason=that display is not selected session=1
+          warn input: input refused kind=pointer reason=that display is not selected service=1
     "#]]
     .assert_eq(&trace.story(&["desktop", "topology", "input"]));
     Ok(())
@@ -694,13 +695,12 @@ fn a_picture_the_viewer_closed_has_no_host_end() -> TestResult {
 }
 
 /// Pictures a host publishes to a viewer's session reach it in order,
-/// keyframe and delta as published, a burst of them too, and the input the
-/// viewer sends meanwhile still applies. What the host advertises follows
-/// its adapters: a capture alone offers no input, a desktop adds it. Empty
-/// pictures and pictures for no session are refused, as are pictures once
-/// the viewer left.
+/// keyframe and delta as published, a burst of them too. What the host
+/// advertises follows its adapters: a capture alone offers no input, a
+/// desktop adds it. Empty pictures and pictures for no session are refused,
+/// as are pictures once the viewer left.
 #[test]
-fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
+fn encoded_frames_reach_the_controller_in_order() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
@@ -719,7 +719,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
             && capture_only.monitors == 1,
         "a capture alone offers one monitor and nothing else: {capture_only:?}"
     );
-    let applied_events = InputLog::install(&pair.host, (100, 100))?;
+    InputLog::install(&pair.host, (100, 100))?;
     let with_desktop = host.capabilities();
     assert!(
         with_desktop.desktop_capture
@@ -786,17 +786,6 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
         "nothing follows the last picture"
     );
 
-    let key = InputEvent::key_down(vnilink::usage::A);
-    controller.submit_input(session.id, session.generation, key)?;
-    wait_for("the key to apply", Duration::from_secs(2), || {
-        (!applied_events.events().is_empty()).then_some(())
-    });
-    assert_eq!(
-        applied_events.events(),
-        [key],
-        "input applies while pictures stream"
-    );
-
     let mut empty = EncodedFrame::h264(true, 1, vec![1])?;
     empty.payload.clear();
     assert!(
@@ -834,7 +823,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
           session: session phase from=active generation=1 role=Controller session=1 to=stopping
           session: session phase from=stopping generation=1 role=Controller session=1 to=closed
         host:
-          input: the session's control stream ended error=network session=1
+          session: the session's control stream ended error=network session=1
           session: session phase from=active generation=1 role=Host session=1 to=closed
     "#]]
     .assert_eq(&trace.story(&["session", "input"]));
@@ -861,6 +850,115 @@ fn a_zero_capture_size_falls_back_to_the_desktop() -> TestResult {
         (session.monitor_width, session.monitor_height),
         (100, 80),
         "the viewer learns the desktop's size"
+    );
+    Ok(())
+}
+
+/// Publishes pictures on `remote` until `asked` holds, one each frame
+/// interval, each a delta after `from`; gives the timestamp after the last.
+fn publish_until(
+    host: &Engine,
+    remote: &ServiceInfo,
+    from: u64,
+    what: &str,
+    mut asked: impl FnMut() -> bool,
+) -> u64 {
+    let mut paced = Paced::new();
+    let mut timestamp = from;
+    wait_for(what, DEFAULT_WAIT, || {
+        if paced.due() {
+            timestamp += 1;
+            host.core
+                .publish_desktop_video(
+                    remote.id,
+                    remote.generation,
+                    vnilink_testkit::desktop::delta(timestamp, vec![5; 200]),
+                )
+                .expect("the host publishes");
+        }
+        asked().then_some(())
+    });
+    timestamp + 1
+}
+
+/// One picture lost at `point` after the first keyframe arrived: the host
+/// is asked for a keyframe, which then reaches the viewer. Gives what the
+/// point lost.
+fn a_lost_picture_is_made_good(point: DropPoint) -> Result<usize, Box<dyn std::error::Error>> {
+    let pair = Pair::for_desktop();
+    let host = &pair.host.core;
+    InputLog::install(&pair.host, SCREEN)?;
+    let desktop = pair.controller.open_desktop(&pair.connect_services())?;
+    let video = desktop.subscribe_video()?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(1, vec![1; 200]))?;
+    assert_eq!(
+        next_picture(&video, "the first keyframe").timestamp_us,
+        1,
+        "the first keyframe arrives whole"
+    );
+    // What opening asked for is answered.
+    host.take_desktop_keyframe_request(remote.id, remote.generation)?;
+    let loses = if point == DropPoint::Gate {
+        &pair.host
+    } else {
+        &pair.controller
+    };
+    let drops = SeededDrops::new().nth(point, &[1]).install(loses);
+    let next = publish_until(
+        &pair.host,
+        &remote,
+        1,
+        "the host to be asked for a keyframe after the loss",
+        || {
+            host.take_desktop_keyframe_request(remote.id, remote.generation)
+                .unwrap_or(false)
+        },
+    );
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(next, vec![9; 200]))?;
+    wait_for("the keyframe after the loss", DEFAULT_WAIT, || {
+        video
+            .recv_timeout(Duration::from_millis(20))
+            .filter(|picture| picture.keyframe && picture.timestamp_us == next)
+    });
+    Ok(drops.tally(point).lost)
+}
+
+/// A picture the host's send gate holds back asks for a keyframe of its
+/// own: the pictures after it reference it.
+#[test]
+fn a_picture_held_back_at_the_send_gate_is_made_good_by_a_keyframe() -> TestResult {
+    let _trace = traced();
+    assert_eq!(
+        a_lost_picture_is_made_good(DropPoint::Gate)?,
+        1,
+        "the gate held back one picture"
+    );
+    Ok(())
+}
+
+/// A picture whose datagram the network lost leaves a gap in the numbers
+/// the viewer sees, and the viewer asks for a keyframe.
+#[test]
+fn a_picture_lost_on_the_network_is_made_good_by_a_keyframe() -> TestResult {
+    let _trace = traced();
+    assert_eq!(
+        a_lost_picture_is_made_good(DropPoint::Datagram)?,
+        1,
+        "the network lost one datagram"
+    );
+    Ok(())
+}
+
+/// A picture lost as it reached the viewer's queue leaves a gap too, and
+/// the viewer asks for a keyframe.
+#[test]
+fn a_picture_lost_before_the_viewers_queue_is_made_good_by_a_keyframe() -> TestResult {
+    let _trace = traced();
+    assert_eq!(
+        a_lost_picture_is_made_good(DropPoint::Inbox)?,
+        1,
+        "the viewer's queue lost one picture"
     );
     Ok(())
 }

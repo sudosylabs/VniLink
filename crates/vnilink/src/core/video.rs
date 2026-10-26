@@ -469,7 +469,7 @@ impl Core {
                 let owner = (session.id, session.generation);
                 let mut auto = lock(&controller.auto);
                 // Only change the local limits after the command is queued.
-                outbox.push_quality(quality)?;
+                outbox.push(super::session_commands::SessionCommand::Quality(quality))?;
                 auto.manual_session = Some(owner);
                 drop(auto);
                 session.quality = Some(quality);

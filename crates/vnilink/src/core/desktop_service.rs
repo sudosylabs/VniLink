@@ -35,9 +35,10 @@ pub(super) fn retire_owner(state: &mut State, id: u64, generation: u64, hosted: 
     }
 }
 
-/// A lifetime handle for desktop capture/input already negotiated by Hello.
-/// It does not own or disconnect the parent connection. Native renderers and
-/// input adapters continue using the existing generation-scoped session APIs.
+/// A viewer's Desktop: on a services connection, its own stream carrying
+/// pictures one way and input the other; adopted on a desktop session, a
+/// lifetime handle for the session's pictures, which carries no input. It
+/// does not own or disconnect the parent connection.
 pub struct RemoteDesktopService {
     pub(super) lease: ServiceLease,
     pub(super) stop: tokio::sync::watch::Sender<bool>,

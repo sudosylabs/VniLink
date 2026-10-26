@@ -48,6 +48,15 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		assert.equal((await execute(first, { type: 'keyboardMode' })).mode, 'Map');
 		assert.equal((await execute(first, { type: 'swapControlAndCommand' })).enabled, true);
 		await assert.rejects(execute(first, { type: 'setInputDefaults', ...input, pointer: { ...input.pointer, sensitivity_percent: 0 } }));
+		// Desktop input goes on a desktop's data channel, never as a command.
+		for (const command of [
+			{ type: 'submitKey', sessionId: '1', generation: '1', usage: 4, down: true },
+			{ type: 'submitText', sessionId: '1', generation: '1', text: 'a' },
+			{ type: 'submitLocalKey', sessionId: '1', generation: '1', usage: 4, down: true, text: 'a', composing: false },
+			{ type: 'releaseSessionInput', sessionId: '1', generation: '1' },
+		]) {
+			await assert.rejects(execute(first, command), /Desktop input goes on its data channel/, command.type);
+		}
 		// The transfer folder is only named here; the first transfer creates it.
 		const transfers = join(tmpdir(), `vnilink-transfers-${String(process.pid)}`);
 		assert.equal((await execute(first, { type: 'setTransferDirectory', path: transfers })).type, 'done');

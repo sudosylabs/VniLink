@@ -1,6 +1,6 @@
 # Keyboard
 
-`submit_local_key` is the key path. It takes the physical HID usage and the text the controller operating system produced for that press. The mode decides what the host receives. The choice belongs to this process and is not saved. Release held keys before changing it. A new session starts with nothing held.
+A Desktop service's `submit_local_key` (`RemoteDesktopService`) is the key path. It takes the physical HID usage and the text the controller operating system produced for that press. The mode decides what the host receives. The choice belongs to this process and is not saved. Release held keys before changing it. A new desktop starts with nothing held.
 
 ## Modes
 
@@ -19,7 +19,7 @@
 3. `set_swap_control_and_command` exchanges Control and Command before the event is queued. It is off by default, it belongs to this process, and it is not saved. The host injects the usage it receives and releases that same usage when the session ends. Release a held modifier before changing the setting.
 4. `submit_text` sends finished characters, tag 8, at most 128 bytes (`MAX_KEY_TEXT`). The host inserts them. This is not a clipboard paste and does not use the clipboard grant. Empty text, a null byte, and a longer string are rejected before they are sent. A refusal does not end the control session. The text is not logged and is not put on an event.
 5. Translate uses tag 9. The payload has the same limit and is not logged. A refusal does not end the control session.
-6. A dropped session does not send the old text or the old chord again. The new generation needs a new `submit_local_key` or `submit_text`. Queued text is dropped with the rest of the input queue.
+6. A desktop whose connection dropped does not send the old text or the old chord again. A desktop on the new generation needs a new `submit_local_key` or `submit_text`. Queued text is dropped with the rest of the input queue.
 
 ## Files
 
@@ -28,7 +28,8 @@
 | `src/keyboard/plan.rs` | Character, Map, and Translate for one local key |
 | `src/keyboard/chord.rs` | Group-1 chord lookup |
 | `src/tests/keyboard.rs` | Plan and chord unit tests. They build the map and do not open a display |
-| `src/core/keys.rs` | `submit_local_key`, `submit_text`, and the mode switch |
+| `src/core/desktop_stream.rs` | A Desktop service's `submit_local_key` and `submit_text`, and the host applying them |
+| `src/core/keys.rs` | The engine's mode and swap defaults |
 | `src/os_input/chord.rs` | Pressing that chord on Linux |
 | `src/tests/keyboard_mode.rs` | Loopback tests of the three modes |
 | `src/tests/keyboard_text.rs` | The Control/Command swap and finished text |

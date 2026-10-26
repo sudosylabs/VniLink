@@ -288,7 +288,6 @@ impl Core {
                 replay,
                 record_relay,
                 incoming: HashMap::new(),
-                incoming_slots: Arc::new(AtomicUsize::new(0)),
                 outgoing: HashMap::new(),
                 clipboard_owner: None,
                 desktop_control: None,
@@ -357,6 +356,8 @@ impl Core {
             job_prefetch: Mutex::new(std::collections::HashMap::new()),
             #[cfg(any(test, feature = "test-probes"))]
             prefetch_off: AtomicBool::new(false),
+            #[cfg(any(test, feature = "test-probes"))]
+            drops: Mutex::new(None),
             folder_watches: Mutex::new(std::collections::HashMap::new()),
             watch_next: std::sync::atomic::AtomicU64::new(1),
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),

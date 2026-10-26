@@ -1,7 +1,7 @@
 import { Emitter, type Event } from '../../../base/common/event.js';
 import { Disposable, MutableDisposable } from '../../../base/common/lifecycle.js';
 import type { DataPacket, DesktopCursor, DesktopCursorImage, DesktopDecoderReport, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
-import { record, videoCodecNames, type DisplayInfo, type EngineCommand, type VideoCodec } from '../../../platform/engine/common/engine.js';
+import { record, videoCodecNames, type DesktopInputCommand, type DisplayInfo, type VideoCodec } from '../../../platform/engine/common/engine.js';
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
 import { DesktopLatency } from './desktopLatency.js';
@@ -97,7 +97,7 @@ export interface DesktopVideoChannel {
 /** The two channels of a session: the picture, and for control the input. */
 export interface DesktopChannels {
 	video: DesktopVideoChannel;
-	input: { input(command: EngineCommand): void; close(): void } | undefined;
+	input: { input(command: DesktopInputCommand): void; close(): void } | undefined;
 }
 
 /**

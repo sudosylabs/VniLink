@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use vnilink::{
-    Core, CoreConfig, CoreEvent, CustomRelay, EncodedFrame, Grants, InputEvent, MemoryStore,
-    OpenConfig, RelaySettings, SessionPath,
+    Core, CoreConfig, CoreEvent, CustomRelay, EncodedFrame, Grants, MemoryStore, OpenConfig,
+    RelaySettings, SessionPath,
 };
 
 fn main() {
@@ -146,9 +146,10 @@ fn main() {
                 old_host.map(|host| host.1).unwrap_or(0),
                 new_host.map(|host| host.1).unwrap_or(0),
             );
-            stale_rejected = controller
-                .submit_input(old.0, old.1, InputEvent::key_down(0x04))
-                .is_err();
+            stale_rejected = matches!(
+                controller.select_displays(old.0, old.1, &[1]),
+                Err(vnilink::Error::StaleSession)
+            );
             next_frame = Instant::now();
             next_sample = Instant::now();
         }

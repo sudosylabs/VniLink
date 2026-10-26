@@ -1,13 +1,13 @@
 //! Headless soak: connecting, opening a desktop, driving a frame and a key
-//! through it, and closing everything again, many times over, leaves no
-//! residue. The registries are the leak checks: controller services,
+//! through it, and closing everything again, so the host releases the held
+//! key on its cleanup worker, many times over, leaves no residue. The registries are the leak checks: controller services,
 //! sessions and jobs empty and forgettable after every cycle, hosted
 //! services empty, hosted sessions at the documented steady state of at
 //! most one finished. Linux also prints resident memory and thread counts
 //! as CI evidence; this file asserts counts, not artifacts.
 
-use vnilink::{EncodedFrame, InputEvent, ServiceKind, SessionPhase};
-use vnilink_testkit::desktop::InputLog;
+use vnilink::{usage, InputEvent, ServiceKind, SessionPhase};
+use vnilink_testkit::desktop::{keyframe, releases_settled, InputLog};
 use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
@@ -40,11 +40,11 @@ fn process_stats() -> (u64, u64) {
 fn repeated_sessions_leave_no_residue() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
-    let _applied = InputLog::install(&pair.host, (1920, 1080))?;
+    let applied = InputLog::install(&pair.host, (1920, 1080))?;
 
     // One warmup cycle so allocator and runtime caches settle before the
     // baseline; the bounds below measure growth across cycles, not startup.
-    soak_cycle(&pair)?;
+    soak_cycle(&pair, &applied)?;
     #[cfg(target_os = "linux")]
     let (baseline_rss, baseline_threads) = process_stats();
     #[cfg(target_os = "linux")]
@@ -52,7 +52,7 @@ fn repeated_sessions_leave_no_residue() -> TestResult {
 
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     for cycle in 0..CYCLES {
-        soak_cycle(&pair)?;
+        soak_cycle(&pair, &applied)?;
         assert!(
             controller.controller_services()?.is_empty(),
             "cycle {cycle}: controller services leaked"
@@ -100,23 +100,20 @@ fn repeated_sessions_leave_no_residue() -> TestResult {
 }
 
 /// One full lifecycle: connect, attach a Desktop, open it, drive one frame
-/// and one key, close everything and forget every record.
-fn soak_cycle(pair: &Pair) -> TestResult {
+/// and press one key through it, close it so the host releases the key,
+/// close everything and forget every record.
+fn soak_cycle(pair: &Pair, applied: &InputLog) -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let session = pair.connect_control();
+    let session = pair.connect_services();
     let desktop = pair.attach(&session, ServiceKind::Desktop);
     let handle = controller.open_desktop_service(desktop.id, desktop.generation)?;
-    let incoming = host
-        .hosted_sessions()?
-        .into_iter()
-        .find(|s| s.peer_id == pair.controller.endpoint())
-        .ok_or("the host holds the controller's session")?;
-    host.publish_video(incoming.id, EncodedFrame::h264(true, 1, vec![7])?)?;
-    controller.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(vnilink::usage::A),
-    )?;
+    let video = handle.subscribe_video()?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(1, vec![7]))?;
+    vnilink_testkit::desktop::next_picture(&video, "the cycle's picture");
+    let before = applied.events().len();
+    handle.submit_input(InputEvent::key_down(usage::A))?;
+    applied.wait_for(before + 1);
     handle.close();
     wait_for("the desktop to finish", DEFAULT_WAIT, || {
         let phase = controller
@@ -125,6 +122,13 @@ fn soak_cycle(pair: &Pair) -> TestResult {
             .phase;
         service_ended(&phase).then_some(())
     });
+    pair.host.wait_released(Some(ServiceKind::Desktop));
+    releases_settled(&pair.host);
+    assert_eq!(
+        applied.events()[before..],
+        [InputEvent::key_down(usage::A), InputEvent::key_up(usage::A)],
+        "closing the desktop releases its held key once"
+    );
     controller.forget_controller_service(desktop.id)?;
     controller.disconnect_session(session.id)?;
     wait_for("the session to close", DEFAULT_WAIT, || {

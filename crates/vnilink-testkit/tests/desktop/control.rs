@@ -439,7 +439,7 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
     desktop.acquire_control()?;
     desktop.submit_input(InputEvent::key_down(usage::A))?;
     trace.wait_for_records("control refused: the peer may not control this computer", 1);
-    trace.wait_for_records("input discarded", 1);
+    trace.wait_for_records("input refused", 1);
     host.take_desktop_keyframe_request(remote.id, remote.generation)?;
     desktop.request_keyframe()?;
     wait_for("the host to see the keyframe request", DEFAULT_WAIT, || {
@@ -485,7 +485,7 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
           input: control changed epoch=2 service=1 state=Viewing
         host:
           input: control refused: the peer may not control this computer service=1
-          input: input discarded kind=key down service=1 why=the peer may not control this computer
+          input: input refused kind=key down reason=the peer may not control this computer service=1
           input: control asked for epoch=0 service=1 state=Controlling
     "#]]
     .assert_eq(&trace.story(&["input"]));
@@ -506,5 +506,30 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
         SessionPhase::Active,
         "withdrawing Desktop leaves the connection up"
     );
+    Ok(())
+}
+
+/// A desktop session carries pictures, not input: while another viewer's
+/// session is live, a Desktop service still opens controlling, and its
+/// keys apply.
+#[test]
+fn a_desktop_session_holds_no_control_over_a_desktop_service() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let applied = InputLog::install(&pair.host, SCREEN)?;
+    pair.connect_control();
+    let other = pair.add_viewer("other");
+    pair.host.pair_for_control(&other)?;
+    let desktop = other.open_desktop(&other.connect_services(&pair.host)?)?;
+    wait_for("the desktop to control", DEFAULT_WAIT, || {
+        (desktop.control_state().ok()? == Controlling).then_some(())
+    });
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
+    assert_eq!(
+        applied.wait_for(1),
+        [InputEvent::key_down(usage::A)],
+        "the desktop's key applies beside a live desktop session"
+    );
+    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
     Ok(())
 }

@@ -73,6 +73,30 @@ fn pair(host: &VnilinkCore, controller: &VnilinkCore, clipboard: bool, transfer:
     host.start_hosting().unwrap();
 }
 
+/// `controller`'s services connection to `host`, once active, and a
+/// Desktop service on it: where a viewer's input goes.
+fn neutral_desktop(
+    host: &VnilinkCore,
+    controller: &VnilinkCore,
+) -> (crate::FfiSessionInfo, Arc<crate::services::DesktopService>) {
+    let pending = controller
+        .begin_connect_services(host.endpoint_id())
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    while controller.controller_session(pending.id).unwrap().phase != FfiSessionPhase::Active {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let parent = controller.controller_session(pending.id).unwrap();
+    let owner = controller
+        .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)
+        .unwrap();
+    let desktop = controller
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    (parent, desktop)
+}
+
 #[test]
 fn service_handles_and_cancellation_cross_the_ffi_boundary() {
     let host = core();
@@ -236,8 +260,9 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
     controller
         .set_desktop_sharing(false, false, false, true)
         .unwrap();
-    let session = controller.connect(host.endpoint_id()).unwrap();
-    // All transitions follow the same path as the Mac native key adapter.
+    // Keys go on a Desktop service, by the same path as the Mac native
+    // key adapter's; clipboard and files on the session.
+    let (keys, desktop) = neutral_desktop(&host, &controller);
     for (usage, down, text) in [
         (227, true, ""),
         (6, true, "c"),
@@ -246,15 +271,8 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         (4, true, "é"),
         (4, false, ""),
     ] {
-        controller
-            .submit_local_key(
-                session.id,
-                session.generation,
-                usage,
-                down,
-                text.into(),
-                false,
-            )
+        desktop
+            .submit_local_key(usage, down, text.into(), false)
             .unwrap();
     }
     let expected = vec![
@@ -272,6 +290,9 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    drop(desktop);
+    controller.disconnect_session(keys.id).unwrap();
+    let session = controller.connect(host.endpoint_id()).unwrap();
     controller
         .submit_clipboard(
             session.id,
@@ -1287,55 +1308,32 @@ fn ffi_pointer_policy_preserves_fractional_motion_and_swapped_button_cleanup() {
         .set_desktop(Box::new(Desktop(seen.clone())))
         .unwrap();
     pair(&host, &controller, false, false);
-    let session = controller.connect(host.endpoint_id()).unwrap();
+    let (_, desktop) = neutral_desktop(&host, &controller);
     let settings = FfiPointerSettings {
         sensitivity_percent: 50,
         reverse_wheel: true,
         swap_buttons: true,
     };
-    controller
-        .set_session_pointer_settings(session.id, session.generation, settings)
+    desktop.set_pointer_settings(settings).unwrap();
+    assert_eq!(desktop.pointer_settings().unwrap(), settings);
+    assert!(desktop.submit_precise_wheel(9000, 0).is_err());
+    desktop.submit_motion(1, 0).unwrap();
+    desktop.submit_button(FfiPointerButton::Left, true).unwrap();
+    desktop.submit_motion(1, 0).unwrap();
+    desktop.submit_precise_wheel(15, -30).unwrap();
+    desktop
+        .submit_button(FfiPointerButton::Forward, true)
         .unwrap();
-    assert_eq!(
-        controller
-            .session_pointer_settings(session.id, session.generation)
-            .unwrap(),
-        settings
-    );
-    assert!(controller
-        .submit_precise_wheel(session.id, session.generation, 9000, 0)
-        .is_err());
-    controller
-        .submit_motion(session.id, session.generation, 1, 0)
+    desktop
+        .submit_button(FfiPointerButton::Forward, false)
         .unwrap();
-    controller
-        .submit_button(session.id, session.generation, FfiPointerButton::Left, true)
-        .unwrap();
-    controller
-        .submit_motion(session.id, session.generation, 1, 0)
-        .unwrap();
-    controller
-        .submit_precise_wheel(session.id, session.generation, 15, -30)
-        .unwrap();
-    controller
-        .submit_button(
-            session.id,
-            session.generation,
-            FfiPointerButton::Forward,
-            true,
-        )
-        .unwrap();
-    controller
-        .submit_button(
-            session.id,
-            session.generation,
-            FfiPointerButton::Forward,
-            false,
-        )
-        .unwrap();
-    controller
-        .release_session_input(session.id, session.generation)
-        .unwrap();
+    // Releasing drops what is still queued: release once the host applied it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while seen.lock().unwrap().len() < 5 {
+        assert!(Instant::now() < deadline, "FFI pointer input did not apply");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    desktop.release_input().unwrap();
     let expected = vec![
         Applied::Input(vnilink::InputEvent::button_down(
             vnilink::PointerButton::Right,

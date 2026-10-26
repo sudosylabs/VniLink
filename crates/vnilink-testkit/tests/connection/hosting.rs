@@ -1,66 +1,20 @@
 //! What ends a hosted session and what it leaves: stopping hosting, the
 //! controller disconnecting, the host revoking or unpairing it, and control
-//! withdrawn mid-session each release the input the controller held, and
-//! each says what a later connect meets.
+//! withdrawn mid-session; each says what a later connect meets, and each
+//! releases the input the controller's desktop held.
 
 use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{
-    usage, Error, Grants, InputEvent, PointerButton, Quality, ServiceKind, SessionPhase,
-    SessionRole,
+    usage, DesktopControlState, Error, Grants, InputEvent, PointerButton, Quality, ServiceKind,
+    SessionPhase, SessionRole,
 };
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 /// The monitor of the desktops these scenarios install.
 const MONITOR: (u16, u16) = (1920, 1080);
-
-/// Input names its session and generation: another session's id or a newer
-/// generation is refused, and once disconnected the session takes none.
-#[test]
-fn input_for_the_wrong_session_or_generation_is_rejected() -> TestResult {
-    let _trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    host.pair_for_control(&controller)?;
-    let session = controller.core.connect(&host.endpoint())?;
-    let key = InputEvent::key_down(usage::A);
-    assert!(
-        matches!(
-            controller
-                .core
-                .submit_input(session.id + 1, session.generation, key),
-            Err(Error::NoSession)
-        ),
-        "input for another session is refused"
-    );
-    assert!(
-        matches!(
-            controller
-                .core
-                .submit_input(session.id, session.generation + 1, key),
-            Err(Error::StaleSession)
-        ),
-        "input for another generation is refused as stale"
-    );
-    controller
-        .core
-        .submit_input(session.id, session.generation, key)?;
-    controller.core.disconnect()?;
-    assert!(
-        matches!(
-            controller.core.submit_input(
-                session.id,
-                session.generation,
-                InputEvent::key_up(usage::A)
-            ),
-            Err(Error::NoSession)
-        ),
-        "a disconnected session takes no input"
-    );
-    Ok(())
-}
 
 /// Stopping hosting turns new sessions away even when none is live, while
 /// the host keeps what it granted its peers; stopping a hosted session that
@@ -105,38 +59,17 @@ fn stopping_hosting_disables_new_sessions_even_when_none_is_active() -> TestResu
     Ok(())
 }
 
-/// Stopping hosting ends the live session on both sides and lifts what the
-/// controller held, the button then the key; the controller keeps its
-/// grant, and hosting again admits it.
+/// Stopping hosting ends the live session on both sides; the controller
+/// keeps its grant, and hosting again admits it.
 #[test]
-fn stopping_hosting_ends_the_active_session_and_releases_keys() -> TestResult {
+fn stopping_hosting_ends_the_active_session() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    let applied = InputLog::install(&host, MONITOR)?;
+    InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    let session = controller.core.connect(&host.endpoint())?;
-    let held = [
-        InputEvent::key_down(usage::A),
-        InputEvent::button_down(PointerButton::Left),
-    ];
-    for event in held {
-        controller
-            .core
-            .submit_input(session.id, session.generation, event)?;
-    }
-    assert_eq!(applied.wait_for(2), held, "the controller's input applies");
+    controller.core.connect(&host.endpoint())?;
     host.core.stop_hosting()?;
-    assert_eq!(
-        applied.wait_for(4),
-        [
-            held[0],
-            held[1],
-            InputEvent::button_up(PointerButton::Left),
-            InputEvent::key_up(usage::A),
-        ],
-        "stopping hosting lifts the held button, then the held key"
-    );
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
     let snapshot = host.core.snapshot()?;
@@ -173,54 +106,22 @@ fn stopping_hosting_ends_the_active_session_and_releases_keys() -> TestResult {
     Ok(())
 }
 
-/// The controller disconnecting closes both sides and lifts what it held;
-/// the host keeps hosting, the old session takes nothing more, a second
-/// disconnect finds no session, and the controller connects again.
+/// The controller disconnecting closes both sides; the host keeps hosting,
+/// a second disconnect finds no session, and the controller connects again.
 #[test]
-fn disconnect_closes_both_sides_and_releases_held_input() -> TestResult {
+fn disconnect_closes_both_sides() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    let applied = InputLog::install(&host, MONITOR)?;
+    InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    let session = controller.core.connect(&host.endpoint())?;
-    let held = [
-        InputEvent::key_down(usage::A),
-        InputEvent::button_down(PointerButton::Left),
-    ];
-    for event in held {
-        controller
-            .core
-            .submit_input(session.id, session.generation, event)?;
-    }
-    assert_eq!(applied.wait_for(2), held, "the controller's input applies");
+    controller.core.connect(&host.endpoint())?;
     controller.core.disconnect()?;
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
-    assert_eq!(
-        applied.wait_for(4),
-        [
-            held[0],
-            held[1],
-            InputEvent::button_up(PointerButton::Left),
-            InputEvent::key_up(usage::A),
-        ],
-        "disconnecting lifts the held button, then the held key"
-    );
     assert!(
         host.core.snapshot()?.hosting,
         "a controller disconnecting leaves the host hosting"
-    );
-    assert!(
-        matches!(
-            controller.core.submit_input(
-                session.id,
-                session.generation,
-                InputEvent::key_down(usage::A)
-            ),
-            Err(Error::NoSession)
-        ),
-        "a disconnected session takes no input"
     );
     assert!(
         matches!(controller.core.disconnect(), Err(Error::NoSession)),
@@ -238,44 +139,24 @@ fn disconnect_closes_both_sides_and_releases_held_input() -> TestResult {
           session: session phase from=stopping generation=1 role=Controller session=1 to=closed
           session: session phase from=connecting generation=3 role=Controller session=2 to=active
         host:
+          session: the session's control stream ended error=network session=1
           session: session phase from=active generation=1 role=Host session=1 to=closed
     "#]]
     .assert_eq(&trace.story(&["session", "hosting"]));
     Ok(())
 }
 
-/// Revoking the controller ends its session and lifts what it held; the
-/// host forgets it, a connect is refused, and the old session takes no
-/// input.
+/// Revoking the controller ends its session; the host forgets it, and a
+/// connect is refused.
 #[test]
-fn revoke_stops_the_session_releases_input_and_blocks_reconnect() -> TestResult {
+fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    let applied = InputLog::install(&host, MONITOR)?;
+    InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    let session = controller.core.connect(&host.endpoint())?;
-    let held = [
-        InputEvent::key_down(usage::LEFT_SHIFT),
-        InputEvent::button_down(PointerButton::Right),
-    ];
-    for event in held {
-        controller
-            .core
-            .submit_input(session.id, session.generation, event)?;
-    }
-    assert_eq!(applied.wait_for(2), held, "the controller's input applies");
+    controller.core.connect(&host.endpoint())?;
     host.core.revoke(&controller.endpoint())?;
-    assert_eq!(
-        applied.wait_for(4),
-        [
-            held[0],
-            held[1],
-            InputEvent::button_up(PointerButton::Right),
-            InputEvent::key_up(usage::LEFT_SHIFT),
-        ],
-        "revoking lifts the held button, then the held key"
-    );
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
     assert!(
@@ -288,17 +169,6 @@ fn revoke_stops_the_session_releases_input_and_blocks_reconnect() -> TestResult 
             Err(Error::Unauthorized)
         ),
         "a revoked controller is refused"
-    );
-    assert!(
-        matches!(
-            controller.core.submit_input(
-                session.id,
-                session.generation,
-                InputEvent::key_down(usage::A)
-            ),
-            Err(Error::NoSession)
-        ),
-        "the revoked session takes no input"
     );
     expect![[r#"
         controller:
@@ -320,27 +190,17 @@ fn revoke_stops_the_session_releases_input_and_blocks_reconnect() -> TestResult 
 }
 
 /// The host unpairing the controller forgets it rather than keeping it with
-/// no grants, ends its session and lifts what it held; the controller still
-/// dials, and the host refuses a peer it no longer knows.
+/// no grants and ends its session; the controller still dials, and the host
+/// refuses a peer it no longer knows.
 #[test]
 fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    let applied = InputLog::install(&host, MONITOR)?;
+    InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
-    let session = controller.core.connect(&host.endpoint())?;
-    let shift = InputEvent::key_down(usage::LEFT_SHIFT);
-    controller
-        .core
-        .submit_input(session.id, session.generation, shift)?;
-    assert_eq!(applied.wait_for(1), [shift], "the controller's key applies");
+    controller.core.connect(&host.endpoint())?;
     host.core.unpair(&controller.endpoint())?;
-    assert_eq!(
-        applied.wait_for(2),
-        [shift, InputEvent::key_up(usage::LEFT_SHIFT)],
-        "unpairing lifts the held key, as any local stop does"
-    );
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
     assert!(
@@ -353,17 +213,6 @@ fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestRes
             Err(Error::Unauthorized)
         ),
         "the host refuses a controller it no longer knows"
-    );
-    assert!(
-        matches!(
-            controller.core.submit_input(
-                session.id,
-                session.generation,
-                InputEvent::key_down(usage::A)
-            ),
-            Err(Error::NoSession)
-        ),
-        "the ended session takes no input"
     );
     expect![[r#"
         controller:
@@ -450,51 +299,29 @@ fn a_controller_unpair_ends_its_outgoing_session() -> TestResult {
         host:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: invitation accepted
+          session: the session's control stream ended error=network session=1
           session: session phase from=active generation=1 role=Host session=1 to=closed
     "#]]
     .assert_eq(&trace.story(&["session", "pairing"]));
     Ok(())
 }
 
-/// Withdrawing control mid-session lifts the held key and discards what
-/// the controller sends afterwards, while the session stays active and
-/// still carries quality changes.
+/// Withdrawing control mid-session keeps the session on both sides, to be
+/// seen, and it still carries quality changes.
 #[test]
-fn removing_control_mid_session_stops_applying_input() -> TestResult {
+fn removing_control_mid_session_keeps_the_session_to_be_seen() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    let applied = InputLog::install(&host, MONITOR)?;
+    InputLog::install(&host, MONITOR)?;
     host.pair_for_control(&controller)?;
     let session = controller.core.connect(&host.endpoint())?;
-    let pressed = InputEvent::key_down(usage::A);
-    controller
-        .core
-        .submit_input(session.id, session.generation, pressed)?;
-    assert_eq!(
-        applied.wait_for(1),
-        [pressed],
-        "the controller's key applies"
-    );
     host.core.set_desktop_sharing(Grants {
         view: true,
         control: false,
         clipboard: true,
         transfer: false,
     })?;
-    controller.core.submit_input(
-        session.id,
-        session.generation,
-        InputEvent::key_down(usage::B),
-    )?;
-    let released = [pressed, InputEvent::key_up(usage::A)];
-    assert_eq!(
-        applied.wait_for(2),
-        released,
-        "withdrawing control lifts the held key"
-    );
-    // A quality change the host applies follows the key on the session, so
-    // once it lands the key had its turn.
     let quality = Quality {
         max_bitrate_kbps: 1500,
         max_frame_rate: 20,
@@ -510,11 +337,6 @@ fn removing_control_mid_session_stops_applying_input() -> TestResult {
         || (host.core.snapshot().ok()?.incoming?.quality == Some(quality)).then_some(()),
     );
     assert_eq!(
-        applied.events(),
-        released,
-        "a key sent after control was withdrawn is not applied"
-    );
-    assert_eq!(
         host.core
             .snapshot()?
             .incoming
@@ -528,11 +350,117 @@ fn removing_control_mid_session_stops_applying_input() -> TestResult {
         SessionPhase::Active,
         "the controller keeps the session to see"
     );
-    expect![[r#"
-        host:
-          input: input discarded stamp=1 what=key down why=the peer may not control this computer
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    Ok(())
+}
+
+/// How a connection's desktop loses its host.
+#[derive(Clone, Copy, Debug)]
+enum Ending {
+    StopHosting,
+    StopHostedSession,
+    Disconnect,
+    Revoke,
+    Unpair,
+    WithdrawControl,
+    ControllerShutdown,
+}
+
+/// Every way a desktop's connection ends, or its control is withdrawn,
+/// lifts what the desktop held on the host, the button then the key, and
+/// the desktop takes no input after: none it sends applies.
+#[test]
+fn each_end_of_a_connection_releases_what_its_desktop_held() -> TestResult {
+    let trace = traced();
+    for ending in [
+        Ending::StopHosting,
+        Ending::StopHostedSession,
+        Ending::Disconnect,
+        Ending::Revoke,
+        Ending::Unpair,
+        Ending::WithdrawControl,
+        Ending::ControllerShutdown,
+    ] {
+        let host = Engine::start("host");
+        let controller = Engine::start("controller");
+        let applied = InputLog::install(&host, MONITOR)?;
+        host.pair_for_control(&controller)?;
+        let connection = controller.connect_services(&host)?;
+        let desktop = controller.open_desktop(&connection)?;
+        let held = [
+            InputEvent::key_down(usage::LEFT_SHIFT),
+            InputEvent::button_down(PointerButton::Right),
+        ];
+        for event in held {
+            desktop.submit_input(event)?;
+        }
+        assert_eq!(
+            applied.wait_for(2),
+            held,
+            "{ending:?}: the desktop's input applies"
+        );
+        match ending {
+            Ending::StopHosting => host.core.stop_hosting()?,
+            Ending::StopHostedSession => host.core.stop_hosted_session()?,
+            Ending::Disconnect => controller.core.disconnect_session(connection.id)?,
+            Ending::Revoke => host.core.revoke(&controller.endpoint())?,
+            Ending::Unpair => host.core.unpair(&controller.endpoint())?,
+            Ending::WithdrawControl => host.core.set_desktop_sharing(Grants {
+                view: true,
+                control: false,
+                clipboard: false,
+                transfer: false,
+            })?,
+            Ending::ControllerShutdown => controller.core.shutdown(),
+        }
+        let released = [
+            held[0],
+            held[1],
+            InputEvent::button_up(PointerButton::Right),
+            InputEvent::key_up(usage::LEFT_SHIFT),
+        ];
+        assert_eq!(
+            applied.wait_for(4),
+            released,
+            "{ending:?}: the held button, then the held key, are lifted"
+        );
+        match ending {
+            // Control withdrawn leaves the desktop to be seen: what it
+            // sends reaches the host, which discards it.
+            Ending::WithdrawControl => {
+                wait_for(
+                    "the desktop to learn it no longer controls",
+                    DEFAULT_WAIT,
+                    || {
+                        (desktop.control_state().ok()? != DesktopControlState::Controlling)
+                            .then_some(())
+                    },
+                );
+                // Counted from here: what earlier endings recorded is theirs.
+                let refused = trace.named("input refused").len();
+                desktop.submit_input(InputEvent::key_down(usage::B))?;
+                trace.wait_for_records("input refused", refused + 1);
+            }
+            _ => {
+                wait_for(
+                    &format!("{ending:?}: the desktop to end"),
+                    DEFAULT_WAIT,
+                    || desktop.is_cancelled().then_some(()),
+                );
+                assert!(
+                    desktop
+                        .submit_input(InputEvent::key_down(usage::B))
+                        .is_err(),
+                    "{ending:?}: an ended desktop takes no input"
+                );
+            }
+        }
+        assert_eq!(
+            applied.events(),
+            released,
+            "{ending:?}: nothing sent after the end applies"
+        );
+    }
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 pub(crate) mod filesystem_location;
-use crate::{new_quality, FfiKeyboardMode, FfiPointerButton, FfiSessionRole, VnilinkCore};
+use crate::{new_quality, FfiKeyboardMode, FfiSessionRole, VnilinkCore};
 use crate::{FfiError, FfiEvent, FfiVideoCodecCaps};
 use filesystem_location::FilesystemLocation;
 
@@ -113,21 +113,12 @@ fn unpaired_peers_fail_before_dialing() {
 }
 
 #[test]
-fn input_clipboard_transfer_and_video_fail_without_a_session() {
+fn commands_clipboard_transfer_and_video_fail_without_a_session() {
     let core = open_core();
     assert!(matches!(
-        core.submit_key(1, 1, 0x04, true),
+        core.select_displays(1, 1, vec![1]),
         Err(FfiError::NoSession) | Err(FfiError::StaleSession)
     ));
-    assert!(core.submit_pointer(1, 1, 10, 10, 1, 1).is_err());
-    assert!(core
-        .submit_button(1, 1, FfiPointerButton::Left, true)
-        .is_err());
-    assert!(core.submit_wheel(1, 1, 0, -1).is_err());
-    assert!(core.submit_text(1, 1, "hi".to_string()).is_err());
-    assert!(core
-        .submit_local_key(1, 1, 0x04, true, "a".to_string(), false)
-        .is_err());
     assert!(core.submit_clipboard(1, 1, "hi".to_string()).is_err());
     assert!(core.clipboard_text().unwrap().is_none());
     assert!(core.fs_list(1, 1, 0, "".to_string(), 0, 20).is_err());

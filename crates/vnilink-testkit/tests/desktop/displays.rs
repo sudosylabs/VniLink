@@ -252,16 +252,19 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
 }
 
 /// Two viewers' sessions each show their own display. When the first
-/// viewer's display goes, it alone loses its selection and says why, both
-/// streams are asked for a keyframe, and its pointers are refused for the
-/// reason that fits each until it selects the display that remains, where
-/// they land. The second viewer's display and its quality stay its own.
+/// viewer's display goes, it alone loses its selection and says why, and
+/// both streams are asked for a keyframe; a display that returns is not
+/// selected again by itself, and the viewer moves to the display that
+/// remains. The second viewer's display and its quality stay its own.
+/// (Pointers refused for each reason are the Desktop service's, in
+/// [`two_desktop_owners_fail_only_the_removed_display`]: a session carries
+/// no input.)
 #[test]
 fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    let applied_events = InputLog::install(&pair.host, SCREEN)?;
+    InputLog::install(&pair.host, SCREEN)?;
     let (first, second) = (&pair.controller, &pair.add_viewer("second"));
     let left = placed(1, 0, (1920, 1080), 0, 100);
     let right = placed(2, -1920, (1280, 800), 90, 200);
@@ -372,39 +375,6 @@ fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
         "a changed topology asks each stream for a keyframe"
     );
 
-    let mut send = |event| {
-        first
-            .core
-            .submit_input(first_session.id, first_session.generation, event)
-            .expect("the first viewer sends input");
-    };
-    for (pointer, key, why) in [
-        (
-            InputEvent::pointer(10, 10, 1, 1),
-            InputEvent::key_down(usage::B),
-            "the pointer uses an outdated display topology",
-        ),
-        (
-            InputEvent::pointer(10, 10, 1, 2),
-            InputEvent::key_up(usage::B),
-            "the display is not in the current topology",
-        ),
-        (
-            InputEvent::pointer(-1900, 10, 2, 2),
-            InputEvent::key_down(usage::A),
-            "no display is selected",
-        ),
-    ] {
-        refused_before_key(
-            &mut send,
-            &applied_events,
-            &events,
-            first_host.id,
-            (pointer, key),
-            why,
-        );
-    }
-
     let restored = placed(1, 0, (1920, 1080), 0, 100);
     host.set_topology(3, &[restored, resized])?;
     assert_eq!(
@@ -415,18 +385,6 @@ fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
         (Vec::new(), vec![2]),
         "a display that returns is not selected again by itself"
     );
-    let replugged = InputEvent::pointer(10, 10, 1, 3);
-    let release = InputEvent::key_up(usage::A);
-    send(replugged);
-    send(release);
-    wait_for("the release to apply", DEFAULT_WAIT, || {
-        has_applied(&applied_events, &release).then_some(())
-    });
-    assert!(
-        !has_applied(&applied_events, &replugged),
-        "a pointer on a returned display the viewer did not select again does not apply"
-    );
-
     first
         .core
         .select_displays(first_session.id, first_session.generation, &[2])?;
@@ -442,20 +400,6 @@ fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
             .then_some(())
         },
     );
-    let landed = InputEvent::pointer(-1900, 10, 2, 3);
-    send(landed);
-    wait_for(
-        "the pointer to land on the remaining display",
-        DEFAULT_WAIT,
-        || has_applied(&applied_events, &landed).then_some(()),
-    );
-
-    // The second viewer does not control: its pointer is discarded, and
-    // a quality change sent after it fences that it was decided.
-    let other = InputEvent::pointer(-1800, 20, 2, 3);
-    second
-        .core
-        .submit_input(second_session.id, second_session.generation, other)?;
     let marker = Quality::new(4_000, 24, 1600, 900)?;
     second
         .core
@@ -465,24 +409,12 @@ fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
         DEFAULT_WAIT,
         || (pair.host.hosted_session(second)?.quality == Some(marker)).then_some(()),
     );
-    assert!(
-        !has_applied(&applied_events, &other),
-        "the viewer without control moves no pointer"
-    );
     assert_eq!(
         host.capture_displays()?,
         vec![2],
         "both viewers now show the remaining display"
     );
-    expect![[r#"
-        host:
-          warn input: input failed reason=the pointer uses an outdated display topology session=1
-          warn input: input failed reason=the display is not in the current topology session=1
-          warn input: input failed reason=no display is selected session=1
-          warn input: input failed reason=no display is selected session=1
-          input: input discarded stamp=2 what=pointer why=another viewer controls this computer
-    "#]]
-    .assert_eq(&trace.story(&["topology", "input"]));
+    expect![[r#""#]].assert_eq(&trace.story(&["topology", "input"]));
     Ok(())
 }
 
@@ -673,10 +605,10 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
     );
     expect![[r#"
         host:
-          warn input: input failed reason=the pointer uses an outdated display topology session=1
-          warn input: input failed reason=the display is not in the current topology session=1
-          warn input: input failed reason=no display is selected session=1
-          input: input discarded kind=pointer service=2 why=another viewer controls this computer
+          warn input: input refused kind=pointer reason=the pointer uses an outdated display topology service=1
+          warn input: input refused kind=pointer reason=the display is not in the current topology service=1
+          warn input: input refused kind=pointer reason=no display is selected service=1
+          input: input refused kind=pointer reason=another viewer controls this computer service=2
           warn input: input failed reason=the display is not in the current topology session=2
     "#]]
     .assert_eq(&trace.story(&["topology", "input"]));
