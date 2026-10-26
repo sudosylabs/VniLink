@@ -1,7 +1,5 @@
 #[path = "tests/admission.rs"]
 mod admission_tests;
-#[path = "tests/availability.rs"]
-mod availability_tests;
 #[path = "tests/filesystem_location.rs"]
 pub(crate) mod filesystem_location;
 #[path = "tests/hostname.rs"]

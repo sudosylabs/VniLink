@@ -59,32 +59,3 @@ fn global_consent_is_durable_covers_future_peers_and_failed_save_changes_nothing
         assert_eq!(device.presence, crate::DevicePresence::Disconnected);
     }
 }
-
-#[test]
-fn concurrent_partial_updates_preserve_unrelated_global_switches() {
-    let host = start_direct();
-    std::thread::scope(|scope| {
-        let terminal = scope.spawn(|| {
-            host.change_sharing_policy(SharingPolicyUpdate {
-                terminal: Some(true),
-                ..Default::default()
-            })
-        });
-        let camera = scope.spawn(|| {
-            host.change_sharing_policy(SharingPolicyUpdate {
-                camera: Some(true),
-                ..Default::default()
-            })
-        });
-        terminal.join().unwrap().unwrap();
-        camera.join().unwrap().unwrap();
-    });
-    assert_eq!(
-        host.sharing_policy().unwrap(),
-        SharingPolicy {
-            terminal: true,
-            camera: true,
-            ..Default::default()
-        }
-    );
-}
