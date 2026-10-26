@@ -125,9 +125,10 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
     let controller = Engine::start("controller");
     let file = host.core.export_pairing_file(FILE_LIFETIME, false).unwrap();
     let mut damaged = file.bytes.clone();
-    // The signature ends the file: damage there is refused the same way every time.
+    // The file ends in the signature's hex digits: another digit there
+    // reads as a file and fails its signature, the same way every run.
     let last = damaged.len() - 1;
-    damaged[last] ^= 0x55;
+    damaged[last] = if damaged[last] == b'0' { b'1' } else { b'0' };
     assert!(controller.core.open_pairing_file(&damaged).is_err());
     let preview = controller.core.open_pairing_file(&file.bytes).unwrap();
     controller

@@ -1653,14 +1653,10 @@ impl Core {
             Err(_) => return self.retry_later(id, UNREACHABLE),
             Ok(Received::Changed) => return self.mark_failed(id, SOURCE_CHANGED),
             Ok(Received::Mismatch) => return self.mark_failed(id, VERIFY_FAILED),
-            Ok(Received::Cancelled) => {
-                let mut jobs = lock(&self.shared.jobs);
-                let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-                record.enter(JobState::Cancelled);
-                drop(jobs);
-                save_jobs(&self.shared)?;
-                return self.job_snapshot(id);
-            }
+            // A job still cancelled or interrupted returned above. One that is
+            // not was resumed while this stopped attempt wound down: the
+            // state is the new attempt's, and this one leaves it alone.
+            Ok(Received::Cancelled) => return self.job_snapshot(id),
         };
         // The partial holds the verified file: publish it per the decision.
         let staged_size = std::fs::metadata(&staged)

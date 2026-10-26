@@ -224,3 +224,58 @@ fn a_cancelled_upload_resumes_to_the_same_tree() {
         tree(&pair.controller.root().join("set"))
     );
 }
+
+/// A host that stops sharing files mid-transfer leaves the job interrupted,
+/// to resume, not cancelled, after the fetch it stopped has ended. Sharing
+/// again, the job resumes to the same tree.
+#[test]
+fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
+    let trace = traced();
+    let pair = Pair::for_files();
+    drive(&pair);
+    write_files(
+        &pair.controller.root().join("set"),
+        &[("large.bin", 128 * 1024 * 1024)],
+    );
+    std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
+    pair.controller.core.connect(&pair.host.endpoint()).unwrap();
+    pair.controller
+        .core
+        .job_submit_upload(
+            &pair.host.endpoint(),
+            pair.controller.root_id(),
+            "set",
+            pair.host.root_id(),
+            "inbox",
+        )
+        .unwrap();
+    let receiver = received(&pair.host.core);
+    wait_for("the first bytes to arrive", DEFAULT_WAIT, || {
+        (pair.host.core.job_snapshot(receiver).ok()?.done_bytes > 0).then_some(())
+    });
+    let (sharing, _) = vnilink_testkit::FILES;
+    pair.host
+        .core
+        .set_desktop_sharing(vnilink::Grants {
+            transfer: false,
+            ..sharing
+        })
+        .unwrap();
+    // The stopped fetch records its end after the job was interrupted.
+    trace.wait_for_records("file received", 1);
+    let stopped = pair.host.core.job_snapshot(receiver).unwrap();
+    assert_eq!(
+        stopped.state,
+        JobState::Interrupted,
+        "a withdrawn permission interrupts a job to resume: {stopped:?}"
+    );
+
+    pair.host.core.set_desktop_sharing(sharing).unwrap();
+    pair.host.core.job_resume(receiver).unwrap();
+    let got = finished(&pair.host.core, receiver, TRANSFER);
+    assert_eq!(got.state, JobState::Complete, "{got:?}");
+    assert_eq!(
+        tree(&pair.host.root().join("inbox/set")),
+        tree(&pair.controller.root().join("set"))
+    );
+}
