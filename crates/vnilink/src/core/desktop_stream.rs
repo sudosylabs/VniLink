@@ -2100,11 +2100,26 @@ pub(super) async fn serve(
     );
     write(&mut send, &response).await?;
     if !*parent_stop.borrow() && !*service_stop.borrow() {
-        tokio::select! {
+        let viewer_left = tokio::select! {
             biased;
-            _ = parent_stop.changed() => {}, _ = service_stop.changed() => {},
-            _ = host_receive(&shared, &desktop, &mut recv) => {},
-            _ = host_send(&shared, &desktop, &mut send) => {},
+            _ = parent_stop.changed() => false, _ = service_stop.changed() => false,
+            _ = host_receive(&shared, &desktop, &mut recv) => true,
+            _ = host_send(&shared, &desktop, &mut send) => false,
+        };
+        // The viewer finished or dropped its side: it closed the desktop.
+        // A cause this computer set first, as a failed capture, stays.
+        if viewer_left {
+            let mut state = lock(&shared.state);
+            if let Some(record) = state
+                .hosted_services
+                .get_mut(&desktop.info.service.id)
+                .filter(|record| record.info.generation == parent.generation)
+            {
+                record.change(
+                    parent.generation,
+                    ServicePhase::Closed(CloseCause::PeerClose),
+                );
+            }
         }
     }
     let parent_stopped = *parent_stop.borrow();
@@ -2312,12 +2327,15 @@ fn discarded(desktop: &DesktopRuntime, kind: &'static str, why: &'static str) {
     );
 }
 
-/// Why this Desktop's input is contended now.
-fn contention(input_allowed: bool, controlling: bool, current: bool) -> &'static str {
+/// Why this Desktop's input is contended now; `taken` says another viewer
+/// holds control.
+fn contention(input_allowed: bool, controlling: bool, taken: bool, current: bool) -> &'static str {
     if !input_allowed {
         "the peer may not control this computer"
-    } else if !controlling {
+    } else if taken {
         "another viewer controls this computer"
+    } else if !controlling {
+        "this viewer does not hold control"
     } else if !current {
         "it was sent under an earlier control lease"
     } else {
@@ -2452,7 +2470,8 @@ fn process_host_command(
     // current controller yields. Release/keyframe/quality are unaffected.
     let controlling = state.desktop_control == Some(desktop.stamp);
     let contended = !input_allowed || !controlling || epoch != current_epoch;
-    let contended_why = contention(input_allowed, controlling, epoch == current_epoch);
+    let taken = state.desktop_control.is_some() && !controlling;
+    let contended_why = contention(input_allowed, controlling, taken, epoch == current_epoch);
     match command {
         ControlMessage::Input { stamp, event } if stamp == desktop.stamp => {
             if contended {

@@ -884,8 +884,10 @@ fn apply_legacy_input(
             std::thread::yield_now();
             continue;
         }
-        if state.input_holder() != Some(id) {
-            return discard("another viewer controls this computer");
+        match state.input_holder() {
+            Some(holder) if holder == id => {}
+            Some(_) => return discard("another viewer controls this computer"),
+            None => return discard("this viewer does not hold control"),
         }
         if let LegacyInput::Event(event) = &command {
             super::topology::accept_pointer(shared, *event, &session.selected_displays)?;
