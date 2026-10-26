@@ -17,7 +17,9 @@ impl Scratch {
         ));
         std::fs::create_dir_all(&path).expect("a scratch folder");
         // Engines compare canonical paths: on macOS the temporary folder is
-        // reached through a link.
+        // reached through a link. Windows would answer with a verbatim
+        // `\\?\` path, which cmd refuses as its directory.
+        #[cfg(unix)]
         let path = std::fs::canonicalize(&path).expect("a scratch folder");
         Self { path }
     }
