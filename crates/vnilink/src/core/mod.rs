@@ -54,7 +54,7 @@ pub(crate) use fs::LIST_DELAY;
 mod host;
 mod job_journal;
 mod jobs;
-#[cfg(unix)]
+#[cfg(all(unix, any(test, feature = "test-probes")))]
 pub use jobs::PrestageHooks;
 #[cfg(any(test, feature = "test-probes"))]
 pub(crate) use jobs::PREPARE_SCAN_HOOKS;
