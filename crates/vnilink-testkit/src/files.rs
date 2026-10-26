@@ -106,6 +106,22 @@ pub fn settled(core: &Core, job: u64, within: Duration) -> JobSnapshot {
     })
 }
 
+/// Polls `receiver`'s job until `done` files landed, within twenty polls:
+/// each poll advances a job by one step. It must not end first.
+pub fn poll_until_files_done(receiver: &Core, job: u64, done: u64) {
+    for _ in 0..20 {
+        let snapshot = receiver.job_poll(job).expect("a poll");
+        assert!(
+            !snapshot.state.is_terminal(),
+            "the job ended early: {snapshot:?}"
+        );
+        if snapshot.files_done == done {
+            return;
+        }
+    }
+    panic!("{done} files did not land within twenty polls");
+}
+
 /// Drives a job by hand, as the application's drivers would, until the
 /// receiver asks a question or both sides ended: a test that must stop a
 /// job at an exact point polls it this way instead of starting [`drive`].

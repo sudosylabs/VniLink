@@ -1050,7 +1050,35 @@ async fn wait_until_state_unlocked(shared: &Arc<Shared>) -> bool {
     }
 }
 
+/// Closes this engine's session links and files connections with
+/// [`CLOSE_SHUT_DOWN`](crate::protocol::CLOSE_SHUT_DOWN), so peers end
+/// their sessions and fetches instead of redialing. A session's own close
+/// frame may still be unsent when the endpoint closes, which drops it.
+/// Connections not yet a session are closed by the endpoint.
+fn close_links_for_shutdown(shared: &Shared) {
+    let code = crate::protocol::CLOSE_SHUT_DOWN.into();
+    let mut links: Vec<iroh::endpoint::Connection> = {
+        let state = lock(&shared.state);
+        state
+            .incoming
+            .values()
+            .chain(state.outgoing.values())
+            .filter_map(|session| session.link.clone())
+            .collect()
+    };
+    links.extend(lock(&shared.files_serving).values().flatten().cloned());
+    links.extend(
+        lock(&shared.files_fetching)
+            .values()
+            .map(transfer::Fetching::connection),
+    );
+    for link in links {
+        link.close(code, b"shut down");
+    }
+}
+
 async fn close_endpoint(shared: &Arc<Shared>) -> bool {
+    close_links_for_shutdown(shared);
     let blocked = take_close_block(shared);
     let limit = teardown_limit(shared, blocked);
     let endpoint = shared.endpoint.clone();

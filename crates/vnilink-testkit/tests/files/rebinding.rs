@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use vnilink::{ConflictChoice, Core, JobState};
-use vnilink_testkit::files::{drive_to_end, payload};
-use vnilink_testkit::{traced, Engine, Pair, TestResult};
+use vnilink_testkit::files::{drive_to_end, payload, poll_until_files_done};
+use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(30);
 
@@ -26,22 +26,6 @@ fn beside(engine: &Engine, name: &str) -> PathBuf {
         .parent()
         .expect("a root inside the engine's folder")
         .join(name)
-}
-
-/// Polls `receiver`'s job until `done` files landed, within twenty polls:
-/// each poll advances a job by one step. It must not end first.
-fn poll_until_files_done(receiver: &Core, job: u64, done: u64) {
-    for _ in 0..20 {
-        let snapshot = receiver.job_poll(job).expect("a poll");
-        assert!(
-            !snapshot.state.is_terminal(),
-            "the job ended early: {snapshot:?}"
-        );
-        if snapshot.files_done == done {
-            return;
-        }
-    }
-    panic!("{done} files did not land within twenty polls");
 }
 
 /// Polls `receiver`'s job until it is interrupted, within ten polls. A
@@ -312,6 +296,11 @@ fn a_sender_restarted_with_its_root_rebound_fails_the_resume_and_says_why() -> T
     // The job's pin on its root is saved, so after the restart only it can
     // fail the resume: the copies are identical.
     pair.host.core.shutdown();
+    wait_for(
+        "the receiver to learn that its sender shut down",
+        Duration::from_secs(1),
+        || (controller.job_poll(job).ok()?.state == JobState::Interrupted).then_some(()),
+    );
     let rebound = beside(&pair.host, "rebound");
     std::fs::create_dir_all(&rebound)?;
     std::fs::write(rebound.join("one.txt"), &one)?;
@@ -347,9 +336,11 @@ fn a_sender_restarted_with_its_root_rebound_fails_the_resume_and_says_why() -> T
         !got.join("two.txt").exists(),
         "nothing from the rebound root lands"
     );
-    // When the receiver learns its sender stopped varies with when the
-    // connection's end reaches it; the story is the sender's.
     expect![[r#"
+        controller:
+          files: file received outcome=received resumed_at=0 size=512 took=512
+          files: file received outcome=received resumed_at=0 size=512 took=512
+          files: job state from=transferring job=1 sender=false to=interrupted
         host:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
@@ -357,7 +348,7 @@ fn a_sender_restarted_with_its_root_rebound_fails_the_resume_and_says_why() -> T
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=true to=failed
           files: the peer was not told: its side keeps the job as it was until it next asks change=resume failure=no session job=1
-    "#]].assert_eq(&trace.engine_story("host", &["files"]));
+    "#]].assert_eq(&trace.story(&["files"]));
     Ok(())
 }
 

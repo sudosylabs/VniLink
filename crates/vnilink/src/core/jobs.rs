@@ -75,6 +75,7 @@ const CONNECTION_ENDED: &str = "the connection to the other computer ended";
 const STALLED: &str = "the transfer stalled";
 const SENDER_BUSY: &str = "the other computer is busy sending other files";
 const SENDER_STOPPED: &str = "the other computer stopped sending";
+const SENDER_SHUT_DOWN: &str = "the other computer shut down";
 const PERMISSION_OFF: &str = "file transfer is no longer allowed";
 const UNPAIRED: &str = "the computers are no longer paired";
 pub(super) const OWNER_GONE: &str = "the Files window that started it closed";
@@ -1645,6 +1646,7 @@ impl Core {
             // A sender stops serving only when its job stopped or its
             // permission or folder went: it will not serve again by itself.
             Ok(Received::Denied) => return self.mark_interrupted(id, SENDER_STOPPED),
+            Ok(Received::ShutDown) => return self.retry_later(id, SENDER_SHUT_DOWN),
             Ok(Received::Stalled) => return self.retry_later(id, STALLED),
             Ok(Received::Busy) => return self.retry_later(id, SENDER_BUSY),
             Err(Error::InvalidSetting(reason))

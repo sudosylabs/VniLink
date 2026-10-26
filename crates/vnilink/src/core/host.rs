@@ -219,6 +219,7 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
         tokio::spawn(async move {
             match incoming.await {
                 Ok(connection) => {
+                    super::transfer::peer_reached(&shared, connection.remote_id().as_bytes());
                     if is_files_connection(&connection) {
                         serve_files_connection(shared, connection).await;
                     } else {

@@ -12,6 +12,8 @@ mod remote_disk;
 mod service_jobs;
 #[path = "files/serving.rs"]
 mod serving;
+#[path = "files/shutdown.rs"]
+mod shutdown;
 #[path = "files/transfers.rs"]
 mod transfers;
 

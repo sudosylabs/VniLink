@@ -18,6 +18,9 @@ use crate::error::Error;
 use crate::transfer::{self, Answer, FileRequest, Partial, Received, FILES_ALPN};
 
 const DIAL_WITHIN: Duration = Duration::from_secs(30);
+
+/// Why a fetch from a peer that shut down fails without dialing.
+const PEER_SHUT_DOWN: &str = "the other computer shut down";
 /// Files served at once, to one peer and in all. Each holds a few chunks
 /// read ahead, so these bound what peers can make this computer hold.
 const SERVE_PER_PEER: usize = 8;
@@ -387,6 +390,10 @@ pub(super) async fn fetch_file(
             Ok((Answer::Busy, _)) => Ok(Received::Busy),
             Err(error) => Err(error),
         };
+        let received = match received {
+            Err(_) if kept_shut_down(shared, peer) => Ok(Received::ShutDown),
+            other => other,
+        };
         match received {
             Ok(Received::Mismatch) if mismatches == 0 => mismatches += 1,
             Ok(Received::Done { .. }) => {
@@ -412,7 +419,8 @@ pub(super) async fn fetch_file(
 }
 
 /// Asks for one file over the peer's kept connection. A kept connection
-/// that fails before the sender answers is replaced once.
+/// that fails before the sender answers is replaced once, unless the peer
+/// closed it as it shut down: that one stays, see [`files_connection`].
 async fn ask_kept(
     shared: &Shared,
     peer: &[u8; 32],
@@ -421,12 +429,13 @@ async fn ask_kept(
 ) -> Result<(Answer, usize), Error> {
     let (mut connection, mut reused) = files_connection(shared, peer, addr.clone()).await?;
     let mut answered = transfer::ask(&connection, request).await;
-    while reused && answered.is_err() {
+    let shut_down = crate::reconnect::peer_shut_down;
+    while reused && answered.is_err() && !shut_down(&connection) {
         forget_files_connection(shared, peer, &connection);
         (connection, reused) = files_connection(shared, peer, addr.clone()).await?;
         answered = transfer::ask(&connection, request).await;
     }
-    if answered.is_err() {
+    if answered.is_err() && !shut_down(&connection) {
         forget_files_connection(shared, peer, &connection);
     }
     answered.map(|answer| (answer, connection.stable_id()))
@@ -448,6 +457,12 @@ pub(super) struct Fetching {
     /// The window last set, for the impaired-network harness.
     #[cfg_attr(not(any(test, feature = "test-probes")), allow(dead_code))]
     window: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Fetching {
+    pub(super) fn connection(&self) -> Connection {
+        self.connection.clone()
+    }
 }
 
 /// How often a fetching connection's path feeds its receive window.
@@ -499,27 +514,32 @@ async fn follow_window(connection: Connection, shown: Arc<std::sync::atomic::Ato
 }
 
 /// The peer's kept files connection while it is open, or a new one kept
-/// for the next file. The flag says it was kept.
+/// for the next file. The flag says it was kept. A peer that closed the
+/// kept one as it shut down is not dialed until it connects again
+/// ([`peer_reached`]): it serves nothing meanwhile, and dialing it waits
+/// out [`DIAL_WITHIN`].
 async fn files_connection(
     shared: &Shared,
     peer: &[u8; 32],
     addr: EndpointAddr,
 ) -> Result<(Connection, bool), Error> {
     let kept = || {
-        lock(&shared.files_fetching)
-            .get(peer)
-            .filter(|kept| kept.connection.close_reason().is_none())
-            .map(|kept| kept.connection.clone())
+        let fetching = lock(&shared.files_fetching);
+        let kept = &fetching.get(peer)?.connection;
+        if crate::reconnect::peer_shut_down(kept) {
+            return Some(Err(Error::network(PEER_SHUT_DOWN)));
+        }
+        kept.close_reason().is_none().then(|| Ok(kept.clone()))
     };
     if let Some(kept) = kept() {
-        return Ok((kept, true));
+        return kept.map(|kept| (kept, true));
     }
     // Files fetched together share one connection: one of them dials, and
     // the others wait and take what it dialed. A connection in use is never
     // replaced, which would end the other fetches' streams.
     let _dialing = shared.files_dialing.lock().await;
     if let Some(kept) = kept() {
-        return Ok((kept, true));
+        return kept.map(|kept| (kept, true));
     }
     // Dialed with a small receive window, widened by `follow_window`.
     let options = iroh::endpoint::ConnectOptions::new()
@@ -545,6 +565,25 @@ async fn files_connection(
         },
     );
     Ok((connection, false))
+}
+
+/// Whether the peer closed its kept files connection as it shut down.
+fn kept_shut_down(shared: &Shared, peer: &[u8; 32]) -> bool {
+    lock(&shared.files_fetching)
+        .get(peer)
+        .is_some_and(|kept| crate::reconnect::peer_shut_down(&kept.connection))
+}
+
+/// A connection with `peer` opened: its kept files connection, if it
+/// ended, no longer stands for it, and the next fetch dials.
+pub(super) fn peer_reached(shared: &Shared, peer: &[u8; 32]) {
+    let mut fetching = lock(&shared.files_fetching);
+    if fetching
+        .get(peer)
+        .is_some_and(|kept| kept.connection.close_reason().is_some())
+    {
+        fetching.remove(peer);
+    }
 }
 
 /// Stops reusing `connection` for `peer` after a request over it failed.

@@ -628,6 +628,7 @@ pub(super) async fn establish(
             .await
             .map_err(|_| Error::Timeout)?
             .map_err(Error::network_debug)?;
+        super::transfer::peer_reached(shared, connection.remote_id().as_bytes());
         {
             let mut state = lock(&shared.state);
             let session = state.outgoing.get_mut(&local_id).ok_or(Error::NoSession)?;
@@ -1087,6 +1088,7 @@ pub(super) async fn command_loop(
             }
         }
     }
+    let remote_close = remote_close || reconnect::peer_shut_down(&connection);
     connection.close(1u8.into(), b"closed");
     if *stop_rx.borrow() {
         LinkEnd::LocalStop

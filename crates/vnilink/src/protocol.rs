@@ -41,6 +41,12 @@ const BT601_CODECS: u8 = 1 | 4 | 8 | 16 | 32;
 /// value matches what Iroh negotiates.
 pub const ALPN: &[u8] = b"vnilink/1";
 
+/// QUIC close code for a connection closed because its engine shut down,
+/// on control and files connections alike. The close is flushed with the
+/// endpoint's own, so it reaches a peer that a close frame written on a
+/// stream might not.
+pub(crate) const CLOSE_SHUT_DOWN: u32 = 2;
+
 pub(crate) const MAX_CONTROL_FRAME: usize = 256;
 
 /// Display snapshots. Sixteen displays at 32 bytes, plus the stamp and revision.

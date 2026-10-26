@@ -405,6 +405,7 @@ impl Core {
                 return;
             }
         }
+        close_links_for_shutdown(&self.shared);
         let blocked = take_close_block(&self.shared);
         let limit = teardown_limit(&self.shared, blocked);
         let endpoint = self.shared.endpoint.clone();

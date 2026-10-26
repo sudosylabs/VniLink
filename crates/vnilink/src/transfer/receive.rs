@@ -43,6 +43,8 @@ pub(crate) enum Received {
     Cancelled,
     /// The sender does not serve this file now.
     Denied,
+    /// The sender shut down: it serves nothing until it connects again.
+    ShutDown,
     /// The sender serves as many files as it allows; ask again later.
     Busy,
     /// The source is no longer the file the manifest describes.
@@ -97,6 +99,7 @@ impl Received {
             Self::Done { .. } => "received",
             Self::Cancelled => "cancelled",
             Self::Denied => "denied",
+            Self::ShutDown => "shut down",
             Self::Busy => "busy",
             Self::Changed => "changed at the source",
             Self::Stalled => "stalled",
