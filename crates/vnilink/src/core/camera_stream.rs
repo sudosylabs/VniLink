@@ -10,6 +10,7 @@ use crate::{
     CloseCause, ServiceKind, ServiceLease, ServicePhase,
 };
 use iroh::endpoint::{RecvStream, SendStream};
+use std::time::Instant;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const LIST: u8 = 2;
 /// Last message on a camera stream: the host closed it, its capture failed,
@@ -20,6 +21,11 @@ const END_WITHDRAWN: u8 = 3;
 /// `[RECORDING, allowed]`: whether the host lets this viewer record the
 /// camera. Sent before the first picture and whenever its user changes it.
 const RECORDING: u8 = 4;
+/// From the viewer: `[KEYFRAME]` asks for a keyframe, and `[RECEIVED,
+/// number]` says it received every picture up to `number` (big-endian
+/// u32), which paces what the host writes (`InFlight`).
+const KEYFRAME: u8 = 1;
+const RECEIVED: u8 = 2;
 
 pub struct RemoteCameraService {
     config: CameraConfig,
@@ -242,10 +248,24 @@ impl Core {
                         ready.send(Ok(actual))
                     );
                     let mut reason = CameraEnd::Lost;
+                    // The newest picture received, acknowledged as it changes.
+                    let (received, mut acknowledging) = tokio::sync::watch::channel(None::<u32>);
                     let requests = async {
                         loop {
-                            keyframes.notified().await;
-                            write(&mut send, vec![1]).await?;
+                            tokio::select! {
+                                _ = keyframes.notified() => write(&mut send, vec![KEYFRAME]).await?,
+                                changed = acknowledging.changed() => {
+                                    if changed.is_err() {
+                                        return Ok(());
+                                    }
+                                    let Some(number) = *acknowledging.borrow_and_update() else {
+                                        continue;
+                                    };
+                                    let mut message = vec![RECEIVED];
+                                    message.extend_from_slice(&number.to_be_bytes());
+                                    write(&mut send, message).await?;
+                                }
+                            }
                         }
                     };
                     let pictures = async {
@@ -275,7 +295,9 @@ impl Core {
                                 }
                                 _ => {}
                             }
-                            let frame = crate::video::decode_video_body(&bytes)?.frame;
+                            let body = crate::video::decode_video_body(&bytes)?;
+                            received.send_replace(Some(body.sequence));
+                            let frame = body.frame;
                             if frame.role == crate::FrameRole::Still {
                                 return Err(Error::Malformed);
                             }
@@ -648,15 +670,24 @@ pub(super) async fn serve(
             "camera opened"
         );
         let mut sent = 0u64;
+        // What the viewer has not yet acknowledged paces what is written.
+        let in_flight = std::sync::Mutex::new(crate::video::InFlight::default());
+        let acknowledged = tokio::sync::Notify::new();
         let commands = async {
             loop {
                 let request = read(&mut recv)
                     .await
                     .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
-                if request != [1] {
-                    return Err(Error::Malformed);
+                match request.as_slice() {
+                    [KEYFRAME] => backend.source.request_keyframe(),
+                    [RECEIVED, number @ ..] => {
+                        let number =
+                            u32::from_be_bytes(number.try_into().map_err(|_| Error::Malformed)?);
+                        lock(&in_flight).acknowledged(number, Instant::now());
+                        acknowledged.notify_one();
+                    }
+                    _ => return Err(Error::Malformed),
                 }
-                backend.source.request_keyframe();
             }
         };
         let sending = async {
@@ -695,16 +726,25 @@ pub(super) async fn serve(
                     .await?;
                     return Ok::<(), Error>(());
                 }
-                for frame in backend.source.frames.drain() {
-                    // Camera pictures go in order on one stream: each is the
-                    // next, its number wrapping.
+                // Camera pictures go in order on one stream: each is the next,
+                // its number wrapping. A picture waits while the link holds
+                // older ones; the queue drops what grows old meanwhile.
+                while lock(&in_flight).may_send(Instant::now()) {
+                    let Some(frame) = backend.source.frames.pop() else {
+                        break;
+                    };
                     let number = sent as u32;
                     write(&mut send, crate::video::encode_video_body(&frame, number))
                         .await
                         .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
+                    lock(&in_flight).sent(number, Instant::now());
                     sent += 1;
                 }
-                tokio::select! { _ = backend.source.frames.notified() => {}, _ = timer.tick() => {} }
+                tokio::select! {
+                    _ = backend.source.frames.notified() => {},
+                    _ = acknowledged.notified() => {},
+                    _ = timer.tick() => {},
+                }
             }
         };
         tokio::select! { result = commands => result, result = sending => result }

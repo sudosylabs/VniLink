@@ -194,6 +194,11 @@ impl VideoOutbox {
         lock(&self.queue).drain()
     }
 
+    /// The oldest queued frame, for a sender that paces what it writes.
+    pub(crate) fn pop(&self) -> Option<EncodedFrame> {
+        lock(&self.queue).pop()
+    }
+
     /// Queued frames waiting for the network task. Poll with
     /// `session_paths` RTT/relay to drive adaptive quality.
     pub(crate) fn queued(&self) -> usize {

@@ -69,7 +69,10 @@ impl Scenario for CameraHost {
                 if stop.load(Ordering::Acquire) {
                     return Ok(index);
                 }
-                let frame = EncodedFrame::h264(index % 30 == 0, clock::now_us(), vec![7; bytes])
+                // A keyframe every second, and whenever the host asks for
+                // one, as the cameras' own encoders do.
+                let keyframe = index % 30 == 0 || source.take_keyframe_request();
+                let frame = EncodedFrame::h264(keyframe, clock::now_us(), vec![7; bytes])
                     .map_err(|error| error.to_string())?;
                 source.publish(frame).map_err(|error| error.to_string())?;
                 let next = started + every * u32::try_from(index + 1).unwrap_or(u32::MAX);

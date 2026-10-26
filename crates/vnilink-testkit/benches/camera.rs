@@ -33,8 +33,11 @@ fn stream(host: &CameraHost, bytes: usize) -> (Vec<Duration>, usize) {
     let mut latency = Vec::new();
     for index in 0..PICTURES {
         let sent = Instant::now();
+        // A keyframe every second, and whenever the host asks for one, as
+        // the cameras' own encoders do.
+        let keyframe = index % 30 == 0 || source.take_keyframe_request();
         source
-            .publish(EncodedFrame::h264(index % 30 == 0, index, vec![7; bytes]).unwrap())
+            .publish(EncodedFrame::h264(keyframe, index, vec![7; bytes]).unwrap())
             .unwrap();
         if camera.recv_timeout(Duration::from_millis(500)).is_some() {
             latency.push(sent.elapsed());

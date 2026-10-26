@@ -12,6 +12,7 @@ pub(crate) use condition::{Conditions, HostState, Observation};
 mod counters;
 mod datagram;
 mod frame;
+mod in_flight;
 mod link_rate;
 pub(crate) use link_rate::LinkRate;
 mod queue;
@@ -29,6 +30,7 @@ pub(crate) use frame::{
     check_video_len, decode_video_body, encode_video_body, VideoBody, VIDEO_HEADER,
 };
 pub use frame::{EncodedFrame, FrameRole, FrameTiming, Region, MAX_REGIONS};
+pub(crate) use in_flight::InFlight;
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
 pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
