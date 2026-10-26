@@ -5,20 +5,12 @@
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{CoreEvent, CustomRelay, Error, OperatingSystem, RelaySettings};
+use vnilink::{CoreEvent, Error, OperatingSystem};
 use vnilink_testkit::{traced, Engine, TestResult};
 
-use super::support::{drain, Installed, EVERYTHING};
+use super::support::{credentialed_relay, drain, Installed, EVERYTHING};
 
 const LIFETIME: Duration = Duration::from_secs(60);
-
-/// A relay with a credential, offered as a first setting that a saved one
-/// overrides.
-fn credentialed_relay() -> Result<RelaySettings, Error> {
-    let relay = CustomRelay::new("https://relay.example.com./")?
-        .with_auth_token("relay-credential-alpha")?;
-    RelaySettings::custom(vec![relay])
-}
 
 /// A restart keeps the identity, the paired peer with its grants and
 /// addresses, and the saved relay over the one offered at opening; it
@@ -43,7 +35,9 @@ fn restart_keeps_the_endpoint_grants_and_addresses() -> TestResult {
         "and where the controller listens"
     );
 
-    host.restart_with(credentialed_relay()?);
+    // A relay with a credential, offered as a first setting that a saved
+    // one overrides.
+    host.restart_with(credentialed_relay("relay-credential-alpha")?);
     assert_eq!(host.core.endpoint_id(), id, "a restart keeps the id");
     assert!(
         host.core.export_identity() == secret,

@@ -1,14 +1,17 @@
 //! What several pairing scenarios share: an installation whose store the
-//! test holds, pairing raw engines as the application pairs them, and
-//! reading what one engine knows of another.
+//! test holds, a store whose failures the test chooses, pairing raw
+//! engines as the application pairs them, and reading what one engine
+//! knows of another.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use vnilink::{
-    ControlRequest, Core, CoreEvent, DeviceInfo, EventSubscription, Grants, MemoryStore,
-    PairingFile, RelaySettings, SessionPhase, SessionRole,
+    ControlRequest, Core, CoreConfig, CoreEvent, CustomRelay, DeviceInfo, Error, EventSubscription,
+    Grants, InstallationStore, Listen, MemoryStore, PairingFile, RelaySettings, SessionPhase,
+    SessionRole,
 };
+use vnilink_testkit::relay::LocalRelay;
 use vnilink_testkit::wait_for;
 
 /// What a host shares once paired for control: it may be seen and
@@ -31,10 +34,11 @@ pub const EVERYTHING: Grants = Grants {
 /// An engine whose installation store the test holds, to make its next save
 /// fail or to reopen it with another relay. A kit [`vnilink_testkit::Engine`]
 /// keeps its store to itself; this is that engine with the store in hand,
-/// set up as the kit sets up its own.
-pub struct Installed {
+/// set up as the kit sets up its own: in a [`MemoryStore`] unless the test
+/// brings a [`TestStore`].
+pub struct Installed<S: InstallationStore + Clone + 'static = MemoryStore> {
     pub core: Core,
-    pub store: MemoryStore,
+    pub store: S,
     name: String,
 }
 
@@ -47,13 +51,21 @@ impl Installed {
 
     /// A new installation named `name` whose first relay setting is `relay`.
     pub fn start_with(name: &str, relay: RelaySettings) -> Self {
-        let store = MemoryStore::empty();
-        let core = open(name, &store, relay);
-        Self {
+        Self::open_in(name, MemoryStore::empty(), relay).expect("a loopback engine")
+    }
+}
+
+impl<S: InstallationStore + Clone + 'static> Installed<S> {
+    /// The installation `store` holds, or a new one saved there, named
+    /// `name`, whose first relay setting is `relay`; the store's refusal
+    /// when it refuses.
+    pub fn open_in(name: &str, store: S, relay: RelaySettings) -> Result<Self, Error> {
+        let core = open_in(name, Arc::new(store.clone()), relay)?;
+        Ok(Self {
             core,
             store,
             name: name.to_owned(),
-        }
+        })
     }
 
     /// Shuts this engine down and opens its installation again, as quitting
@@ -66,25 +78,130 @@ impl Installed {
     /// which a saved one overrides.
     pub fn restart_with(&mut self, relay: RelaySettings) {
         self.core.shutdown();
-        self.core = open(&self.name, &self.store, relay);
+        self.core =
+            open_in(&self.name, Arc::new(self.store.clone()), relay).expect("a loopback engine");
     }
 }
 
-impl Drop for Installed {
+impl<S: InstallationStore + Clone + 'static> Drop for Installed<S> {
     fn drop(&mut self) {
         self.core.shutdown();
     }
 }
 
 /// Opens the installation in `store` as the kit opens an engine: on
-/// loopback, named `name` in records and to its peers, with codecs.
-fn open(name: &str, store: &MemoryStore, relay: RelaySettings) -> Core {
-    let core = Core::open_direct(Arc::new(store.clone()), relay).expect("a loopback engine");
+/// loopback, named `name` in records and to its peers, with codecs; the
+/// store's refusal when it refuses.
+pub fn open_in(
+    name: &str,
+    store: Arc<dyn InstallationStore>,
+    relay: RelaySettings,
+) -> Result<Core, Error> {
+    vnilink::trace::name_next_engine(name);
+    let core = Core::open_direct(store, relay)?;
     core.set_trace_name(name);
     core.set_hostname(name).expect("a computer name");
     core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "testkit"))
         .expect("codecs");
-    core
+    Ok(core)
+}
+
+/// An installation store that counts every save asked of it and fails its
+/// loads, or its next save, or panics in it, as the test chooses: the
+/// platform stores' failures, which a [`MemoryStore`] offers only in part.
+#[derive(Clone, Default)]
+pub struct TestStore(Arc<Mutex<Held>>);
+
+#[derive(Default)]
+struct Held {
+    record: Option<Vec<u8>>,
+    refusing: Option<Fault>,
+    next_save: Option<Fault>,
+    panic_next_save: bool,
+    saves: usize,
+}
+
+/// A store's failure, as a platform store reports one.
+#[derive(Clone, Copy)]
+pub enum Fault {
+    Locked,
+    Unavailable,
+    RecoveryRequired,
+}
+
+impl Fault {
+    fn error(self) -> Error {
+        match self {
+            Fault::Locked => Error::StoreLocked,
+            Fault::Unavailable => Error::StoreUnavailable,
+            Fault::RecoveryRequired => Error::StoreRecoveryRequired,
+        }
+    }
+}
+
+impl TestStore {
+    fn held(&self) -> std::sync::MutexGuard<'_, Held> {
+        self.0.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// A store already holding `record`.
+    pub fn containing(record: Vec<u8>) -> Self {
+        let store = Self::default();
+        store.held().record = Some(record);
+        store
+    }
+
+    /// A store whose every load fails with `fault`.
+    pub fn refusing(fault: Fault) -> Self {
+        let store = Self::default();
+        store.held().refusing = Some(fault);
+        store
+    }
+
+    /// The next save fails with `fault`, once, leaving the record as it
+    /// was.
+    pub fn fail_next_save(&self, fault: Fault) {
+        self.held().next_save = Some(fault);
+    }
+
+    /// The next save panics, once, leaving the record as it was.
+    pub fn panic_next_save(&self) {
+        self.held().panic_next_save = true;
+    }
+
+    /// The record it holds.
+    pub fn record(&self) -> Option<Vec<u8>> {
+        self.held().record.clone()
+    }
+
+    /// The saves asked of it, failed ones included.
+    pub fn save_attempts(&self) -> usize {
+        self.held().saves
+    }
+}
+
+impl InstallationStore for TestStore {
+    fn load(&self) -> Result<Option<Vec<u8>>, Error> {
+        let held = self.held();
+        match held.refusing {
+            Some(fault) => Err(fault.error()),
+            None => Ok(held.record.clone()),
+        }
+    }
+
+    fn save(&self, record: &[u8]) -> Result<(), Error> {
+        let mut held = self.held();
+        held.saves += 1;
+        if std::mem::take(&mut held.panic_next_save) {
+            drop(held);
+            panic!("the store panics while saving, as the test asked");
+        }
+        if let Some(fault) = held.next_save.take() {
+            return Err(fault.error());
+        }
+        held.record = Some(record.to_vec());
+        Ok(())
+    }
 }
 
 /// `host` and `controller` trust each other as two paired computers do,
@@ -154,4 +271,32 @@ pub fn wait_closed(core: &Core, role: SessionRole, within: Duration) {
 /// The events `events` holds now, taken.
 pub fn drain(events: &EventSubscription) -> Vec<CoreEvent> {
     std::iter::from_fn(|| events.try_recv()).collect()
+}
+
+/// An engine with no installation store, as [`Core::start`] starts one: of
+/// `identity`, or a new one, publishing at most `event_capacity` events
+/// ahead of a reader. An engine without a store cannot be kept off relays
+/// as [`Core::open_direct`] keeps one, so its relay is `relay`, on this
+/// computer.
+pub fn start_storeless(
+    name: &str,
+    relay: &LocalRelay,
+    identity: Option<[u8; 32]>,
+    event_capacity: usize,
+) -> Result<Core, Error> {
+    vnilink::trace::name_next_engine(name);
+    let core = Core::start(CoreConfig {
+        relay: RelaySettings::custom(vec![CustomRelay::new(relay.url())?])?,
+        listen: Listen::Loopback,
+        event_capacity,
+        identity,
+    })?;
+    core.set_trace_name(name);
+    Ok(core)
+}
+
+/// A relay of its own, with the credential `token`.
+pub fn credentialed_relay(token: &str) -> Result<RelaySettings, Error> {
+    let relay = CustomRelay::new("https://relay.example.com./")?.with_auth_token(token)?;
+    RelaySettings::custom(vec![relay])
 }

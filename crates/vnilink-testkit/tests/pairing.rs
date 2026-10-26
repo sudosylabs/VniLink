@@ -13,10 +13,16 @@ mod link;
 mod names;
 #[path = "pairing/persistence.rs"]
 mod persistence;
+#[path = "pairing/policies.rs"]
+mod policies;
 #[path = "pairing/presence.rs"]
 mod presence;
 #[path = "pairing/reconnect.rs"]
 mod reconnect;
+#[path = "pairing/records.rs"]
+mod records;
+#[path = "pairing/saving.rs"]
+mod saving;
 #[path = "pairing/support.rs"]
 mod support;
 
