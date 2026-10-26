@@ -501,7 +501,12 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	/** Sizes the picture in its stage as chosen, centred where it is smaller, scrolling where it is larger. */
 	private layout(): void {
 		const ratio = getWindow(this.element).devicePixelRatio || 1;
-		const stage = { width: this.stage.clientWidth, height: this.stage.clientHeight };
+		// Fit and Stretch never scroll, so scroll bars left from a larger size, which take room where
+		// they are not overlaid, are about to go: their room is the whole stage.
+		const whole = this.pictureSize === 'fit' || this.pictureSize === 'stretch';
+		const stage = whole
+			? { width: this.stage.offsetWidth, height: this.stage.offsetHeight }
+			: { width: this.stage.clientWidth, height: this.stage.clientHeight };
 		const shown = shownSize(this.pictureSize, this.canvas.width, this.canvas.height, stage, ratio);
 		// Whole device pixels for the margins too, so the picture is not split across pixels.
 		const margin = (room: number, size: number): string => `${String(Math.max(0, Math.floor((room - size) / 2 * ratio)) / ratio)}px`;
