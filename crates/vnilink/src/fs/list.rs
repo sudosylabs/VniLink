@@ -341,3 +341,154 @@ fn dir_has_more(dir: &std::path::Path, at_least: usize) -> bool {
         Err(_) => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{FilesystemLocation, Scratch};
+    use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
+
+    static LIST_PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static LIST_MAX_UNIT: AtomicU64 = AtomicU64::new(0);
+    static LIST_FINISHED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+    static LIST_FINISH_CV: std::sync::Condvar = std::sync::Condvar::new();
+
+    fn list_park_probe(unit: u64, cancelled: &std::sync::atomic::AtomicBool) {
+        use std::sync::atomic::Ordering as Seq;
+        LIST_MAX_UNIT.fetch_max(unit, Seq::SeqCst);
+        if LIST_PARKED.swap(true, Seq::SeqCst) {
+            return;
+        }
+        while !cancelled.load(Seq::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn list_finish_probe(cancelled: bool) {
+        *LIST_FINISHED.lock().unwrap() = Some(cancelled);
+        LIST_FINISH_CV.notify_all();
+    }
+
+    /// STD08: detached listing yields the executor and holds no shared lock
+    /// (a sibling listing completes while the first is parked), and dropping
+    /// the future aborts the worker before anything is enumerated.
+    #[test]
+    fn parked_list_yields_sibling_and_cancels_before_enumeration() {
+        use std::sync::{Arc, Mutex};
+
+        let scratch = Scratch::tagged("fs");
+        let root = scratch.join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("alpha.txt"), b"a").unwrap();
+        std::fs::write(root.join("beta.txt"), b"beta-bytes").unwrap();
+        let mut roots = crate::fs::RootSet::default();
+        roots.set_filesystem().unwrap();
+        let files = FilesystemLocation::new(roots.snapshot(), &root);
+        // Stand-in for the shared file-roots lock: the parked listing must
+        // hold no lock across its worker await, so the sibling locks,
+        // snapshots and completes while the first stays parked.
+        let shared = Arc::new(Mutex::new(roots));
+        let first = shared.lock().unwrap().clone();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let hooks = crate::fs::ListHooks {
+            entry_probe: Some(list_park_probe),
+            finish_probe: Some(list_finish_probe),
+        };
+        let (handle_tx, handle_rx) = std::sync::mpsc::channel();
+        let (sibling_tx, sibling_rx) = std::sync::mpsc::channel();
+        let sibling_shared = shared.clone();
+        // A current-thread runtime only drives tasks under `block_on`; the
+        // driver thread owns it while the test observes from outside.
+        let driver = std::thread::spawn(move || {
+            runtime.block_on(async move {
+                let sibling_files = files.clone();
+                let list = tokio::spawn(crate::fs::list_page_async(
+                    first,
+                    files.root,
+                    files.path(""),
+                    0,
+                    50,
+                    hooks,
+                ));
+                handle_tx.send(list).unwrap();
+                let cap = std::time::Instant::now() + Duration::from_secs(30);
+                while !LIST_PARKED.load(Ordering::SeqCst) {
+                    if std::time::Instant::now() > cap {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                // Spawned only after the park is observed: it must lock the
+                // shared roots, snapshot and finish while parked.
+                tokio::spawn(async move {
+                    let snapshot = sibling_shared.lock().unwrap().clone();
+                    let page = crate::fs::list_page_async(
+                        snapshot,
+                        sibling_files.root,
+                        sibling_files.path(""),
+                        0,
+                        50,
+                        crate::fs::ListHooks::none(),
+                    )
+                    .await;
+                    let _ = sibling_tx.send(page.map(|page| page.total));
+                });
+                while LIST_FINISHED.lock().unwrap().is_none() {
+                    if std::time::Instant::now() > cap {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            });
+        });
+        // The worker must reach the parked probe; on the old inline path no
+        // probe exists and this times out.
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while !LIST_PARKED.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "list worker never parked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Sibling progress while parked: the async worker is free and no
+        // shared lock is held, so a full second listing completes.
+        let sibling = sibling_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("sibling blocked during parked list");
+        assert_eq!(
+            sibling.expect("sibling list failed"),
+            2,
+            "sibling list result changed while parked"
+        );
+        // Cancellation aborts the worker without enumerating anything: only
+        // the pre-access probe fired.
+        let list = handle_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        list.abort();
+        let finished = LIST_FINISHED.lock().unwrap();
+        let (finished, timeout) = LIST_FINISH_CV
+            .wait_timeout_while(finished, Duration::from_secs(5), |done| done.is_none())
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "list worker never finished after abort"
+        );
+        assert_eq!(
+            *finished,
+            Some(true),
+            "list worker did not report cancellation"
+        );
+        drop(finished);
+        assert_eq!(
+            LIST_MAX_UNIT.load(Ordering::SeqCst),
+            0,
+            "parked list enumerated entries"
+        );
+        driver.join().expect("driver thread panicked");
+    }
+}

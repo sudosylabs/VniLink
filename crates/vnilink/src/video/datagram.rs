@@ -439,3 +439,7 @@ impl Reassembler {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "datagram_tests.rs"]
+mod tests;

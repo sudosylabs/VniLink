@@ -673,3 +673,261 @@ fn take_text(cursor: &mut &[u8], max: usize) -> Option<String> {
     *cursor = &cursor[len..];
     Some(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A listing page survives its wire body whole, and a body cut short or
+    /// trailing a byte is refused.
+    #[test]
+    fn list_body_round_trips() {
+        use crate::test_support::{loopback_core, FilesystemLocation, Scratch};
+        let scratch = Scratch::tagged("fs");
+        let root = scratch.join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.txt"), b"abc").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let core = loopback_core();
+        core.enable_filesystem_access().unwrap();
+        let files = FilesystemLocation::new(core.file_roots().unwrap(), &root);
+        let page = core.list_dir(files.root, &files.path(""), 0, 50).unwrap();
+        let bytes = encode_list_body(&page).unwrap();
+        let back = decode_list_body(&bytes).unwrap();
+        assert_eq!(back, page, "a page decodes to what was encoded");
+        assert!(
+            decode_list_body(&bytes[..bytes.len() - 1]).is_err(),
+            "a body cut short is refused"
+        );
+        let mut bad = bytes.clone();
+        bad.push(0);
+        assert!(
+            decode_list_body(&bad).is_err(),
+            "a trailing byte is refused"
+        );
+    }
+
+    /// Found by the `fs_wire` fuzz target: a List whose path is one NUL byte
+    /// decoded, though no request with it can be encoded.
+    #[test]
+    fn wire_text_with_a_nul_byte_is_refused() {
+        let mut list = vec![1, 0, 0x24, 0, 0, 0, 0, 0x10, 0, 0, 0, 0, 0, 1];
+        list.extend_from_slice(&2u64.to_be_bytes());
+        list.extend_from_slice(&[0, 1, 0]);
+        list.extend_from_slice(&0u64.to_be_bytes());
+        list.extend_from_slice(&10u16.to_be_bytes());
+        assert!(crate::fs::decode_request(&list).is_err());
+        let path_ok = [&list[..22], &[0, 1, b'a'], &list[25..]].concat();
+        assert!(crate::fs::decode_request(&path_ok).is_ok());
+    }
+
+    /// Breaks the `fs_wire` fuzz target's round trip: a strong listing token
+    /// with a zero device decoded as half a token, which re-encodes as none.
+    #[test]
+    fn a_strong_listing_token_decodes_whole() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u64.to_be_bytes());
+        body.extend_from_slice(&u64::MAX.to_be_bytes());
+        body.push(0);
+        body.extend_from_slice(&0u64.to_be_bytes());
+        body.extend_from_slice(&1u16.to_be_bytes());
+        body.extend_from_slice(&[0, 1, b'a', 0]);
+        body.extend_from_slice(&[0; 16]);
+        body.push(1);
+        body.extend_from_slice(&0u64.to_be_bytes());
+        body.extend_from_slice(&5u64.to_be_bytes());
+        body.push(1);
+        body.extend_from_slice(&7u64.to_be_bytes());
+        let page = crate::fs::decode_list_body(&body).unwrap();
+        assert_eq!(
+            page.entries[0].token,
+            EntryToken {
+                dev: Some(0),
+                ino: Some(5),
+                born: Some(7),
+            }
+        );
+        let encoded = crate::fs::encode_list_body(&page).unwrap();
+        assert_eq!(encoded, body);
+    }
+
+    #[test]
+    fn wire_codec_round_trips_and_rejects() {
+        use crate::fs::{Request as WireRequest, Response as WireResponse};
+
+        for request in [
+            WireRequest::List {
+                id: 7,
+                generation: 3,
+                root: 0,
+                path: "docs/2026".to_string(),
+                offset: 3,
+                limit: 50,
+            },
+            WireRequest::Mkdir {
+                id: 8,
+                generation: 3,
+                root: 1,
+                path: "".to_string(),
+                name: "new".to_string(),
+            },
+            WireRequest::Rename {
+                id: 9,
+                generation: 4,
+                root: 0,
+                path: "docs".to_string(),
+                name: "a.txt".to_string(),
+                expected: Some(EntryToken {
+                    dev: Some(3),
+                    ino: Some(9),
+                    born: Some(1_792_781_822_915_157_352),
+                }),
+                new_name: "b.txt".to_string(),
+            },
+            WireRequest::Rename {
+                id: 10,
+                generation: 4,
+                root: 0,
+                path: "".to_string(),
+                name: "a.txt".to_string(),
+                expected: None,
+                new_name: "b.txt".to_string(),
+            },
+            WireRequest::Delete {
+                id: 11,
+                generation: 4,
+                root: 0,
+                path: "docs".to_string(),
+                name: "a.txt".to_string(),
+                expected: Some(EntryToken {
+                    dev: Some(3),
+                    ino: Some(9),
+                    born: None,
+                }),
+                trash: false,
+            },
+            WireRequest::Delete {
+                id: 12,
+                generation: 4,
+                root: 0,
+                path: "".to_string(),
+                name: "a.txt".to_string(),
+                expected: None,
+                trash: true,
+            },
+            WireRequest::Places {
+                id: 13,
+                generation: 4,
+            },
+        ] {
+            let bytes = crate::fs::encode_request(&request).unwrap();
+            assert_eq!(crate::fs::decode_request(&bytes).unwrap(), request);
+        }
+
+        let ok = WireResponse::ok(11);
+        assert!(ok.is_ok());
+        let bytes = crate::fs::encode_response(&ok);
+        let back = crate::fs::decode_response(&bytes).unwrap();
+        assert_eq!(back.id, 11);
+        assert!(back.is_ok());
+
+        // Wrong version, truncation, unknown tag and trailing bytes all fail.
+        let mut bad = crate::fs::encode_request(&WireRequest::List {
+            id: 1,
+            generation: 1,
+            root: 0,
+            path: "".to_string(),
+            offset: 0,
+            limit: 10,
+        })
+        .unwrap();
+        bad[0] = 99;
+        assert!(crate::fs::decode_request(&bad).is_err());
+        let truncated = &bad[..4];
+        assert!(crate::fs::decode_request(truncated).is_err());
+        let mut tagged = crate::fs::encode_request(&WireRequest::List {
+            id: 1,
+            generation: 1,
+            root: 0,
+            path: "".to_string(),
+            offset: 0,
+            limit: 10,
+        })
+        .unwrap();
+        tagged[13] = 77;
+        assert!(crate::fs::decode_request(&tagged).is_err());
+        // Oversize text is refused at encode time, never sent.
+        let huge = "a".repeat(crate::fs::MAX_REL_BYTES + 1);
+        assert!(crate::fs::encode_request(&WireRequest::List {
+            id: 1,
+            generation: 1,
+            root: 0,
+            path: huge,
+            offset: 0,
+            limit: 10,
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn places_body_round_trips_and_refuses_unsafe_folders() {
+        let places = crate::fs::Places {
+            roots: vec![
+                crate::fs::PlaceRoot {
+                    id: 2,
+                    name: "C:".to_owned(),
+                },
+                crate::fs::PlaceRoot {
+                    id: 3,
+                    name: "D:".to_owned(),
+                },
+            ],
+            folders: vec![
+                crate::fs::Place {
+                    kind: crate::fs::FolderKind::Home,
+                    root: 2,
+                    path: "Users/someone".to_owned(),
+                },
+                crate::fs::Place {
+                    kind: crate::fs::FolderKind::Downloads,
+                    root: 2,
+                    path: "Users/someone/Downloads".to_owned(),
+                },
+                crate::fs::Place {
+                    kind: crate::fs::FolderKind::Volume,
+                    root: 2,
+                    path: "Volumes/Backup".to_owned(),
+                },
+            ],
+        };
+        let body = crate::fs::encode_places_body(&places).unwrap();
+        assert_eq!(crate::fs::decode_places_body(&body).unwrap(), places);
+        let mut escaping = places.clone();
+        escaping.folders[0].path = "../outside".to_owned();
+        let body = crate::fs::encode_places_body(&escaping).unwrap();
+        assert!(crate::fs::decode_places_body(&body).is_err());
+        let mut trailing = crate::fs::encode_places_body(&places).unwrap();
+        trailing.push(0);
+        assert!(crate::fs::decode_places_body(&trailing).is_err());
+        // A places request carries no root or path of its own.
+        let mut rooted = crate::fs::encode_request(&crate::fs::Request::Places {
+            id: 1,
+            generation: 1,
+        })
+        .unwrap();
+        rooted[21] = 1;
+        assert!(crate::fs::decode_request(&rooted).is_err());
+    }
+
+    #[test]
+    fn revision_gate_fences_late_replies() {
+        let mut gate = RevisionGate::new();
+        assert!(!gate.accept(0));
+        let first = gate.navigate();
+        let second = gate.navigate();
+        assert_ne!(first, second);
+        // The delayed reply to the first navigation must not paint.
+        assert!(!gate.accept(first));
+        assert!(gate.accept(second));
+    }
+}

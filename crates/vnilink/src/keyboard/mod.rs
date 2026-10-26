@@ -77,7 +77,5 @@ impl<'a> LocalKey<'a> {
     }
 }
 
-#[cfg(test)]
-pub(crate) use chord::LayoutChord;
 pub(crate) use chord::{find_chord, keysym_of, ChordLevel, HostKeymap};
 pub(crate) use plan::{KeyPlan, Planned};

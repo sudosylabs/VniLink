@@ -4,93 +4,10 @@ use std::time::{Duration, SystemTime};
 use iroh::{PublicKey, RelayMode};
 
 use crate::core::{Core, CoreConfig, Listen};
-use crate::error::Error;
-use crate::events::CoreEvent;
 use crate::invitation;
 use crate::relay::RelaySettings;
 
 use super::support::*;
-
-#[test]
-fn a_fresh_loopback_core_starts_idle() {
-    let core = start_direct();
-    let snapshot = core.snapshot().unwrap();
-    assert_eq!(snapshot.endpoint_id, core.endpoint_id());
-    assert!(snapshot.public_relay);
-    assert!(snapshot.relay_urls.is_empty());
-    assert!(!snapshot.hosting);
-    assert!(snapshot.devices.is_empty());
-    assert!(snapshot.incoming.is_none());
-    assert!(snapshot.outgoing.is_none());
-    assert!(!snapshot.capabilities.keyboard);
-    assert!(!snapshot.capabilities.pointer);
-    assert!(!snapshot.capabilities.desktop_capture);
-    assert_eq!(snapshot.capabilities.monitors, 0);
-}
-
-#[test]
-fn event_capacity_must_be_between_1_and_1024() {
-    assert!(matches!(
-        boot_capacity(0),
-        Err(Error::InvalidSetting("event capacity must be at least 1"))
-    ));
-    assert!(matches!(
-        boot_capacity(1025),
-        Err(Error::InvalidSetting("event capacity must be at most 1024"))
-    ));
-    let core = boot_capacity(1).unwrap();
-    let events = core.subscribe().unwrap();
-    core.start_hosting().unwrap();
-    core.stop_hosting().unwrap();
-    assert!(!core.snapshot().unwrap().hosting);
-    assert_eq!(events.lagged(), 1);
-    assert_eq!(
-        events.try_recv(),
-        Some(CoreEvent::HostingChanged { hosting: true })
-    );
-    assert!(boot_capacity(1024).is_ok());
-}
-
-#[test]
-fn restored_identity_keeps_the_same_endpoint_id() {
-    let original = start_direct();
-    let bytes = original.export_identity();
-    let id = original.endpoint_id();
-    drop(original);
-    let restored = Core::boot(
-        CoreConfig {
-            identity: Some(bytes),
-            listen: Listen::Loopback,
-            ..CoreConfig::default()
-        },
-        RelayMode::Disabled,
-    )
-    .unwrap();
-    assert_eq!(restored.export_identity(), bytes);
-    assert_eq!(restored.endpoint_id(), id);
-    assert_ne!(start_direct().endpoint_id(), id);
-    let rendered = format!(
-        "{:?}",
-        CoreConfig {
-            identity: Some([0x11; 32]),
-            ..CoreConfig::default()
-        }
-    );
-    assert!(rendered.contains("[redacted]"));
-    assert!(!rendered.contains("17"));
-}
-
-#[test]
-fn an_installation_cannot_pair_with_itself() {
-    let core = start_direct();
-    let token = core.create_invitation(Duration::from_secs(60)).unwrap();
-    assert!(matches!(
-        core.accept_invitation(&token),
-        Err(Error::InvalidInvitation(
-            "an installation cannot pair with itself"
-        ))
-    ));
-}
 
 #[test]
 fn a_loopback_invitation_carries_a_loopback_address() {

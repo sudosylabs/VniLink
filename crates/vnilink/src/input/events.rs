@@ -301,3 +301,98 @@ pub(crate) fn swap_command_key(event: InputEvent) -> InputEvent {
         other => other,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_swap_exchanges_only_control_and_meta() {
+        assert_eq!(
+            swap_command_key(InputEvent::key_down(usage::LEFT_META)),
+            InputEvent::key_down(usage::LEFT_CONTROL)
+        );
+        assert_eq!(
+            swap_command_key(InputEvent::key_up(usage::LEFT_CONTROL)),
+            InputEvent::key_up(usage::LEFT_META)
+        );
+        assert_eq!(
+            swap_command_key(InputEvent::key_down(usage::RIGHT_CONTROL)),
+            InputEvent::key_down(usage::RIGHT_META)
+        );
+        assert_eq!(
+            swap_command_key(InputEvent::key_up(usage::RIGHT_META)),
+            InputEvent::key_up(usage::RIGHT_CONTROL)
+        );
+        assert_eq!(
+            swap_command_key(InputEvent::key_down(usage::LEFT_SHIFT)),
+            InputEvent::key_down(usage::LEFT_SHIFT)
+        );
+        assert_eq!(
+            swap_command_key(InputEvent::pointer(1, 2, 1, 1)),
+            InputEvent::pointer(1, 2, 1, 1)
+        );
+    }
+
+    #[test]
+    fn malformed_input_bytes_are_rejected() {
+        let round_trips = [
+            InputEvent::key_down(usage::DIGIT_0),
+            InputEvent::key_up(usage::KEYPAD_ENTER),
+            InputEvent::button_down(PointerButton::Middle),
+            InputEvent::button_up(PointerButton::Middle),
+            InputEvent::pointer(-12, 32768, 4, 2),
+            InputEvent::wheel(0, 0),
+            InputEvent::wheel(i16::MIN, i16::MAX),
+        ];
+        for event in round_trips {
+            let mut bytes = Vec::new();
+            event.encode(&mut bytes);
+            assert_eq!(InputEvent::decode(&bytes).unwrap(), event);
+        }
+        assert!(matches!(InputEvent::decode(&[]), Err(Error::Malformed)));
+        assert!(matches!(InputEvent::decode(&[9]), Err(Error::Malformed)));
+        assert!(matches!(
+            InputEvent::decode(&[1, 0, 0x04]),
+            Err(Error::Malformed)
+        ));
+        assert!(matches!(
+            InputEvent::decode(&[1, 0, 0x04, 2]),
+            Err(Error::Malformed)
+        ));
+        assert!(matches!(
+            InputEvent::decode(&[2, 9, 1]),
+            Err(Error::Malformed)
+        ));
+        assert!(matches!(
+            InputEvent::decode(&[2, 1, 2]),
+            Err(Error::Malformed)
+        ));
+        assert!(matches!(
+            InputEvent::decode(&[3, 0, 1]),
+            Err(Error::Malformed)
+        ));
+        let mut zero_display = Vec::new();
+        InputEvent::pointer(1, 2, 0, 1).encode(&mut zero_display);
+        assert!(matches!(
+            InputEvent::decode(&zero_display),
+            Err(Error::Malformed)
+        ));
+        let mut zero_revision = Vec::new();
+        InputEvent::pointer(1, 2, 1, 0).encode(&mut zero_revision);
+        assert!(matches!(
+            InputEvent::decode(&zero_revision),
+            Err(Error::Malformed)
+        ));
+        let mut too_far = Vec::new();
+        InputEvent::pointer(32769, 0, 1, 1).encode(&mut too_far);
+        assert!(matches!(
+            InputEvent::decode(&too_far),
+            Err(Error::Malformed)
+        ));
+        assert!(matches!(
+            InputEvent::decode(&[4, 0, 1]),
+            Err(Error::Malformed)
+        ));
+    }
+}

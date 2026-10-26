@@ -515,3 +515,247 @@ mod motion_invalidation_tests {
         assert_eq!(queue.drain().len(), INPUT_QUEUE);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::{usage, INPUT_QUEUE, MAX_KEY_TEXT};
+
+    fn only_events(items: Vec<Outbound>) -> Vec<InputEvent> {
+        items
+            .into_iter()
+            .map(|item| match item {
+                Outbound::Event(event) => event,
+                Outbound::Text(_)
+                | Outbound::Chord(_)
+                | Outbound::Quality(_)
+                | Outbound::Displays(_) => {
+                    panic!("a text item was queued with the keys")
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pointer_samples_collapse_and_keys_do_not() {
+        let outbox = InputOutbox::new();
+        outbox.push(InputEvent::key_down(usage::A)).unwrap();
+        outbox.push(InputEvent::pointer(1, 1, 1, 1)).unwrap();
+        outbox.push(InputEvent::pointer(8, 9, 1, 1)).unwrap();
+        outbox.push(InputEvent::pointer(3, 4, 1, 1)).unwrap();
+        outbox.push(InputEvent::key_up(usage::A)).unwrap();
+        assert_eq!(
+            only_events(outbox.drain()),
+            vec![
+                InputEvent::key_down(usage::A),
+                InputEvent::pointer(3, 4, 1, 1),
+                InputEvent::key_up(usage::A),
+            ]
+        );
+    }
+
+    #[test]
+    fn ending_a_session_releases_held_keys_and_buttons_in_reverse() {
+        let mut held = HeldInput::default();
+        held.observe(InputEvent::key_down(usage::LEFT_SHIFT));
+        held.observe(InputEvent::button_down(PointerButton::Left));
+        held.observe(InputEvent::pointer(10, 10, 1, 1));
+        held.observe(InputEvent::key_down(usage::LEFT_SHIFT));
+        assert_eq!(
+            held.release_events(),
+            vec![
+                InputEvent::button_up(PointerButton::Left),
+                InputEvent::key_up(usage::LEFT_SHIFT),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_full_queue_keeps_key_transitions_and_folds_pointer_samples() {
+        let outbox = InputOutbox::new();
+        for usage_code in 0..INPUT_QUEUE as u16 {
+            outbox.push(InputEvent::key_down(usage_code)).unwrap();
+        }
+        assert!(matches!(
+            outbox.push(InputEvent::key_down(usage::A)),
+            Err(Error::Busy)
+        ));
+        outbox.push(InputEvent::pointer(1, 2, 1, 1)).unwrap();
+        let drained = only_events(outbox.drain());
+        assert_eq!(drained.len(), INPUT_QUEUE);
+        assert!(drained
+            .iter()
+            .all(|event| matches!(event, InputEvent::Key { .. })));
+
+        let outbox = InputOutbox::new();
+        for usage_code in 0..(INPUT_QUEUE as u16 - 1) {
+            outbox.push(InputEvent::key_down(usage_code)).unwrap();
+        }
+        outbox.push(InputEvent::pointer(1, 1, 1, 1)).unwrap();
+        outbox.push(InputEvent::pointer(2, 2, 1, 1)).unwrap();
+        let drained = only_events(outbox.drain());
+        assert_eq!(drained.len(), INPUT_QUEUE);
+        assert!(matches!(
+            drained.last(),
+            Some(InputEvent::Pointer { x: 2, y: 2, .. })
+        ));
+        assert!(!drained
+            .iter()
+            .any(|event| matches!(event, InputEvent::Pointer { x: 1, y: 1, .. })));
+
+        let outbox = InputOutbox::new();
+        outbox.push(InputEvent::key_down(1)).unwrap();
+        outbox.push(InputEvent::pointer(1, 1, 1, 1)).unwrap();
+        for usage_code in 2..INPUT_QUEUE as u16 {
+            outbox.push(InputEvent::key_down(usage_code)).unwrap();
+        }
+        outbox.push(InputEvent::pointer(7, 8, 1, 1)).unwrap();
+        let drained = only_events(outbox.drain());
+        assert_eq!(drained.len(), INPUT_QUEUE);
+        assert!(matches!(drained[0], InputEvent::Key { usage: 1, .. }));
+        assert!(matches!(
+            drained.last(),
+            Some(InputEvent::Pointer { x: 7, y: 8, .. })
+        ));
+        assert!(!drained
+            .iter()
+            .any(|event| matches!(event, InputEvent::Pointer { x: 1, y: 1, .. })));
+    }
+
+    #[test]
+    fn the_first_fault_sticks_and_later_pushes_return_it() {
+        let outbox = InputOutbox::new();
+        outbox.fail(&Error::InputFailed(
+            "the operating system rejected the event",
+        ));
+        outbox.fail(&Error::Unsupported("no desktop adapter is installed"));
+        assert!(matches!(
+            outbox.push(InputEvent::pointer(1, 1, 1, 1)),
+            Err(Error::InputFailed(
+                "the operating system rejected the event"
+            ))
+        ));
+        assert!(outbox.drain().is_empty());
+
+        let outbox = InputOutbox::new();
+        outbox.fail(&Error::StaleSession);
+        assert!(matches!(
+            outbox.push(InputEvent::key_down(usage::A)),
+            Err(Error::StaleSession)
+        ));
+
+        let outbox = InputOutbox::new();
+        outbox.fail(&Error::Malformed);
+        assert!(matches!(
+            outbox.push(InputEvent::key_up(usage::A)),
+            Err(Error::Malformed)
+        ));
+
+        let outbox = InputOutbox::new();
+        outbox.fail(&Error::Busy);
+        assert!(matches!(
+            outbox.push(InputEvent::key_down(usage::A)),
+            Err(Error::InputFailed("input was rejected"))
+        ));
+    }
+
+    #[test]
+    fn releasing_a_key_or_button_removes_it_from_the_held_set() {
+        let mut held = HeldInput::default();
+        held.observe(InputEvent::key_down(usage::A));
+        held.observe(InputEvent::button_down(PointerButton::Left));
+        held.observe(InputEvent::key_up(usage::A));
+        held.observe(InputEvent::button_up(PointerButton::Left));
+        held.observe(InputEvent::pointer(4, 5, 1, 1));
+        held.observe(InputEvent::wheel(1, -1));
+        assert!(held.release_events().is_empty());
+
+        held.observe(InputEvent::key_down(usage::A));
+        held.observe(InputEvent::key_down(usage::B));
+        held.observe(InputEvent::button_down(PointerButton::Right));
+        held.observe(InputEvent::key_up(usage::A));
+        held.observe(InputEvent::button_down(PointerButton::Right));
+        assert_eq!(
+            held.release_events(),
+            vec![
+                InputEvent::button_up(PointerButton::Right),
+                InputEvent::key_up(usage::B),
+            ]
+        );
+    }
+
+    #[test]
+    fn finished_text_is_bounded_and_cleared_with_the_queue() {
+        assert!(check_key_text("héllo").is_ok());
+        assert!(check_key_text(&"a".repeat(MAX_KEY_TEXT)).is_ok());
+        assert!(matches!(
+            check_key_text(""),
+            Err(Error::InvalidSetting("text entry is empty"))
+        ));
+        assert!(matches!(
+            check_key_text(&"a".repeat(MAX_KEY_TEXT + 1)),
+            Err(Error::InvalidSetting("text entry is longer than 128 bytes"))
+        ));
+        assert!(matches!(
+            check_key_text("a\0b"),
+            Err(Error::InvalidSetting("text entry contains a null byte"))
+        ));
+
+        let outbox = InputOutbox::new();
+        outbox.push(InputEvent::key_down(usage::A)).unwrap();
+        outbox.push_text("héllo".to_owned()).unwrap();
+        outbox.push(InputEvent::key_up(usage::A)).unwrap();
+        let drained = outbox.drain();
+        assert!(!format!("{drained:?}").contains("héllo"));
+        assert_eq!(
+            drained,
+            vec![
+                Outbound::Event(InputEvent::key_down(usage::A)),
+                Outbound::Text("héllo".to_owned()),
+                Outbound::Event(InputEvent::key_up(usage::A)),
+            ]
+        );
+
+        let outbox = InputOutbox::new();
+        outbox.push_text("gone".to_owned()).unwrap();
+        outbox.clear();
+        assert!(outbox.drain().is_empty());
+        for _ in 0..INPUT_QUEUE {
+            outbox.push(InputEvent::key_down(usage::A)).unwrap();
+        }
+        assert!(matches!(
+            outbox.push_text("late".to_owned()),
+            Err(Error::Busy)
+        ));
+    }
+
+    #[test]
+    fn selecting_a_display_allows_an_unchanged_pointer_retry_and_survives_focus_loss() {
+        let outbox = crate::input::InputOutbox::new();
+        let point = InputEvent::pointer(1, 2, 1, 1);
+        outbox.push(point).unwrap();
+        assert_eq!(outbox.drain(), vec![crate::input::Outbound::Event(point)]);
+        outbox.push(point).unwrap();
+        assert!(outbox.drain().is_empty());
+        outbox.push_displays(vec![1]).unwrap();
+        outbox.push(point).unwrap();
+        assert_eq!(
+            outbox.drain(),
+            vec![
+                crate::input::Outbound::Displays(vec![1]),
+                crate::input::Outbound::Event(point)
+            ]
+        );
+        outbox.push_displays(vec![1]).unwrap();
+        outbox.push(InputEvent::key_down(usage::A)).unwrap();
+        assert_eq!(
+            outbox.clear_pending_input(),
+            1,
+            "the one queued key is dropped"
+        );
+        assert_eq!(
+            outbox.drain(),
+            vec![crate::input::Outbound::Displays(vec![1])]
+        );
+    }
+}

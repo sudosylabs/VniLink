@@ -563,3 +563,36 @@ fn decode_image(bytes: &[u8]) -> Result<ScreenImage, Error> {
     validate_image(&image).map_err(|_| Error::Malformed)?;
     Ok(image)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Found by the `snapshot_payload` fuzz target: an outcome with bytes after
+    /// it decoded, though the host writes none.
+    #[test]
+    fn an_outcome_with_trailing_bytes_is_malformed() {
+        assert!(matches!(
+            decode_payload(&[1, 1]),
+            Ok(ScreenSnapshot::NeedsPermission)
+        ));
+        assert!(matches!(
+            decode_payload(&[1, 1, 0x37, 0x37]),
+            Err(Error::Malformed)
+        ));
+    }
+
+    #[test]
+    fn admission_bounds_jobs_and_spacing() {
+        assert!(snapshot_admitted(0, None));
+        assert!(snapshot_admitted(
+            MAX_SNAPSHOT_JOBS - 1,
+            Some(SNAPSHOT_MIN_INTERVAL)
+        ));
+        assert!(!snapshot_admitted(MAX_SNAPSHOT_JOBS, None));
+        assert!(!snapshot_admitted(
+            0,
+            Some(SNAPSHOT_MIN_INTERVAL - Duration::from_millis(1))
+        ));
+    }
+}

@@ -1,10 +1,6 @@
-use crate::error::Error;
-use crate::input::InputEvent;
-use crate::input::{DisplayInfo, MAX_KEY_TEXT};
-use crate::protocol::{
-    error_code, ControlMessage, KeyText, Quality, RejectCode, SessionStamp, MAX_CONTROL_FRAME,
-    MAX_TOPOLOGY_FRAME, PROTOCOL_VERSION,
-};
+use super::*;
+use crate::input::MAX_KEY_TEXT;
+use crate::{Capability, RemoteStatus};
 
 #[test]
 fn control_messages_round_trip() {
@@ -12,7 +8,7 @@ fn control_messages_round_trip() {
     let messages = [
         ControlMessage::Hello {
             version: PROTOCOL_VERSION,
-            codec: crate::protocol::CODEC_H264,
+            codec: CODEC_H264,
             quality,
             decode: true,
             files_only: false,
@@ -25,7 +21,7 @@ fn control_messages_round_trip() {
         },
         ControlMessage::Hello {
             version: PROTOCOL_VERSION,
-            codec: crate::protocol::CODEC_H264,
+            codec: CODEC_H264,
             quality,
             decode: false,
             files_only: false,
@@ -38,7 +34,7 @@ fn control_messages_round_trip() {
         },
         ControlMessage::Hello {
             version: PROTOCOL_VERSION,
-            codec: crate::protocol::CODEC_H264_HIGH,
+            codec: CODEC_H264_HIGH,
             quality,
             decode: true,
             files_only: false,
@@ -53,7 +49,7 @@ fn control_messages_round_trip() {
             stamp: SessionStamp::new(7, 3),
             monitor_width: 1920,
             monitor_height: 1080,
-            codec: crate::protocol::CODEC_H264_HIGH,
+            codec: CODEC_H264_HIGH,
             quality,
             hostname: None,
             os: crate::OperatingSystem::local(),
@@ -62,7 +58,7 @@ fn control_messages_round_trip() {
             stamp: SessionStamp::new(7, 3),
             monitor_width: 1920,
             monitor_height: 1080,
-            codec: crate::protocol::CODEC_H264,
+            codec: CODEC_H264,
             quality,
             hostname: Some("linux-laptop".to_string()),
             os: crate::OperatingSystem::local(),
@@ -71,7 +67,7 @@ fn control_messages_round_trip() {
             stamp: SessionStamp::new(7, 3),
             monitor_width: 1920,
             monitor_height: 1080,
-            codec: crate::protocol::CODEC_H264,
+            codec: CODEC_H264,
             quality,
             hostname: None,
             os: crate::OperatingSystem::local(),
@@ -115,7 +111,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
     // New Hello/Accept lengths with out-of-range quality are malformed.
     let mut bad_hello = ControlMessage::Hello {
         version: PROTOCOL_VERSION,
-        codec: crate::protocol::CODEC_H264,
+        codec: CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
         files_only: false,
@@ -135,7 +131,7 @@ fn hello_accept_and_quality_shapes_are_validated() {
     ));
     let mut bad_decode = ControlMessage::Hello {
         version: PROTOCOL_VERSION,
-        codec: crate::protocol::CODEC_H264,
+        codec: CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
         files_only: false,
@@ -173,7 +169,7 @@ fn hostname_shapes_are_validated() {
     let quality = Quality::new(2_000, 30, 1920, 1080).unwrap();
     let hello = |hostname: Option<String>| ControlMessage::Hello {
         version: PROTOCOL_VERSION,
-        codec: crate::protocol::CODEC_H264,
+        codec: CODEC_H264,
         quality,
         decode: true,
         files_only: false,
@@ -625,7 +621,7 @@ fn handshake_os_is_bounded_and_every_truncation_is_rejected_without_panicking() 
         for message in [
             ControlMessage::Hello {
                 version: PROTOCOL_VERSION,
-                codec: crate::protocol::CODEC_H264,
+                codec: CODEC_H264,
                 quality,
                 decode: true,
                 files_only: true,
@@ -660,5 +656,78 @@ fn handshake_os_is_bounded_and_every_truncation_is_rejected_without_panicking() 
                 Err(Error::Malformed)
             ));
         }
+    }
+}
+
+#[test]
+fn availability_message_is_strict() {
+    let message = ControlMessage::Availability {
+        entries: vec![
+            (Capability::Camera, RemoteStatus::TurnedOff),
+            (Capability::Files, RemoteStatus::Available),
+        ],
+    };
+    let bytes = message.encode();
+    assert_eq!(ControlMessage::decode(&bytes).unwrap(), message);
+    let empty = ControlMessage::Availability { entries: vec![] };
+    assert_eq!(ControlMessage::decode(&empty.encode()).unwrap(), empty);
+    for bad in [
+        vec![13, 1, 0, 0],       // unknown capability 0
+        vec![13, 1, 6, 9],       // unknown status
+        vec![13, 2, 6, 1, 6, 0], // the same capability twice
+        vec![13, 2, 6, 1],       // shorter than its count
+        vec![13, 1, 6, 1, 4],    // trailing byte
+        vec![13, 14],            // more entries than capabilities
+    ] {
+        assert!(
+            matches!(ControlMessage::decode(&bad), Err(Error::Malformed)),
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn hostile_wire_topology_with_extreme_origin_is_malformed() {
+    for (x, y) in [(i32::MIN, 0), (0, i32::MIN), (i32::MAX, 0), (0, i32::MAX)] {
+        let bytes = ControlMessage::Topology {
+            stamp: SessionStamp::new(9, 1),
+            revision: 1,
+            displays: vec![screen(1, x, y, 1920, 1080, 0, 100)],
+        }
+        .encode();
+        assert!(
+            matches!(ControlMessage::decode(&bytes), Err(crate::Error::Malformed)),
+            "hostile origin ({x}, {y}) decoded"
+        );
+    }
+    let bytes = ControlMessage::Topology {
+        stamp: SessionStamp::new(9, 1),
+        revision: 1,
+        displays: vec![screen(1, 0, 0, 1920, 1080, 0, 100)],
+    }
+    .encode();
+    assert!(matches!(
+        ControlMessage::decode(&bytes),
+        Ok(ControlMessage::Topology { .. })
+    ));
+}
+fn screen(
+    id: u64,
+    x: i32,
+    y: i32,
+    width: u16,
+    height: u16,
+    rotation: u16,
+    scale: u16,
+) -> DisplayInfo {
+    DisplayInfo {
+        id,
+        origin_x: x,
+        origin_y: y,
+        width,
+        height,
+        rotation_deg: rotation,
+        scale_percent: scale,
+        revision: 1,
     }
 }

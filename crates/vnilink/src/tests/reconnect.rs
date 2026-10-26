@@ -4,15 +4,12 @@ use std::time::{Duration, SystemTime};
 
 use iroh::{RelayMode, SecretKey};
 
-use crate::address::{self, Announcement};
 use crate::core::{Core, CoreConfig, Listen};
 use crate::error::Error;
 use crate::installation::MemoryStore;
-use crate::invitation::{self, MAX_DIRECT_ADDRS};
-use crate::protocol::ControlMessage;
+use crate::invitation;
 use crate::relay::RelaySettings;
 use crate::session::{Grants, SessionPhase};
-use crate::trust::Device;
 
 fn start_direct() -> Core {
     let core = Core::boot(
@@ -97,52 +94,6 @@ fn wait_until(mut ready: impl FnMut() -> bool) {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-}
-
-#[test]
-fn an_announcement_round_trips_and_keeps_grants() {
-    let relays = vec!["https://relay.example.com".to_string()];
-    let direct = vec!["127.0.0.1:9".parse().unwrap(), "[::1]:9".parse().unwrap()];
-    let announcement = address::canonical(&relays, &direct).unwrap();
-    let bytes = address::encode(&announcement.relays, &announcement.direct);
-    assert_eq!(address::decode(&bytes).unwrap(), announcement);
-    let message = ControlMessage::Addresses {
-        relays: announcement.relays.clone(),
-        direct: announcement.direct.clone(),
-    };
-    assert_eq!(ControlMessage::decode(&message.encode()).unwrap(), message);
-    assert_eq!(
-        ControlMessage::decode(&ControlMessage::Close.encode()).unwrap(),
-        ControlMessage::Close
-    );
-
-    let mut device = Device {
-        endpoint_id: [4; 32],
-        display_id: "peer".to_string(),
-        relays: vec!["https://old.example.com".to_string()],
-        direct: vec!["198.51.100.8:8".parse().unwrap()],
-    };
-    address::install(&mut device, &announcement).unwrap();
-    assert_eq!(device.endpoint_id, [4; 32]);
-    assert_eq!(device.relays, announcement.relays);
-    assert!(!device.direct.contains(&"198.51.100.8:8".parse().unwrap()));
-
-    let mut too_many = vec!["203.0.113.1:1".parse().unwrap()];
-    for port in 2..=MAX_DIRECT_ADDRS as u16 + 1 {
-        too_many.push(SocketAddr::from(([203, 0, 113, 2], port)));
-    }
-    assert!(matches!(
-        address::canonical(&[], &too_many),
-        Err(Error::Malformed)
-    ));
-    assert!(matches!(
-        address::decode(b"\x06\x01\x00\x05http:extra"),
-        Err(Error::Malformed)
-    ));
-    let _ = Announcement {
-        relays: Vec::new(),
-        direct: Vec::new(),
-    };
 }
 
 #[test]

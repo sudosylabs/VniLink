@@ -343,3 +343,177 @@ pub fn export_json(snapshot: &DiagnosticSnapshot) -> Result<String, crate::Error
     }
     Ok(encoded)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection(id: u64) -> ConnectionSummary {
+        ConnectionSummary {
+            id,
+            role: "controller".into(),
+            phase: "active".into(),
+            generation: 1,
+            peer: fingerprint(&[id as u8; 32]),
+            services: 1,
+            path: "direct".into(),
+            rtt_ms: Some(3),
+            tx_bytes: 100,
+            rx_bytes: 200,
+            cwnd: Some(12_000),
+            congestion_events: Some(0),
+            lost_packets: Some(0),
+            black_holes_detected: Some(0),
+        }
+    }
+
+    fn service(id: u64) -> ServiceSummary {
+        ServiceSummary {
+            id,
+            connection_id: 1,
+            kind: "files".into(),
+            phase: "active".into(),
+            hosted: false,
+        }
+    }
+
+    fn pipeline(id: u64) -> PipelineSummary {
+        PipelineSummary {
+            service_id: id,
+            hosted: true,
+            codec: "h264".into(),
+            width: 1920,
+            height: 1080,
+            control: "controlling".into(),
+            ..Default::default()
+        }
+    }
+
+    fn inputs(connections: usize, services: usize) -> SnapshotInputs {
+        inputs_pipelines(connections, services, 0)
+    }
+
+    fn inputs_pipelines(connections: usize, services: usize, pipelines: usize) -> SnapshotInputs {
+        SnapshotInputs {
+            monotonic_ms: 7,
+            hosting: true,
+            connections: (0..connections as u64).map(connection).collect(),
+            services: (0..services as u64).map(service).collect(),
+            pipelines: (0..pipelines as u64).map(pipeline).collect(),
+            resources: ResourceCounts {
+                paired_devices: 2,
+                ..Default::default()
+            },
+            queues: QueueDepths::default(),
+            transfers: Default::default(),
+            last_end: None,
+            ignored: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_short_hex_and_never_the_key() {
+        let key = [0xABu8; 32];
+        assert_eq!(fingerprint(&key), "abababab");
+        assert_eq!(fingerprint(&[0u8; 32]), "00000000");
+        assert_ne!(fingerprint(&[1u8; 32]), fingerprint(&[2u8; 32]));
+    }
+
+    #[test]
+    fn file_name_only_strips_directories_and_bounds_length() {
+        assert_eq!(file_name_only("/Users/someone/Secret/file.txt"), "file.txt");
+        assert_eq!(file_name_only("C:\\Users\\someone\\doc.pdf"), "doc.pdf");
+        assert_eq!(file_name_only("bare"), "bare");
+        assert_eq!(file_name_only("/trailing/slash/"), "?");
+        assert_eq!(file_name_only(""), "?");
+        let long = format!("/tmp/{}.txt", "é".repeat(200));
+        let name = file_name_only(&long);
+        assert!(name.len() <= 128);
+        assert!(name.starts_with("é"));
+    }
+
+    #[test]
+    fn build_marks_truncation_at_the_list_cap() {
+        let small = build_snapshot(inputs(2, 3));
+        assert!(!small.truncated);
+        assert_eq!(small.connections.len(), 2);
+        assert_eq!(small.services.len(), 3);
+        assert_eq!(small.version, SNAPSHOT_VERSION);
+        let big = build_snapshot(inputs(MAX_SNAPSHOT_LISTED + 10, MAX_SNAPSHOT_LISTED + 1));
+        assert!(big.truncated);
+        assert_eq!(big.connections.len(), MAX_SNAPSHOT_LISTED);
+        assert_eq!(big.services.len(), MAX_SNAPSHOT_LISTED);
+        let piped = build_snapshot(inputs_pipelines(1, 1, MAX_SNAPSHOT_LISTED + 5));
+        assert!(piped.truncated);
+        assert_eq!(piped.pipelines.len(), MAX_SNAPSHOT_LISTED);
+        // Counts describe live state, not the truncated lists.
+        assert_eq!(big.resources.paired_devices, 2);
+    }
+
+    #[test]
+    fn export_round_trips_small_snapshots_as_expected_keys() {
+        let snapshot = build_snapshot(inputs(1, 1));
+        let json = export_json(&snapshot).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let keys: Vec<&str> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "connections",
+                "hosting",
+                "ignored",
+                "last_end",
+                "monotonic_ms",
+                "pipelines",
+                "queues",
+                "resources",
+                "services",
+                "transfers",
+                "truncated",
+                "version"
+            ]
+        );
+        // The exact key set is the schema: counts, labels and phases only.
+        // No screen, clipboard, terminal, token, secret or path field exists.
+        assert!(json.len() <= MAX_EXPORT_BYTES);
+    }
+
+    #[test]
+    fn export_sheds_lists_to_fit_the_cap_and_says_so() {
+        let mut snapshot = DiagnosticSnapshot {
+            version: SNAPSHOT_VERSION,
+            monotonic_ms: 9,
+            hosting: true,
+            connections: (0..2000u64).map(connection).collect(),
+            services: (0..2000u64).map(service).collect(),
+            pipelines: (0..2000u64).map(pipeline).collect(),
+            resources: ResourceCounts::default(),
+            queues: QueueDepths::default(),
+            transfers: Default::default(),
+            last_end: None,
+            ignored: Vec::new(),
+            truncated: false,
+        };
+        // Sanity: the untrimmed form really exceeds the cap.
+        assert!(serde_json::to_string(&snapshot).unwrap().len() > MAX_EXPORT_BYTES);
+        let json = export_json(&snapshot).unwrap();
+        assert!(json.len() <= MAX_EXPORT_BYTES);
+        snapshot = serde_json::from_str(&json).unwrap();
+        assert!(snapshot.truncated);
+        assert!(
+            snapshot.connections.len() + snapshot.services.len() + snapshot.pipelines.len() < 6000
+        );
+    }
+
+    #[test]
+    fn monotonic_clock_never_goes_backwards() {
+        let first = monotonic_ms();
+        let second = monotonic_ms();
+        assert!(second >= first);
+    }
+}

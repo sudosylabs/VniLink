@@ -724,3 +724,7 @@ pub(crate) fn error_code(error: &Error) -> RejectCode {
         _ => RejectCode::Malformed,
     }
 }
+
+#[cfg(test)]
+#[path = "protocol_tests.rs"]
+mod tests;

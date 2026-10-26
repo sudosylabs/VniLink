@@ -350,3 +350,166 @@ pub(crate) fn truncate(detail: String) -> String {
     }
     detail[..end].to_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn granted_inputs() -> AvailabilityInputs {
+        AvailabilityInputs {
+            implemented: true,
+            os_denied: false,
+            device_missing: false,
+            policy_allowed: true,
+            peer_granted: true,
+            capacity: None,
+            backend_failed: None,
+        }
+    }
+
+    #[test]
+    fn full_facts_mean_available_with_a_plain_summary() {
+        let availability = evaluate(Capability::Files, &granted_inputs());
+        assert!(availability.available);
+        assert!(availability.reasons.is_empty());
+        assert_eq!(availability.summarize(), "files: available");
+    }
+
+    #[test]
+    fn every_blocker_is_reported_most_fundamental_first() {
+        let availability = evaluate(
+            Capability::Terminal,
+            &AvailabilityInputs {
+                implemented: false,
+                os_denied: true,
+                device_missing: true,
+                policy_allowed: false,
+                peer_granted: false,
+                capacity: Some((16, 16)),
+                backend_failed: Some("pty spawn refused".into()),
+            },
+        );
+        assert!(!availability.available);
+        assert_eq!(
+            availability
+                .reasons
+                .iter()
+                .map(AvailabilityReason::label)
+                .collect::<Vec<_>>(),
+            [
+                "missing-implementation",
+                "denied-os-permission",
+                "unavailable-device",
+                "disabled-local-policy",
+                "denied-peer-grant",
+                "busy-resource",
+                "backend-failed",
+            ]
+        );
+        assert_eq!(
+            availability.summarize(),
+            "terminal: unavailable (missing-implementation, denied-os-permission, \
+         unavailable-device, disabled-local-policy, denied-peer-grant, \
+         busy-resource, backend-failed)"
+        );
+    }
+
+    #[test]
+    fn capacity_binds_only_at_the_limit_and_carries_counts() {
+        let under = evaluate(
+            Capability::Terminal,
+            &AvailabilityInputs {
+                capacity: Some((15, 16)),
+                ..granted_inputs()
+            },
+        );
+        assert!(under.available);
+        let at_limit = evaluate(
+            Capability::Terminal,
+            &AvailabilityInputs {
+                capacity: Some((16, 16)),
+                ..granted_inputs()
+            },
+        );
+        assert!(!at_limit.available);
+        assert_eq!(
+            at_limit.reasons,
+            [AvailabilityReason::BusyResource {
+                used: 16,
+                limit: 16
+            }]
+        );
+    }
+
+    #[test]
+    fn backend_failure_detail_is_bounded_on_char_boundaries() {
+        let availability = evaluate(
+            Capability::Camera,
+            &AvailabilityInputs {
+                backend_failed: Some("é".repeat(300)),
+                ..granted_inputs()
+            },
+        );
+        assert!(!availability.available);
+        let [AvailabilityReason::BackendFailed { detail }] = availability.reasons.as_slice() else {
+            panic!(
+                "expected one backend failure, got {:?}",
+                availability.reasons
+            );
+        };
+        assert!(detail.len() <= 256);
+        assert!(detail.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn each_capability_has_a_distinct_stable_label() {
+        let capabilities = [
+            Capability::DesktopView,
+            Capability::DesktopControl,
+            Capability::Clipboard,
+            Capability::Files,
+            Capability::Terminal,
+            Capability::Camera,
+            Capability::SystemAudio,
+            Capability::Microphone,
+            Capability::SystemLock,
+            Capability::SystemRestart,
+            Capability::SystemShutdown,
+            Capability::SystemPrivacy,
+            Capability::Recording,
+        ];
+        let mut labels: Vec<&str> = capabilities.iter().map(|c| c.label()).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), capabilities.len());
+    }
+
+    #[test]
+    fn policy_registry_names_every_durable_policy_with_its_scope() {
+        assert_eq!(POLICIES.len(), 5);
+        assert_eq!(
+            policy_descriptor("terminal").unwrap().scope,
+            PolicyChangeScope::IdleGated
+        );
+        assert_eq!(
+            policy_descriptor("file-retention").unwrap().scope,
+            PolicyChangeScope::Immediate
+        );
+        assert_eq!(
+            policy_descriptor("file-resource").unwrap().scope,
+            PolicyChangeScope::NextOwner
+        );
+        assert_eq!(
+            policy_descriptor("power").unwrap().scope,
+            PolicyChangeScope::Immediate
+        );
+        assert_eq!(
+            policy_descriptor("system").unwrap().scope,
+            PolicyChangeScope::Immediate
+        );
+        assert!(policy_descriptor("no-such-policy").is_err());
+        for descriptor in POLICIES {
+            assert!(!descriptor.summary.is_empty());
+        }
+    }
+}

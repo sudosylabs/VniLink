@@ -92,3 +92,177 @@ pub(crate) fn find_chord(map: &HostKeymap, keysym: u32) -> Option<LayoutChord> {
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pc_french_row_resolves_at_one_and_bracket() {
+        let mut keysyms = vec![0u32; 4 * 4];
+        keysyms[0..4].copy_from_slice(&[0x26, 0x31, 0, 0]);
+        keysyms[8..12].copy_from_slice(&[0xe0, 0x30, 0x40, 0]);
+        keysyms[12..16].copy_from_slice(&[0x29, 0xb0, 0x5d, 0]);
+        let map = HostKeymap {
+            min_keycode: 8,
+            keysyms_per_keycode: 4,
+            keysyms,
+        };
+        assert_eq!(keysym_of('@'), 0x40);
+        assert_eq!(keysym_of('é'), 0xe9);
+        assert_eq!(keysym_of('€'), 0x0100_20ac);
+        assert_eq!(
+            find_chord(&map, keysym_of('@')),
+            Some(LayoutChord {
+                keycode: 10,
+                level: ChordLevel::AltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('1')),
+            Some(LayoutChord {
+                keycode: 8,
+                level: ChordLevel::Shift,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of(']')),
+            Some(LayoutChord {
+                keycode: 11,
+                level: ChordLevel::AltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('&')),
+            Some(LayoutChord {
+                keycode: 8,
+                level: ChordLevel::Plain,
+            })
+        );
+        assert_eq!(find_chord(&map, keysym_of('€')), None);
+
+        let mut both = map.keysyms.clone();
+        both.extend_from_slice(&[0x40, 0, 0, 0]);
+        let map = HostKeymap {
+            keysyms: both,
+            ..map
+        };
+        assert_eq!(
+            find_chord(&map, keysym_of('@')),
+            Some(LayoutChord {
+                keycode: 12,
+                level: ChordLevel::Plain,
+            })
+        );
+    }
+
+    #[test]
+    fn a_ten_wide_french_core_map_uses_group_one() {
+        // Live `fr` basic rows, X core width 10. Columns 2 and 3 are the US
+        // group. `@` there is not AltGr. Group 1 level 3 is column 4.
+        let mut keysyms = vec![0u32; 10 * (38 - 11 + 1)];
+        {
+            let mut put = |keycode: u8, syms: [u32; 6]| {
+                let start = usize::from(keycode - 11) * 10;
+                keysyms[start..start + 6].copy_from_slice(&syms);
+            };
+            put(11, [0x00e9, 0x0032, 0x0032, 0x0040, 0x007e, 0x0ac3]);
+            put(19, [0x00e0, 0x0030, 0x0030, 0x0029, 0x0040, 0x00b0]);
+            put(20, [0x0029, 0x00b0, 0x002d, 0x005f, 0x005d, 0x00bf]);
+            put(24, [0x0061, 0x0041, 0x0071, 0x0051, 0x00e6, 0x00c6]);
+            put(38, [0x0071, 0x0051, 0x0061, 0x0041, 0x0040, 0x07d9]);
+        }
+        let map = HostKeymap {
+            min_keycode: 11,
+            keysyms_per_keycode: 10,
+            keysyms,
+        };
+        assert_eq!(
+            find_chord(&map, keysym_of('@')),
+            Some(LayoutChord {
+                keycode: 19,
+                level: ChordLevel::AltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of(']')),
+            Some(LayoutChord {
+                keycode: 20,
+                level: ChordLevel::AltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('2')),
+            Some(LayoutChord {
+                keycode: 11,
+                level: ChordLevel::Shift,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('~')),
+            Some(LayoutChord {
+                keycode: 11,
+                level: ChordLevel::AltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('æ')),
+            Some(LayoutChord {
+                keycode: 24,
+                level: ChordLevel::AltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('¿')),
+            Some(LayoutChord {
+                keycode: 20,
+                level: ChordLevel::ShiftAltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('q')),
+            Some(LayoutChord {
+                keycode: 38,
+                level: ChordLevel::Plain,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of(')')),
+            Some(LayoutChord {
+                keycode: 20,
+                level: ChordLevel::Plain,
+            })
+        );
+    }
+
+    #[test]
+    fn a_single_group_wide_row_skips_the_copied_columns() {
+        // `XkbGetCoreMap` writes one group of four levels as ABABC D.
+        let map = HostKeymap {
+            min_keycode: 24,
+            keysyms_per_keycode: 6,
+            keysyms: vec![0x61, 0x41, 0x61, 0x41, 0xe6, 0xc6],
+        };
+        assert_eq!(
+            find_chord(&map, keysym_of('a')),
+            Some(LayoutChord {
+                keycode: 24,
+                level: ChordLevel::Plain,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('æ')),
+            Some(LayoutChord {
+                keycode: 24,
+                level: ChordLevel::AltGr,
+            })
+        );
+        assert_eq!(
+            find_chord(&map, keysym_of('Æ')),
+            Some(LayoutChord {
+                keycode: 24,
+                level: ChordLevel::ShiftAltGr,
+            })
+        );
+    }
+}

@@ -531,3 +531,31 @@ mod filesystem_mode_tests {
         std::fs::remove_dir_all(fixture).unwrap();
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use crate::test_support::Scratch;
+
+    /// Persisted pins cannot adopt a different directory at the same path.
+    #[test]
+    #[cfg(unix)]
+    fn persisted_root_pin_refuses_same_path_replacement() {
+        let scratch = Scratch::tagged("fs");
+        let root = scratch.join("root");
+        std::fs::create_dir(&root).unwrap();
+        let mut roots = crate::fs::RootSet::default();
+        roots.set(std::slice::from_ref(&root)).unwrap();
+        let pin = roots.pin(0).unwrap();
+        let persisted = serde_json::to_vec(&pin).unwrap();
+        std::fs::rename(&root, scratch.join("original")).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("valuable"), b"keep").unwrap();
+        let pin: crate::fs::PinnedRoot = serde_json::from_slice(&persisted).unwrap();
+        let mut restarted = crate::fs::RootSet::default();
+        restarted.set(std::slice::from_ref(&root)).unwrap();
+        assert!(restarted.verify_pin(&pin).is_err());
+        roots.set(std::slice::from_ref(&root)).unwrap();
+        assert!(roots.verify_pin(&pin).is_err());
+        assert_eq!(std::fs::read(root.join("valuable")).unwrap(), b"keep");
+    }
+}

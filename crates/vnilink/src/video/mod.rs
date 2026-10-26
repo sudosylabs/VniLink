@@ -19,8 +19,6 @@ mod recovery;
 mod report;
 
 pub(crate) use counters::{VideoCounters, VideoCounts};
-#[cfg(test)]
-pub(crate) use datagram::MAX_PARTIAL_BYTES;
 pub(crate) use datagram::{
     fragment, fragmented_size, parity_count, FragmentCounts, Losses, Reassembler, FRAG_HEADER,
     MAX_PROTECTION,
@@ -114,3 +112,6 @@ pub trait HostCapture: Send {
         false
     }
 }
+
+#[cfg(test)]
+mod tests;

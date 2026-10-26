@@ -317,3 +317,16 @@ pub(crate) fn truncate_detail(detail: String) -> String {
     }
     detail[..end].to_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_detail_truncates_on_char_boundaries() {
+        let long = "é".repeat(300);
+        let truncated = truncate_detail(long);
+        assert!(truncated.len() <= 256);
+        assert!(truncated.chars().all(|c| c == 'é'));
+    }
+}

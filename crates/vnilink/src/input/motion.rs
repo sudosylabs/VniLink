@@ -111,3 +111,62 @@ impl PointerPlan {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::input::InputEvent;
+
+    #[test]
+    fn pointer_motion_keeps_sub_counts_and_never_scales_absolute_positions() {
+        use crate::input::{PointerPlan, PointerSettings};
+        let mut plan = PointerPlan::default();
+        plan.set(
+            PointerSettings {
+                sensitivity_percent: 1,
+                ..PointerSettings::default()
+            },
+            false,
+        )
+        .unwrap();
+        for _ in 0..99 {
+            assert_eq!(plan.apply(InputEvent::motion(1, -1)).unwrap(), None);
+        }
+        assert_eq!(
+            plan.apply(InputEvent::motion(1, -1)).unwrap(),
+            Some(InputEvent::motion(1, -1))
+        );
+        assert_eq!(
+            plan.apply(InputEvent::pointer(-20, 30, 1, 1)).unwrap(),
+            Some(InputEvent::pointer(-20, 30, 1, 1))
+        );
+        assert!(plan
+            .set(
+                PointerSettings {
+                    sensitivity_percent: 0,
+                    ..PointerSettings::default()
+                },
+                false
+            )
+            .is_err());
+        plan.set(
+            PointerSettings {
+                sensitivity_percent: 400,
+                ..PointerSettings::default()
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.apply(InputEvent::motion(i16::MAX, i16::MIN)).unwrap(),
+            Some(InputEvent::motion(i16::MAX, i16::MIN))
+        );
+        let mut pending = 0;
+        for _ in 0..7 {
+            assert_eq!(crate::input::accumulate_detents(&mut pending, 15), 0);
+        }
+        assert_eq!(crate::input::accumulate_detents(&mut pending, 15), 1);
+        assert_eq!(pending, 0);
+        assert_eq!(crate::input::accumulate_detents(&mut pending, -119), 0);
+        assert_eq!(crate::input::accumulate_detents(&mut pending, -1), -1);
+    }
+}

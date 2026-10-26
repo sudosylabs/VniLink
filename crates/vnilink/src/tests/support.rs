@@ -5,7 +5,6 @@ use iroh::RelayMode;
 
 use crate::core::{Core, CoreConfig, Listen};
 use crate::error::Error;
-use crate::events::{CoreEvent, EventSubscription};
 use crate::input::{HostDesktop, InputEvent};
 use crate::session::{Grants, SessionPhase, SessionRole};
 use crate::video::HostCapture;
@@ -64,43 +63,6 @@ impl HostDesktop for RecordingDesktop {
     }
 }
 
-pub(super) struct FixedDesktop {
-    pub(super) width: u16,
-    pub(super) height: u16,
-    pub(crate) events: Arc<Mutex<Vec<InputEvent>>>,
-    pub(super) fail_key_down: Option<u16>,
-    pub(super) fail_release: bool,
-}
-
-impl HostDesktop for FixedDesktop {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
-        match event {
-            InputEvent::Key { down: false, .. } | InputEvent::Button { down: false, .. }
-                if self.fail_release =>
-            {
-                return Err(Error::InputFailed(
-                    "the operating system rejected the event",
-                ));
-            }
-            InputEvent::Key { usage, down: true } if self.fail_key_down == Some(usage) => {
-                return Err(Error::InputFailed(
-                    "the operating system rejected the event",
-                ));
-            }
-            _ => {}
-        }
-        self.events
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(event);
-        Ok(())
-    }
-
-    fn monitor(&self) -> (u16, u16) {
-        (self.width, self.height)
-    }
-}
-
 pub(super) struct ShutdownCapture;
 
 impl HostCapture for ShutdownCapture {
@@ -131,49 +93,4 @@ pub(crate) fn pair_for_control(host: &Core, controller: &Core) {
         transfer: false,
     })
     .unwrap();
-}
-
-pub(super) fn take_matching(
-    subscription: &EventSubscription,
-    mut pred: impl FnMut(&CoreEvent) -> bool,
-) -> CoreEvent {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        if std::time::Instant::now() > deadline {
-            panic!("timed out waiting for an event");
-        }
-        if let Some(event) = subscription.recv_timeout(Duration::from_millis(20)) {
-            if pred(&event) {
-                return event;
-            }
-        }
-    }
-}
-
-pub(super) fn boot_capacity(event_capacity: usize) -> Result<Core, Error> {
-    Core::boot(
-        CoreConfig {
-            listen: Listen::Loopback,
-            event_capacity,
-            ..CoreConfig::default()
-        },
-        RelayMode::Disabled,
-    )
-}
-
-pub(super) fn wait_applied(events: &Mutex<Vec<InputEvent>>, expected: &[InputEvent]) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        let got = events.lock().unwrap_or_else(|poison| poison.into_inner());
-        if got.len() >= expected.len() {
-            assert_eq!(got.as_slice(), expected);
-            return;
-        }
-        drop(got);
-        if std::time::Instant::now() > deadline {
-            let got = events.lock().unwrap_or_else(|poison| poison.into_inner());
-            panic!("applied events did not settle: {got:?}");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
 }

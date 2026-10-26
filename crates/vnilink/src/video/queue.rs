@@ -610,3 +610,172 @@ mod recording_tests {
         assert!(taps.iter().all(RecordingVideoTap::is_closed));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_still_waits_in_turn_and_owes_nothing() {
+        let picture = |keyframe, at| EncodedFrame::h264(keyframe, at, vec![1]).unwrap();
+        let still = |at| EncodedFrame::still(at, vec![2]).unwrap();
+        let mut queue = VideoQueue::new();
+        assert_eq!(queue.push(picture(true, 1)), VideoPush::Queued);
+        assert_eq!(
+            queue.push(still(2)),
+            VideoPush::Queued,
+            "behind the picture before it"
+        );
+        assert_eq!(queue.pop().unwrap().timestamp_us, 1);
+        assert_eq!(queue.pop().unwrap().role, FrameRole::Still);
+        // A full queue leaves a still out rather than drop the stream's frames.
+        for at in 0..crate::video::VIDEO_QUEUE as u64 {
+            queue.push(picture(at == 0, 10 + at));
+        }
+        assert_eq!(queue.push(still(30)), VideoPush::Skipped);
+        while queue.pop().is_some() {}
+        // A loss leaves the stream waiting for a keyframe; a still neither
+        // answers it nor lets the predicted frames through.
+        queue.lost();
+        assert_eq!(queue.push(still(4)), VideoPush::Queued);
+        assert_eq!(queue.push(picture(false, 5)), VideoPush::StillNeedsKeyframe);
+        // A keyframe replaces a still waiting before it, uncounted.
+        let dropped = queue.dropped();
+        assert_eq!(queue.push(picture(true, 6)), VideoPush::Queued);
+        assert_eq!(queue.dropped(), dropped);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.pop().unwrap().timestamp_us, 6);
+    }
+
+    #[test]
+    fn a_still_is_shown_but_never_recorded() {
+        let inbox = VideoInbox::new();
+        let tap = inbox.recording_tap().unwrap();
+        inbox.push(EncodedFrame::h264(true, 1, vec![1]).unwrap());
+        inbox.push(EncodedFrame::still(2, vec![2]).unwrap());
+        assert_eq!(inbox.try_pop().unwrap().timestamp_us, 1);
+        assert_eq!(inbox.try_pop().unwrap().role, FrameRole::Still);
+        let recorded: Vec<_> = std::iter::from_fn(|| tap.try_recv())
+            .map(|frame| frame.timestamp_us)
+            .collect();
+        assert_eq!(recorded, [1]);
+    }
+
+    #[test]
+    fn an_overflow_episode_requests_one_keyframe_until_it_arrives() {
+        let mut queue = VideoQueue::new();
+        assert_eq!(queue.push(frame(true, 1)), VideoPush::Queued);
+        // Fill to the bound with predicted frames.
+        for index in 0..VIDEO_QUEUE - 1 {
+            assert_eq!(
+                queue.push(frame(false, 2 + index as u64)),
+                VideoPush::Queued
+            );
+        }
+        // The next predicted frame overflows: exactly one keyframe request for
+        // the whole episode, then silence until the keyframe arrives.
+        assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
+        for timestamp in 100..110u64 {
+            assert_eq!(
+                queue.push(frame(false, timestamp)),
+                VideoPush::StillNeedsKeyframe
+            );
+        }
+        assert_eq!(queue.push(frame(true, 110)), VideoPush::Queued);
+        assert_eq!(queue.pop().unwrap().timestamp_us, 110);
+    }
+
+    #[test]
+    fn predicted_frames_drop_until_the_next_keyframe() {
+        let mut queue = VideoQueue::new();
+        assert_eq!(queue.push(frame(true, 1)), VideoPush::Queued);
+        for index in 0..VIDEO_QUEUE - 1 {
+            assert_eq!(
+                queue.push(frame(false, 2 + index as u64)),
+                VideoPush::Queued
+            );
+        }
+        assert_eq!(queue.len(), VIDEO_QUEUE);
+        assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
+        assert_eq!(queue.len(), 1);
+        let kept = queue.pop().unwrap();
+        assert!(kept.keyframe);
+        assert_eq!(kept.timestamp_us, 1);
+        assert!(queue.dropped() >= 1);
+        assert_eq!(queue.push(frame(false, 100)), VideoPush::StillNeedsKeyframe);
+        assert_eq!(queue.push(frame(true, 101)), VideoPush::Queued);
+        assert_eq!(queue.len(), 1);
+        let dropped = queue.dropped();
+        assert_eq!(queue.push(frame(true, 102)), VideoPush::Queued);
+        assert!(queue.dropped() > dropped);
+        assert_eq!(queue.len(), 1);
+        let only = queue.pop().unwrap();
+        assert!(only.keyframe);
+        assert_eq!(only.timestamp_us, 102);
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn a_viewer_queue_older_than_its_budget_starts_again_from_a_keyframe() {
+        let start = Instant::now();
+        let frame = |keyframe| EncodedFrame::h264(keyframe, 1, vec![0x41]).unwrap();
+        let mut queue = VideoQueue::new().with_max_age(crate::video::INBOX_MAX_AGE);
+        assert_eq!(queue.push_at(frame(true), start), VideoPush::Queued);
+        assert_eq!(
+            queue.push_at(frame(false), start + Duration::from_millis(100)),
+            VideoPush::Queued,
+            "two frames within the budget are jitter, not delay"
+        );
+        // The window has not taken the first frame for longer than the budget:
+        // the predicted frames go, and a keyframe is wanted.
+        assert_eq!(
+            queue.push_at(frame(false), start + Duration::from_millis(151)),
+            VideoPush::KeyframeNeeded
+        );
+        assert_eq!(queue.len(), 1, "the buffered keyframe stays");
+        assert_eq!(
+            queue.push_at(frame(true), start + Duration::from_millis(160)),
+            VideoPush::Queued
+        );
+        // A queue without a budget is bounded by depth only.
+        let mut deep = VideoQueue::new();
+        deep.push_at(frame(true), start);
+        assert_eq!(
+            deep.push_at(frame(false), start + Duration::from_secs(5)),
+            VideoPush::Queued
+        );
+    }
+
+    /// A reader told when a frame is queued need not poll; once it is gone, the
+    /// network task calls nothing.
+    #[test]
+    fn a_subscription_is_woken_when_a_frame_is_queued_until_it_is_dropped() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let inbox = Arc::new(crate::video::VideoInbox::new());
+        let subscription = crate::VideoSubscription::new(Arc::clone(&inbox), Arc::new(()));
+        let woken = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&woken);
+        subscription.on_ready(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        let frame = |keyframe| EncodedFrame::h264(keyframe, 1, vec![0x65]).unwrap();
+        inbox.push(frame(true));
+        assert_eq!(woken.load(Ordering::Relaxed), 1);
+        assert!(subscription.try_recv().is_some());
+        // A frame dropped while a keyframe is owed wakes no one.
+        inbox.lost();
+        inbox.push(frame(false));
+        assert_eq!(woken.load(Ordering::Relaxed), 1);
+        drop(subscription);
+        inbox.push(frame(true));
+        assert_eq!(
+            woken.load(Ordering::Relaxed),
+            1,
+            "a dropped reader was woken"
+        );
+    }
+
+    fn frame(keyframe: bool, timestamp_us: u64) -> EncodedFrame {
+        EncodedFrame::h264(keyframe, timestamp_us, vec![1]).unwrap()
+    }
+}

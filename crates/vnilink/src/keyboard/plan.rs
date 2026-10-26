@@ -209,3 +209,237 @@ fn is_level(usage: u16) -> bool {
 fn is_typed_text(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|character| !character.is_control())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn held_navigation_keys_repeat_and_release_once() {
+        let mut plan = KeyPlan::new();
+        let press = LocalKey {
+            usage: 42,
+            down: true,
+            text: "",
+            composing: false,
+        };
+        for mode in [KeyboardMode::Character, KeyboardMode::Map] {
+            plan.clear();
+            for _ in 0..3 {
+                assert_eq!(
+                    events(&plan.apply(mode, false, press).unwrap()),
+                    vec![InputEvent::key_down(42)]
+                );
+            }
+            assert_eq!(
+                events(&plan.apply(mode, false, up(42)).unwrap()),
+                vec![InputEvent::key_up(42)]
+            );
+            assert!(!plan.is_held());
+        }
+    }
+
+    fn down<'a>(usage: u16, text: &'a str) -> LocalKey<'a> {
+        LocalKey::new(usage, true, text)
+    }
+
+    fn up(usage: u16) -> LocalKey<'static> {
+        LocalKey::new(usage, false, "")
+    }
+
+    fn events(planned: &[Planned]) -> Vec<InputEvent> {
+        planned
+            .iter()
+            .filter_map(|item| match item {
+                Planned::Event(event) => Some(*event),
+                Planned::Text(_) | Planned::Chord(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn character_mode_inserts_at_from_either_chord() {
+        let mut plan = KeyPlan::new();
+        let mac = plan
+            .apply(KeyboardMode::Character, false, down(usage::GRAVE, "@"))
+            .unwrap();
+        assert_eq!(mac, vec![Planned::Text("@".to_owned())]);
+        assert!(plan
+            .apply(KeyboardMode::Character, false, up(usage::GRAVE))
+            .unwrap()
+            .is_empty());
+
+        plan.apply(KeyboardMode::Character, false, down(usage::RIGHT_ALT, ""))
+            .unwrap();
+        let pc = plan
+            .apply(KeyboardMode::Character, false, down(usage::DIGIT_0, "@"))
+            .unwrap();
+        assert_eq!(pc, vec![Planned::Text("@".to_owned())]);
+        assert!(events(
+            &plan
+                .apply(KeyboardMode::Character, false, up(usage::DIGIT_0))
+                .unwrap()
+        )
+        .is_empty());
+        assert!(events(
+            &plan
+                .apply(KeyboardMode::Character, false, up(usage::RIGHT_ALT))
+                .unwrap()
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn character_mode_inserts_the_french_m_and_keeps_shortcuts() {
+        let mut plan = KeyPlan::new();
+        let typed = plan
+            .apply(KeyboardMode::Character, false, down(usage::SEMICOLON, "m"))
+            .unwrap();
+        assert_eq!(typed, vec![Planned::Text("m".to_owned())]);
+
+        let mut plan = KeyPlan::new();
+        let command = plan
+            .apply(KeyboardMode::Character, true, down(usage::LEFT_META, ""))
+            .unwrap();
+        let letter = plan
+            .apply(KeyboardMode::Character, true, down(usage::C, "c"))
+            .unwrap();
+        assert_eq!(
+            events(&[command, letter].concat()),
+            vec![
+                InputEvent::key_down(usage::LEFT_CONTROL),
+                InputEvent::key_down(usage::C),
+            ]
+        );
+    }
+
+    #[test]
+    fn shift_is_a_key_for_selection_and_not_for_a_symbol() {
+        let mut plan = KeyPlan::new();
+        assert!(plan
+            .apply(KeyboardMode::Character, false, down(usage::LEFT_SHIFT, ""))
+            .unwrap()
+            .is_empty());
+        let symbol = plan
+            .apply(KeyboardMode::Character, false, down(usage::GRAVE, "#"))
+            .unwrap();
+        assert_eq!(symbol, vec![Planned::Text("#".to_owned())]);
+        let arrow = plan
+            .apply(KeyboardMode::Character, false, down(usage::LEFT, ""))
+            .unwrap();
+        assert_eq!(
+            arrow,
+            vec![
+                Planned::Event(InputEvent::key_down(usage::LEFT_SHIFT)),
+                Planned::Event(InputEvent::key_down(usage::LEFT)),
+            ]
+        );
+    }
+
+    #[test]
+    fn map_sends_the_position_and_translate_sends_a_chord() {
+        let mut plan = KeyPlan::new();
+        let mapped = plan
+            .apply(KeyboardMode::Map, false, down(usage::GRAVE, "@"))
+            .unwrap();
+        assert_eq!(
+            mapped,
+            vec![Planned::Event(InputEvent::key_down(usage::GRAVE))]
+        );
+
+        let mut plan = KeyPlan::new();
+        let translated = plan
+            .apply(KeyboardMode::Translate, false, down(usage::GRAVE, "@"))
+            .unwrap();
+        assert_eq!(translated, vec![Planned::Chord("@".to_owned())]);
+        let shortcut = plan
+            .apply(
+                KeyboardMode::Translate,
+                false,
+                down(usage::LEFT_CONTROL, ""),
+            )
+            .unwrap();
+        let letter = plan
+            .apply(KeyboardMode::Translate, false, down(usage::C, "c"))
+            .unwrap();
+        assert_eq!(
+            events(&[shortcut, letter].concat()),
+            vec![
+                InputEvent::key_down(usage::LEFT_CONTROL),
+                InputEvent::key_down(usage::C),
+            ]
+        );
+    }
+
+    #[test]
+    fn enter_and_a_missing_character_stay_physical() {
+        let mut plan = KeyPlan::new();
+        let entered = plan
+            .apply(KeyboardMode::Character, false, down(usage::ENTER, "\n"))
+            .unwrap();
+        assert_eq!(
+            entered,
+            vec![Planned::Event(InputEvent::key_down(usage::ENTER))]
+        );
+        let bare = plan
+            .apply(KeyboardMode::Character, false, down(usage::A, ""))
+            .unwrap();
+        assert_eq!(bare, vec![Planned::Event(InputEvent::key_down(usage::A))]);
+    }
+
+    #[test]
+    fn uncommitted_dead_key_does_not_duplicate_the_final_composed_character() {
+        for mode in [KeyboardMode::Character, KeyboardMode::Translate] {
+            let mut plan = KeyPlan::new();
+            assert!(plan
+                .apply(mode, false, LocalKey::composing(usage::APOSTROPHE, true))
+                .unwrap()
+                .is_empty());
+            assert!(plan
+                .apply(mode, false, LocalKey::composing(usage::APOSTROPHE, false))
+                .unwrap()
+                .is_empty());
+            let committed = plan
+                .apply(mode, false, LocalKey::new(usage::E, true, "é"))
+                .unwrap();
+            assert_eq!(
+                committed,
+                vec![if mode == KeyboardMode::Character {
+                    Planned::Text("é".into())
+                } else {
+                    Planned::Chord("é".into())
+                }]
+            );
+            assert!(plan
+                .apply(mode, false, LocalKey::new(usage::E, false, ""))
+                .unwrap()
+                .is_empty());
+            assert!(!plan.is_held());
+        }
+        let mut plan = KeyPlan::new();
+        assert_eq!(
+            events(
+                &plan
+                    .apply(
+                        KeyboardMode::Map,
+                        false,
+                        LocalKey::composing(usage::APOSTROPHE, true)
+                    )
+                    .unwrap()
+            ),
+            vec![InputEvent::key_down(usage::APOSTROPHE)]
+        );
+        assert_eq!(
+            events(
+                &plan
+                    .apply(
+                        KeyboardMode::Map,
+                        false,
+                        LocalKey::composing(usage::APOSTROPHE, false)
+                    )
+                    .unwrap()
+            ),
+            vec![InputEvent::key_up(usage::APOSTROPHE)]
+        );
+    }
+}
