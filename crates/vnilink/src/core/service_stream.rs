@@ -838,9 +838,10 @@ impl Drop for HostedGuard {
                     CloseCause::Shutdown
                 } else {
                     match state.incoming.get(&record.info.connection_id) {
-                        Some(session) if session.phase == SessionPhase::Active => {
-                            CloseCause::DeviceLoss
-                        }
+                        // A live connection on an open link: the backend or
+                        // loop itself died. A link already closed is a lost
+                        // parent, whatever the session's phase says yet.
+                        Some(session) if session.connected() => CloseCause::DeviceLoss,
                         _ => CloseCause::ParentLoss,
                     }
                 };
@@ -882,7 +883,7 @@ pub(super) fn close_hosted(shared: &Shared, id: u64, cause: CloseCause) {
     let connected = state
         .incoming
         .get(&connection)
-        .is_some_and(|session| session.phase == SessionPhase::Active);
+        .is_some_and(LiveSession::connected);
     if (cause == CloseCause::PeerClose && !connected) || state.shut_down {
         return;
     }

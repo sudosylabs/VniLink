@@ -1833,9 +1833,10 @@ impl Drop for HostedDesktopGuard {
                     CloseCause::Shutdown
                 } else {
                     match state.incoming.get(&record.info.connection_id) {
-                        Some(session) if session.phase == SessionPhase::Active => {
-                            CloseCause::DeviceLoss
-                        }
+                        // A live connection on an open link: the backend or
+                        // loop itself died. A link already closed is a lost
+                        // parent, whatever the session's phase says yet.
+                        Some(session) if session.connected() => CloseCause::DeviceLoss,
                         _ => CloseCause::ParentLoss,
                     }
                 };
@@ -2115,7 +2116,7 @@ pub(super) async fn serve(
             let connected = state
                 .incoming
                 .get(&desktop.info.service.connection_id)
-                .is_some_and(|session| session.phase == SessionPhase::Active);
+                .is_some_and(LiveSession::connected);
             if let Some(record) = state
                 .hosted_services
                 .get_mut(&desktop.info.service.id)
@@ -2129,7 +2130,15 @@ pub(super) async fn serve(
         }
     }
     let parent_stopped = *parent_stop.borrow();
-    if let Some(end) = host_end(&shared, &desktop, parent_stopped) {
+    // A parent stopped because its link was lost: nobody is left to tell.
+    let link_lost = parent_stopped
+        && !lock(&shared.state)
+            .incoming
+            .get(&desktop.info.service.connection_id)
+            .is_some_and(LiveSession::connected);
+    if link_lost {
+        desktop.ended(&shared, true, crate::DesktopEnd::LinkLost);
+    } else if let Some(end) = host_end(&shared, &desktop, parent_stopped) {
         desktop.ended(&shared, true, crate::DesktopEnd::Host(end));
         crate::ignored!(
             crate::trace::STREAM,

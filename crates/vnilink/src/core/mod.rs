@@ -286,6 +286,19 @@ struct LiveSession {
     remote_availability: Option<Vec<(crate::Capability, crate::RemoteStatus)>>,
 }
 
+impl LiveSession {
+    /// Active, on a link still open. A stream that ends on such a session
+    /// was ended by its peer; a lost link ends streams too, before the
+    /// session's phase learns of it, which its link already says.
+    fn connected(&self) -> bool {
+        self.phase == SessionPhase::Active
+            && self
+                .link
+                .as_ref()
+                .is_some_and(|link| link.close_reason().is_none())
+    }
+}
+
 /// All mutable controller channels belong to one session, including reconnects.
 struct ControllerState {
     inbox: Arc<VideoInbox>,
