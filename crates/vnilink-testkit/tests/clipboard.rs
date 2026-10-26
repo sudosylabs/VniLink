@@ -3,6 +3,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use expect_test::expect;
+
 use vnilink::{Error, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{DesktopSession, RecordingClipboard, Script, ScriptedScreen};
 use vnilink_testkit::traced;
@@ -43,13 +45,16 @@ fn text_crosses_both_ways_and_is_never_recorded() {
         Some("from the host")
     );
 
-    let sent = trace.named("clipboard sent");
-    assert_eq!(sent.len(), 2, "{sent:?}");
-    assert!(
-        sent.iter().all(|event| event["ended"].is_null()),
-        "{sent:?}"
-    );
-    assert_eq!(sent[0]["bytes"], secret.len());
+    expect![[r#"
+        controller:
+          clipboard: clipboard sent bytes=28 service=1
+          clipboard: clipboard received bytes=13 hosted=false service=1
+        host:
+          clipboard: clipboard adapter installed
+          clipboard: clipboard received bytes=28 hosted=true service=1
+          clipboard: clipboard sent bytes=13 service=1
+    "#]]
+    .assert_eq(&trace.story(&["clipboard"]));
     let everything = trace.events().join("\n");
     assert!(!everything.contains("horse"), "copied text was recorded");
     assert!(
@@ -79,19 +84,22 @@ fn without_the_grant_nothing_crosses_and_the_desktop_lives() {
     ));
     assert!(texts.lock().unwrap().is_empty());
     assert!(!session.service.is_cancelled());
-    let refused = trace.named("clipboard received");
-    assert!(
-        refused
-            .iter()
-            .any(|event| event["refused"] == "clipboard denied"),
-        "{refused:?}"
-    );
     session.share_clipboard(true);
     session.service.submit_clipboard("granted").unwrap();
     assert_eq!(
         texts.lock().unwrap().last().map(String::as_str),
         Some("granted")
     );
+    expect![[r#"
+        controller:
+          clipboard: clipboard sent bytes=6 ended=clipboard denied service=1
+          clipboard: clipboard sent bytes=7 service=1
+        host:
+          clipboard: clipboard adapter installed
+          clipboard: clipboard received bytes=6 hosted=true refused=clipboard denied service=1
+          clipboard: clipboard received bytes=7 hosted=true service=1
+    "#]]
+    .assert_eq(&trace.story(&["clipboard"]));
 }
 
 /// The largest text crosses whole; one byte more is refused before it is
@@ -148,31 +156,15 @@ fn a_file_selection_crosses_a_session_and_its_story_is_recorded() {
         .unwrap();
     assert_eq!(stored.selection, offer);
 
-    let story = |message: &str| -> Vec<(String, String)> {
-        trace
-            .named(message)
-            .iter()
-            .filter(|event| event["kind"] == "files")
-            .map(|event| {
-                (
-                    event["engine"].as_str().unwrap_or_default().to_owned(),
-                    event["refused"].as_str().unwrap_or("delivered").to_owned(),
-                )
-            })
-            .collect()
-    };
-    assert_eq!(
-        story("clipboard sent"),
-        [("controller".into(), "delivered".into())]
-    );
-    assert_eq!(
-        story("clipboard received"),
-        [("host".into(), "delivered".into())]
-    );
-    assert_eq!(
-        story("clipboard answered"),
-        [("controller".into(), "delivered".into())]
-    );
+    expect![[r#"
+        controller:
+          clipboard: clipboard stream opened dial=true
+          clipboard: clipboard sent amount=1 kind=files
+          clipboard: clipboard answered amount=1 kind=files
+        host:
+          clipboard: clipboard received amount=1 kind=files
+    "#]]
+    .assert_eq(&trace.story(&["clipboard"]));
     assert!(
         !trace.events().join("\n").contains("quarterly"),
         "a file's name was recorded"

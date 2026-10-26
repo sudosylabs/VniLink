@@ -1,5 +1,6 @@
 //! The Camera service alone: a host's camera viewed from the controller.
 
+use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::camera::{CameraConfig, CameraEnd};
@@ -35,9 +36,11 @@ fn pictures_start_at_a_keyframe_and_arrive_whole() {
     let keyframe = EncodedFrame::h264(true, 2, vec![7; 512 * 1024]).unwrap();
     source.publish(keyframe.clone()).unwrap();
     assert_eq!(camera.recv_timeout(DEFAULT_WAIT), Some(keyframe));
-    let opened = trace.named("camera opened");
-    assert_eq!(opened.len(), 1, "{opened:?}");
-    assert_eq!(opened[0]["width"], 640);
+    expect![[r#"
+        host:
+          camera: camera opened fps=30 height=480 service=1 width=640
+    "#]]
+    .assert_eq(&trace.story(&["camera"]));
 }
 
 /// The viewer learns why its picture stopped: the camera stopped, or the
@@ -68,16 +71,18 @@ fn the_viewer_learns_why_the_picture_stopped() {
         .unwrap();
     assert_eq!(ended(&camera), CameraEnd::Withdrawn);
 
-    let ends: Vec<String> = trace
-        .named("camera picture ended")
-        .iter()
-        .map(|event| event["reason"].as_str().unwrap_or_default().to_owned())
-        .collect();
-    assert_eq!(ends, ["Stopped", "Withdrawn"]);
-    assert!(trace
-        .named("camera capture ended")
-        .iter()
-        .any(|event| event["failed"] == true));
+    expect![[r#"
+        controller:
+          camera: camera picture ended closed_here=false reason=Stopped service=1
+          camera: camera picture ended closed_here=false reason=Withdrawn service=2
+        host:
+          camera: camera opened fps=30 height=480 service=1 width=640
+          camera: camera capture ended failed=true sent=1 service=1
+          camera: camera stream ended service=1 withdrawn=false
+          camera: camera opened fps=30 height=480 service=2 width=640
+          camera: camera stream ended ended=no session service=2 withdrawn=true
+    "#]]
+    .assert_eq(&trace.story(&["camera"]));
 }
 
 /// A camera the host does not have is refused, and nothing starts.
@@ -91,9 +96,13 @@ fn an_unknown_camera_is_refused_and_nothing_starts() {
     });
     assert!(refused.is_err());
     assert!(host.cameras.sources.lock().unwrap().is_empty());
-    let recorded = wait_for("the refusal to be recorded", DEFAULT_WAIT, || {
-        let recorded = trace.named("camera not opened");
-        (!recorded.is_empty()).then_some(recorded)
+    wait_for("the refusal to be recorded", DEFAULT_WAIT, || {
+        (!trace.named("camera not opened").is_empty()).then_some(())
     });
-    assert_eq!(recorded[0]["reason"], "camera device", "{recorded:?}");
+    expect![[r#"
+        host:
+          camera: camera not opened error=unsupported reason=camera device service=1
+          camera: camera stream ended ended=unsupported service=1 withdrawn=false
+    "#]]
+    .assert_eq(&trace.story(&["camera"]));
 }

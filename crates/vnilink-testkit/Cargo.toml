@@ -19,6 +19,11 @@ vnilink-audio = { path = "../vnilink-audio" }
 vnilink-log = { path = "../vnilink-log" }
 vnilink-media = { path = "../vnilink-media" }
 
+# Suites state the story a service recorded inline (`Traced::story`);
+# `UPDATE_EXPECT=1` rewrites a changed one for review.
+[dev-dependencies]
+expect-test = "=1.5.1"
+
 # Each platform's own backends, where a suite runs the real one.
 [target.'cfg(windows)'.dependencies]
 vnilink-windows = { path = "../vnilink-windows" }

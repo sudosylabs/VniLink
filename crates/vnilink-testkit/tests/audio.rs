@@ -1,6 +1,7 @@
 //! The audio services alone: the host's system sound and microphone heard
 //! on the controller, each under its own grant.
 
+use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::audio::AudioKind;
@@ -44,7 +45,14 @@ fn each_source_arrives_as_sent_and_closes_alone() {
         .publish(sent.clone())
         .unwrap();
     assert_eq!(next(&system), sent);
-    assert_eq!(trace.named("audio opened").len(), 2);
+    expect![[r#"
+        controller:
+          audio: audio ended closed_here=true dropped=0 ended=no session kind=Microphone service=2
+        host:
+          audio: audio opened channels=2 kind=System service=1 voice=false
+          audio: audio opened channels=2 kind=Microphone service=2 voice=false
+    "#]]
+    .assert_eq(&trace.story(&["audio"]));
 }
 
 /// The microphone needs its own grant: system sound alone does not open it.

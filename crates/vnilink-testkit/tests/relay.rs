@@ -1,6 +1,7 @@
 //! Relayed connections alone: two engines with no direct route, so all
 //! they exchange crosses a relay on this computer.
 
+use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::JobState;
@@ -28,13 +29,12 @@ fn a_connection_without_a_direct_route_goes_through_the_relay() {
         "a direct path: {paths:?}"
     );
     assert!(relay.carried() > 0, "the relay carried nothing");
-    let bound = trace.named("endpoint bound");
-    assert!(
-        bound
-            .iter()
-            .any(|event| event["listen"] == "RelayOnly" && event["relay"] == true),
-        "{bound:?}"
-    );
+    expect![[r#"
+        engine:
+          relay: endpoint bound listen=RelayOnly relay=true
+          relay: endpoint bound listen=RelayOnly relay=true
+    "#]]
+    .assert_eq(&trace.story(&["relay"]));
 }
 
 /// Files cross the relay exactly.

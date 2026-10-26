@@ -1,6 +1,7 @@
 //! The Terminal service alone: the host's real shell, a terminal opened
 //! from the controller as the application opens one.
 
+use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{Error, ServiceKind};
@@ -37,12 +38,13 @@ fn a_shell_runs_what_is_typed_and_ends_with_its_exit_code() {
             .is_empty()
             .then_some(())
     });
-    let opened = trace.named("terminal opened");
-    assert_eq!(opened.len(), 1, "{opened:?}");
-    assert_eq!(opened[0]["rows"], 24);
-    let exited = trace.named("terminal shell exited");
-    assert_eq!(exited.len(), 1, "{exited:?}");
-    assert_eq!(exited[0]["code"], 7);
+    expect![[r#"
+        host:
+          terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
+          terminal: terminal shell exited code=7 service=1
+          terminal: terminal stream ended explicit_close=true service=1
+    "#]]
+    .assert_eq(&trace.story(&["terminal"]));
 }
 
 /// A resize reaches the shell's terminal.
@@ -116,11 +118,16 @@ fn without_the_grant_no_terminal_opens_and_the_connection_lives() {
             .phase,
         vnilink::SessionPhase::Active
     );
-    let refused = wait_for("the refusal to be recorded", DEFAULT_WAIT, || {
-        let refused = trace.named("service refused");
-        (!refused.is_empty()).then_some(refused)
+    wait_for("the refusal to be recorded", DEFAULT_WAIT, || {
+        (!trace.named("service refused").is_empty()).then_some(())
     });
-    assert_eq!(refused[0]["status"], "not permitted", "{refused:?}");
+    expect![[r#"
+        controller:
+          service: service phase from=active generation=1 kind=Terminal service=1 to=failed
+        host:
+          hosting: service refused connection=1 kind=Terminal status=not permitted
+    "#]]
+    .assert_eq(&trace.story(&["hosting", "service"]));
 }
 
 /// Closing the terminal ends the shell on the host.

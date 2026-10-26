@@ -2,6 +2,7 @@
 //! through a pairing file and its digits, as two people do, and forgetting
 //! each other again.
 
+use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{Error, SessionPhase};
@@ -64,16 +65,17 @@ fn a_pairing_file_and_its_digits_pair_both_computers() {
     assert_eq!(session.phase, SessionPhase::Active);
     assert_eq!(host.core.snapshot().unwrap().devices.len(), 1);
 
-    for step in [
-        "pairing file exported",
-        "pairing file opened",
-        "invitation accepted",
-        "control request answered",
-    ] {
-        assert_eq!(trace.named(step).len(), 1, "{step} was not recorded once");
-    }
+    expect![[r#"
+        controller:
+          pairing: pairing file opened bytes=320
+          pairing: invitation accepted
+        host:
+          pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
+          pairing: control request answered
+    "#]]
+    .assert_eq(&trace.story(&["pairing"]));
+    // Peers are recorded by fingerprint only.
     let accepted = &trace.named("invitation accepted")[0];
-    assert!(accepted["refused"].is_null(), "{accepted}");
     assert_eq!(
         accepted["peer"].as_str().map(str::len),
         Some(8),
@@ -100,7 +102,14 @@ fn mismatched_digits_save_nothing() {
         Err(Error::PairingCheckMismatch)
     ));
     assert!(controller.core.snapshot().unwrap().devices.is_empty());
-    assert_eq!(trace.named("pairing digits did not match").len(), 1);
+    expect![[r#"
+        controller:
+          pairing: pairing file opened bytes=320
+          pairing: pairing digits did not match
+        host:
+          pairing: pairing file exported allow_control=false direct=1 relays=0 ttl_s=60
+    "#]]
+    .assert_eq(&trace.story(&["pairing"]));
     controller
         .core
         .confirm_pairing(&preview, &file.check)
@@ -119,8 +128,6 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
     let middle = damaged.len() / 2;
     damaged[middle] ^= 0x55;
     assert!(controller.core.open_pairing_file(&damaged).is_err());
-    let opened = trace.named("pairing file opened");
-    assert!(!opened[0]["refused"].is_null(), "{opened:?}");
     let preview = controller.core.open_pairing_file(&file.bytes).unwrap();
     controller
         .core
@@ -130,6 +137,15 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
         controller.core.confirm_pairing(&preview, &file.check),
         Err(Error::InvitationReplayed)
     ));
+    expect![[r#"
+        controller:
+          pairing: pairing file opened bytes=320 reason=unrecognized invitation refused=invalid invitation
+          pairing: pairing file opened bytes=320
+          pairing: invitation accepted
+          pairing: invitation accepted refused=invitation replayed
+        host:
+          pairing: pairing file exported allow_control=false direct=1 relays=0 ttl_s=60
+    "#]].assert_eq(&trace.story(&["pairing"]));
 }
 
 /// A host that forgets its controller ends their connection, and the
@@ -150,5 +166,14 @@ fn a_forgotten_controller_is_disconnected_and_cannot_return() {
         (phase != SessionPhase::Active).then_some(())
     });
     assert!(connect(&pair.controller, &pair.host).is_err());
-    assert_eq!(trace.named("unpair requested").len(), 1);
+    expect![[r#"
+        controller:
+          pairing: invitation accepted
+          pairing: invitation issued direct=1 relays=0 ttl_s=60
+        host:
+          pairing: invitation issued direct=1 relays=0 ttl_s=60
+          pairing: invitation accepted
+          pairing: unpair requested
+    "#]]
+    .assert_eq(&trace.story(&["pairing"]));
 }

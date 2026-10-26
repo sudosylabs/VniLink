@@ -1,6 +1,7 @@
 //! System actions alone: a controller asking the host to lock, restart,
 //! shut down or keep its screen private, under the host's policy.
 
+use expect_test::expect;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,21 +27,11 @@ fn a_lock_runs_and_a_restart_waits_for_the_host_s_policy() {
     assert_eq!(restart.state, OperationState::Refused);
     assert_eq!(system.asked().restarts, 0);
 
-    let ended = trace.named("system action ended");
-    assert!(
-        ended
-            .iter()
-            .any(|event| event["action"] == "Lock" && event["state"] == "Executed"),
-        "{ended:?}"
-    );
-    let refused = trace.named("system action refused");
-    assert!(
-        refused
-            .iter()
-            .any(|event| event["action"] == "Restart"
-                && event["detail"] == "disabled by host policy"),
-        "{refused:?}"
-    );
+    expect![[r#"
+        host:
+          system: system action ended action=Lock operation=1 scheduled=false state=Executed
+          system: system action refused action=Restart connection=1 detail=disabled by host policy operation=2
+    "#]].assert_eq(&trace.story(&["system"]));
 }
 
 /// An allowed restart waits out its notice, can be cancelled meanwhile,
@@ -88,13 +79,10 @@ fn without_a_backend_actions_are_refused_and_say_why() {
     let session = SystemSession::open(None);
     let refused = session.service.execute(SystemAction::Lock).unwrap();
     assert_eq!(refused.state, OperationState::Refused);
-    let recorded = trace.named("system action refused");
-    assert!(
-        recorded
-            .iter()
-            .any(|event| event["detail"] == "no system backend"),
-        "{recorded:?}"
-    );
+    expect![[r#"
+        host:
+          system: system action refused action=Lock connection=1 detail=no system backend operation=1
+    "#]].assert_eq(&trace.story(&["system"]));
 }
 
 /// Privacy hides the screen and blocks input while held, and closing the
@@ -119,9 +107,13 @@ fn privacy_holds_until_the_service_closes() {
         let asked = system.asked();
         (!asked.display_private && !asked.input_blocked).then_some(())
     });
-    let applied = trace.named("privacy applied");
-    assert!(
-        applied.iter().any(|event| event["display_private"] == true),
-        "{applied:?}"
-    );
+    // The record follows the restore.
+    wait_for("the restore to be recorded", DEFAULT_WAIT, || {
+        (!trace.named("privacy restored").is_empty()).then_some(())
+    });
+    expect![[r#"
+        host:
+          system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
+          system: privacy restored connection=1 display=true input=true
+    "#]].assert_eq(&trace.story(&["system"]));
 }

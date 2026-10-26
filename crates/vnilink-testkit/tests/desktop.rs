@@ -2,6 +2,7 @@
 //! through its real picture pipeline, and a viewer connected as the
 //! application connects one.
 
+use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::FrameRole::{Changed, Still, Unchanged};
@@ -120,24 +121,19 @@ fn input_reaches_the_host_in_order() {
         (applied.len() >= pressed.len()).then_some(applied)
     });
     assert_eq!(applied, pressed);
-    // The host recorded each key it applied, by kind only.
-    let recorded: Vec<String> = trace
-        .named("input applied")
-        .iter()
-        .map(|event| {
-            assert_eq!(event["engine"], "host", "{event}");
-            assert!(
-                event.get("usage").is_none(),
-                "a key's identity was recorded: {event}"
-            );
-            event["kind"].as_str().unwrap_or_default().to_owned()
-        })
-        .collect();
-    assert_eq!(
-        recorded,
-        ["key down", "key up"].repeat(4),
-        "the host's record of applied input"
-    );
+    // The host records each key it applied by kind, never which key.
+    expect![[r#"
+        host:
+          input: input applied kind=key down service=1
+          input: input applied kind=key up service=1
+          input: input applied kind=key down service=1
+          input: input applied kind=key up service=1
+          input: input applied kind=key down service=1
+          input: input applied kind=key up service=1
+          input: input applied kind=key down service=1
+          input: input applied kind=key up service=1
+    "#]]
+    .assert_eq(&trace.detailed_story(&["input"]));
 }
 
 /// Once the host stops sharing control, a viewer's key still leaves the
@@ -164,17 +160,14 @@ fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
         .service
         .submit_input(InputEvent::key_down(usage::A))
         .expect("the viewer sends the key; the host decides");
-    let discarded = wait_for("the host to discard the key", DEFAULT_WAIT, || {
-        let discarded = trace.named("input discarded");
-        (!discarded.is_empty()).then_some(discarded)
+    wait_for("the host to discard the key", DEFAULT_WAIT, || {
+        (!trace.named("input discarded").is_empty()).then_some(())
     });
-    assert_eq!(discarded.len(), 1, "{discarded:?}");
-    assert_eq!(discarded[0]["engine"], "host");
-    assert_eq!(discarded[0]["kind"], "key down");
-    assert_eq!(
-        discarded[0]["why"],
-        "the peer may not control this computer"
-    );
+    expect![[r#"
+        host:
+          input: input discarded kind=key down service=1 why=the peer may not control this computer
+    "#]]
+    .assert_eq(&trace.story(&["input"]));
     assert!(
         session.applied().is_empty(),
         "a key was applied without control"

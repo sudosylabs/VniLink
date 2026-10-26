@@ -2,6 +2,7 @@
 //! between their roots, with both job drivers running as in the
 //! application.
 
+use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{ConflictChoice, JobState};
@@ -54,35 +55,26 @@ fn an_upload_lands_exactly() {
         tree(&pair.host.root().join("inbox/set")),
         tree(&pair.controller.root().join("set"))
     );
-    // Each side's job records say which engine kept them.
-    // Every file crossed whole, by the record of each side.
-    let received = trace.named("file received");
-    assert!(!received.is_empty(), "no file receipt was recorded");
-    for event in &received {
-        assert_eq!(event["engine"], "host", "{event}");
-        assert_eq!(event["outcome"], "received", "{event}");
-    }
-    let served = trace.named("file served");
-    assert_eq!(served.len(), received.len(), "{served:?}");
-    for event in &served {
-        assert_eq!(event["engine"], "controller", "{event}");
-        assert_eq!(event["ended"], "sent", "{event}");
-    }
+    // Each side records its own job, and every file crossed whole.
+    expect![[r#"
+        controller:
+          files: job state from=preparing job=1 sender=true to=serving
+          files: file served ended=sent from=0 sent=0 size=0
+          files: file served ended=sent from=0 sent=1024 size=1024
+          files: file served ended=sent from=0 sent=4096 size=4096
+          files: file served ended=sent from=0 sent=512 size=512
+          files: file served ended=sent from=0 sent=9437191 size=9437191
+          files: job state done_bytes=9442823 files_done=5 from=serving job=1 sender=true to=complete
+        host:
+          files: file received outcome=received resumed_at=0 size=0 took=0
+          files: file received outcome=received resumed_at=0 size=1024 took=1024
+          files: file received outcome=received resumed_at=0 size=4096 took=4096
+          files: file received outcome=received resumed_at=0 size=512 took=512
+          files: file received outcome=received resumed_at=0 size=9437191 took=9437191
+          files: job state done_bytes=9442823 files_done=5 from=transferring job=1 sender=false to=complete
+    "#]].assert_eq(&trace.concurrent_story(&["files"]));
     let everything = trace.events().join("\n");
     assert!(!everything.contains("read me"), "a file name was recorded");
-    let states = trace.named("job state");
-    assert!(!states.is_empty(), "no job state was recorded");
-    for event in states {
-        let expected = if event["sender"] == true {
-            "controller"
-        } else {
-            "host"
-        };
-        assert_eq!(
-            event["engine"], expected,
-            "a job state was recorded by the wrong engine: {event}"
-        );
-    }
 }
 
 #[test]
