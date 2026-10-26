@@ -3,7 +3,10 @@ use crate::video::{decode_video_body, encode_video_body, EncodedFrame};
 use crate::MAX_VIDEO_FRAME;
 
 fn body(keyframe: bool, stamp: u64, payload: &[u8]) -> Vec<u8> {
-    encode_video_body(&EncodedFrame::h264(keyframe, stamp, payload.to_vec()).unwrap())
+    encode_video_body(
+        &EncodedFrame::h264(keyframe, stamp, payload.to_vec()).unwrap(),
+        0,
+    )
 }
 
 #[test]
@@ -21,7 +24,7 @@ fn fragments_round_trip_in_order() {
     }
     let done = done.expect("last fragment completes the frame");
     assert_eq!(done, body);
-    let frame = decode_video_body(&done).unwrap();
+    let frame = decode_video_body(&done).unwrap().frame;
     assert!(frame.keyframe && frame.timestamp_us == 7);
 }
 
@@ -50,96 +53,104 @@ fn shuffled_fragments_still_complete() {
 }
 
 #[test]
-fn loss_never_completes_and_stragglers_are_ignored() {
+fn an_older_frame_goes_when_a_newer_one_completes_and_stragglers_are_ignored() {
     let original = body(false, 11, &[7; 4000]);
     let frags = fragment(&original, 21, 800, 0.0);
-    assert!(frags.len() > 2);
+    assert!(frags.len() > 2, "the frame spans several fragments");
     let mut reasm = Reassembler::new();
     // Drop the middle fragment: nothing may complete.
     for (index, frag) in frags.iter().enumerate() {
         if index != frags.len() / 2 {
-            assert!(reasm.push(frag).is_none());
+            assert!(reasm.push(frag).is_none(), "a frame missing a shard waits");
         }
     }
-    // The late fragment arrives after a newer frame completed: the old frame
-    // would reach the decoder out of order, so it is lost, and said so.
+    assert_eq!(
+        reasm.take_fragments().received,
+        frags.len() as u64 - 1,
+        "every fragment that arrived is counted"
+    );
+    // A newer frame completes: the older one could only complete after it,
+    // too late to decode, so it goes, its missing fragment counted.
     let other = body(true, 12, &[8; 100]);
     for frag in fragment(&other, 22, 1200, 0.0) {
-        let _ = reasm.push(&frag);
+        assert_eq!(
+            reasm.push(&frag),
+            Some(other.clone()),
+            "the newer frame completes"
+        );
     }
+    assert_eq!(
+        reasm.take_fragments(),
+        FragmentCounts {
+            received: 1,
+            missing: 1,
+            repaired: 0,
+        },
+        "the older frame's missing fragment is counted when it goes"
+    );
+    assert_eq!(
+        reasm.take_unfinished(),
+        Unfinished::default(),
+        "a frame overtaken is not given up unfinished: its picture number says it is missing"
+    );
+    // Its late fragment alone completes nothing...
+    assert_eq!(
+        reasm.push(&frags[frags.len() / 2]),
+        None,
+        "a late fragment of a frame let go completes nothing"
+    );
+    // ...and a true duplicate of a finished frame is ignored.
     assert!(
-        !reasm.take_loss().any(),
-        "the first complete frame is no loss"
-    );
-    assert_eq!(reasm.push(&frags[frags.len() / 2]), None);
-    assert_eq!(
-        reasm.take_loss(),
-        Losses {
-            stale: 1,
-            ..Losses::default()
-        },
-        "an out-of-order frame was not reported lost"
-    );
-    assert!(!reasm.take_loss().any(), "a loss is reported once");
-    // ...while a true duplicate of a finished frame is ignored.
-    assert!(reasm.push(&frags[0]).is_none());
-    assert!(!reasm.take_loss().any());
-}
-
-/// A frame completing past a missing one says the one between is lost, so
-/// the viewer asks for a keyframe instead of decoding against a gap.
-#[test]
-fn a_frame_after_a_gap_reports_the_loss() {
-    let mut reasm = Reassembler::new();
-    let first = body(true, 1, &[1; 10]);
-    assert!(reasm.push(&fragment(&first, 40, 1200, 0.0)[0]).is_some());
-    let next = body(false, 2, &[2; 10]);
-    assert!(reasm.push(&fragment(&next, 41, 1200, 0.0)[0]).is_some());
-    assert!(!reasm.take_loss().any(), "consecutive frames are no loss");
-    let after_gap = body(false, 4, &[4; 10]);
-    assert!(reasm
-        .push(&fragment(&after_gap, 43, 1200, 0.0)[0])
-        .is_some());
-    assert_eq!(
-        reasm.take_loss(),
-        Losses {
-            gap: 1,
-            ..Losses::default()
-        },
-        "frame 42 went missing unnoticed"
+        reasm.push(&fragment(&other, 22, 1200, 0.0)[0]).is_none(),
+        "a finished frame does not complete twice"
     );
 }
 
-/// A frame evicted unfinished counts once, even when a later frame skips
-/// past it, so diagnostics count frames, not ways of noticing them.
+/// A frame pushed out unfinished is counted as given up; frames older than
+/// one that completes go without being counted, as their pictures' numbers
+/// report them.
 #[test]
-fn a_lost_frame_is_counted_once_by_how_it_was_lost() {
+fn a_frame_pushed_out_unfinished_is_counted_once() {
     let mut reasm = Reassembler::new();
     let first = body(true, 1, &[1; 10]);
-    assert!(reasm.push(&fragment(&first, 10, 1200, 0.0)[0]).is_some());
+    assert!(
+        reasm.push(&fragment(&first, 10, 1200, 0.0)[0]).is_some(),
+        "a one-fragment frame completes"
+    );
     // Nine unfinished frames: the oldest is pushed out by the ninth.
+    let mut shards = 0;
     for seq in 11..20 {
-        let big = body(false, u64::from(seq), &[2; 3000]);
-        assert!(reasm.push(&fragment(&big, seq, 1200, 0.0)[0]).is_none());
+        let big = fragment(&body(false, u64::from(seq), &[2; 3000]), seq, 1200, 0.0);
+        shards = big.len() as u64;
+        assert!(reasm.push(&big[0]).is_none(), "one shard of several");
     }
     assert_eq!(
-        reasm.take_loss(),
-        Losses {
+        reasm.take_unfinished(),
+        Unfinished {
             evicted: 1,
-            ..Losses::default()
-        }
+            ..Unfinished::default()
+        },
+        "the ninth unfinished frame pushes out the oldest"
     );
-    // Frame 21 pushes out 12 as it arrives, then completes, skipping 11 to
-    // 20: ten frames lost in all, 11 and 12 not counted again.
+    // Frame 21 pushes out 12 as it arrives, then completes, letting 13 to
+    // 19 go uncounted.
     let next = body(false, 21, &[3; 10]);
-    assert!(reasm.push(&fragment(&next, 21, 1200, 0.0)[0]).is_some());
+    assert!(
+        reasm.push(&fragment(&next, 21, 1200, 0.0)[0]).is_some(),
+        "the newer frame completes"
+    );
     assert_eq!(
-        reasm.take_loss(),
-        Losses {
+        reasm.take_unfinished(),
+        Unfinished {
             evicted: 1,
-            gap: 8,
-            ..Losses::default()
-        }
+            ..Unfinished::default()
+        },
+        "only the frame pushed out is given up"
+    );
+    assert_eq!(
+        reasm.take_fragments().missing,
+        9 * (shards - 1),
+        "every unfinished frame's missing shards are counted once"
     );
 }
 
@@ -194,8 +205,8 @@ fn a_frame_still_arriving_outlives_the_silence() {
         at += silence / 2;
         done = done.or(reasm.push_at(frag, at));
     }
-    assert_eq!(done, Some(keyframe));
-    assert!(!reasm.take_loss().any());
+    assert_eq!(done, Some(keyframe), "a frame still arriving completes");
+    assert!(!reasm.take_unfinished().any(), "nothing is given up");
 }
 
 /// A frame whose fragments stop coming is lost once it has been silent for
@@ -210,11 +221,12 @@ fn a_silent_frame_expires() {
     assert!(reasm.push_at(&frags[0], at).is_none());
     assert!(reasm.push_at(&frags[1], at + silence).is_none());
     assert_eq!(
-        reasm.take_loss(),
-        Losses {
+        reasm.take_unfinished(),
+        Unfinished {
             expired: 1,
-            ..Losses::default()
-        }
+            ..Unfinished::default()
+        },
+        "a frame silent for the span is given up"
     );
 }
 
@@ -272,7 +284,10 @@ fn parity_rebuilds_a_frame_missing_that_many_shards() {
     assert_eq!(done, Some(frame.clone()));
     let counts = reasm.take_fragments();
     assert_eq!(counts.repaired, parity as u64);
-    assert!(!reasm.take_loss().any());
+    assert!(
+        !reasm.take_unfinished().any(),
+        "a rebuilt frame is not given up"
+    );
 
     // One more missing: never whole.
     let mut reasm = Reassembler::new();
@@ -376,7 +391,10 @@ fn forged_frames_never_hold_more_than_the_byte_budget() {
             .is_none());
         assert!(reasm.buffered_bytes() <= MAX_PARTIAL_BYTES);
     }
-    assert!(reasm.take_loss().evicted > 0);
+    assert!(
+        reasm.take_unfinished().evicted > 0,
+        "frames over the budget are pushed out"
+    );
 }
 
 /// One frame larger than the budget alone is dropped, not kept growing.
@@ -388,7 +406,10 @@ fn a_frame_larger_than_the_byte_budget_is_dropped() {
         assert!(reasm.push(&forged(1, index, &payload)).is_none());
         assert!(reasm.buffered_bytes() <= MAX_PARTIAL_BYTES);
     }
-    assert!(reasm.take_loss().evicted > 0);
+    assert!(
+        reasm.take_unfinished().evicted > 0,
+        "frames over the budget are pushed out"
+    );
 }
 
 /// The largest frame a sender makes still completes beside forged frames
@@ -407,7 +428,11 @@ fn the_largest_frame_fits_the_byte_budget() {
         whole.extend(reasm.push(datagram));
     }
     assert_eq!(whole, [largest]);
-    assert_eq!(reasm.take_loss(), Losses::default());
+    assert_eq!(
+        reasm.take_unfinished(),
+        Unfinished::default(),
+        "the largest frame completes beside the forged ones"
+    );
 }
 
 /// What a frame costs on the wire is what fragmenting it makes, at every

@@ -17,14 +17,17 @@ pub(crate) use link_rate::LinkRate;
 mod queue;
 mod recovery;
 mod report;
+mod viewer;
 
 pub(crate) use counters::{VideoCounters, VideoCounts};
 pub(crate) use datagram::{
-    fragment, fragmented_size, parity_count, FragmentCounts, Losses, Reassembler, FRAG_HEADER,
-    MAX_PROTECTION,
+    fragment, fragmented_size, parity_count, FragmentCounts, Losses, Reassembler, Unfinished,
+    FRAG_HEADER, MAX_PROTECTION,
 };
 pub(crate) use frame::micros_since;
-pub(crate) use frame::{check_video_len, decode_video_body, encode_video_body, VIDEO_HEADER};
+pub(crate) use frame::{
+    check_video_len, decode_video_body, encode_video_body, VideoBody, VIDEO_HEADER,
+};
 pub use frame::{EncodedFrame, FrameRole, FrameTiming, Region, MAX_REGIONS};
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
 pub use queue::{RecordingVideoTap, VideoSubscription};
@@ -32,6 +35,7 @@ pub use queue::{RecordingVideoTap, VideoSubscription};
 pub(crate) use queue::{VideoQueue, INBOX_MAX_AGE, VIDEO_QUEUE};
 pub(crate) use recovery::KeyframeRequests;
 pub(crate) use report::{Congestion, ReportTally, VideoReport, ViewerLoss, REPORT_LEN};
+pub(crate) use viewer::{Order, ViewerPictures};
 
 /// Largest encoded payload, not counting the video header before it.
 pub const MAX_VIDEO_FRAME: usize = 1_048_576;

@@ -100,7 +100,7 @@ pub fn reassemble<'a>(datagrams: impl IntoIterator<Item = &'a [u8]>) {
             // The fuzz case is that decoding never panics, whatever it returns.
             drop(decode_video_body(&body));
         }
-        drop(reassembler.take_loss());
+        drop(reassembler.take_unfinished());
         drop(reassembler.take_fragments());
     }
 }

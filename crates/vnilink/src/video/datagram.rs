@@ -3,20 +3,22 @@
 //! Each encoded body (codec header plus payload) is split into data shards
 //! that fit one datagram, followed by parity shards: Reed–Solomon over the
 //! data, so that any data-count of a frame's shards rebuild it. Fragments
-//! may arrive out of order or not at all. A frame that does not gather
-//! enough shards, or that would reach the decoder after a newer one, is
-//! lost: [`Reassembler::take_loss`] says so, and the caller asks for a
-//! keyframe, exactly as it does for queue drops. How much parity a frame
-//! carries is the sender's choice, from what its viewer reports losing.
+//! may arrive out of order or not at all. The fragment sequence only
+//! regroups a frame's shards: whether a picture is missing or late is the
+//! picture number's to say, in the body (see `ViewerPictures`). Here a frame
+//! that does not gather enough shards is given up, and its fragments are
+//! counted for the viewer's loss report. How much parity a frame carries is
+//! the sender's choice, from what its viewer reports losing.
 //! Wire bytes are screen content: do not log them.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
 /// Fragment header: frame sequence u32, shard index u16 (data shards first,
-/// then parity), data shard count u16, parity shard count u16. Keyframe and
-/// timestamp travel inside the reassembled body, which the existing
-/// video-body codec validates.
+/// then parity), data shard count u16, parity shard count u16. The sequence
+/// counts the frames sent as datagrams, stills among them, and only groups
+/// their shards. Keyframe, timestamp and picture number travel inside the
+/// reassembled body, which the video-body codec validates.
 pub(crate) const FRAG_HEADER: usize = 10;
 
 /// Each frame's shards begin with its body's length, so the padding that
@@ -196,16 +198,33 @@ impl Partial {
     }
 }
 
-/// Frames lost since the last ask, by how each was lost.
+/// Unfinished frames given up since the last ask: stills among them, and
+/// each stream picture among them is also a gap once a later one arrives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Unfinished {
+    /// Its fragments stopped coming.
+    pub(crate) expired: u64,
+    /// Newer frames needed its place.
+    pub(crate) evicted: u64,
+}
+
+impl Unfinished {
+    pub(crate) fn any(&self) -> bool {
+        self.expired + self.evicted > 0
+    }
+}
+
+/// How the viewer lost pictures, for diagnostics: frames the reassembler
+/// gave up, and stream pictures its numbers say were skipped or late.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Losses {
     /// Unfinished when its fragments stopped coming.
     pub(crate) expired: u64,
     /// Unfinished when newer frames needed its place.
     pub(crate) evicted: u64,
-    /// Skipped: a newer frame completed first.
+    /// Skipped: a later stream picture arrived first.
     pub(crate) gap: u64,
-    /// Completed after a newer frame, too late to decode.
+    /// Arrived after a later stream picture, too late to decode.
     pub(crate) stale: u64,
 }
 
@@ -219,12 +238,10 @@ pub(crate) struct FragmentCounts {
 }
 
 impl Losses {
-    pub(crate) fn any(&self) -> bool {
-        self.total() > 0
-    }
-
+    /// Stream pictures the decoder did not get. An unfinished frame is
+    /// counted here as the gap it leaves, so it counts once.
     pub(crate) fn total(&self) -> u64 {
-        self.expired + self.evicted + self.gap + self.stale
+        self.gap + self.stale
     }
 }
 
@@ -232,13 +249,8 @@ impl Losses {
 pub(crate) struct Reassembler {
     partial: BTreeMap<u32, Partial>,
     completed: VecDeque<u32>,
-    /// The newest frame handed on; an older one completing later is stale.
-    newest: Option<u32>,
-    /// Frames lost since [`Self::take_loss`] was last asked.
-    lost: Losses,
-    /// Recent sequences already counted lost unfinished, so a later gap
-    /// over them does not count them twice.
-    gone: VecDeque<u32>,
+    /// Frames given up since [`Self::take_unfinished`] was last asked.
+    unfinished: Unfinished,
     /// How long an incomplete frame may go without a fragment.
     silence: Duration,
     /// Fragments seen since [`Self::take_fragments`] was last asked.
@@ -250,9 +262,7 @@ impl Reassembler {
         Self {
             partial: BTreeMap::new(),
             completed: VecDeque::new(),
-            newest: None,
-            lost: Losses::default(),
-            gone: VecDeque::new(),
+            unfinished: Unfinished::default(),
             silence: FRAG_SILENCE,
             fragments: FragmentCounts::default(),
         }
@@ -273,15 +283,17 @@ impl Reassembler {
         }
     }
 
-    /// Frames lost since the last call: ones that expired unfinished, were
-    /// evicted, were skipped by a newer frame, or arrived after one. After
-    /// any, the decoder needs a keyframe before the frames that follow.
-    pub(crate) fn take_loss(&mut self) -> Losses {
-        std::mem::take(&mut self.lost)
+    /// Frames given up unfinished since the last call. They ask nothing of
+    /// the host by themselves: a stream picture among them leaves a gap in
+    /// the picture numbers, and a still leaves none.
+    pub(crate) fn take_unfinished(&mut self) -> Unfinished {
+        std::mem::take(&mut self.unfinished)
     }
 
     /// Feed one datagram. Returns the complete body when this datagram
-    /// finishes a frame, else `None`. Malformed datagrams are ignored.
+    /// finishes a frame, else `None`, in the order frames complete: whether
+    /// one came too late is the picture number's to say. Malformed
+    /// datagrams are ignored.
     pub(crate) fn push(&mut self, datagram: &[u8]) -> Option<Vec<u8>> {
         self.push_at(datagram, Instant::now())
     }
@@ -357,44 +369,25 @@ impl Reassembler {
         while self.completed.len() > COMPLETED_MEMORY {
             self.completed.pop_front();
         }
-        // Sequences only grow within a stream: a frame from before the newest
-        // would reach the decoder out of order, and one past a gap means the
-        // frames between are gone.
-        if let Some(newest) = self.newest {
-            let ahead = seq.wrapping_sub(newest);
-            if ahead == 0 || ahead > u32::MAX / 2 {
-                self.lost.stale += 1;
-                return None;
+        // Frames are sent in sequence: an older one still incomplete would
+        // complete only after this one, too late to decode. Its missing
+        // fragments are counted now; the gap it leaves is the picture
+        // number's to report.
+        let mut missing = 0;
+        self.partial.retain(|&pending, partial| {
+            let keep = pending.wrapping_sub(seq) <= u32::MAX / 2;
+            if !keep {
+                missing += partial.missing();
             }
-            if ahead > 1 {
-                // Each skipped frame counts once: not again when it already
-                // expired or was evicted unfinished.
-                let counted = self
-                    .gone
-                    .iter()
-                    .filter(|&&gone| {
-                        let after = gone.wrapping_sub(newest);
-                        after > 0 && after < ahead
-                    })
-                    .count() as u64;
-                self.lost.gap += u64::from(ahead - 1).saturating_sub(counted);
-                let mut missing = 0;
-                self.partial.retain(|&pending, partial| {
-                    let keep = pending.wrapping_sub(seq) <= u32::MAX / 2;
-                    if !keep {
-                        missing += partial.missing();
-                    }
-                    keep
-                });
-                self.fragments.missing += missing;
-            }
-        }
-        self.newest = Some(seq);
+            keep
+        });
+        self.fragments.missing += missing;
         // Parity still on its way to a frame already whole is not missed,
         // and a data shard rebuilt from parity was.
         let Some((body, repaired)) = partial.assemble() else {
-            // Shards that do not decode to a body: lost like an unfinished frame.
-            self.lost.expired += 1;
+            // Shards that do not decode to a body: given up like an
+            // unfinished frame.
+            self.unfinished.expired += 1;
             return None;
         };
         self.fragments.missing += repaired;
@@ -412,8 +405,7 @@ impl Reassembler {
         if let Some(evicted) = self.partial.remove(&seq) {
             self.fragments.missing += evicted.missing();
         }
-        self.lost.evicted += 1;
-        self.remember_gone(seq);
+        self.unfinished.evicted += 1;
     }
 
     fn expire(&mut self, now: Instant) {
@@ -427,15 +419,7 @@ impl Reassembler {
             if let Some(expired) = self.partial.remove(&seq) {
                 self.fragments.missing += expired.missing();
             }
-            self.lost.expired += 1;
-            self.remember_gone(seq);
-        }
-    }
-
-    fn remember_gone(&mut self, seq: u32) {
-        self.gone.push_back(seq);
-        while self.gone.len() > COMPLETED_MEMORY {
-            self.gone.pop_front();
+            self.unfinished.expired += 1;
         }
     }
 }

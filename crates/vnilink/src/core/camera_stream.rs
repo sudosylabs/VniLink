@@ -275,7 +275,7 @@ impl Core {
                                 }
                                 _ => {}
                             }
-                            let frame = crate::video::decode_video_body(&bytes)?;
+                            let frame = crate::video::decode_video_body(&bytes)?.frame;
                             if frame.role == crate::FrameRole::Still {
                                 return Err(Error::Malformed);
                             }
@@ -696,7 +696,10 @@ pub(super) async fn serve(
                     return Ok::<(), Error>(());
                 }
                 for frame in backend.source.frames.drain() {
-                    write(&mut send, crate::video::encode_video_body(&frame))
+                    // Camera pictures go in order on one stream: each is the
+                    // next, its number wrapping.
+                    let number = sent as u32;
+                    write(&mut send, crate::video::encode_video_body(&frame, number))
                         .await
                         .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
                     sent += 1;

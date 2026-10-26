@@ -134,9 +134,9 @@ pub(super) struct DesktopRuntime {
     report: crate::video::ReportTally,
     /// Host: what its viewer reports losing, smoothed.
     viewer_loss: Mutex<crate::video::ViewerLoss>,
-    /// The viewer's outstanding keyframe request, so losses while one is
-    /// coming do not ask again.
-    keyframe_requests: Mutex<crate::video::KeyframeRequests>,
+    /// Viewer: its datagrams' reassembly and its outstanding keyframe
+    /// request, so losses while one is coming do not ask again.
+    pictures: Mutex<crate::video::ViewerPictures>,
     control_state: tokio::sync::watch::Sender<(DesktopControlState, u64)>,
     control_commands: Mutex<std::collections::VecDeque<(u8, u64)>>,
     control_notify: tokio::sync::Notify,
@@ -232,7 +232,7 @@ impl DesktopRuntime {
             counters: crate::video::VideoCounters::default(),
             report: Default::default(),
             viewer_loss: Mutex::new(Default::default()),
-            keyframe_requests: Mutex::new(crate::video::KeyframeRequests::default()),
+            pictures: Mutex::new(crate::video::ViewerPictures::new()),
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
             control_notify: tokio::sync::Notify::new(),
@@ -413,17 +413,25 @@ impl DesktopRuntime {
         info.quality = *lock(&self.quality);
         info
     }
-    /// A frame arrived for the viewer. A keyframe answers the outstanding
-    /// request; a full queue asks for one.
-    fn receive_video(&self, frame: EncodedFrame) {
-        // A still picture is not the stream's keyframe: it answers no request.
-        let keyframe = frame.keyframe && frame.role != crate::FrameRole::Still;
-        if matches!(self.inbox.push(frame), VideoPush::KeyframeNeeded) {
-            self.keyframe.request();
-        }
-        if keyframe {
-            lock(&self.keyframe_requests).keyframe_arrived();
-        }
+    /// A picture arrived for the viewer, by datagrams or on the stream.
+    /// Pictures its number says are missing or late are counted lost and
+    /// reported to the host; see [`crate::video::ViewerPictures::picture`].
+    fn receive_video(&self, body: crate::video::VideoBody) {
+        let order =
+            lock(&self.pictures).picture(body.sequence, body.frame, &self.inbox, &self.keyframe);
+        let lost = match order {
+            crate::video::Order::Next => return,
+            crate::video::Order::Gap(missing) => crate::video::Losses {
+                gap: u64::from(missing),
+                ..Default::default()
+            },
+            crate::video::Order::Stale => crate::video::Losses {
+                stale: 1,
+                ..Default::default()
+            },
+        };
+        self.report.frames_lost(lost.total());
+        self.counters.lost(lost);
     }
     /// Point-in-time pipeline facts for diagnostics: labels, stage
     /// durations, queue depths and drops. Never frame bytes. Durations
@@ -601,8 +609,6 @@ async fn route_desktop_datagrams(
     connection_id: u64,
     generation: u64,
 ) {
-    let mut fragments: std::collections::HashMap<(u64, u64), crate::video::Reassembler> =
-        std::collections::HashMap::new();
     // Each owner's runtime, found once under the state lock and kept until
     // it retires, so a datagram takes no shared lock.
     let mut owners: std::collections::HashMap<(u64, u64), Arc<DesktopRuntime>> =
@@ -653,40 +659,34 @@ async fn route_desktop_datagrams(
                 owners.remove(&key);
                 continue;
             };
-            // One reassembly context and cached owner per stamp; stale
-            // contexts expire inside the reassembler, and neither map can
-            // outgrow the owner bound plus one transient entry for a closing
-            // sibling.
-            if fragments.len() > MAX_DESKTOP_OWNERS_PER_CONNECTION + 1 {
-                fragments.clear();
-            }
+            // One cached owner per stamp, which reassembles its own
+            // pictures; the map cannot outgrow the owner bound plus one
+            // transient entry for a closing sibling.
             if owners.len() > MAX_DESKTOP_OWNERS_PER_CONNECTION + 1 {
                 owners.clear();
             }
             owners.insert(key, Arc::clone(&desktop));
-            let reassembly = fragments
-                .entry(key)
-                .or_insert_with(crate::video::Reassembler::new);
-            let body = reassembly.push(fragment);
-            desktop.report.fragments(reassembly.take_fragments());
-            if body.is_some() {
+            let arrival = lock(&desktop.pictures).datagram(fragment, std::time::Instant::now());
+            desktop.report.fragments(arrival.fragments);
+            if arrival.body.is_some() {
                 desktop.report.frame_completed();
             }
-            // A lost frame: what follows waits for a keyframe, which is asked
-            // for now rather than at the next periodic one.
-            let losses = reassembly.take_loss();
-            if losses.any() {
-                desktop.report.frames_lost(losses.total());
-                desktop.counters.lost(losses);
-                desktop.inbox.lost();
-                desktop.keyframe.request();
+            if arrival.unfinished.any() {
+                desktop.counters.lost(crate::video::Losses {
+                    expired: arrival.unfinished.expired,
+                    evicted: arrival.unfinished.evicted,
+                    ..Default::default()
+                });
             }
-            if let Some(body) = body {
-                if let Ok(frame) = crate::video::decode_video_body(&body) {
-                    if !frame.belongs_to(desktop.info.codec, desktop.info.stills) {
+            if let Some(body) = arrival.body {
+                if let Ok(body) = crate::video::decode_video_body(&body) {
+                    if !body
+                        .frame
+                        .belongs_to(desktop.info.codec, desktop.info.stills)
+                    {
                         continue;
                     }
-                    desktop.receive_video(frame);
+                    desktop.receive_video(body);
                 }
             }
         }
@@ -1577,21 +1577,22 @@ async fn client_send(
             bytes.extend_from_slice(&lease_epoch.to_be_bytes());
             write(send, &bytes).await?;
         }
-        if desktop.keyframe.take() {
-            lock(&desktop.keyframe_requests).want();
-        }
         let path_rtt = link
             .paths()
             .iter()
             .find(|path| path.is_selected())
             .map_or(Duration::ZERO, |path| path.rtt());
         let frame_period = frame_period(desktop);
-        let ask = lock(&desktop.keyframe_requests).should_send(
-            std::time::Instant::now(),
-            path_rtt,
-            frame_period,
-        );
-        let retry = lock(&desktop.keyframe_requests).retry_at(path_rtt, frame_period);
+        let (ask, retry) = {
+            let mut pictures = lock(&desktop.pictures);
+            let ask = pictures.should_ask(
+                &desktop.keyframe,
+                std::time::Instant::now(),
+                path_rtt,
+                frame_period,
+            );
+            (ask, pictures.retry_at(path_rtt, frame_period))
+        };
         if ask {
             desktop.counters.keyframe_requested();
             let mut bytes = vec![COMMAND];
@@ -1698,7 +1699,7 @@ async fn client_send(
                         signals,
                         relay: path.is_relay(),
                         received_frames: feedback.receiver.received_frames,
-                        keyframe_pending: lock(&desktop.keyframe_requests).outstanding(),
+                        keyframe_pending: lock(&desktop.pictures).keyframe_pending(),
                         host: host.map(|host| host.host_state()),
                         decoder_software: decoder.software == Some(true),
                         decoder_recoveries: decoder.recoveries,
@@ -1769,11 +1770,14 @@ async fn client_receive(
                     *lock(&desktop.host_feedback) = Some((feedback, std::time::Instant::now()));
                 }
                 VIDEO => {
-                    let frame = crate::video::decode_video_body(&body[1..])?;
-                    if !frame.belongs_to(desktop.info.codec, desktop.info.stills) {
+                    let body = crate::video::decode_video_body(&body[1..])?;
+                    if !body
+                        .frame
+                        .belongs_to(desktop.info.codec, desktop.info.stills)
+                    {
                         return Err(Error::Malformed);
                     }
-                    desktop.receive_video(frame);
+                    desktop.receive_video(body);
                 }
                 TOPOLOGY => {
                     let ControlMessage::Topology {
@@ -2864,7 +2868,11 @@ async fn host_send(
         .get(&desktop.info.service.connection_id)
         .and_then(|s| s.link.clone())
         .ok_or(Error::NoSession)?;
+    // Groups each datagram picture's fragments, stills among them.
     let mut seq = 0u32;
+    // The number the next stream picture takes, on either transport; a
+    // still repeats the one before, and a picture dropped here takes none.
+    let mut picture = 0u32;
     let mut gate = SendGate::default();
     let mut congestion = crate::video::Congestion::default();
     let mut path = None;
@@ -2923,7 +2931,12 @@ async fn host_send(
                 lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
             }
             congestion.rtt(rtt);
-            let body = crate::video::encode_video_body(&frame);
+            let number = if still {
+                picture.wrapping_sub(1)
+            } else {
+                picture
+            };
+            let body = crate::video::encode_video_body(&frame, number);
             let max = link.max_datagram_size();
             #[cfg(any(test, feature = "test-probes"))]
             let max = if desktop
@@ -2990,6 +3003,7 @@ async fn host_send(
                 link.send_many_datagrams(&datagrams)
                     .map_err(Error::network_debug)?;
                 seq = seq.wrapping_add(1);
+                picture = picture.wrapping_add(1);
                 gate.sent(frame.keyframe, wire);
                 pictured = true;
                 if frame.keyframe {
@@ -3009,6 +3023,7 @@ async fn host_send(
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
+                picture = picture.wrapping_add(1);
                 gate.sent(frame.keyframe, bytes.len());
                 pictured = true;
                 if frame.keyframe {

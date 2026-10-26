@@ -8,9 +8,10 @@ use crate::error::Error;
 use super::MAX_VIDEO_FRAME;
 
 /// Header before the payload: codec, flags, timestamp, source display id,
-/// source topology revision, and the host's capture-to-send time. A frame
-/// that says where it changed has its regions between this and the payload.
-pub(crate) const VIDEO_HEADER: usize = 30;
+/// source topology revision, the host's capture-to-send time, and the
+/// picture's number in its stream. A frame that says where it changed has
+/// its regions between this and the payload.
+pub(crate) const VIDEO_HEADER: usize = 34;
 
 /// The most regions a frame carries; a picture changed in more places says
 /// none, as if all of it changed.
@@ -215,7 +216,20 @@ pub(crate) fn check_video_len(len: usize) -> Result<(), Error> {
     }
 }
 
-pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
+/// A picture as it crosses the wire: the frame, and its number among the
+/// stream pictures its host sent.
+///
+/// The host numbers each stream picture it puts on the link, by datagrams
+/// or on the stream, one after another; a picture it drops before sending
+/// takes no number. A still repeats the number of the stream picture before
+/// it, so a lost still leaves no gap. The number wraps.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct VideoBody {
+    pub(crate) sequence: u32,
+    pub(crate) frame: EncodedFrame,
+}
+
+pub(crate) fn encode_video_body(frame: &EncodedFrame, sequence: u32) -> Vec<u8> {
     let regions = frame
         .regions
         .as_ref()
@@ -241,6 +255,7 @@ pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
         .captured_at
         .map_or(frame.timing.host_us, micros_since);
     body.extend_from_slice(&host_us.to_be_bytes());
+    body.extend_from_slice(&sequence.to_be_bytes());
     if let Some(regions) = regions {
         body.push(regions.len() as u8);
         for region in regions {
@@ -253,7 +268,7 @@ pub(crate) fn encode_video_body(frame: &EncodedFrame) -> Vec<u8> {
     body
 }
 
-pub(crate) fn decode_video_body(body: &[u8]) -> Result<EncodedFrame, Error> {
+pub(crate) fn decode_video_body(body: &[u8]) -> Result<VideoBody, Error> {
     check_video_len(body.len())?;
     let codec = VideoCodec::from_wire_id(body[0]).ok_or(Error::Unsupported("this video codec"))?;
     if codec.wire_id() != body[0] {
@@ -263,6 +278,7 @@ pub(crate) fn decode_video_body(body: &[u8]) -> Result<EncodedFrame, Error> {
     let display_id = u64::from_be_bytes(body[10..18].try_into().expect("8 bytes"));
     let revision = u64::from_be_bytes(body[18..26].try_into().expect("8 bytes"));
     let host_us = u32::from_be_bytes(body[26..30].try_into().expect("4 bytes"));
+    let sequence = u32::from_be_bytes(body[30..34].try_into().expect("4 bytes"));
     let flags = body[1];
     let keyframe = flags & FLAG_KEYFRAME != 0;
     let role = match (flags & FLAG_STILL != 0, flags & FLAG_UNCHANGED != 0) {
@@ -303,7 +319,7 @@ pub(crate) fn decode_video_body(body: &[u8]) -> Result<EncodedFrame, Error> {
     frame.role = role;
     frame.regions = regions;
     frame.timing.host_us = host_us;
-    Ok(frame)
+    Ok(VideoBody { sequence, frame })
 }
 
 #[cfg(test)]
@@ -312,13 +328,21 @@ mod tests {
     use crate::video::VideoQueue;
     use std::time::Duration;
 
+    fn encode(frame: &EncodedFrame) -> Vec<u8> {
+        encode_video_body(frame, 0)
+    }
+
+    fn decode(body: &[u8]) -> Result<EncodedFrame, Error> {
+        decode_video_body(body).map(|body| body.frame)
+    }
+
     #[test]
     fn a_frame_carries_its_capture_to_send_time_and_its_queued_time() {
         let captured = Instant::now() - Duration::from_millis(40);
         let frame = EncodedFrame::h264(true, 1, vec![0x65])
             .unwrap()
             .with_captured_at(captured);
-        let sent = decode_video_body(&encode_video_body(&frame)).unwrap();
+        let sent = decode(&encode(&frame)).unwrap();
         assert!(
             (40_000..10_000_000).contains(&sent.timing.host_us),
             "capture to send was {} µs",
@@ -329,17 +353,11 @@ mod tests {
             "the capture instant stays on the host"
         );
         // A received frame passed on keeps the time it arrived with.
-        let passed = decode_video_body(&encode_video_body(&sent)).unwrap();
+        let passed = decode(&encode(&sent)).unwrap();
         assert_eq!(passed.timing.host_us, sent.timing.host_us);
         // Without a capture instant the time is unknown: zero.
         let unknown = EncodedFrame::h264(true, 1, vec![0x65]).unwrap();
-        assert_eq!(
-            decode_video_body(&encode_video_body(&unknown))
-                .unwrap()
-                .timing
-                .host_us,
-            0
-        );
+        assert_eq!(decode(&encode(&unknown)).unwrap().timing.host_us, 0);
 
         let mut queue = VideoQueue::new();
         queue.push_at(sent, Instant::now() - Duration::from_millis(25));
@@ -365,46 +383,31 @@ mod tests {
         let frame = EncodedFrame::h264(false, 5, vec![0x41, 2])
             .unwrap()
             .with_regions(Some(vec![clock]));
-        let back = decode_video_body(&encode_video_body(&frame)).unwrap();
+        let back = decode(&encode(&frame)).unwrap();
         assert_eq!(back.regions, Some(vec![clock]));
         assert_eq!(back.payload, vec![0x41, 2]);
         // None changed: an empty list is a statement too.
         let none = frame.clone().with_regions(Some(Vec::new()));
-        assert_eq!(
-            decode_video_body(&encode_video_body(&none))
-                .unwrap()
-                .regions,
-            Some(Vec::new())
-        );
+        assert_eq!(decode(&encode(&none)).unwrap().regions, Some(Vec::new()));
         let many = frame
             .clone()
             .with_regions(Some(vec![clock; MAX_REGIONS + 1]));
         assert_eq!(many.regions, None);
-        assert_eq!(
-            decode_video_body(&encode_video_body(&many))
-                .unwrap()
-                .regions,
-            None
-        );
+        assert_eq!(decode(&encode(&many)).unwrap().regions, None);
         // A repeat of the screen says nothing of regions, whatever it holds.
         let repeat = frame.clone().unchanged();
-        assert_eq!(
-            decode_video_body(&encode_video_body(&repeat))
-                .unwrap()
-                .regions,
-            None
-        );
+        assert_eq!(decode(&encode(&repeat)).unwrap().regions, None);
         // Regions on a repeat, and a count past the limit or past the body, are
         // malformed.
-        let mut body = encode_video_body(&frame);
+        let mut body = encode(&frame);
         body[1] |= 4;
-        assert!(matches!(decode_video_body(&body), Err(Error::Malformed)));
-        let mut body = encode_video_body(&frame);
-        body[30] = (MAX_REGIONS + 1) as u8;
-        assert!(matches!(decode_video_body(&body), Err(Error::Malformed)));
-        let mut body = encode_video_body(&frame);
-        body[30] = 2;
-        assert!(matches!(decode_video_body(&body), Err(Error::Malformed)));
+        assert!(matches!(decode(&body), Err(Error::Malformed)));
+        let mut body = encode(&frame);
+        body[VIDEO_HEADER] = (MAX_REGIONS + 1) as u8;
+        assert!(matches!(decode(&body), Err(Error::Malformed)));
+        let mut body = encode(&frame);
+        body[VIDEO_HEADER] = 2;
+        assert!(matches!(decode(&body), Err(Error::Malformed)));
     }
 
     #[test]
@@ -418,39 +421,35 @@ mod tests {
             Err(Error::InvalidSetting("encoded frame is larger than 1 MiB"))
         ));
         let small = EncodedFrame::h264(false, u64::MAX, vec![0x7F]).unwrap();
-        assert_eq!(
-            decode_video_body(&encode_video_body(&small)).unwrap(),
-            small
-        );
+        assert_eq!(decode(&encode(&small)).unwrap(), small);
         let stamped = EncodedFrame::h264(true, 9, vec![0x65, 1])
             .unwrap()
             .with_source(3, 7);
-        let back = decode_video_body(&encode_video_body(&stamped)).unwrap();
+        let back = decode(&encode(&stamped)).unwrap();
         assert_eq!(back, stamped);
         assert_eq!((back.display_id, back.revision), (3, 7));
 
-        let mut flags = encode_video_body(&EncodedFrame::h264(true, 7, vec![4]).unwrap());
+        let mut flags = encode(&EncodedFrame::h264(true, 7, vec![4]).unwrap());
         // Bits past the keyframe, role and region bits are ignored.
         flags[1] = 0xF1;
-        assert!(decode_video_body(&flags).unwrap().keyframe);
+        assert!(decode(&flags).unwrap().keyframe);
         flags[1] = 0xF0;
-        assert!(!decode_video_body(&flags).unwrap().keyframe);
+        assert!(!decode(&flags).unwrap().keyframe);
 
+        let mut unknown = vec![0; VIDEO_HEADER + 1];
+        unknown[0] = 9;
         assert!(matches!(
-            decode_video_body(&[
-                9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 1
-            ]),
+            decode(&unknown),
             Err(Error::Unsupported("this video codec"))
         ));
-        assert!(matches!(decode_video_body(&[1, 0]), Err(Error::Malformed)));
+        assert!(matches!(decode(&[1, 0]), Err(Error::Malformed)));
         assert!(matches!(
-            decode_video_body(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
+            decode(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
             Err(Error::Malformed)
         ));
         // The old 10-byte header is too short to carry a source stamp.
         assert!(matches!(
-            decode_video_body(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
+            decode(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
             Err(Error::Malformed)
         ));
 
@@ -480,7 +479,7 @@ mod tests {
         let unchanged = changed.clone().unchanged();
         let still = EncodedFrame::still(3, vec![7; 40]).unwrap();
         for frame in [&changed, &unchanged, &still] {
-            let back = decode_video_body(&encode_video_body(frame)).unwrap();
+            let back = decode(&encode(frame)).unwrap();
             assert_eq!(back.role, frame.role);
             assert_eq!(back.keyframe, frame.keyframe);
             assert_eq!(back.codec, frame.codec);
@@ -490,13 +489,47 @@ mod tests {
         // A still stays a still when marked unchanged.
         assert_eq!(still.clone().unchanged().role, FrameRole::Still);
         let flags = |frame: &EncodedFrame, flags: u8| {
-            let mut body = encode_video_body(frame);
+            let mut body = encode(frame);
             body[1] = flags;
-            decode_video_body(&body)
+            decode(&body)
         };
         // Still flag on a predicted frame, on H.264, or with the unchanged flag.
         assert!(flags(&still, 2).is_err());
         assert!(flags(&EncodedFrame::h264(true, 1, vec![9; 40]).unwrap(), 3).is_err());
         assert!(flags(&still, 7).is_err());
+    }
+
+    /// A picture's number crosses the wire beside the frame, up to the last
+    /// before it wraps, and a header without room for it is refused.
+    #[test]
+    fn a_pictures_number_round_trips_through_its_wraparound() {
+        let frame = EncodedFrame::h264(false, 4, vec![0x41; 8])
+            .unwrap()
+            .with_regions(Some(vec![crate::Region::default()]));
+        for sequence in [0, 1, 0x0102_0304, u32::MAX - 1, u32::MAX] {
+            let back = decode_video_body(&encode_video_body(&frame, sequence)).unwrap();
+            assert_eq!(
+                back,
+                VideoBody {
+                    sequence,
+                    frame: frame.clone()
+                },
+                "picture {sequence} comes back as sent, its regions after the number"
+            );
+        }
+        let still = EncodedFrame::still(9, vec![7; 8]).unwrap();
+        assert_eq!(
+            decode_video_body(&encode_video_body(&still, u32::MAX))
+                .unwrap()
+                .sequence,
+            u32::MAX,
+            "a still carries the number it repeats"
+        );
+        let mut short = encode_video_body(&frame, 7);
+        short.truncate(VIDEO_HEADER - 1);
+        assert!(
+            matches!(decode_video_body(&short), Err(Error::Malformed)),
+            "a header too short for the number is malformed"
+        );
     }
 }

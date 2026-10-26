@@ -501,7 +501,10 @@ pub(super) async fn host_video_loop(
 ) {
     // The reliable stream opens lazily: datagram sessions may never need it.
     let mut send: Option<iroh::endpoint::SendStream> = None;
+    // Groups each datagram frame's fragments.
     let mut seq: u32 = 0;
+    // Every frame sent, on either transport, is the next picture.
+    let mut picture: u32 = 0;
     loop {
         if *stop_rx.borrow() {
             return;
@@ -524,7 +527,8 @@ pub(super) async fn host_video_loop(
             if max >= crate::video::FRAG_HEADER + 64 {
                 let mut datagrams = Vec::new();
                 for frame in &frames {
-                    let body = encode_video_body(frame);
+                    let body = encode_video_body(frame, picture);
+                    picture = picture.wrapping_add(1);
                     // This stream hears no loss report: keyframes carry the
                     // default parity, other frames none.
                     let protection = crate::video::ViewerLoss::default().protection(
@@ -562,7 +566,9 @@ pub(super) async fn host_video_loop(
         let stream = send.as_mut().expect("opened");
         let mut failed = false;
         for frame in frames {
-            if write_video_frame(stream, &frame).await.is_err() {
+            let sent = write_video_frame(stream, &frame, picture).await;
+            picture = picture.wrapping_add(1);
+            if sent.is_err() {
                 failed = true;
                 break;
             }
@@ -601,7 +607,7 @@ pub(super) async fn video_recv_loop(
                     continue;
                 };
                 match decode_video_body(&body) {
-                    Ok(frame) => {
+                    Ok(crate::video::VideoBody { frame, .. }) => {
                         if !frame.belongs_to(codec, false) {continue;}
                         if matches!(inbox.push(frame), VideoPush::KeyframeNeeded) {
                             keyframe.request();
@@ -639,7 +645,7 @@ pub(super) async fn video_recv_loop(
                         if crate::video::check_video_len(len).is_err() { return; }
                         let mut body = vec![0;len];
                         if stream.read_exact(&mut body).await.is_err() { return; }
-                        if let Ok(frame) = decode_video_body(&body) {
+                        if let Ok(crate::video::VideoBody { frame, .. }) = decode_video_body(&body) {
                             if !frame.belongs_to(codec, false) {return;}
                             if matches!(inbox.push(frame), VideoPush::KeyframeNeeded) { keyframe.request(); }
                         }
@@ -656,8 +662,9 @@ pub(super) async fn video_recv_loop(
 pub(super) async fn write_video_frame(
     send: &mut iroh::endpoint::SendStream,
     frame: &EncodedFrame,
+    sequence: u32,
 ) -> Result<(), Error> {
-    let body = encode_video_body(frame);
+    let body = encode_video_body(frame, sequence);
     crate::video::check_video_len(body.len())?;
     let len = u32::try_from(body.len()).map_err(|_| Error::Malformed)?;
     send.write_all(&len.to_be_bytes())
@@ -680,7 +687,7 @@ pub(super) async fn read_video_frame(
     recv.read_exact(&mut body)
         .await
         .map_err(Error::network_debug)?;
-    decode_video_body(&body)
+    decode_video_body(&body).map(|body| body.frame)
 }
 
 fn video_targets_locked(shared: &Shared, state: &State) -> Vec<VideoTarget> {

@@ -57,8 +57,8 @@ impl VideoReport {
     }
 }
 
-/// The viewer's running tally, added to by its datagram router and taken
-/// by its control loop.
+/// The viewer's running tally, added to as datagrams and pictures arrive
+/// and taken by its control loop.
 #[derive(Default)]
 pub(crate) struct ReportTally {
     frames_completed: AtomicU32,
