@@ -91,8 +91,10 @@ pub enum StreamFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamEnd {
     Failed(StreamFailure),
-    /// Its user stopped sharing, or closed the connection.
+    /// Its user stopped sharing the screen.
     Stopped,
+    /// Its user ended the whole connection, as by stopping hosting.
+    Disconnected,
     /// VniLink on the host is quitting.
     Shutdown,
     /// Its user withdrew this computer's permission to view or control.
@@ -109,6 +111,7 @@ impl StreamEnd {
             Self::Stopped => 5,
             Self::Shutdown => 6,
             Self::Revoked => 7,
+            Self::Disconnected => 8,
         }
     }
 
@@ -121,6 +124,7 @@ impl StreamEnd {
             5 => Self::Stopped,
             6 => Self::Shutdown,
             7 => Self::Revoked,
+            8 => Self::Disconnected,
             _ => return Err(crate::Error::Malformed),
         })
     }
@@ -131,7 +135,8 @@ impl StreamEnd {
     pub(crate) fn for_close(cause: CloseCause) -> Option<Self> {
         match cause {
             CloseCause::Failed(failure) => Some(Self::Failed(failure)),
-            CloseCause::OwnerClose | CloseCause::ParentLoss => Some(Self::Stopped),
+            CloseCause::OwnerClose => Some(Self::Stopped),
+            CloseCause::ParentLoss => Some(Self::Disconnected),
             CloseCause::Shutdown => Some(Self::Shutdown),
             CloseCause::Revoked => Some(Self::Revoked),
             CloseCause::DeviceLoss => Some(Self::Failed(StreamFailure::Capture)),
@@ -163,6 +168,7 @@ impl DesktopEnd {
             Self::Host(StreamEnd::Failed(StreamFailure::Permission)) => "hostPermission",
             Self::Host(StreamEnd::Failed(StreamFailure::DisplayGone)) => "displayGone",
             Self::Host(StreamEnd::Stopped) => "hostStopped",
+            Self::Host(StreamEnd::Disconnected) => "hostDisconnected",
             Self::Host(StreamEnd::Shutdown) => "hostShutdown",
             Self::Host(StreamEnd::Revoked) => "revoked",
             Self::PeerClosed => "peerClosed",
@@ -658,4 +664,35 @@ fn sharing_boolean<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<bool>, D::Error> {
     <bool as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_stream_end_is_one_known_byte() {
+        use crate::{StreamEnd, StreamFailure};
+        for end in [
+            StreamEnd::Failed(StreamFailure::Encoder),
+            StreamEnd::Failed(StreamFailure::Capture),
+            StreamEnd::Failed(StreamFailure::Permission),
+            StreamEnd::Failed(StreamFailure::DisplayGone),
+            StreamEnd::Stopped,
+            StreamEnd::Shutdown,
+            StreamEnd::Revoked,
+            StreamEnd::Disconnected,
+        ] {
+            assert_eq!(StreamEnd::decode(end.encode()).unwrap(), end);
+        }
+        for unknown in [0, 9, 255] {
+            assert!(matches!(
+                StreamEnd::decode(unknown),
+                Err(crate::Error::Malformed)
+            ));
+        }
+        assert_eq!(StreamEnd::for_close(crate::CloseCause::PeerClose), None);
+        assert_eq!(
+            StreamEnd::for_close(crate::CloseCause::DeviceLoss),
+            Some(StreamEnd::Failed(StreamFailure::Capture))
+        );
+    }
 }

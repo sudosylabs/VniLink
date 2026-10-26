@@ -360,6 +360,7 @@ fn desktop_end_label(end: vnilink_app::FfiDesktopEnd) -> &'static str {
         End::HostPermission => "hostPermission",
         End::DisplayGone => "displayGone",
         End::HostStopped => "hostStopped",
+        End::HostDisconnected => "hostDisconnected",
         End::HostShutdown => "hostShutdown",
         End::Revoked => "revoked",
         End::PeerClosed => "peerClosed",

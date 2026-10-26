@@ -312,11 +312,15 @@ impl LiveSession {
     /// was ended by its peer; a lost link ends streams too, before the
     /// session's phase learns of it, which its link already says.
     fn connected(&self) -> bool {
-        self.phase == SessionPhase::Active
-            && self
-                .link
-                .as_ref()
-                .is_some_and(|link| link.close_reason().is_none())
+        self.phase == SessionPhase::Active && self.link_open()
+    }
+
+    /// Its link still carries streams, whatever its phase: a session this
+    /// computer is stopping can still tell its peer why.
+    fn link_open(&self) -> bool {
+        self.link
+            .as_ref()
+            .is_some_and(|link| link.close_reason().is_none())
     }
 }
 

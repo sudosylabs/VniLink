@@ -65,8 +65,10 @@ export type DesktopEnd =
 	| 'hostPermission'
 	/** The display being shown went away. */
 	| 'displayGone'
-	/** Its user stopped sharing, or closed the connection. */
+	/** Its user stopped sharing its screen. */
 	| 'hostStopped'
+	/** Its user ended the connection, as by no longer accepting connections. */
+	| 'hostDisconnected'
 	/** VniLink quit on it. */
 	| 'hostShutdown'
 	/** Its user withdrew this computer's permission. */
@@ -75,7 +77,7 @@ export type DesktopEnd =
 	| 'cantShow';
 
 /** The ends the engine reports in a picture channel's last packet. */
-export const engineDesktopEnds: readonly DesktopEnd[] = ['linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed', 'hostPermission', 'displayGone', 'hostStopped', 'hostShutdown', 'revoked'];
+export const engineDesktopEnds: readonly DesktopEnd[] = ['linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed', 'hostPermission', 'displayGone', 'hostStopped', 'hostDisconnected', 'hostShutdown', 'revoked'];
 
 /** One picture of a display on the other computer, at the topology revision it was taken with. */
 /**

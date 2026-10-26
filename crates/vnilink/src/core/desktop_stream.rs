@@ -277,6 +277,16 @@ impl DesktopRuntime {
             });
         }
     }
+    /// Whether the host said it ended the whole connection, so the
+    /// desktop went with its parent rather than by itself.
+    fn host_ended_connection(&self) -> bool {
+        matches!(
+            *lock(&self.end),
+            Some(crate::DesktopEnd::Host(
+                crate::StreamEnd::Disconnected | crate::StreamEnd::Shutdown
+            ))
+        )
+    }
     pub(super) fn close(&self) {
         self.retired
             .store(true, std::sync::atomic::Ordering::Release);
@@ -1488,6 +1498,8 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     link.close_reason().is_none(),
                     if lease.is_cancelled() {
                         CloseCause::OwnerClose
+                    } else if desktop.host_ended_connection() {
+                        CloseCause::ParentLoss
                     } else {
                         CloseCause::PeerClose
                     },
@@ -2135,7 +2147,7 @@ pub(super) async fn serve(
         && !lock(&shared.state)
             .incoming
             .get(&desktop.info.service.connection_id)
-            .is_some_and(LiveSession::connected);
+            .is_some_and(LiveSession::link_open);
     if link_lost {
         desktop.ended(&shared, true, crate::DesktopEnd::LinkLost);
     } else if let Some(end) = host_end(&shared, &desktop, parent_stopped) {
@@ -2173,7 +2185,7 @@ fn host_end(
     match phase {
         Some(ServicePhase::Closed(cause)) => crate::StreamEnd::for_close(cause),
         _ if state.shut_down => Some(crate::StreamEnd::Shutdown),
-        _ if parent_stopped => Some(crate::StreamEnd::Stopped),
+        _ if parent_stopped => Some(crate::StreamEnd::Disconnected),
         _ => None,
     }
 }

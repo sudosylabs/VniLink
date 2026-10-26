@@ -481,7 +481,16 @@ pub(super) async fn serve_aux_host(
             }
         }
     }
-    // JoinSet drop aborts every owned stream task; service guards settle records.
+    // Each stream ends on the stop it watches, telling its peer why; the
+    // JoinSet's drop aborts what has not, and service guards settle records.
+    crate::ignored!(
+        crate::trace::SESSION,
+        "streams still running are aborted with the set",
+        tokio::time::timeout(super::host::STREAMS_ENDING, async {
+            while workers.join_next().await.is_some() {}
+        })
+        .await
+    );
 }
 
 async fn dispatch_aux_host(

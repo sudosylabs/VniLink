@@ -540,7 +540,7 @@ pub(super) async fn handle_host_request(
                             // make the controller's connect call return. In particular,
                             // a host file send immediately after connect must not race
                             // this registration.
-                            let (clipboard, files) = spawn_host_streams(
+                            let (clipboard, mut files) = spawn_host_streams(
                                 shared,
                                 iroh::endpoint::Connection::clone(connection),
                                 info.id,
@@ -605,7 +605,19 @@ pub(super) async fn handle_host_request(
                             if let Some(task) = clipboard {
                                 task.abort();
                             }
-                            files.abort();
+                            // Service streams end on the session's stop and
+                            // tell their peers why before its close below;
+                            // one that has not ended by then is cut off.
+                            match tokio::time::timeout(STREAMS_ENDING, &mut files).await {
+                                Ok(ended) => {
+                                    crate::ignored!(
+                                        crate::trace::SESSION,
+                                        "a stream task that failed has ended all the same",
+                                        ended
+                                    );
+                                }
+                                Err(_) => files.abort(),
+                            }
                             if let Some(task) = cursor_task {
                                 task.abort();
                             }
@@ -772,6 +784,10 @@ pub(super) fn register_incoming(
     }
     Ok(info)
 }
+
+/// How long a stopping session's service streams have to end on their own,
+/// telling their peers why, before they are cut off.
+pub(super) const STREAMS_ENDING: Duration = Duration::from_secs(1);
 
 pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     let mut state = lock(&shared.state);
