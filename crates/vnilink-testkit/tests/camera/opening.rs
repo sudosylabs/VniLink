@@ -135,19 +135,11 @@ fn a_camera_opens_for_one_viewer_at_a_time_and_frees_on_close() -> TestResult {
         .core
         .close_controller_service(owner.id, owner.generation)?;
     second.core.forget_controller_service(owner.id)?;
-    // Each attempt opens under an owner of its own, since a refused open
-    // consumes its owner.
-    let taken = wait_for(
-        "the closed camera to open for the other viewer",
-        Duration::from_secs(8),
-        || match open(&second, &to_second, "one") {
-            Ok(camera) => Some(camera),
-            Err(Error::Busy) => None,
-            Err(other) => {
-                panic!("a freed camera is refused for a reason other than busy: {other:?}")
-            }
-        },
-    );
+    // The host frees a camera before it records the stream's end, so once
+    // both closed streams have ended (beside the refused one) it opens at
+    // the first try.
+    trace.wait_for_records("camera stream ended", 3);
+    let taken = open(&second, &to_second, "one")?;
     taken.close();
     // The host's side alone: a viewer's record of a camera it closed is
     // not always written once its owner is forgotten.
@@ -168,7 +160,7 @@ fn a_camera_opens_for_one_viewer_at_a_time_and_frees_on_close() -> TestResult {
           camera: camera stream ended ended=viewer closed service=4
         second:
           camera: camera picture ended closed_here=true service=2
-          camera: camera picture ended closed_here=true service=4
+          camera: camera picture ended closed_here=true service=3
     "#]]
     .assert_eq(&trace.tell(&["camera"]).concurrent().to_string());
     Ok(())

@@ -914,6 +914,9 @@ pub(super) enum HostedEnd {
     ViewerClosed,
     /// The connection carrying it ended.
     ConnectionEnded,
+    /// This computer's engine shut down, which ends its connections and
+    /// drops its tasks, whichever reaches the stream first.
+    ShutDown,
     /// Its service was closed by something else, as a revoke.
     ServiceClosed,
     /// Its work ended on this computer, in the service's words (`shell
@@ -944,6 +947,7 @@ impl HostedEnd {
             Self::Dropped => "dropped",
             Self::ViewerClosed => "viewer closed",
             Self::ConnectionEnded => "connection ended",
+            Self::ShutDown => "shut down",
             Self::ServiceClosed => "service closed",
             Self::Finished(words) | Self::Failed(words) => words,
             Self::Malformed => "malformed",
@@ -1000,7 +1004,15 @@ impl HostedEnding {
         if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
             return;
         }
-        let end = *lock(&self.end);
+        // At shutdown, connections end and tasks drop in either order: both
+        // are the engine shutting down.
+        let shutting_down = lock(&self.shared.state).shut_down;
+        let end = match *lock(&self.end) {
+            None | Some(HostedEnd::ConnectionEnded | HostedEnd::Dropped) if shutting_down => {
+                Some(HostedEnd::ShutDown)
+            }
+            end => end,
+        };
         (self.record)(match (end, failure) {
             (Some(end), _) => end.label(),
             (None, Some(failure)) => failure,

@@ -206,7 +206,7 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
           camera: camera opened fps=30 height=480 service=4 width=640
           camera: camera stream ended ended=service closed service=4
           camera: camera opened fps=30 height=480 service=5 width=640
-          camera: camera stream ended ended=connection ended service=5
+          camera: camera stream ended ended=shut down service=5
     "#]]
     .assert_eq(&trace.tell(&["camera"]).of("host").to_string());
     Ok(())
