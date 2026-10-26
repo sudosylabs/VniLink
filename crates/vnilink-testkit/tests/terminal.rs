@@ -55,7 +55,7 @@ fn a_shell_runs_what_is_typed_and_ends_with_its_exit_code() {
         host:
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
           terminal: terminal shell exited code=7 service=1
-          terminal: terminal stream ended explicit_close=true service=1
+          terminal: terminal stream ended ended=shell exited explicit_close=true service=1
     "#]]
     .assert_eq(&trace.story(&["terminal"]));
 }

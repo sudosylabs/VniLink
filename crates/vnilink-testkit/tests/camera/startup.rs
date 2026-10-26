@@ -227,7 +227,7 @@ fn a_camera_that_opens_after_its_grant_is_withdrawn_is_closed_unused() -> TestRe
     );
     expect![[r#"
         host:
-          camera: camera stream ended ended=no session service=1 withdrawn=true
+          camera: camera stream ended ended=service closed service=1
     "#]]
     .assert_eq(&trace.story(&["camera"]));
     Ok(())

@@ -152,18 +152,25 @@ fn a_camera_opens_for_one_viewer_at_a_time_and_frees_on_close() -> TestResult {
     // The host's side alone: a viewer's record of a camera it closed is
     // not always written once its owner is forgotten.
     trace.wait_for_records("camera stream ended", 4);
+    // Each viewer records the pictures it closed; the refused open has none.
+    trace.wait_for_records("camera picture ended", 3);
     expect![[r#"
+        controller:
+          camera: camera picture ended closed_here=true service=1
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
           camera: camera not opened error=busy service=2
-          camera: camera stream ended ended=busy service=2 withdrawn=false
+          camera: camera stream ended ended=busy service=2
           camera: camera opened fps=30 height=480 service=3 width=640
-          camera: camera stream ended ended=network service=1 withdrawn=false
-          camera: camera stream ended ended=network service=3 withdrawn=false
+          camera: camera stream ended ended=viewer closed service=1
+          camera: camera stream ended ended=viewer closed service=3
           camera: camera opened fps=30 height=480 service=4 width=640
-          camera: camera stream ended ended=network service=4 withdrawn=false
+          camera: camera stream ended ended=viewer closed service=4
+        second:
+          camera: camera picture ended closed_here=true service=2
+          camera: camera picture ended closed_here=true service=4
     "#]]
-    .assert_eq(&trace.tell(&["camera"]).of("host").concurrent().to_string());
+    .assert_eq(&trace.tell(&["camera"]).concurrent().to_string());
     Ok(())
 }
 
@@ -224,12 +231,12 @@ fn a_camera_that_failed_to_open_reads_as_failed_until_one_opens() -> TestResult 
     trace.wait_for_records("camera picture ended", 1);
     expect![[r#"
         controller:
-          camera: camera picture ended closed_here=true reason=Lost service=2
+          camera: camera picture ended closed_here=true service=2
         host:
           camera: camera not opened error=unsupported reason=camera sensor service=1
-          camera: camera stream ended ended=unsupported service=1 withdrawn=false
+          camera: camera stream ended ended=unsupported service=1
           camera: camera opened fps=30 height=480 service=2 width=640
-          camera: camera stream ended ended=network service=2 withdrawn=false
+          camera: camera stream ended ended=viewer closed service=2
     "#]]
     .assert_eq(&trace.story(&["camera"]));
     Ok(())

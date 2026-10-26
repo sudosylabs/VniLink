@@ -1,6 +1,6 @@
 //! Independently cancelled terminal pipe over an admitted neutral connection.
 // trace: records every ignored failure
-use super::service_stream::{read, write};
+use super::service_stream::{read, write, HostedEnd, HostedEnding};
 use super::terminal_runtime::{self, HostedTerminal};
 use super::*;
 use crate::terminal::{
@@ -462,6 +462,20 @@ pub(super) async fn serve(
     };
     let mut attached: Option<terminal_runtime::Attachment> = None;
     let explicit_close = Arc::new(AtomicBool::new(false));
+    // Says how the stream ended when it ends, however it ends: a task the
+    // engine drops while tearing down records it too.
+    let ending = {
+        let explicit_close = explicit_close.clone();
+        HostedEnding::new(&shared, id, move |ended| {
+            tracing::debug!(
+                target: crate::trace::TERMINAL,
+                service = id,
+                ended,
+                explicit_close = explicit_close.load(std::sync::atomic::Ordering::Acquire),
+                "terminal stream ended"
+            );
+        })
+    };
     // Clones for startup cancellation: a delayed native open must not leak a
     // retained shell when parent loss / revoke / shutdown wins first.
     let mut startup_parent = parent.clone();
@@ -515,9 +529,18 @@ pub(super) async fn serve(
                 });
                 let opened = tokio::select! {
                     biased;
-                    _ = startup_parent.changed() => return Err(Error::NoSession),
-                    _ = startup_stop.changed() => return Err(Error::NoSession),
-                    _ = read(&mut recv) => return Err(Error::NoSession),
+                    _ = startup_parent.changed() => {
+                        ending.why(HostedEnd::ConnectionEnded);
+                        return Err(Error::NoSession);
+                    }
+                    _ = startup_stop.changed() => {
+                        ending.why(HostedEnd::service_closed(&shared, id));
+                        return Err(Error::NoSession);
+                    }
+                    _ = read(&mut recv) => {
+                        ending.why(HostedEnd::ViewerClosed);
+                        return Err(Error::NoSession);
+                    }
                     result = tokio::time::timeout(TIMEOUT, join) => result
                         .map_err(|_| Error::Timeout)?
                         .map_err(|_| Error::Unsupported("terminal backend startup"))?,
@@ -604,10 +627,13 @@ pub(super) async fn serve(
         };
         let receiving = async {
             loop {
-                let bytes = read(&mut recv).await?;
+                let bytes = read(&mut recv).await.inspect_err(|_| {
+                    ending.why(HostedEnd::ViewerClosed);
+                })?;
                 let command = match bytes.first() {
                     Some(6) if bytes.len() == 1 => {
                         explicit_close.store(true, std::sync::atomic::Ordering::Release);
+                        ending.why(HostedEnd::ViewerClosed);
                         return Ok(());
                     }
                     Some(1) if bytes.len() > 1 && bytes.len() <= TERMINAL_CHUNK + 1 => {
@@ -661,7 +687,9 @@ pub(super) async fn serve(
                 }
                 if !bytes.is_empty() {
                     offset += bytes.len() as u64;
-                    write(&mut send, encode_event(TerminalEvent::Output(bytes))).await?;
+                    write(&mut send, encode_event(TerminalEvent::Output(bytes)))
+                        .await
+                        .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
                     continue;
                 }
                 if let Some(event) = ended {
@@ -678,6 +706,10 @@ pub(super) async fn serve(
                             "terminal backend failed"
                         ),
                     }
+                    ending.why(match event {
+                        TerminalEvent::Exited(_) => HostedEnd::Finished("shell exited"),
+                        _ => HostedEnd::Failed("shell failed"),
+                    });
                     write(&mut send, encode_event(event)).await?;
                     explicit_close.store(true, std::sync::atomic::Ordering::Release);
                     return Ok(());
@@ -690,17 +722,23 @@ pub(super) async fn serve(
     if *parent.borrow() || *stop.borrow() {
         return Err(Error::NoSession);
     }
-    let result = tokio::select! { biased; _ = parent.changed() => Err(Error::NoSession), _ = stop.changed() => Err(Error::NoSession), result = run => result };
+    let result = tokio::select! {
+        biased;
+        _ = parent.changed() => {
+            ending.why(HostedEnd::ConnectionEnded);
+            Err(Error::NoSession)
+        }
+        _ = stop.changed() => {
+            ending.why(HostedEnd::service_closed(&shared, id));
+            Err(Error::NoSession)
+        }
+        result = run => result,
+    };
     if matches!(result, Err(Error::Malformed)) {
         explicit_close.store(true, std::sync::atomic::Ordering::Release);
+        ending.why(HostedEnd::Malformed);
     }
-    tracing::debug!(
-        target: crate::trace::TERMINAL,
-        service = id,
-        ended = result.as_ref().err().map(Error::name),
-        explicit_close = explicit_close.load(std::sync::atomic::Ordering::Acquire),
-        "terminal stream ended"
-    );
+    ending.close(result.as_ref().err().map(Error::name));
     drop(attached);
     crate::ignored!(
         crate::trace::TERMINAL,

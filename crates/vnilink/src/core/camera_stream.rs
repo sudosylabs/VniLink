@@ -1,6 +1,7 @@
 //! Independently owned camera transport, using the shared H.264 frame format.
 // trace: records every ignored failure
 use super::service_stream::{preamble, read, status, write};
+use super::service_stream::{HostedEnd, HostedEnding};
 use super::*;
 use crate::{
     availability::Capability,
@@ -304,14 +305,17 @@ impl Core {
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
                     }
+                    // A viewer that closed the picture itself has no reason from
+                    // the host to give.
+                    let closed_here = lease.is_cancelled();
                     tracing::info!(
                         target: crate::trace::CAMERA,
                         service = id,
-                        reason = ?reason,
-                        closed_here = lease.is_cancelled(),
+                        reason = (!closed_here).then(|| tracing::field::debug(reason)),
+                        closed_here,
                         "camera picture ended"
                     );
-                    end_reason = Some(reason);
+                    end_reason = (!closed_here).then_some(reason);
                     crate::ignored!(
                         crate::trace::CAMERA,
                         "a stream that cannot finish is closed with its link",
@@ -487,6 +491,16 @@ pub(super) async fn serve(
     // device when parent loss / revoke / shutdown wins before Open completes.
     let mut startup_parent = parent.clone();
     let mut startup_stop = stop.clone();
+    // Says how the stream ended when it ends, however it ends: a task the
+    // engine drops while tearing down records it too.
+    let ending = HostedEnding::new(&shared, id, move |ended| {
+        tracing::debug!(
+            target: crate::trace::CAMERA,
+            service = id,
+            ended,
+            "camera stream ended"
+        );
+    });
     let run = async {
         if *startup_parent.borrow() || *startup_stop.borrow() {
             return Err(Error::NoSession);
@@ -609,7 +623,10 @@ pub(super) async fn serve(
         let mut sent = 0u64;
         let commands = async {
             loop {
-                if read(&mut recv).await? != [1] {
+                let request = read(&mut recv)
+                    .await
+                    .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
+                if request != [1] {
                     return Err(Error::Malformed);
                 }
                 backend.source.request_keyframe();
@@ -622,7 +639,9 @@ pub(super) async fn serve(
                 // Recording consent follows the host's sharing policy as it changes.
                 let allowed = lock(&shared.state).trust.sharing.recording;
                 if recording != Some(allowed) {
-                    write(&mut send, vec![RECORDING, u8::from(allowed)]).await?;
+                    write(&mut send, vec![RECORDING, u8::from(allowed)])
+                        .await
+                        .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
                     recording = Some(allowed);
                 }
                 if backend.source.is_cancelled() {
@@ -633,6 +652,11 @@ pub(super) async fn serve(
                         sent,
                         "camera capture ended"
                     );
+                    ending.why(if backend.source.has_failed() {
+                        HostedEnd::Failed("capture failed")
+                    } else {
+                        HostedEnd::Finished("capture ended")
+                    });
                     write(
                         &mut send,
                         vec![if backend.source.has_failed() {
@@ -645,7 +669,9 @@ pub(super) async fn serve(
                     return Ok::<(), Error>(());
                 }
                 for frame in backend.source.frames.drain() {
-                    write(&mut send, crate::video::encode_video_body(&frame)).await?;
+                    write(&mut send, crate::video::encode_video_body(&frame))
+                        .await
+                        .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
                     sent += 1;
                 }
                 tokio::select! { _ = backend.source.frames.notified() => {}, _ = timer.tick() => {} }
@@ -657,15 +683,23 @@ pub(super) async fn serve(
     if *parent.borrow() || *stop.borrow() {
         return Err(Error::NoSession);
     }
-    let mut withdrawn = false;
-    let result = tokio::select! { biased; _ = parent.changed() => Err(Error::NoSession), _ = stop.changed() => { withdrawn = true; Err(Error::NoSession) }, result = run => result };
-    tracing::debug!(
-        target: crate::trace::CAMERA,
-        service = id,
-        withdrawn,
-        ended = result.as_ref().err().map(Error::name),
-        "camera stream ended"
-    );
+    let result = tokio::select! {
+        biased;
+        _ = parent.changed() => {
+            ending.why(HostedEnd::ConnectionEnded);
+            Err(Error::NoSession)
+        }
+        _ = stop.changed() => {
+            ending.why(HostedEnd::service_closed(&shared, id));
+            Err(Error::NoSession)
+        }
+        result = run => result,
+    };
+    // The service closed under the stream, for a reason other than its viewer's
+    // close: the viewer hears it was withdrawn.
+    let withdrawn =
+        *stop.borrow() && HostedEnd::service_closed(&shared, id) == HostedEnd::ServiceClosed;
+    ending.close(result.as_ref().err().map(Error::name));
     if withdrawn {
         // Tell the viewer why the picture stopped; it may already be gone.
         crate::ignored!(

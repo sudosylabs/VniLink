@@ -9,8 +9,7 @@ use vnilink_testkit::terminal::shell;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 use super::support::{
-    assert_content_unrecorded, ended_by_viewer, host_ended_shells, open_with, options, phase,
-    read_until,
+    assert_content_unrecorded, host_ended_shells, open_with, options, phase, read_until,
 };
 
 /// The story of a scenario that disconnects: the terminals the host opened
@@ -222,14 +221,9 @@ fn closing_a_persistent_terminal_bypasses_stalled_input() -> TestResult {
           terminal: terminal pipe ended closed_here=true error=no session service=1
         host:
           terminal: terminal opened columns=80 persistent=true resumed=false rows=24 service=1
-          terminal: terminal stream ended ended=… explicit_close=false service=1
+          terminal: terminal stream ended ended=no session explicit_close=false service=1
     "#]]
-    .assert_eq(
-        &trace
-            .tell(&["terminal"])
-            .masking(&["ended"], ended_by_viewer(&[1]))
-            .to_string(),
-    );
+    .assert_eq(&trace.tell(&["terminal"]).to_string());
     assert_content_unrecorded(&trace, &["SLEEP_"]);
     Ok(())
 }

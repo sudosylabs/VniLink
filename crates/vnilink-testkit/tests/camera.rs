@@ -161,21 +161,20 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
     hosting.turn_off_camera()?;
     assert_eq!(ended(controller, &camera), CameraEnd::Withdrawn);
 
-    // The host's side is told before it goes away: a host that shuts down
-    // does not always record its camera's end.
+    // The host's side before it goes away; its last end follows below.
     trace.wait_for_records("camera stream ended", 4);
     expect![[r#"
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
           camera: camera capture ended failed=true sent=1 service=1
-          camera: camera stream ended service=1 withdrawn=false
+          camera: camera stream ended ended=capture failed service=1
           camera: camera opened fps=30 height=480 service=2 width=640
           camera: camera capture ended failed=false sent=1 service=2
-          camera: camera stream ended service=2 withdrawn=false
+          camera: camera stream ended ended=capture ended service=2
           camera: camera opened fps=30 height=480 service=3 width=640
-          camera: camera stream ended ended=no session service=3 withdrawn=true
+          camera: camera stream ended ended=service closed service=3
           camera: camera opened fps=30 height=480 service=4 width=640
-          camera: camera stream ended ended=no session service=4 withdrawn=true
+          camera: camera stream ended ended=service closed service=4
     "#]]
     .assert_eq(&trace.tell(&["camera"]).of("host").to_string());
 
@@ -192,6 +191,24 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
           camera: camera picture ended closed_here=false reason=Lost service=5
     "#]]
     .assert_eq(&trace.tell(&["camera"]).of("controller").to_string());
+    // The host records the end of the camera it was serving as it shut down.
+    trace.wait_for_records("camera stream ended", 5);
+    expect![[r#"
+        host:
+          camera: camera opened fps=30 height=480 service=1 width=640
+          camera: camera capture ended failed=true sent=1 service=1
+          camera: camera stream ended ended=capture failed service=1
+          camera: camera opened fps=30 height=480 service=2 width=640
+          camera: camera capture ended failed=false sent=1 service=2
+          camera: camera stream ended ended=capture ended service=2
+          camera: camera opened fps=30 height=480 service=3 width=640
+          camera: camera stream ended ended=service closed service=3
+          camera: camera opened fps=30 height=480 service=4 width=640
+          camera: camera stream ended ended=service closed service=4
+          camera: camera opened fps=30 height=480 service=5 width=640
+          camera: camera stream ended ended=connection ended service=5
+    "#]]
+    .assert_eq(&trace.tell(&["camera"]).of("host").to_string());
     Ok(())
 }
 
@@ -240,7 +257,7 @@ fn an_unknown_camera_or_an_invalid_size_is_refused_and_nothing_starts() -> TestR
     expect![[r#"
         host:
           camera: camera not opened error=unsupported reason=camera device service=1
-          camera: camera stream ended ended=unsupported service=1 withdrawn=false
+          camera: camera stream ended ended=unsupported service=1
     "#]]
     .assert_eq(&trace.story(&["camera"]));
     Ok(())

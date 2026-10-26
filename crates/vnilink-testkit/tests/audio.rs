@@ -51,10 +51,11 @@ fn each_source_arrives_as_sent_and_closes_alone() {
     assert_eq!(next(&system), sent);
     expect![[r#"
         controller:
-          audio: audio ended closed_here=true dropped=0 ended=no session kind=Microphone service=2
+          audio: audio ended closed_here=true dropped=0 kind=Microphone service=2
         host:
           audio: audio opened channels=2 kind=System service=1 voice=false
           audio: audio opened channels=2 kind=Microphone service=2 voice=false
+          audio: audio stream ended ended=viewer closed kind=Microphone service=2
     "#]]
     .assert_eq(&trace.story(&["audio"]));
 }
@@ -217,11 +218,13 @@ fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
     trace.wait_for_records("audio ended", 2);
     expect![[r#"
         controller:
-          audio: audio ended closed_here=false dropped=0 ended=network kind=Microphone service=3
-          audio: audio ended closed_here=true dropped=0 ended=no session kind=System service=2
+          audio: audio ended closed_here=false dropped=0 ended=withdrawn kind=Microphone service=3
+          audio: audio ended closed_here=true dropped=0 kind=System service=2
         host:
           audio: audio opened channels=2 kind=System service=1 voice=false
           audio: audio opened channels=2 kind=Microphone service=2 voice=false
+          audio: audio stream ended ended=service closed kind=Microphone service=2
+          audio: audio stream ended ended=viewer closed kind=System service=1
     "#]]
     .assert_eq(&trace.story(&["audio"]));
     Ok(())

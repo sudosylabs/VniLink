@@ -48,10 +48,10 @@ fn closing_the_camera_stops_capture_and_leaves_the_connection() -> TestResult {
     trace.wait_for_records("camera picture ended", 1);
     expect![[r#"
         controller:
-          camera: camera picture ended closed_here=true reason=Lost service=2
+          camera: camera picture ended closed_here=true service=2
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
-          camera: camera stream ended ended=network service=1 withdrawn=false
+          camera: camera stream ended ended=viewer closed service=1
     "#]]
     .assert_eq(&trace.story(&["camera"]));
     Ok(())
@@ -100,9 +100,9 @@ fn withdrawing_the_camera_or_its_backend_stops_capture_and_keeps_the_connection(
           camera: camera picture ended closed_here=false reason=Withdrawn service=2
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
-          camera: camera stream ended ended=no session service=1 withdrawn=true
+          camera: camera stream ended ended=service closed service=1
           camera: camera opened fps=30 height=480 service=2 width=640
-          camera: camera stream ended ended=no session service=2 withdrawn=true
+          camera: camera stream ended ended=service closed service=2
     "#]]
     .assert_eq(&trace.story(&["camera"]));
     Ok(())
@@ -139,7 +139,7 @@ fn a_failed_capture_fails_the_camera_and_keeps_the_connection() -> TestResult {
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
           camera: camera capture ended failed=true sent=0 service=1
-          camera: camera stream ended service=1 withdrawn=false
+          camera: camera stream ended ended=capture failed service=1
     "#]]
     .assert_eq(&trace.story(&["camera"]));
     Ok(())

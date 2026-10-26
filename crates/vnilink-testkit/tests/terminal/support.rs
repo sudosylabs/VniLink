@@ -104,18 +104,3 @@ pub(super) fn phase(controller: &Engine, connection: &SessionInfo) -> SessionPha
         .expect("the connection")
         .phase
 }
-
-/// Whether `event` is the host's record of how a terminal in `services`
-/// ended, for a story to mask its `ended`: a viewer's close or disconnect
-/// reaches the host both as the end of its stream and as a close or the
-/// connection's end, and the host records whichever came first (`network`
-/// or `no session`), so the cause varies between runs.
-pub(super) fn ended_by_viewer(services: &[u64]) -> impl Fn(&serde_json::Value) -> bool + '_ {
-    |event| {
-        event["engine"] == "host"
-            && event["message"] == "terminal stream ended"
-            && event["service"]
-                .as_u64()
-                .is_some_and(|service| services.contains(&service))
-    }
-}

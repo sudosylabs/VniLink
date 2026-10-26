@@ -15,7 +15,7 @@ use vnilink::{BackendStartup, Error, ServiceInfo, ServiceKind, SessionInfo, Sess
 use vnilink_testkit::terminal::{shell, SIZE};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{ended_by_viewer, host_ended_shells, phase};
+use super::support::{host_ended_shells, phase};
 
 /// Within this a cancelled startup reaches the backend still starting.
 const CANCELLED_WITHIN: Duration = Duration::from_secs(1);
@@ -106,7 +106,7 @@ fn revoking_terminal_cancels_a_shell_still_starting() -> TestResult {
     expect![[r#"
         host:
           hosting: service opened connection=1 kind=Some(Terminal) service=1
-          terminal: terminal stream ended ended=no session explicit_close=false service=1
+          terminal: terminal stream ended ended=service closed explicit_close=false service=1
           hosting: service released service=1
     "#]]
     .assert_eq(&trace.story(&["terminal", "hosting"]));
@@ -261,16 +261,11 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
           terminal: terminal stream ended ended=busy explicit_close=false service=2
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=3
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
-          terminal: terminal stream ended ended=… explicit_close=false service=1
-          terminal: terminal stream ended ended=… explicit_close=false service=3
+          terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
+          terminal: terminal stream ended ended=viewer closed explicit_close=false service=3
           terminal: terminal not opened error=unauthorized resume=false service=4
           terminal: terminal stream ended ended=unauthorized explicit_close=false service=4
     "#]]
-    .assert_eq(
-        &trace
-            .tell(&["terminal"])
-            .masking(&["ended"], ended_by_viewer(&[1, 3]))
-            .to_string(),
-    );
+    .assert_eq(&trace.tell(&["terminal"]).to_string());
     Ok(())
 }

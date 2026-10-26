@@ -863,6 +863,160 @@ impl Drop for HostedGuard {
     }
 }
 
+/// Names why hosted service `id` closed, from the serve loop that knows: its
+/// viewer left, or its work ended, as a shell that exited. Without it,
+/// [`HostedGuard`] can only guess from a live connection that the backend
+/// died. A cause set first stays, and a viewer's close counts only while its
+/// connection lives: a lost connection ends the stream too, and is the
+/// guard's to name.
+pub(super) fn close_hosted(shared: &Shared, id: u64, cause: CloseCause) {
+    let mut state = lock(&shared.state);
+    let Some(connection) = state
+        .hosted_services
+        .get(&id)
+        .filter(|record| !record.info.phase.finished())
+        .map(|record| record.info.connection_id)
+    else {
+        return;
+    };
+    let connected = state
+        .incoming
+        .get(&connection)
+        .is_some_and(|session| session.phase == SessionPhase::Active);
+    if (cause == CloseCause::PeerClose && !connected) || state.shut_down {
+        return;
+    }
+    let Some(record) = state.hosted_services.get_mut(&id) else {
+        return;
+    };
+    record.info.phase = ServicePhase::Closed(cause);
+    tracing::info!(
+        target: crate::trace::HOSTING,
+        service = id,
+        kind = ?record.info.kind,
+        phase = record.info.phase.label(),
+        "service closed"
+    );
+    let service = record.info.clone();
+    drop(state);
+    shared
+        .events
+        .publish(CoreEvent::HostedServiceChanged { service });
+}
+
+/// How a hosted service's stream ended, as its serve loop saw it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HostedEnd {
+    /// The engine dropped the serve task before it said, as at teardown.
+    Dropped,
+    /// The viewer closed it, finished its stream or stopped reading ours.
+    ViewerClosed,
+    /// The connection carrying it ended.
+    ConnectionEnded,
+    /// Its service was closed by something else, as a revoke.
+    ServiceClosed,
+    /// Its work ended on this computer, in the service's words (`shell
+    /// exited`); this computer closes it.
+    Finished(&'static str),
+    /// Its backend failed, in the service's words (`capture failed`).
+    Failed(&'static str),
+    Malformed,
+}
+
+impl HostedEnd {
+    /// How a stream whose service was closed ended: by its viewer when the
+    /// peer closed the service, which also ends the stream; otherwise by
+    /// whatever closed it.
+    pub(super) fn service_closed(shared: &Shared, id: u64) -> Self {
+        let phase = lock(&shared.state)
+            .hosted_services
+            .get(&id)
+            .map(|record| record.info.phase.clone());
+        match phase {
+            Some(ServicePhase::Closed(CloseCause::PeerClose)) => Self::ViewerClosed,
+            _ => Self::ServiceClosed,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Dropped => "dropped",
+            Self::ViewerClosed => "viewer closed",
+            Self::ConnectionEnded => "connection ended",
+            Self::ServiceClosed => "service closed",
+            Self::Finished(words) | Self::Failed(words) => words,
+            Self::Malformed => "malformed",
+        }
+    }
+
+    /// The close cause this end names, where the serve loop is the one to
+    /// name it; other ends are named by what closed the service.
+    fn cause(self) -> Option<CloseCause> {
+        match self {
+            Self::ViewerClosed => Some(CloseCause::PeerClose),
+            Self::Finished(_) => Some(CloseCause::OwnerClose),
+            Self::Failed(_) => Some(CloseCause::DeviceLoss),
+            _ => None,
+        }
+    }
+}
+
+/// Records how a hosted service's stream ended once it ends, even when the
+/// engine drops its task, and names its close cause ([`close_hosted`]).
+/// `record` writes the service's own record of it, given how it ended.
+pub(super) struct HostedEnding {
+    shared: Arc<Shared>,
+    id: u64,
+    end: Mutex<Option<HostedEnd>>,
+    closed: std::sync::atomic::AtomicBool,
+    record: Box<dyn Fn(&'static str) + Send + Sync>,
+}
+
+impl HostedEnding {
+    pub(super) fn new(
+        shared: &Arc<Shared>,
+        id: u64,
+        record: impl Fn(&'static str) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            shared: shared.clone(),
+            id,
+            end: Mutex::new(None),
+            closed: std::sync::atomic::AtomicBool::new(false),
+            record: Box::new(record),
+        }
+    }
+
+    /// Notes how the stream ends; the first note stands.
+    pub(super) fn why(&self, end: HostedEnd) {
+        lock(&self.end).get_or_insert(end);
+    }
+
+    /// Records the end and names the service's cause, once: the end noted,
+    /// else `failure`, the error the stream ended with, else that the
+    /// engine dropped it.
+    pub(super) fn close(&self, failure: Option<&'static str>) {
+        if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let end = *lock(&self.end);
+        (self.record)(match (end, failure) {
+            (Some(end), _) => end.label(),
+            (None, Some(failure)) => failure,
+            (None, None) => HostedEnd::Dropped.label(),
+        });
+        if let Some(cause) = end.and_then(HostedEnd::cause) {
+            close_hosted(&self.shared, self.id, cause);
+        }
+    }
+}
+
+impl Drop for HostedEnding {
+    fn drop(&mut self) {
+        self.close(None);
+    }
+}
+
 /// A refusal's wire status by what it means.
 fn refusal(status: u8) -> &'static str {
     match status {
