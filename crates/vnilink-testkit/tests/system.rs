@@ -107,10 +107,7 @@ fn privacy_holds_until_the_service_closes() {
         let asked = system.asked();
         (!asked.display_private && !asked.input_blocked).then_some(())
     });
-    // The record follows the restore.
-    wait_for("the restore to be recorded", DEFAULT_WAIT, || {
-        (!trace.named("privacy restored").is_empty()).then_some(())
-    });
+    trace.wait_for_records("privacy restored", 1);
     expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true

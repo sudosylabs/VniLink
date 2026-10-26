@@ -63,6 +63,19 @@ impl Traced {
     }
 }
 
+impl Traced {
+    /// Waits until `count` events whose message is `message` are recorded.
+    /// A service records an event just after the work it describes, so a
+    /// test that saw the work waits for its record before stating the story.
+    pub fn wait_for_records(&self, message: &str, count: usize) {
+        crate::wait_for(
+            &format!("{count} \"{message}\" records"),
+            crate::DEFAULT_WAIT,
+            || (self.named(message).len() >= count).then_some(()),
+        );
+    }
+}
+
 /// Fields a story leaves out: they differ from run to run, as times and
 /// peers' fingerprints do, or every line has them.
 const UNSTORIED: &[&str] = &["ms", "level", "target", "message", "engine", "peer"];

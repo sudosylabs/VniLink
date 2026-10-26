@@ -122,6 +122,7 @@ fn input_reaches_the_host_in_order() {
     });
     assert_eq!(applied, pressed);
     // The host records each key it applied by kind, never which key.
+    trace.wait_for_records("input applied", pressed.len());
     expect![[r#"
         host:
           input: input applied kind=key down service=1
