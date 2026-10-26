@@ -2,6 +2,15 @@
 //! through its real picture pipeline, and a viewer connected as the
 //! application connects one.
 
+#[path = "desktop/control.rs"]
+mod control;
+#[path = "desktop/displays.rs"]
+mod displays;
+#[path = "desktop/lifecycle.rs"]
+mod lifecycle;
+#[path = "desktop/streams.rs"]
+mod streams;
+
 use expect_test::expect;
 use std::time::Duration;
 
