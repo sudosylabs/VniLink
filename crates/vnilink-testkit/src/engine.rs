@@ -13,14 +13,29 @@ use crate::{wait_for, Scratch, DEFAULT_WAIT};
 pub struct Engine {
     pub core: Arc<Core>,
     scratch: Scratch,
+    name: String,
+    /// Its installation: identity and records, kept for [`Self::restart`].
+    store: MemoryStore,
 }
 
 impl Engine {
     /// `name` tags its folders, such as `host` or `controller`.
     pub fn start(name: &str) -> Self {
-        let core = Core::open_direct(Arc::new(MemoryStore::empty()), RelaySettings::public_n0())
+        let store = MemoryStore::empty();
+        let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
             .expect("a loopback engine");
-        Self::prepare(name, core)
+        Self::prepare(name, core, store)
+    }
+
+    /// Shuts this engine down and opens its installation again, as quitting
+    /// and starting the application does: the same identity, records and
+    /// folders.
+    pub fn restart(&mut self) {
+        self.core.shutdown();
+        let core = Core::open_direct(Arc::new(self.store.clone()), RelaySettings::public_n0())
+            .expect("a loopback engine");
+        configure(&self.name, &core, &self.scratch);
+        self.core = Arc::new(core);
     }
 
     /// An engine with no direct address, whose only way to its peers is the
@@ -29,8 +44,9 @@ impl Engine {
         let settings =
             RelaySettings::custom(vec![vnilink::CustomRelay::new(relay).expect("a relay URL")])
                 .expect("relay settings");
+        let store = MemoryStore::empty();
         let core = Core::open(
-            Arc::new(MemoryStore::empty()),
+            Arc::new(store.clone()),
             vnilink::OpenConfig {
                 listen: vnilink::Listen::RelayOnly,
                 event_capacity: 64,
@@ -38,37 +54,18 @@ impl Engine {
             },
         )
         .expect("a relayed engine");
-        Self::prepare(name, core)
+        Self::prepare(name, core, store)
     }
 
-    fn prepare(name: &str, core: Core) -> Self {
-        // Every event this engine records says it is `name`, and other
-        // engines know its computer by that name, wherever the suite runs.
-        core.set_trace_name(name);
-        core.set_hostname(name).expect("a computer name");
+    fn prepare(name: &str, core: Core, store: MemoryStore) -> Self {
         let scratch = Scratch::new(name);
-        // A session needs codecs to open, whatever it carries.
-        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "testkit"))
-            .expect("codecs");
         std::fs::create_dir_all(scratch.join("root")).expect("a file root");
-        core.set_transfer_directory(scratch.join("transfers"))
-            .expect("a transfer folder");
-        // Windows refuses rooted Files until its operations are handle-relative;
-        // the other services still run there, and the Files suites fail plainly.
-        match core.set_file_roots(vec![scratch.join("root")]) {
-            Err(vnilink::Error::Unsupported(_)) if cfg!(windows) => {}
-            result => result.expect("a file root"),
-        }
-        // A suite's files are small next to the free space the product keeps
-        // in reserve; admission has its own tests in `vnilink`.
-        core.set_file_resource_policy(vnilink::job::FileResourcePolicy {
-            minimum_free_bytes: 0,
-            ..Default::default()
-        })
-        .expect("a resource policy");
+        configure(name, &core, &scratch);
         Self {
             core: Arc::new(core),
             scratch,
+            name: name.to_owned(),
+            store,
         }
     }
 
@@ -97,6 +94,33 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.core.shutdown();
     }
+}
+
+/// Settles an engine as the suites run one: named `name`, with codecs, its
+/// transfer folder and its one file root under `scratch`.
+fn configure(name: &str, core: &Core, scratch: &Scratch) {
+    // Every event this engine records says it is `name`, and other
+    // engines know its computer by that name, wherever the suite runs.
+    core.set_trace_name(name);
+    core.set_hostname(name).expect("a computer name");
+    // A session needs codecs to open, whatever it carries.
+    core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "testkit"))
+        .expect("codecs");
+    core.set_transfer_directory(scratch.join("transfers"))
+        .expect("a transfer folder");
+    // Windows refuses rooted Files until its operations are handle-relative;
+    // the other services still run there, and the Files suites fail plainly.
+    match core.set_file_roots(vec![scratch.join("root")]) {
+        Err(vnilink::Error::Unsupported(_)) if cfg!(windows) => {}
+        result => result.expect("a file root"),
+    }
+    // A suite's files are small next to the free space the product keeps
+    // in reserve; admission has its own tests in `vnilink`.
+    core.set_file_resource_policy(vnilink::job::FileResourcePolicy {
+        minimum_free_bytes: 0,
+        ..Default::default()
+    })
+    .expect("a resource policy");
 }
 
 /// What the host and the controller grant so files move both ways; a

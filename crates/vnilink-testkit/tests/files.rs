@@ -2,6 +2,19 @@
 //! between their roots, with both job drivers running as in the
 //! application.
 
+#[path = "files/pacing.rs"]
+mod pacing;
+#[path = "files/rebinding.rs"]
+mod rebinding;
+#[path = "files/remote_disk.rs"]
+mod remote_disk;
+#[path = "files/service_jobs.rs"]
+mod service_jobs;
+#[path = "files/serving.rs"]
+mod serving;
+#[path = "files/transfers.rs"]
+mod transfers;
+
 use expect_test::expect;
 use std::time::Duration;
 

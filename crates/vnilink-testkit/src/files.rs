@@ -105,3 +105,31 @@ pub fn settled(core: &Core, job: u64, within: Duration) -> JobSnapshot {
             .then_some(snapshot)
     })
 }
+
+/// Drives a job by hand, as the application's drivers would, until the
+/// receiver asks a question or both sides ended: a test that must stop a
+/// job at an exact point polls it this way instead of starting [`drive`].
+/// Returns the sender's and the receiver's last snapshots.
+pub fn drive_to_end(
+    sender: &Core,
+    sender_job: u64,
+    receiver: &Core,
+    receiver_job: u64,
+    within: Duration,
+) -> (JobSnapshot, JobSnapshot) {
+    let mut sent = sender.job_snapshot(sender_job).expect("the sender's job");
+    let mut got = receiver
+        .job_snapshot(receiver_job)
+        .expect("the receiver's job");
+    wait_for("both sides of the job to end", within, || {
+        if !got.state.is_terminal() {
+            got = receiver.job_poll(receiver_job).ok()?;
+        }
+        if !sent.state.is_terminal() {
+            sent = sender.job_poll(sender_job).ok()?;
+        }
+        let asking = got.state == vnilink::JobState::WaitingDecision;
+        (asking || (got.state.is_terminal() && sent.state.is_terminal()))
+            .then(|| (sent.clone(), got.clone()))
+    })
+}
