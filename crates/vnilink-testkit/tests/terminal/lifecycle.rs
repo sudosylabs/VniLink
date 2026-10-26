@@ -304,7 +304,7 @@ fn closing_a_terminal_does_not_wait_for_unread_output() -> TestResult {
           terminal: terminal pipe ended closed_here=true error=no session service=1
         host:
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
-          terminal: terminal stream ended ended=no session explicit_close=false service=1
+          terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
     "#]]
     .assert_eq(&trace.tell(&["terminal"]).to_string());
     assert_content_unrecorded(&trace, &["VNI_STREAM"]);

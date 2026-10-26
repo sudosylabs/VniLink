@@ -625,6 +625,19 @@ pub(super) async fn serve(
         } else {
             0
         };
+        // Why the shell stopped under its stream: its viewer's close reaches
+        // the host by a request of its own or by this stream, whichever comes
+        // first; otherwise the host ended it.
+        let stopped = || {
+            if runtime
+                .closed_by_viewer
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                HostedEnd::ViewerClosed
+            } else {
+                HostedEnd::service_closed(&shared, id)
+            }
+        };
         let receiving = async {
             loop {
                 let bytes = read(&mut recv).await.inspect_err(|_| {
@@ -654,7 +667,10 @@ pub(super) async fn serve(
                     match runtime.commands.try_send(command) {
                         Ok(()) => break,
                         Err(std::sync::mpsc::TrySendError::Full(value)) => command = value,
-                        Err(_) => return Err(Error::NoSession),
+                        Err(_) => {
+                            ending.why(stopped());
+                            return Err(Error::NoSession);
+                        }
                     }
                     // Cancellation drops this future and its unaccepted command.
                     // No blocking sender survives a lost connection.
@@ -668,6 +684,7 @@ pub(super) async fn serve(
         let sending = async {
             loop {
                 if runtime.stop.load(std::sync::atomic::Ordering::Acquire) {
+                    ending.why(stopped());
                     return Err(Error::NoSession);
                 }
                 let (first, bytes, ended) = runtime.read(offset);
@@ -836,6 +853,9 @@ pub(super) async fn registry(
                 let sessions = lock(&shared.terminal_sessions);
                 match sessions.get(id).filter(|s| s.peer == peer) {
                     Some(session) => {
+                        session
+                            .closed_by_viewer
+                            .store(true, std::sync::atomic::Ordering::Release);
                         session
                             .stop
                             .store(true, std::sync::atomic::Ordering::Release);

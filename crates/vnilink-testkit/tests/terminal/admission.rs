@@ -221,6 +221,8 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
         !tb.is_cancelled(),
         "closing one peer's terminal leaves the other's"
     );
+    // The shell ends before its stream records why; the other closes after.
+    trace.wait_for_records("terminal stream ended", 2);
     tb.close();
     host_ended_shells(host);
     let denied = TerminalPolicy {
