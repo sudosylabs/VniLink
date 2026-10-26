@@ -2,19 +2,16 @@
 //! displays that disappear under one viewer or owner but not another.
 
 use expect_test::expect;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use vnilink::{
     usage, CoreEvent, DesktopControlState, DisplayInfo, Error, EventSubscription, InputEvent,
     Quality, ServiceKind, SessionInfo, SessionPhase, SessionRole,
 };
+use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::streams::{
-    another_viewer, applied, connect, display, hosted_desktops, hosted_for, hosted_showing,
-    input_failure, open_desktop, picture, received, Applied, Capture, SCREEN,
-};
+use super::streams::{display, hosted_showing, input_failure, SCREEN};
 
 /// A display anywhere on the host's desktop, turned and scaled, at
 /// revision 1.
@@ -42,8 +39,8 @@ fn hosted_session(host: &Engine, viewer: &Engine) -> Result<SessionInfo, Error> 
 }
 
 /// Whether the host's desktop applied `event`.
-fn has_applied(events: &Mutex<Vec<InputEvent>>, event: &InputEvent) -> bool {
-    applied(events).contains(event)
+fn has_applied(log: &InputLog, event: &InputEvent) -> bool {
+    log.events().contains(event)
 }
 
 /// Sends `pointer` and then `key`, and says the pointer was refused for
@@ -52,7 +49,7 @@ fn has_applied(events: &Mutex<Vec<InputEvent>>, event: &InputEvent) -> bool {
 /// the next.
 fn refused_before_key(
     send: &mut impl FnMut(InputEvent),
-    applied_events: &Mutex<Vec<InputEvent>>,
+    applied_events: &InputLog,
     events: &EventSubscription,
     id: u64,
     (pointer, key): (InputEvent, InputEvent),
@@ -90,12 +87,12 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    host.set_capture(Box::new(Capture(SCREEN)))?;
+    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
     host.set_topology(1, &[display(1, 0, 1920, 1), display(2, 1920, 1280, 1)])?;
     let connection = pair.connect_services();
     // A second Desktop owner on the same connection is admitted, not Busy.
-    let desktop_a = open_desktop(&pair.controller, &connection)?;
-    let desktop_b = open_desktop(&pair.controller, &connection)?;
+    let desktop_a = pair.controller.open_desktop(&connection)?;
+    let desktop_b = pair.controller.open_desktop(&connection)?;
     wait_for("both owners to learn the monitors", DEFAULT_WAIT, || {
         (desktop_a.topology().ok()?.len() == 2 && desktop_b.topology().ok()?.len() == 2)
             .then_some(())
@@ -147,15 +144,23 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
     let video_a = desktop_a.subscribe_video()?;
     let video_b = desktop_b.subscribe_video()?;
     for round in 0..3u64 {
-        host.publish_desktop_video(remote_a.id, remote_a.generation, picture(round, 31, 1000))?;
-        host.publish_desktop_video(remote_b.id, remote_b.generation, picture(round, 42, 1000))?;
+        host.publish_desktop_video(
+            remote_a.id,
+            remote_a.generation,
+            keyframe(round, vec![31; 1000]),
+        )?;
+        host.publish_desktop_video(
+            remote_b.id,
+            remote_b.generation,
+            keyframe(round, vec![42; 1000]),
+        )?;
         assert_eq!(
-            received(&video_a, "the first monitor's picture").payload,
+            next_picture(&video_a, "the first monitor's picture").payload,
             vec![31; 1000],
             "the first owner receives its own monitor's pictures"
         );
         assert_eq!(
-            received(&video_b, "the second monitor's picture").payload,
+            next_picture(&video_b, "the second monitor's picture").payload,
             vec![42; 1000],
             "the second owner receives its own monitor's pictures"
         );
@@ -202,9 +207,9 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
         (vec![2], None),
         "the other owner keeps its monitor"
     );
-    host.publish_desktop_video(remote_b.id, remote_b.generation, picture(9, 43, 500))?;
+    host.publish_desktop_video(remote_b.id, remote_b.generation, keyframe(9, vec![43; 500]))?;
     assert_eq!(
-        received(&video_b, "the survivor's picture").payload,
+        next_picture(&video_b, "the survivor's picture").payload,
         vec![43; 500],
         "removing one monitor spares the other owner's stream"
     );
@@ -223,11 +228,15 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
 
     desktop_a.close();
     wait_for("the host to let the first owner go", DEFAULT_WAIT, || {
-        (hosted_desktops(&pair.host).len() == 1).then_some(())
+        (pair.host.hosted(Some(ServiceKind::Desktop)).len() == 1).then_some(())
     });
-    host.publish_desktop_video(remote_b.id, remote_b.generation, picture(10, 44, 500))?;
+    host.publish_desktop_video(
+        remote_b.id,
+        remote_b.generation,
+        keyframe(10, vec![44; 500]),
+    )?;
     assert_eq!(
-        received(&video_b, "the survivor's picture after the close").payload,
+        next_picture(&video_b, "the survivor's picture after the close").payload,
         vec![44; 500],
         "closing one owner spares the other's stream"
     );
@@ -263,9 +272,8 @@ fn two_viewers_keep_their_own_displays_when_one_disappears() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    let (desktop, applied_events) = Applied::new();
-    host.set_desktop(Box::new(desktop))?;
-    let (first, second) = (&pair.controller, &another_viewer(&pair, "second")?);
+    let applied_events = InputLog::install(&pair.host, SCREEN)?;
+    let (first, second) = (&pair.controller, &pair.add_viewer("second"));
     let left = placed(1, 0, (1920, 1080), 0, 100);
     let right = placed(2, -1920, (1280, 800), 90, 200);
     host.set_topology(1, &[left, right])?;
@@ -500,17 +508,16 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
     let trace = traced();
     let pair = Pair::for_services(&[ServiceKind::Desktop]);
     let host = &pair.host.core;
-    let (desktop, applied_events) = Applied::new();
-    host.set_desktop(Box::new(desktop))?;
-    let (first, second) = (&pair.controller, &another_viewer(&pair, "second")?);
+    let applied_events = InputLog::install(&pair.host, SCREEN)?;
+    let (first, second) = (&pair.controller, &pair.add_viewer("second"));
     let left = placed(1, 0, (1920, 1080), 0, 100);
     let right = placed(2, -1920, (1280, 800), 90, 200);
     host.set_topology(1, &[left, right])?;
 
-    let first_connection = connect(first, &pair.host)?;
-    let first_desktop = open_desktop(first, &first_connection)?;
-    let second_connection = connect(second, &pair.host)?;
-    let second_desktop = open_desktop(second, &second_connection)?;
+    let first_connection = first.connect_services(&pair.host)?;
+    let first_desktop = first.open_desktop(&first_connection)?;
+    let second_connection = second.connect_services(&pair.host)?;
+    let second_desktop = second.open_desktop(&second_connection)?;
     wait_for("the viewers to learn the displays", DEFAULT_WAIT, || {
         (first_desktop.topology().ok()?.len() == 2
             && second_desktop
@@ -528,8 +535,8 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
     });
     first_desktop.select_displays(&[1])?;
     second_desktop.select_displays(&[2])?;
-    let first_remote = hosted_for(&pair.host, first);
-    let second_remote = hosted_for(&pair.host, second);
+    let first_remote = pair.host.serving(ServiceKind::Desktop, &first);
+    let second_remote = pair.host.serving(ServiceKind::Desktop, &second);
     assert!(
         first_remote.connection_id < second_remote.connection_id,
         "the host numbers connections in the order they arrived"

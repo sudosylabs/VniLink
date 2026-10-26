@@ -21,7 +21,7 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{ConflictChoice, JobState};
-use vnilink_testkit::files::{drive, finished, received, settled, tree, write_files};
+use vnilink_testkit::files::{self, drive, finished, received, settled, tree, write_files};
 use vnilink_testkit::{traced, wait_for, Pair, DEFAULT_WAIT};
 
 /// A tree with what trips transfers up: nesting, an empty folder, a name
@@ -49,17 +49,7 @@ fn an_upload_lands_exactly() {
     source_tree(&pair.controller.root().join("set"));
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
     pair.controller.core.connect(&pair.host.endpoint()).unwrap();
-    let job = pair
-        .controller
-        .core
-        .job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.root_id(),
-            "set",
-            pair.host.root_id(),
-            "inbox",
-        )
-        .unwrap();
+    let job = files::upload(&pair, "set", "inbox").unwrap();
     let sent = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(sent.state, JobState::Complete, "{sent:?}");
     let receiver = received(&pair.host.core);
@@ -100,17 +90,7 @@ fn a_download_lands_exactly() {
     source_tree(&pair.host.root().join("shared"));
     std::fs::create_dir_all(pair.controller.root().join("downloads")).unwrap();
     pair.controller.core.connect(&pair.host.endpoint()).unwrap();
-    let job = pair
-        .controller
-        .core
-        .job_submit_download(
-            &pair.host.endpoint(),
-            pair.host.root_id(),
-            "shared",
-            pair.controller.root_id(),
-            "downloads",
-        )
-        .unwrap();
+    let job = files::download(&pair, "shared", "downloads").unwrap();
     let got = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     assert_eq!(
@@ -136,17 +116,7 @@ fn conflicts_wait_for_a_choice_and_follow_it() {
         std::fs::write(destination.join(name), format!("old {name}")).unwrap();
     }
     pair.controller.core.connect(&pair.host.endpoint()).unwrap();
-    let job = pair
-        .controller
-        .core
-        .job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.root_id(),
-            "set",
-            pair.host.root_id(),
-            "inbox",
-        )
-        .unwrap();
+    let job = files::upload(&pair, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     for (name, choice) in [
         ("a.txt", ConflictChoice::Replace),
@@ -208,17 +178,7 @@ fn a_cancelled_upload_resumes_to_the_same_tree() {
     source_tree(&pair.controller.root().join("set"));
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
     pair.controller.core.connect(&pair.host.endpoint()).unwrap();
-    let job = pair
-        .controller
-        .core
-        .job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.root_id(),
-            "set",
-            pair.host.root_id(),
-            "inbox",
-        )
-        .unwrap();
+    let job = files::upload(&pair, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     pair.controller.core.job_cancel(job).unwrap();
     assert_eq!(
@@ -254,16 +214,7 @@ fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
     );
     std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
     pair.controller.core.connect(&pair.host.endpoint()).unwrap();
-    pair.controller
-        .core
-        .job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.root_id(),
-            "set",
-            pair.host.root_id(),
-            "inbox",
-        )
-        .unwrap();
+    files::upload(&pair, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     wait_for("the first bytes to arrive", DEFAULT_WAIT, || {
         (pair.host.core.job_snapshot(receiver).ok()?.done_bytes > 0).then_some(())

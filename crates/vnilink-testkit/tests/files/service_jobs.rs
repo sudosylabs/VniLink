@@ -8,88 +8,14 @@
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{
-    Error, JobSnapshot, JobState, RemoteFilesService, ServiceInfo, ServiceKind, SessionInfo,
-    SessionPhase,
-};
-use vnilink_testkit::files::{drive_to_end, payload};
+use vnilink::{Error, JobSnapshot, JobState, ServiceInfo, ServiceKind, SessionPhase};
+use vnilink_testkit::files::{self, drive_to_end, job_on, payload};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, Traced, DEFAULT_WAIT, FILES};
 
 const TRANSFER: Duration = Duration::from_secs(30);
 
-/// The controller's desktop connection to the host, once active.
-fn desktop_connection(pair: &Pair) -> Result<SessionInfo, Error> {
-    let controller = &pair.controller.core;
-    let pending = controller.begin_connect(&pair.host.endpoint())?;
-    Ok(wait_for(
-        "the connection to be active",
-        DEFAULT_WAIT,
-        || {
-            let session = controller.controller_session(pending.id).ok()?;
-            (session.phase == SessionPhase::Active).then_some(session)
-        },
-    ))
-}
-
-/// A Files service on `connection`, opened as the Files tab opens one.
-fn open_files(
-    pair: &Pair,
-    connection: &SessionInfo,
-) -> Result<(ServiceInfo, RemoteFilesService), Error> {
-    let service = pair.attach(connection, ServiceKind::Files);
-    let pipe = pair
-        .controller
-        .core
-        .open_files_service(service.id, service.generation)?;
-    Ok((service, pipe))
-}
-
-/// The one job on `core` that sends, or the one that receives.
-fn job_on(core: &vnilink::Core, sender: bool) -> Result<u64, Error> {
-    Ok(core
-        .job_list()?
-        .into_iter()
-        .find(|job| job.sender == sender)
-        .expect("the peer's side of the job")
-        .id)
-}
-
 fn both(sent: &JobSnapshot, got: &JobSnapshot) -> (JobState, JobState) {
     (sent.state, got.state)
-}
-
-/// The host hosting again after a restart, and each engine told where the
-/// other now listens, as invitations tell them: a restarted engine on this
-/// computer listens on a new port, and no relay or lookup says which.
-fn reintroduce(pair: &Pair) -> Result<(), Error> {
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let invitation = Duration::from_secs(60);
-    host.start_hosting()?;
-    controller.accept_invitation(&host.create_invitation(invitation)?)?;
-    host.accept_invitation(&controller.create_invitation(invitation)?)?;
-    Ok(())
-}
-
-/// Each engine's job states in the order it recorded them: the story of a
-/// transfer whose byte counts vary with how far it fetched ahead.
-fn job_states(trace: &Traced) -> String {
-    let mut lines: Vec<(String, usize, String)> = trace
-        .named("job state")
-        .iter()
-        .enumerate()
-        .map(|(order, event)| {
-            let engine = event["engine"].as_str().unwrap_or("?").to_owned();
-            let line = format!(
-                "{engine}: job {} {} -> {}",
-                event["job"],
-                event["from"].as_str().unwrap_or("?"),
-                event["to"].as_str().unwrap_or("?")
-            );
-            (engine, order, line)
-        })
-        .collect();
-    lines.sort();
-    lines.into_iter().map(|(_, _, line)| line + "\n").collect()
 }
 
 /// The last file `engine` recorded receiving whole.
@@ -100,18 +26,6 @@ fn last_received(trace: &Traced, engine: &str) -> serde_json::Value {
         .filter(|event| event["engine"] == engine && event["outcome"] == "received")
         .next_back()
         .expect("a file received whole")
-}
-
-/// Waits until the host no longer serves any service for the controller.
-fn host_released_services(pair: &Pair) {
-    wait_for("the host to release the service", DEFAULT_WAIT, || {
-        pair.host
-            .core
-            .hosted_services()
-            .ok()?
-            .is_empty()
-            .then_some(())
-    });
 }
 
 /// An upload and a download on a desktop connection's Files service both
@@ -126,8 +40,8 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
     let download = payload(16384, 117);
     std::fs::write(controller.root().join("up.bin"), &upload)?;
     std::fs::write(host.root().join("down.bin"), &download)?;
-    let connection = desktop_connection(&pair)?;
-    let (files, _pipe) = open_files(&pair, &connection)?;
+    let connection = pair.connect_control();
+    let (files, _pipe) = pair.controller.open_files(&connection)?;
     let up = controller.core.files_service_upload(
         files.id,
         files.generation,
@@ -232,7 +146,7 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
         connection.quality.is_none(),
         "a services connection carries no picture quality: {connection:?}"
     );
-    let (files, _pipe) = open_files(&pair, &connection)?;
+    let (files, _pipe) = pair.controller.open_files(&connection)?;
     let up = controller.core.files_service_upload(
         files.id,
         files.generation,
@@ -321,8 +235,8 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
     let (host, controller) = (&pair.host, &pair.controller);
     let bytes = payload(32768, 123);
     std::fs::write(controller.root().join("same.bin"), &bytes)?;
-    let connection = desktop_connection(&pair)?;
-    let (files, pipe) = open_files(&pair, &connection)?;
+    let connection = pair.connect_control();
+    let (files, pipe) = pair.controller.open_files(&connection)?;
     let desktop = pair.attach(&connection, ServiceKind::Desktop);
     let scoped = controller.core.files_service_upload(
         files.id,
@@ -427,8 +341,8 @@ fn a_host_closing_the_files_service_interrupts_a_download_and_refuses_new_work()
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
     std::fs::write(host.root().join("a.bin"), payload(8192, 137))?;
-    let connection = desktop_connection(&pair)?;
-    let (files, pipe) = open_files(&pair, &connection)?;
+    let connection = pair.connect_control();
+    let (files, pipe) = pair.controller.open_files(&connection)?;
     let job = controller.core.files_service_download(
         files.id,
         files.generation,
@@ -533,7 +447,7 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
     ) {
         controller.close_controller_service(unopened.id, unopened.generation)?;
     }
-    let (files, pipe) = open_files(&pair, &session)?;
+    let (files, pipe) = pair.controller.open_files(&session)?;
     let job = controller.files_service_upload(
         files.id,
         files.generation,
@@ -582,27 +496,14 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
     let (first, controller) = (&pair.host, &pair.controller);
     let second = Engine::start("second");
     let (sharing, _) = FILES;
-    second.core.start_hosting()?;
-    let invitation = Duration::from_secs(60);
-    controller
-        .core
-        .accept_invitation(&second.core.create_invitation(invitation)?)?;
-    second
-        .core
-        .accept_invitation(&controller.core.create_invitation(invitation)?)?;
+    second.pair_with(controller)?;
     second.core.set_desktop_sharing(sharing)?;
     let bytes = payload(65536, 149);
     std::fs::write(controller.root().join("shared.bin"), &bytes)?;
-    let one = desktop_connection(&pair)?;
-    let (one, _one_pipe) = open_files(&pair, &one)?;
-    let two = {
-        let pending = controller.core.begin_connect(&second.endpoint())?;
-        wait_for("the second connection to be active", DEFAULT_WAIT, || {
-            let session = controller.core.controller_session(pending.id).ok()?;
-            (session.phase == SessionPhase::Active).then_some(session)
-        })
-    };
-    let (two, _two_pipe) = open_files(&pair, &two)?;
+    let one = pair.connect_control();
+    let (one, _one_pipe) = pair.controller.open_files(&one)?;
+    let two = controller.connect_control(&second)?;
+    let (two, _two_pipe) = pair.controller.open_files(&two)?;
     let cancelled = controller.core.files_service_upload(
         one.id,
         one.generation,
@@ -761,7 +662,7 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
     let bytes = payload(1024 * 1024, 903);
     std::fs::write(controller.root().join("adopt.bin"), &bytes)?;
     let session = controller.core.connect(&host.endpoint())?;
-    let (old, pipe) = open_files(&pair, &session)?;
+    let (old, pipe) = pair.controller.open_files(&session)?;
     let job = controller.core.files_service_upload(
         old.id,
         old.generation,
@@ -776,8 +677,8 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
         .core
         .close_controller_service(old.id, old.generation)?;
     drop(pipe);
-    host_released_services(&pair);
-    let (fresh, _pipe) = open_files(&pair, &session)?;
+    pair.host.wait_released(None);
+    let (fresh, _pipe) = pair.controller.open_files(&session)?;
     let core = &controller.core;
     assert_eq!(
         core.files_service_adopt_job(fresh.id, fresh.generation, job)?
@@ -845,7 +746,7 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
     std::fs::write(host.root().join("source/a.bin"), &first)?;
     std::fs::write(host.root().join("source/b.bin"), &second)?;
     let session = pair.connect_services();
-    let (old, pipe) = open_files(&pair, &session)?;
+    let (old, pipe) = pair.controller.open_files(&session)?;
     let core = &controller.core;
     let job = core.files_service_download(
         old.id,
@@ -871,7 +772,7 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
     );
     core.disconnect_session(session.id)?;
     drop(pipe);
-    host_released_services(&pair);
+    pair.host.wait_released(None);
     // The host releasing the service and the controller retiring the
     // connection are separate: a stopping connection still holds its peer.
     wait_for("the old connection to retire", DEFAULT_WAIT, || match core
@@ -884,7 +785,7 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
         Err(error) => panic!("the old connection failed to retire: {error}"),
     });
     let fresh_session = pair.connect_services();
-    let (fresh, _pipe) = open_files(&pair, &fresh_session)?;
+    let (fresh, _pipe) = pair.controller.open_files(&fresh_session)?;
     let adopted = core.files_service_adopt_job(fresh.id, fresh.generation, job)?;
     assert_eq!(adopted.id, job, "adoption keeps the job's id");
     assert_eq!(
@@ -916,15 +817,17 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
     // How far the second file was fetched ahead when the job stopped varies;
     // its resumed fetch takes exactly the rest.
     expect![[r#"
-        controller: job 1 transferring -> interrupted
-        controller: job 1 interrupted -> transferring
-        controller: job 1 transferring -> complete
-        host: job 1 preparing -> serving
-        host: job 1 serving -> interrupted
-        host: job 1 interrupted -> serving
-        host: job 1 serving -> complete
+        controller:
+          files: job state from=transferring job=1 sender=false to=interrupted
+          files: job state from=interrupted job=1 sender=false to=transferring
+          files: job state done_bytes=196608 files_done=2 from=transferring job=1 sender=false to=complete
+        host:
+          files: job state from=preparing job=1 sender=true to=serving
+          files: job state from=serving job=1 sender=true to=interrupted
+          files: job state from=interrupted job=1 sender=true to=serving
+          files: job state done_bytes=196608 files_done=2 from=serving job=1 sender=true to=complete
     "#]]
-    .assert_eq(&job_states(&trace));
+    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
     let resumed = last_received(&trace, "controller");
     assert_eq!(
         resumed["resumed_at"].as_u64().unwrap_or(u64::MAX) + resumed["took"].as_u64().unwrap_or(0),
@@ -947,7 +850,7 @@ fn a_download_adopted_after_both_computers_restart_keeps_its_verified_files() ->
     std::fs::write(pair.host.root().join("pack/a.bin"), &first)?;
     std::fs::write(pair.host.root().join("pack/b.bin"), &second)?;
     let session = pair.connect_services();
-    let (old, pipe) = open_files(&pair, &session)?;
+    let (old, pipe) = pair.controller.open_files(&session)?;
     let job = pair.controller.core.files_service_download(
         old.id,
         old.generation,
@@ -969,9 +872,9 @@ fn a_download_adopted_after_both_computers_restart_keeps_its_verified_files() ->
     drop(pipe);
     pair.controller.restart();
     pair.host.restart();
-    reintroduce(&pair)?;
+    pair.reintroduce();
     let session = pair.connect_services();
-    let (fresh, _pipe) = open_files(&pair, &session)?;
+    let (fresh, _pipe) = pair.controller.open_files(&session)?;
     let core = &pair.controller.core;
     assert!(
         core.files_service_jobs(fresh.id, fresh.generation)?
@@ -1005,15 +908,17 @@ fn a_download_adopted_after_both_computers_restart_keeps_its_verified_files() ->
     // How far the second file was fetched ahead when the job stopped varies;
     // its resumed fetch takes exactly the rest.
     expect![[r#"
-        controller: job 1 transferring -> interrupted
-        controller: job 1 interrupted -> transferring
-        controller: job 1 transferring -> complete
-        host: job 1 preparing -> serving
-        host: job 1 serving -> interrupted
-        host: job 1 interrupted -> serving
-        host: job 1 serving -> complete
+        controller:
+          files: job state from=transferring job=1 sender=false to=interrupted
+          files: job state from=interrupted job=1 sender=false to=transferring
+          files: job state done_bytes=98304 files_done=2 from=transferring job=1 sender=false to=complete
+        host:
+          files: job state from=preparing job=1 sender=true to=serving
+          files: job state from=serving job=1 sender=true to=interrupted
+          files: job state from=interrupted job=1 sender=true to=serving
+          files: job state done_bytes=98304 files_done=2 from=serving job=1 sender=true to=complete
     "#]]
-    .assert_eq(&job_states(&trace));
+    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
     let resumed = last_received(&trace, "controller");
     assert_eq!(
         resumed["resumed_at"].as_u64().unwrap_or(u64::MAX) + resumed["took"].as_u64().unwrap_or(0),
@@ -1034,7 +939,7 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
     let expected = payload(65536, 942);
     std::fs::write(controller.root().join("source.bin"), &expected)?;
     let session = pair.connect_services();
-    let (old, pipe) = open_files(&pair, &session)?;
+    let (old, pipe) = pair.controller.open_files(&session)?;
     let core = &controller.core;
     let job = core.files_service_upload(
         old.id,
@@ -1048,8 +953,8 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
     let peer_job = job_on(&host.core, false)?;
     core.close_controller_service(old.id, old.generation)?;
     drop(pipe);
-    host_released_services(&pair);
-    let (fresh, _pipe) = open_files(&pair, &session)?;
+    pair.host.wait_released(None);
+    let (fresh, _pipe) = pair.controller.open_files(&session)?;
     // A folder where the job's record goes refuses its replacement on every
     // platform, whatever the account may write.
     let record = controller.transfers().join(format!("jobs/{job}.jsonl"));
@@ -1126,13 +1031,7 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
             minimum_free_bytes: 0,
         })?;
     controller.core.connect(&host.endpoint())?;
-    let sent = controller.core.job_submit_upload(
-        &host.endpoint(),
-        controller.root_id(),
-        "set",
-        host.root_id(),
-        "arrived",
-    )?;
+    let sent = files::upload(&pair, "set", "arrived")?;
     let receiver = job_on(&host.core, false)?;
     let failed = host.core.job_poll(receiver)?;
     assert_eq!(failed.state, JobState::Failed, "the receiver fails the job");
@@ -1187,13 +1086,7 @@ fn a_restart_removes_orphaned_staging_and_keeps_an_interrupted_jobs() -> TestRes
         b"source survives crash",
     )?;
     pair.controller.core.connect(&pair.host.endpoint())?;
-    pair.controller.core.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.root_id(),
-        "",
-        pair.host.root_id(),
-        "received",
-    )?;
+    files::upload(&pair, "", "received")?;
     let receiver = job_on(&pair.host.core, false)?;
     pair.host.core.shutdown();
     pair.controller.core.shutdown();

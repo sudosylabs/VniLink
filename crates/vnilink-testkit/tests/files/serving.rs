@@ -2,42 +2,14 @@
 //! their offer, shared content, and the partials a receiver keeps or releases.
 
 use expect_test::expect;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use vnilink::JobState;
-use vnilink_testkit::files::{drive_to_end, payload, received};
+use vnilink_testkit::files::{self, drive_to_end, payload, received};
 use vnilink_testkit::{traced, Engine, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(60);
-
-/// The controller sends `from` in its root to `to` in the host's.
-fn upload(pair: &Pair, from: &str, to: &str) -> Result<u64, vnilink::Error> {
-    pair.controller.core.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.root_id(),
-        from,
-        pair.host.root_id(),
-        to,
-    )
-}
-
-/// Every file under `folder` whose bytes are `bytes`.
-fn files_with_bytes(folder: &Path, bytes: &[u8]) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut folders = vec![folder.to_path_buf()];
-    while let Some(folder) = folders.pop() {
-        for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                folders.push(path);
-            } else if std::fs::read(&path).is_ok_and(|content| content == bytes) {
-                found.push(path);
-            }
-        }
-    }
-    found
-}
 
 /// Where `engine` stages what it receives for `job`.
 fn staging(engine: &Engine, job: u64) -> PathBuf {
@@ -52,7 +24,7 @@ fn a_source_in_transfer_cannot_be_renamed_until_its_job_ends() -> TestResult {
     let pair = Pair::for_files();
     std::fs::write(pair.controller.root().join("a.txt"), payload(512, 41))?;
     pair.controller.core.connect(&pair.host.endpoint())?;
-    let job = upload(&pair, "a.txt", "dest")?;
+    let job = files::upload(&pair, "a.txt", "dest")?;
     received(&pair.host.core);
     let root = pair.controller.root_id();
     assert!(
@@ -101,7 +73,7 @@ fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
     std::fs::create_dir(&outside)?;
     std::fs::write(outside.join("public.txt"), b"secret")?;
     pair.controller.core.connect(&pair.host.endpoint())?;
-    let job = upload(&pair, "docs/public.txt", "got")?;
+    let job = files::upload(&pair, "docs/public.txt", "got")?;
     std::fs::remove_dir_all(&docs)?;
     std::os::unix::fs::symlink(&outside, &docs)?;
     let receiver = received(&pair.host.core);
@@ -118,7 +90,7 @@ fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
         "a source behind a swapped link is not delivered: {got:?}"
     );
     assert!(
-        files_with_bytes(&pair.host.root(), b"secret").is_empty(),
+        files::files_with_bytes(&pair.host.root(), b"secret").is_empty(),
         "bytes outside the root reached the receiver"
     );
     expect![[r#"
@@ -142,7 +114,7 @@ fn serving_refuses_a_source_replaced_after_its_offer() -> TestResult {
     let source = pair.controller.root().join("source.bin");
     std::fs::write(&source, payload(64 * 1024, 1701))?;
     pair.controller.core.connect(&pair.host.endpoint())?;
-    let job = upload(&pair, "source.bin", "arrived")?;
+    let job = files::upload(&pair, "source.bin", "arrived")?;
     let decoy = payload(64 * 1024, 1702);
     let staged = pair.controller.root().join("staged.bin");
     std::fs::write(&staged, &decoy)?;
@@ -161,7 +133,7 @@ fn serving_refuses_a_source_replaced_after_its_offer() -> TestResult {
         "a replaced source is not delivered: {got:?}"
     );
     assert!(
-        files_with_bytes(&pair.host.root(), &decoy).is_empty(),
+        files::files_with_bytes(&pair.host.root(), &decoy).is_empty(),
         "replacement bytes reached the receiver"
     );
     expect![[r#"
@@ -185,8 +157,8 @@ fn jobs_sharing_content_keep_serving_it_when_one_is_cancelled() -> TestResult {
     std::fs::write(pair.controller.root().join("a.txt"), &bytes)?;
     std::fs::write(pair.controller.root().join("b.txt"), &bytes)?;
     pair.controller.core.connect(&pair.host.endpoint())?;
-    let first = upload(&pair, "a.txt", "got-a")?;
-    let second = upload(&pair, "b.txt", "got-b")?;
+    let first = files::upload(&pair, "a.txt", "got-a")?;
+    let second = files::upload(&pair, "b.txt", "got-b")?;
     // A receiver takes its sender's id.
     pair.controller.core.job_cancel(first)?;
     pair.host.core.job_poll(first)?;
@@ -246,7 +218,7 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
     let bytes = payload(64 * 1024, 707);
     std::fs::write(pair.controller.root().join("payload.bin"), &bytes)?;
     pair.controller.core.connect(&pair.host.endpoint())?;
-    let job = upload(&pair, "payload.bin", "")?;
+    let job = files::upload(&pair, "payload.bin", "")?;
     let receiver = received(&pair.host.core);
     let (_, got) = drive_to_end(
         &pair.controller.core,
@@ -273,7 +245,7 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
 
     let second = payload(64 * 1024, 708);
     std::fs::write(pair.controller.root().join("partial.bin"), &second)?;
-    let job = upload(&pair, "partial.bin", "")?;
+    let job = files::upload(&pair, "partial.bin", "")?;
     let receiver = pair
         .host
         .core

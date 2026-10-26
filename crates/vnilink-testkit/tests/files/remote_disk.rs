@@ -345,13 +345,7 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
         .ok_or("a.txt is listed")?
         .token;
     assert!(token.is_strong(), "a listed file carries its own identity");
-    let job = pair.controller.core.job_submit_download(
-        &pair.host.endpoint(),
-        pair.host.root_id(),
-        "a.txt",
-        pair.controller.root_id(),
-        "",
-    )?;
+    let job = vnilink_testkit::files::download(&pair, "a.txt", "")?;
     let serving = host.job_list()?;
     assert_eq!(serving.len(), 1, "the host serves one job");
     assert!(

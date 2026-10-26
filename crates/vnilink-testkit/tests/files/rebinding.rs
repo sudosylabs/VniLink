@@ -10,8 +10,8 @@ use expect_test::expect;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use vnilink::{ConflictChoice, Core, JobState};
-use vnilink_testkit::files::{drive_to_end, payload, poll_until_files_done};
+use vnilink::{ConflictChoice, JobState};
+use vnilink_testkit::files::{self, drive_to_end, payload};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(30);
@@ -28,25 +28,6 @@ fn beside(engine: &Engine, name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Polls `receiver`'s job until it is interrupted, within ten polls. A
-/// rebound root shows as the job's state, never as a failed poll, so the
-/// job stays resumable.
-fn poll_until_interrupted(receiver: &Core, job: u64) {
-    for _ in 0..10 {
-        let snapshot = receiver
-            .job_poll(job)
-            .expect("a rebound root fails no poll");
-        if snapshot.state == JobState::Interrupted {
-            return;
-        }
-        assert!(
-            !snapshot.state.is_terminal(),
-            "the job ended without being interrupted: {snapshot:?}"
-        );
-    }
-    panic!("the job was not interrupted within ten polls");
-}
-
 /// A receiver's root rebound to an empty folder mid-download interrupts the
 /// job before it fetches again, writing nothing under either root; with
 /// the root restored, the job resumes to the end.
@@ -59,17 +40,14 @@ fn a_receiving_root_rebound_mid_download_interrupts_without_writing() -> TestRes
     let two = payload(512, 1606);
     std::fs::write(host.root().join("one.txt"), &one)?;
     std::fs::write(host.root().join("two.txt"), &two)?;
-    let (host_root, controller_root) = (host.root_id(), controller.root_id());
     controller.core.connect(&host.endpoint())?;
-    controller.core.create_dir(controller_root, "", "got")?;
-    let job = controller.core.job_submit_download(
-        &host.endpoint(),
-        host_root,
-        "",
-        controller_root,
-        "got",
-    )?;
-    poll_until_files_done(&controller.core, job, 1);
+    controller
+        .core
+        .create_dir(controller.root_id(), "", "got")?;
+    let job = files::download(&pair, "", "got")?;
+    files::poll_within(&controller.core, job, 20, "the first file to land", |s| {
+        s.files_done == 1
+    });
     let host_job = host.core.job_list()?[0].id;
     let got = controller.root().join("got");
     assert_eq!(
@@ -82,7 +60,13 @@ fn a_receiving_root_rebound_mid_download_interrupts_without_writing() -> TestRes
     let rebound = beside(controller, "rebound");
     std::fs::create_dir_all(&rebound)?;
     controller.core.set_file_roots(vec![rebound.clone()])?;
-    poll_until_interrupted(&controller.core, job);
+    files::poll_within(
+        &controller.core,
+        job,
+        10,
+        "the job to be interrupted",
+        |s| s.state == JobState::Interrupted,
+    );
     assert_eq!(
         std::fs::read_dir(&rebound)?.count(),
         0,
@@ -136,15 +120,8 @@ fn a_replace_choice_applies_only_under_the_root_it_was_made_for() -> TestResult 
     let got = controller.root().join("got");
     std::fs::create_dir_all(&got)?;
     std::fs::write(got.join("one.txt"), b"original-local-content")?;
-    let (host_root, controller_root) = (host.root_id(), controller.root_id());
     controller.core.connect(&host.endpoint())?;
-    let job = controller.core.job_submit_download(
-        &host.endpoint(),
-        host_root,
-        "",
-        controller_root,
-        "got",
-    )?;
+    let job = files::download(&pair, "", "got")?;
     assert_eq!(
         controller.core.job_poll(job)?.state,
         JobState::WaitingDecision,
@@ -158,7 +135,13 @@ fn a_replace_choice_applies_only_under_the_root_it_was_made_for() -> TestResult 
     let valuable = payload(512, 1611);
     std::fs::write(rebound.join("got/one.txt"), &valuable)?;
     controller.core.set_file_roots(vec![rebound.clone()])?;
-    poll_until_interrupted(&controller.core, job);
+    files::poll_within(
+        &controller.core,
+        job,
+        10,
+        "the job to be interrupted",
+        |s| s.state == JobState::Interrupted,
+    );
     assert_eq!(
         std::fs::read(rebound.join("got/one.txt"))?,
         valuable,
@@ -215,16 +198,9 @@ fn a_saved_replace_choice_refuses_a_root_replaced_at_the_same_path() -> TestResu
     let root = pair.controller.root();
     std::fs::create_dir_all(root.join("got"))?;
     std::fs::write(root.join("got/one.txt"), b"original")?;
-    let (host_root, controller_root) = (pair.host.root_id(), pair.controller.root_id());
     let controller = &pair.controller.core;
     controller.connect(&pair.host.endpoint())?;
-    let job = controller.job_submit_download(
-        &pair.host.endpoint(),
-        host_root,
-        "",
-        controller_root,
-        "got",
-    )?;
+    let job = files::download(&pair, "", "got")?;
     assert_eq!(
         controller.job_poll(job)?.state,
         JobState::WaitingDecision,
@@ -280,18 +256,13 @@ fn a_sender_restarted_with_its_root_rebound_fails_the_resume_and_says_why() -> T
     let two = payload(512, 1608);
     std::fs::write(pair.host.root().join("one.txt"), &one)?;
     std::fs::write(pair.host.root().join("two.txt"), &two)?;
-    let (host_root, controller_root) = (pair.host.root_id(), pair.controller.root_id());
     let controller = &pair.controller.core;
     controller.connect(&pair.host.endpoint())?;
-    controller.create_dir(controller_root, "", "got")?;
-    let job = controller.job_submit_download(
-        &pair.host.endpoint(),
-        host_root,
-        "",
-        controller_root,
-        "got",
-    )?;
-    poll_until_files_done(controller, job, 1);
+    controller.create_dir(pair.controller.root_id(), "", "got")?;
+    let job = files::download(&pair, "", "got")?;
+    files::poll_within(controller, job, 20, "the first file to land", |s| {
+        s.files_done == 1
+    });
     let sender_job = pair.host.core.job_list()?[0].id;
     // The job's pin on its root is saved, so after the restart only it can
     // fail the resume: the copies are identical.
@@ -371,15 +342,11 @@ fn a_sending_root_rebound_mid_upload_interrupts_and_resumes_once_restored() -> T
     std::fs::write(source.join("one.txt"), &one)?;
     std::fs::write(source.join("two.txt"), &two)?;
     controller.connect(&pair.host.endpoint())?;
-    let job = controller.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.root_id(),
-        "set",
-        pair.host.root_id(),
-        "arrived",
-    )?;
-    let receiver = vnilink_testkit::files::received(host);
-    poll_until_files_done(host, receiver, 1);
+    let job = files::upload(&pair, "set", "arrived")?;
+    let receiver = files::received(host);
+    files::poll_within(host, receiver, 20, "the first file to land", |s| {
+        s.files_done == 1
+    });
     let arrived = pair.host.root().join("arrived/set");
     assert_eq!(
         std::fs::read(arrived.join("one.txt"))?,
@@ -394,7 +361,9 @@ fn a_sending_root_rebound_mid_upload_interrupts_and_resumes_once_restored() -> T
     std::fs::write(rebound.join("set/one.txt"), &one)?;
     std::fs::write(rebound.join("set/two.txt"), &two)?;
     controller.set_file_roots(vec![rebound])?;
-    poll_until_interrupted(host, receiver);
+    files::poll_within(host, receiver, 10, "the job to be interrupted", |s| {
+        s.state == JobState::Interrupted
+    });
     assert!(
         !arrived.join("two.txt").exists(),
         "bytes from a rebound root never land"

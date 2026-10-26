@@ -5,73 +5,19 @@
 
 use expect_test::expect;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use vnilink::{
     AdaptationReason, Condition, CoreEvent, DesktopControlState, DesktopEnd, DisplayInfo,
-    EncodedFrame, EncoderImplementation, Error, EventSubscription, HostCapture, HostDesktop,
-    InputEvent, RemoteDesktopService, ServiceInfo, ServiceKind, SessionInfo, SessionPhase,
-    StreamEnd, StreamFailure, VideoCodecCaps, VideoSubscription,
+    EncodedFrame, EncoderImplementation, Error, EventSubscription, InputEvent, ServiceInfo,
+    ServiceKind, SessionPhase, StreamEnd, StreamFailure, VideoCodecCaps,
 };
+use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 /// The size of the host's screens.
 pub(super) const SCREEN: (u16, u16) = (1920, 1080);
-
-/// A host's physical capture, as the engine sees it: one monitor of this
-/// size.
-pub(super) struct Capture(pub(super) (u16, u16));
-
-impl HostCapture for Capture {
-    fn monitor(&self) -> (u16, u16) {
-        self.0
-    }
-}
-
-/// A desktop of a monitor's size that applies input by recording it.
-pub(super) struct Applied {
-    events: Arc<Mutex<Vec<InputEvent>>>,
-    monitor: (u16, u16),
-}
-
-impl Applied {
-    /// A desktop of [`SCREEN`], and what it applies.
-    pub(super) fn new() -> (Self, Arc<Mutex<Vec<InputEvent>>>) {
-        Self::sized(SCREEN)
-    }
-
-    pub(super) fn sized(monitor: (u16, u16)) -> (Self, Arc<Mutex<Vec<InputEvent>>>) {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let desktop = Self {
-            events: Arc::clone(&events),
-            monitor,
-        };
-        (desktop, events)
-    }
-}
-
-impl HostDesktop for Applied {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
-        self.events
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(event);
-        Ok(())
-    }
-
-    fn monitor(&self) -> (u16, u16) {
-        self.monitor
-    }
-}
-
-/// What the host's desktop applied so far.
-pub(super) fn applied(events: &Mutex<Vec<InputEvent>>) -> Vec<InputEvent> {
-    events
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .clone()
-}
 
 /// A display of the host, at revision `revision`.
 pub(super) fn display(id: u64, x: i32, width: u16, revision: u64) -> DisplayInfo {
@@ -87,81 +33,21 @@ pub(super) fn display(id: u64, x: i32, width: u16, revision: u64) -> DisplayInfo
     }
 }
 
-/// Another controller, named `name`, paired with the pair's host as the
-/// pair's own controller is.
-pub(super) fn another_viewer(pair: &Pair, name: &str) -> Result<Engine, Error> {
-    let viewer = Engine::start(name);
-    let invitation = Duration::from_secs(60);
-    let token = pair.host.core.create_invitation(invitation)?;
-    viewer.core.accept_invitation(&token)?;
-    let back = viewer.core.create_invitation(invitation)?;
-    pair.host.core.accept_invitation(&back)?;
-    Ok(viewer)
-}
-
-/// `viewer`'s services connection to `host`, once the host admitted it.
-pub(super) fn connect(viewer: &Engine, host: &Engine) -> Result<SessionInfo, Error> {
-    let pending = viewer.core.begin_connect_services(&host.endpoint())?;
-    Ok(wait_for(
-        "the connection to be admitted",
-        DEFAULT_WAIT,
-        || {
-            let session = viewer.core.controller_session(pending.id).ok()?;
-            (session.phase == SessionPhase::Active).then_some(session)
-        },
-    ))
-}
-
-/// A Desktop owner on `connection`, opened as the application opens one.
-pub(super) fn open_desktop(
-    viewer: &Engine,
-    connection: &SessionInfo,
-) -> Result<RemoteDesktopService, Error> {
-    let owner = viewer.core.attach_controller_service(
-        connection.id,
-        connection.generation,
-        ServiceKind::Desktop,
-    )?;
-    viewer.core.open_desktop_service(owner.id, owner.generation)
-}
-
-/// The host's Desktop services.
-pub(super) fn hosted_desktops(host: &Engine) -> Vec<ServiceInfo> {
-    host.core
-        .hosted_services()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|service| service.kind == ServiceKind::Desktop)
-        .collect()
-}
-
-/// The host's Desktop service for `viewer`.
-pub(super) fn hosted_for(host: &Engine, viewer: &Engine) -> ServiceInfo {
-    let peer = viewer.endpoint();
-    wait_for(
-        "the host to serve the viewer's desktop",
-        DEFAULT_WAIT,
-        || {
-            hosted_desktops(host)
-                .into_iter()
-                .find(|service| service.peer_id == peer)
-        },
-    )
-}
-
 /// The host's Desktop service whose applied selection is `display` alone.
 pub(super) fn hosted_showing(host: &Engine, display: u64) -> ServiceInfo {
     wait_for(
         &format!("the host to apply a selection of display {display}"),
         DEFAULT_WAIT,
         || {
-            hosted_desktops(host).into_iter().find(|service| {
-                host.core
-                    .hosted_display_selection(service.id, service.generation)
-                    .ok()
-                    .as_deref()
-                    == Some(&[display][..])
-            })
+            host.hosted(Some(ServiceKind::Desktop))
+                .into_iter()
+                .find(|service| {
+                    host.core
+                        .hosted_display_selection(service.id, service.generation)
+                        .ok()
+                        .as_deref()
+                        == Some(&[display][..])
+                })
         },
     )
 }
@@ -176,18 +62,6 @@ pub(super) fn input_failure(events: &EventSubscription) -> &'static str {
             _ => None,
         },
     )
-}
-
-/// A keyframe of `payload`, `len` bytes of it.
-pub(super) fn picture(timestamp: u64, payload: u8, len: usize) -> EncodedFrame {
-    EncodedFrame::h264(true, timestamp, vec![payload; len]).expect("an H.264 keyframe")
-}
-
-/// The next picture `video` receives.
-pub(super) fn received(video: &VideoSubscription, what: &str) -> EncodedFrame {
-    video
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap_or_else(|| panic!("{what} did not arrive"))
 }
 
 /// How often a producer publishes while a test waits for the viewer to
@@ -225,7 +99,7 @@ fn capture_startup_serves_only_the_desktops_open_when_it_began() -> TestResult {
     let timeout = Duration::from_secs(5);
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    host.set_capture(Box::new(Capture(SCREEN)))?;
+    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
     let stop = Arc::new(AtomicBool::new(false));
     let alone = host.desktop_capture_startup(0, Arc::clone(&stop), timeout);
     assert!(
@@ -233,13 +107,13 @@ fn capture_startup_serves_only_the_desktops_open_when_it_began() -> TestResult {
         "no capture starts with no desktop to serve: {:?}",
         alone.err()
     );
-    let second = another_viewer(&pair, "second")?;
+    let second = pair.add_viewer("second");
     let viewers = [&pair.controller, &second];
     let mut connections = Vec::new();
     let mut desktops = Vec::new();
     for viewer in viewers {
-        let connection = connect(viewer, &pair.host)?;
-        desktops.push(open_desktop(viewer, &connection)?);
+        let connection = viewer.connect_services(&pair.host)?;
+        desktops.push(viewer.open_desktop(&connection)?);
         connections.push(connection);
     }
     wait_for("the host to serve both desktops", DEFAULT_WAIT, || {
@@ -264,7 +138,7 @@ fn capture_startup_serves_only_the_desktops_open_when_it_began() -> TestResult {
         "a capture whose desktops all closed is cancelled"
     );
 
-    let replacement = open_desktop(&pair.controller, &connections[0])?;
+    let replacement = pair.controller.open_desktop(&connections[0])?;
     assert!(
         matches!(startup.check(), Err(Error::NoSession)),
         "a desktop opened later does not adopt a cancelled capture"
@@ -299,19 +173,24 @@ fn capture_startup_serves_only_the_desktops_open_when_it_began() -> TestResult {
 fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let (desktop, _) = Applied::new();
-    pair.host.core.set_desktop(Box::new(desktop))?;
-    let second = another_viewer(&pair, "second")?;
-    let slow = open_desktop(&pair.controller, &connect(&pair.controller, &pair.host)?)?;
-    let slow_host = hosted_for(&pair.host, &pair.controller);
-    let fast = open_desktop(&second, &connect(&second, &pair.host)?)?;
-    let fast_host = hosted_for(&pair.host, &second);
+    InputLog::install(&pair.host, SCREEN)?;
+    let second = pair.add_viewer("second");
+    let slow = pair
+        .controller
+        .open_desktop(&pair.controller.connect_services(&pair.host)?)?;
+    let slow_host = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    let fast = second.open_desktop(&second.connect_services(&pair.host)?)?;
+    let fast_host = pair.host.serving(ServiceKind::Desktop, &second);
     let _slow_video = slow.subscribe_video()?;
     let fast_video = fast.subscribe_video()?;
     let initial = slow.desktop_info()?.quality;
     let host = &pair.host.core;
     // One picture the slow viewer never reads.
-    host.publish_desktop_video(slow_host.id, slow_host.generation, picture(1, 31, 1000))?;
+    host.publish_desktop_video(
+        slow_host.id,
+        slow_host.generation,
+        keyframe(1, vec![31; 1000]),
+    )?;
 
     let budget = Duration::from_secs(8);
     let started = Instant::now();
@@ -328,11 +207,11 @@ fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> 
         host.publish_desktop_video(
             fast_host.id,
             fast_host.generation,
-            picture(timestamp, payload, 1000),
+            keyframe(timestamp, vec![payload; 1000]),
         )
         .expect("the host publishes to the fast viewer");
         assert_eq!(
-            received(&fast_video, "the fast viewer's picture").payload,
+            next_picture(&fast_video, "the fast viewer's picture").payload,
             vec![payload; 1000],
             "the fast viewer receives each picture published to it"
         );
@@ -412,15 +291,15 @@ fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> 
         "a closed desktop takes no reports"
     );
     wait_for("the host to let the slow viewer go", DEFAULT_WAIT, || {
-        (hosted_desktops(&pair.host).len() == 1).then_some(())
+        (pair.host.hosted(Some(ServiceKind::Desktop)).len() == 1).then_some(())
     });
     host.publish_desktop_video(
         fast_host.id,
         fast_host.generation,
-        picture(timestamp, 77, 1000),
+        keyframe(timestamp, vec![77; 1000]),
     )?;
     assert_eq!(
-        received(&fast_video, "the sibling's picture after the close").payload,
+        next_picture(&fast_video, "the sibling's picture after the close").payload,
         vec![77; 1000],
         "the sibling streams after the slow viewer closed"
     );
@@ -443,13 +322,12 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    let (desktop, applied_events) = Applied::new();
-    host.set_desktop(Box::new(desktop))?;
+    let applied_events = InputLog::install(&pair.host, SCREEN)?;
     // Twins: identical geometry, distinct ids.
     host.set_topology(5, &[display(1, 0, 1920, 5), display(2, 1920, 1920, 5)])?;
     let connection = pair.connect_services();
-    let desktop_a = open_desktop(&pair.controller, &connection)?;
-    let desktop_b = open_desktop(&pair.controller, &connection)?;
+    let desktop_a = pair.controller.open_desktop(&connection)?;
+    let desktop_b = pair.controller.open_desktop(&connection)?;
     wait_for("both owners to learn the twins", DEFAULT_WAIT, || {
         (desktop_a.topology().ok()?.len() == 2 && desktop_b.topology().ok()?.len() == 2)
             .then_some(())
@@ -481,27 +359,27 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     host.publish_desktop_video(
         remote_a.id,
         remote_a.generation,
-        picture(1, 31, 1000).with_source(1, 5),
+        keyframe(1, vec![31; 1000]).with_source(1, 5),
     )?;
     host.publish_desktop_video(
         remote_b.id,
         remote_b.generation,
-        picture(1, 42, 1000).with_source(2, 5),
+        keyframe(1, vec![42; 1000]).with_source(2, 5),
     )?;
-    let got_a = received(&video_a, "the first twin's picture");
+    let got_a = next_picture(&video_a, "the first twin's picture");
     assert_eq!(
         (got_a.payload, got_a.display_id, got_a.revision),
         (vec![31; 1000], 1, 5),
         "the first owner receives its twin's picture, stamped exactly"
     );
-    let got_b = received(&video_b, "the second twin's picture");
+    let got_b = next_picture(&video_b, "the second twin's picture");
     assert_eq!(
         (got_b.payload, got_b.display_id, got_b.revision),
         (vec![42; 1000], 2, 5),
         "the second owner receives its twin's picture, stamped exactly"
     );
-    host.publish_desktop_video(remote_a.id, remote_a.generation, picture(2, 33, 100))?;
-    let unstamped = received(&video_a, "the unstamped picture");
+    host.publish_desktop_video(remote_a.id, remote_a.generation, keyframe(2, vec![33; 100]))?;
+    let unstamped = next_picture(&video_a, "the unstamped picture");
     assert_eq!(
         (unstamped.display_id, unstamped.revision),
         (0, 5),
@@ -511,10 +389,10 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     let on_first = InputEvent::pointer(100, 100, 1, 5);
     desktop_a.submit_input(on_first)?;
     wait_for("the pointer on display 1 to apply", DEFAULT_WAIT, || {
-        (!applied(&applied_events).is_empty()).then_some(())
+        (!applied_events.events().is_empty()).then_some(())
     });
     assert_eq!(
-        applied(&applied_events),
+        applied_events.events(),
         [on_first],
         "a pointer on the owner's twin applies"
     );
@@ -526,26 +404,26 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
         "a pointer on the other twin is refused for this owner"
     );
     assert_eq!(
-        applied(&applied_events).len(),
+        applied_events.events().len(),
         1,
         "the refused pointer did not apply"
     );
 
     desktop_a.close();
     wait_for("the host to drop the first owner", DEFAULT_WAIT, || {
-        (hosted_desktops(&pair.host).len() == 1).then_some(())
+        (pair.host.hosted(Some(ServiceKind::Desktop)).len() == 1).then_some(())
     });
     assert!(
-        host.publish_desktop_video(remote_a.id, remote_a.generation, picture(3, 31, 100))
+        host.publish_desktop_video(remote_a.id, remote_a.generation, keyframe(3, vec![31; 100]))
             .is_err(),
         "a closed owner takes no pictures"
     );
     host.publish_desktop_video(
         remote_b.id,
         remote_b.generation,
-        picture(3, 43, 500).with_source(2, 5),
+        keyframe(3, vec![43; 500]).with_source(2, 5),
     )?;
-    let survivor = received(&video_b, "the survivor's picture");
+    let survivor = next_picture(&video_b, "the survivor's picture");
     assert_eq!(
         (survivor.payload, survivor.display_id, survivor.revision),
         (vec![43; 500], 2, 5),
@@ -562,9 +440,9 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     host.publish_desktop_video(
         remote_b.id,
         remote_b.generation,
-        picture(4, 44, 500).with_source(1, 5),
+        keyframe(4, vec![44; 500]).with_source(1, 5),
     )?;
-    let switched = received(&video_b, "the switched picture");
+    let switched = next_picture(&video_b, "the switched picture");
     assert_eq!(
         (switched.payload, switched.display_id, switched.revision),
         (vec![44; 500], 1, 5),
@@ -592,11 +470,10 @@ fn host_and_decoder_reports_become_the_viewers_conditions() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    let (desktop, _) = Applied::new();
-    host.set_desktop(Box::new(desktop))?;
+    InputLog::install(&pair.host, SCREEN)?;
     let connection = pair.connect_services();
-    let viewer = open_desktop(&pair.controller, &connection)?;
-    let remote = hosted_for(&pair.host, &pair.controller);
+    let viewer = pair.controller.open_desktop(&connection)?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
     let video = viewer.subscribe_video()?;
     host.report_desktop_encoder(
         remote.id,
@@ -619,10 +496,10 @@ fn host_and_decoder_reports_become_the_viewers_conditions() -> TestResult {
                 host.publish_desktop_video(
                     remote.id,
                     remote.generation,
-                    picture(timestamp, 9, 500),
+                    keyframe(timestamp, vec![9; 500]),
                 )
                 .expect("the host publishes a picture");
-                received(&video, "the viewer's picture");
+                next_picture(&video, "the viewer's picture");
                 timestamp += 1;
             }
             let set: Vec<_> = viewer.media_status().ok()?.conditions.iter().collect();
@@ -691,11 +568,10 @@ enum Ending {
 /// learned.
 fn picture_ended_by(pair: &Pair, ending: Ending) -> Result<Option<DesktopEnd>, Error> {
     let host = &pair.host.core;
-    let (desktop, _) = Applied::new();
-    host.set_desktop(Box::new(desktop))?;
+    InputLog::install(&pair.host, SCREEN)?;
     let connection = pair.connect_services();
-    let viewer = open_desktop(&pair.controller, &connection)?;
-    let remote = hosted_for(&pair.host, &pair.controller);
+    let viewer = pair.controller.open_desktop(&connection)?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
     assert_eq!(viewer.end(), None, "a live picture has no end");
     match ending {
         Ending::HostCloses => host.close_hosted_service(remote.id, remote.generation)?,
@@ -713,7 +589,10 @@ fn picture_ended_by(pair: &Pair, ending: Ending) -> Result<Option<DesktopEnd>, E
         // has the original's 300 ms to reach the viewer.
         Ending::ViewerCloses => {
             wait_for("the host to let the picture go", DEFAULT_WAIT, || {
-                hosted_desktops(&pair.host).is_empty().then_some(())
+                pair.host
+                    .hosted(Some(ServiceKind::Desktop))
+                    .is_empty()
+                    .then_some(())
             });
             holds(
                 "the viewer's closed picture having no end",
@@ -838,7 +717,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     // The kit's engines share a folder; this host offers only its screen.
     host.set_file_roots(Vec::new())?;
-    host.set_capture(Box::new(Capture((1280, 720))))?;
+    host.set_capture(Box::new(MonitorCapture((1280, 720))))?;
     host.set_video_codecs(VideoCodecCaps::encode_only(4096, 4096, "testkit"))?;
     let capture_only = host.capabilities();
     assert!(
@@ -851,8 +730,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
             && capture_only.monitors == 1,
         "a capture alone offers one monitor and nothing else: {capture_only:?}"
     );
-    let (desktop, applied_events) = Applied::sized((100, 100));
-    host.set_desktop(Box::new(desktop))?;
+    let applied_events = InputLog::install(&pair.host, (100, 100))?;
     let with_desktop = host.capabilities();
     assert!(
         with_desktop.desktop_capture
@@ -878,7 +756,7 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
     );
     assert!(
         matches!(
-            host.set_capture(Box::new(Capture((1, 1)))),
+            host.set_capture(Box::new(MonitorCapture((1, 1)))),
             Err(Error::Busy)
         ),
         "the capture is not swapped during a session"
@@ -886,13 +764,13 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
 
     host.publish_video(session.id, EncodedFrame::h264(true, 1, vec![1])?)?;
     host.publish_video(session.id, EncodedFrame::h264(false, 2, vec![2])?)?;
-    let first = received(&video, "the keyframe");
+    let first = next_picture(&video, "the keyframe");
     assert_eq!(
         (first.keyframe, first.timestamp_us, first.payload),
         (true, 1, vec![1]),
         "the keyframe arrives first, as published"
     );
-    let second = received(&video, "the delta");
+    let second = next_picture(&video, "the delta");
     assert_eq!(
         (second.keyframe, second.timestamp_us, second.payload),
         (false, 2, vec![2]),
@@ -922,10 +800,10 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
     let key = InputEvent::key_down(vnilink::usage::A);
     controller.submit_input(session.id, session.generation, key)?;
     wait_for("the key to apply", Duration::from_secs(2), || {
-        (!applied(&applied_events).is_empty()).then_some(())
+        (!applied_events.events().is_empty()).then_some(())
     });
     assert_eq!(
-        applied(&applied_events),
+        applied_events.events(),
         [key],
         "input applies while pictures stream"
     );
@@ -976,10 +854,9 @@ fn a_zero_capture_size_falls_back_to_the_desktop() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
-    host.set_capture(Box::new(Capture((0, 0))))?;
+    host.set_capture(Box::new(MonitorCapture((0, 0))))?;
     host.set_video_codecs(VideoCodecCaps::encode_only(4096, 4096, "testkit"))?;
-    let (desktop, _) = Applied::sized((100, 80));
-    host.set_desktop(Box::new(desktop))?;
+    InputLog::install(&pair.host, (100, 80))?;
     let capabilities = host.capabilities();
     assert!(
         capabilities.desktop_capture && capabilities.keyboard && capabilities.monitors == 1,

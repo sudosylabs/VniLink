@@ -10,28 +10,6 @@ use vnilink_testkit::{traced, wait_for, Engine, DEFAULT_WAIT};
 
 const FILE_LIFETIME: Duration = Duration::from_secs(60);
 
-/// The controller's services connection to `host`, or why it was refused.
-fn connect(controller: &Engine, host: &Engine) -> Result<vnilink::SessionInfo, Error> {
-    let pending = controller.core.begin_connect_services(&host.endpoint())?;
-    wait_for(
-        "the connection to settle",
-        DEFAULT_WAIT,
-        || match controller.core.controller_session(pending.id) {
-            Ok(session) if session.phase == SessionPhase::Active => Some(Ok(session)),
-            Ok(session)
-                if matches!(
-                    session.phase,
-                    SessionPhase::Failed(_) | SessionPhase::Closed
-                ) =>
-            {
-                Some(Err(Error::Unauthorized))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        },
-    )
-}
-
 /// One file, its digits read across, pairs both ways: the host then asks
 /// its owner to approve the controller by the controller's digits, and
 /// nothing is granted beyond being remembered. Each step is recorded,
@@ -53,7 +31,7 @@ fn a_pairing_file_and_its_digits_pair_both_computers() {
 
     host.core.start_hosting().unwrap();
     let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| connect(&controller, &host));
+        let connecting = scope.spawn(|| controller.connect_services(&host));
         let request = wait_for("the host to ask its owner", DEFAULT_WAIT, || {
             host.core.control_request().ok().flatten()
         });
@@ -167,7 +145,7 @@ fn a_forgotten_controller_is_disconnected_and_cannot_return() {
             .phase;
         (phase != SessionPhase::Active).then_some(())
     });
-    assert!(connect(&pair.controller, &pair.host).is_err());
+    assert!(pair.controller.connect_services(&pair.host).is_err());
     expect![[r#"
         controller:
           pairing: invitation accepted

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use vnilink::FrameRole::{Changed, Still, Unchanged};
 use vnilink::{usage, InputEvent, Region};
-use vnilink_testkit::desktop::{DesktopSession, Script, ScriptedScreen, DISPLAY};
+use vnilink_testkit::desktop::{next_picture, DesktopSession, Script, ScriptedScreen, DISPLAY};
 use vnilink_testkit::{traced, wait_for, DEFAULT_WAIT};
 
 fn ticking(share: f32, regions: Option<Vec<Region>>) -> ScriptedScreen {
@@ -114,9 +114,7 @@ fn an_unchanged_screen_brings_one_still() {
 fn input_reaches_the_host_in_order() {
     let trace = traced();
     let session = DesktopSession::start(ScriptedScreen::new(Script::Still), false);
-    wait_for("the first picture", DEFAULT_WAIT, || {
-        session.frames.recv_timeout(Duration::from_millis(20))
-    });
+    next_picture(&session.frames, "the first picture");
     let mut pressed = Vec::new();
     for key in [usage::A, usage::A + 1, usage::A + 2, usage::A + 3] {
         pressed.push(InputEvent::key_down(key));
@@ -152,9 +150,7 @@ fn input_reaches_the_host_in_order() {
 fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
     let trace = traced();
     let session = DesktopSession::start(ScriptedScreen::new(Script::Still), false);
-    wait_for("the first picture", DEFAULT_WAIT, || {
-        session.frames.recv_timeout(Duration::from_millis(20))
-    });
+    next_picture(&session.frames, "the first picture");
     session
         .pair
         .host

@@ -9,12 +9,10 @@ use vnilink::{
     usage, Error, Grants, HostDesktop, InputEvent, KeyboardMode, LocalKey, PointerButton,
     PointerSettings, ServiceKind, SessionPhase,
 };
-use vnilink_testkit::desktop::SCREEN;
+use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, SCREEN};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::lifecycle::{
-    connect, host_released_desktops, hosted, next_picture, open, pair, picture, Applied,
-};
+use super::lifecycle::pair;
 
 /// What a host's desktop was asked to do: an input event, text typed as
 /// characters, or text typed as the host layout's keys.
@@ -107,8 +105,8 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
         typed.push(install_typing(host)?);
         pair(host, &controller)?;
         controller.core.set_keyboard_mode(mode)?;
-        let connection = connect(host, &controller)?;
-        desktops.push(open(&controller, &connection)?);
+        let connection = controller.connect_services(&host)?;
+        desktops.push(controller.open_desktop(&connection)?);
         connections.push(connection);
     }
     let (first, second) = (&desktops[0], &desktops[1]);
@@ -186,7 +184,7 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
     );
 
     first.close();
-    host_released_desktops(&hosts[0]);
+    hosts[0].wait_released(Some(ServiceKind::Desktop));
     assert!(
         !second.is_cancelled(),
         "closing one computer's desktop leaves the other's open"
@@ -196,7 +194,7 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
         KeyboardMode::Translate,
         "closing another desktop leaves this one's mode"
     );
-    let fresh = open(&controller, &connections[0])?;
+    let fresh = controller.open_desktop(&connections[0])?;
     assert_eq!(
         fresh.keyboard_mode()?,
         KeyboardMode::Character,
@@ -234,9 +232,9 @@ fn pointer_settings_belong_to_one_desktop_and_a_swapped_drag_releases_the_button
 ) -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
-    let applied = Applied::install(&pair.host)?;
+    let applied = InputLog::install(&pair.host, SCREEN)?;
     let connection = pair.connect_services();
-    let desktop = open(&pair.controller, &connection)?;
+    let desktop = pair.controller.open_desktop(&connection)?;
     let policy = PointerSettings {
         sensitivity_percent: 50,
         reverse_wheel: true,
@@ -281,12 +279,12 @@ fn pointer_settings_belong_to_one_desktop_and_a_swapped_drag_releases_the_button
     );
     desktop.set_pointer_settings(PointerSettings::default())?;
     desktop.close();
-    host_released_desktops(&pair.host);
+    pair.host.wait_released(Some(ServiceKind::Desktop));
     assert!(
         desktop.set_pointer_settings(policy).is_err(),
         "a closed desktop takes no pointer settings"
     );
-    let fresh = open(&pair.controller, &connection)?;
+    let fresh = pair.controller.open_desktop(&connection)?;
     assert_eq!(
         fresh.pointer_settings()?,
         PointerSettings::default(),
@@ -315,7 +313,7 @@ fn pointer_settings_belong_to_one_desktop_and_a_swapped_drag_releases_the_button
 fn handing_control_over_releases_held_keys_and_keeps_every_viewer() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
-    let applied = Applied::install(&host)?;
+    let applied = InputLog::install(&host, SCREEN)?;
     let peers = [
         Engine::start("first"),
         Engine::start("second"),
@@ -326,9 +324,12 @@ fn handing_control_over_releases_held_keys_and_keeps_every_viewer() -> TestResul
     let mut videos = Vec::new();
     for peer in &peers {
         pair(&host, peer)?;
-        let connection = connect(&host, peer)?;
-        let desktop = open(peer, &connection)?;
-        owners.push(hosted(&host, peer).ok_or("the host serves the Desktop")?);
+        let connection = peer.connect_services(&host)?;
+        let desktop = peer.open_desktop(&connection)?;
+        owners.push(
+            host.hosted_for(ServiceKind::Desktop, &peer)
+                .ok_or("the host serves the Desktop")?,
+        );
         videos.push(desktop.subscribe_video()?);
         desktops.push(desktop);
     }
@@ -457,7 +458,7 @@ fn handing_control_over_releases_held_keys_and_keeps_every_viewer() -> TestResul
         host.core.publish_desktop_video(
             owner.id,
             owner.generation,
-            picture(10, vec![index as u8])?,
+            keyframe(10, vec![index as u8]),
         )?;
         assert_eq!(
             next_picture(&videos[index], "a remaining viewer's picture").payload,
@@ -497,7 +498,7 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let applied = Applied::install(&pair.host)?;
+    let applied = InputLog::install(&pair.host, SCREEN)?;
     let view_only = Grants {
         view: true,
         control: false,
@@ -506,8 +507,11 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
     };
     host.set_desktop_sharing(view_only)?;
     let connection = pair.connect_services();
-    let desktop = open(&pair.controller, &connection)?;
-    let remote = hosted(&pair.host, &pair.controller).ok_or("the host serves the Desktop")?;
+    let desktop = pair.controller.open_desktop(&connection)?;
+    let remote = pair
+        .host
+        .hosted_for(ServiceKind::Desktop, &pair.controller)
+        .ok_or("the host serves the Desktop")?;
     assert_eq!(
         desktop.control_state()?,
         Viewing,
@@ -568,7 +572,7 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
     .assert_eq(&trace.story(&["input"]));
 
     let video = desktop.subscribe_video()?;
-    host.publish_desktop_video(remote.id, remote.generation, picture(1, vec![7])?)?;
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(1, vec![7]))?;
     assert_eq!(
         next_picture(&video, "the viewer's picture after losing control").payload,
         vec![7],

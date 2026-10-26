@@ -7,14 +7,9 @@
 //! desktop alone.
 
 use expect_test::expect;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
-use vnilink::{
-    usage, EncodedFrame, Error, Grants, HostCapture, InputEvent, PointerButton,
-    RemoteDesktopService, ServiceInfo, ServiceKind, SessionInfo, SessionPhase, VideoSubscription,
-};
-use vnilink_testkit::desktop::{RecordingDesktop, SCREEN};
+use vnilink::{usage, Error, Grants, InputEvent, PointerButton, ServiceKind, SessionPhase};
+use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture, SCREEN};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 /// What a host shares with the controllers these scenarios pair: it may be
@@ -30,135 +25,8 @@ const SEEN_AND_CONTROLLED: Grants = Grants {
 /// host serving and sharing itself to be seen and controlled. [`Pair`] does
 /// this for one host and one controller; these scenarios pair several.
 pub(super) fn pair(host: &Engine, controller: &Engine) -> Result<(), Error> {
-    let invitation = Duration::from_secs(60);
-    host.core.start_hosting()?;
-    controller
-        .core
-        .accept_invitation(&host.core.create_invitation(invitation)?)?;
-    host.core
-        .accept_invitation(&controller.core.create_invitation(invitation)?)?;
+    host.pair_with(controller)?;
     host.core.set_desktop_sharing(SEEN_AND_CONTROLLED)
-}
-
-/// `controller`'s services connection to `host`, once the host admitted it.
-pub(super) fn connect(host: &Engine, controller: &Engine) -> Result<SessionInfo, Error> {
-    let pending = controller.core.begin_connect_services(&host.endpoint())?;
-    Ok(wait_for(
-        "the connection to be admitted",
-        DEFAULT_WAIT,
-        || {
-            let session = controller.core.controller_session(pending.id).ok()?;
-            (session.phase == SessionPhase::Active).then_some(session)
-        },
-    ))
-}
-
-/// A Desktop service opened on `connection`.
-pub(super) fn open(
-    controller: &Engine,
-    connection: &SessionInfo,
-) -> Result<RemoteDesktopService, Error> {
-    let owner = controller.core.attach_controller_service(
-        connection.id,
-        connection.generation,
-        ServiceKind::Desktop,
-    )?;
-    controller
-        .core
-        .open_desktop_service(owner.id, owner.generation)
-}
-
-/// The host's side of `controller`'s Desktop service, if it serves one.
-pub(super) fn hosted(host: &Engine, controller: &Engine) -> Option<ServiceInfo> {
-    host.core
-        .hosted_services()
-        .ok()?
-        .into_iter()
-        .find(|service| {
-            service.kind == ServiceKind::Desktop && service.peer_id == controller.endpoint()
-        })
-}
-
-/// Waits until `host` serves no Desktop service.
-pub(super) fn host_released_desktops(host: &Engine) {
-    wait_for("the host to release its desktops", DEFAULT_WAIT, || {
-        host.core
-            .hosted_services()
-            .ok()?
-            .iter()
-            .all(|service| service.kind != ServiceKind::Desktop)
-            .then_some(())
-    });
-}
-
-/// The input a host's desktop applied, in order.
-#[derive(Clone)]
-pub(super) struct Applied(Arc<Mutex<Vec<(Instant, InputEvent)>>>);
-
-impl Applied {
-    /// Installs a desktop on `host` that records the input it applies.
-    pub(super) fn install(host: &Engine) -> Result<Self, Error> {
-        let applied = Arc::new(Mutex::new(Vec::new()));
-        host.core.set_desktop(Box::new(RecordingDesktop {
-            applied: Arc::clone(&applied),
-        }))?;
-        Ok(Self(applied))
-    }
-
-    pub(super) fn events(&self) -> Vec<InputEvent> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .iter()
-            .map(|(_, event)| *event)
-            .collect()
-    }
-
-    /// Waits until the desktop applied `count` events, and gives them.
-    pub(super) fn wait_for(&self, count: usize) -> Vec<InputEvent> {
-        wait_for(
-            &format!("the host to apply {count} input events"),
-            DEFAULT_WAIT,
-            || {
-                let events = self.events();
-                (events.len() >= count).then_some(events)
-            },
-        )
-    }
-
-    /// Waits until the desktop applied `count` events, which must be all
-    /// it applied: a duplicated release fails here.
-    pub(super) fn exactly(&self, count: usize) -> Vec<InputEvent> {
-        let events = self.wait_for(count);
-        assert_eq!(
-            events.len(),
-            count,
-            "the host applied exactly {count} input events: {events:?}"
-        );
-        events
-    }
-}
-
-/// A keyframe stamped `timestamp_us` carrying `payload`, as a host's
-/// encoder hands one over.
-pub(super) fn picture(timestamp_us: u64, payload: Vec<u8>) -> Result<EncodedFrame, Error> {
-    EncodedFrame::h264(true, timestamp_us, payload)
-}
-
-/// The next picture `video` brings.
-pub(super) fn next_picture(video: &VideoSubscription, what: &str) -> EncodedFrame {
-    wait_for(what, DEFAULT_WAIT, || {
-        video.recv_timeout(Duration::from_millis(20))
-    })
-}
-
-/// A host's capture of one monitor, as adapters are set up before a session.
-struct Screen;
-
-impl HostCapture for Screen {
-    fn monitor(&self) -> (u16, u16) {
-        SCREEN
-    }
 }
 
 /// A Desktop service opens only while the host shares Desktop, and a
@@ -170,7 +38,7 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let applied = Applied::install(&pair.host)?;
+    let applied = InputLog::install(&pair.host, SCREEN)?;
     host.set_service_sharing(ServiceKind::Desktop, false)?;
     let session = pair.connect_services();
     assert!(
@@ -194,7 +62,10 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
 
     host.set_service_sharing(ServiceKind::Desktop, true)?;
     let first = controller.open_desktop_service(owner.id, owner.generation)?;
-    let remote = hosted(&pair.host, &pair.controller).ok_or("the host serves the Desktop")?;
+    let remote = pair
+        .host
+        .hosted_for(ServiceKind::Desktop, &pair.controller)
+        .ok_or("the host serves the Desktop")?;
     let info = first.desktop_info()?;
     assert_eq!(
         (info.monitor_width, info.monitor_height),
@@ -215,7 +86,7 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
         matches!(first.subscribe_video(), Err(Error::Busy)),
         "a desktop has one picture subscriber"
     );
-    host.publish_desktop_video(remote.id, remote.generation, picture(1, vec![1])?)?;
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(1, vec![1]))?;
     assert_eq!(
         next_picture(&video, "the first desktop's picture").payload,
         vec![1],
@@ -241,7 +112,7 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
     first.submit_input(key)?;
     applied.exactly(5);
     first.close();
-    host_released_desktops(&pair.host);
+    pair.host.wait_released(Some(ServiceKind::Desktop));
     assert_eq!(
         applied.exactly(6).last(),
         Some(&InputEvent::key_up(usage::A)),
@@ -256,14 +127,17 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
         "a closed desktop shows no picture"
     );
     assert!(
-        host.publish_desktop_video(remote.id, remote.generation, picture(2, vec![2])?)
+        host.publish_desktop_video(remote.id, remote.generation, keyframe(2, vec![2]))
             .is_err(),
         "the host cannot publish to a closed desktop"
     );
 
     let next = pair.attach(&session, ServiceKind::Desktop);
     let second = controller.open_desktop_service(next.id, next.generation)?;
-    let new_remote = hosted(&pair.host, &pair.controller).ok_or("the host serves the Desktop")?;
+    let new_remote = pair
+        .host
+        .hosted_for(ServiceKind::Desktop, &pair.controller)
+        .ok_or("the host serves the Desktop")?;
     assert_ne!(
         new_remote.id, remote.id,
         "a reopened desktop is a new service on the host"
@@ -274,7 +148,7 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
         "closing the old desktop again leaves the new one open"
     );
     let second_video = second.subscribe_video()?;
-    host.publish_desktop_video(new_remote.id, new_remote.generation, picture(3, vec![3])?)?;
+    host.publish_desktop_video(new_remote.id, new_remote.generation, keyframe(3, vec![3]))?;
     assert_eq!(
         next_picture(&second_video, "the second desktop's picture").payload,
         vec![3],
@@ -331,18 +205,20 @@ fn closing_one_computers_desktop_keeps_another_computer_streaming() -> TestResul
     let mut desktops = Vec::new();
     let mut videos = Vec::new();
     for host in &hosts {
-        Applied::install(host)?;
+        InputLog::install(host, SCREEN)?;
         pair(host, &controller)?;
-        let connection = connect(host, &controller)?;
-        let desktop = open(&controller, &connection)?;
+        let connection = controller.connect_services(&host)?;
+        let desktop = controller.open_desktop(&connection)?;
         videos.push(desktop.subscribe_video()?);
         desktops.push(desktop);
         connections.push(connection);
     }
     for (index, host) in (0u8..).zip(&hosts) {
-        let owner = hosted(host, &controller).ok_or("the host serves the Desktop")?;
+        let owner = host
+            .hosted_for(ServiceKind::Desktop, &controller)
+            .ok_or("the host serves the Desktop")?;
         host.core
-            .publish_desktop_video(owner.id, owner.generation, picture(1, vec![index])?)?;
+            .publish_desktop_video(owner.id, owner.generation, keyframe(1, vec![index]))?;
     }
     for (index, video) in (0u8..).zip(&videos) {
         assert_eq!(
@@ -352,15 +228,17 @@ fn closing_one_computers_desktop_keeps_another_computer_streaming() -> TestResul
         );
     }
     desktops[0].close();
-    host_released_desktops(&hosts[0]);
+    hosts[0].wait_released(Some(ServiceKind::Desktop));
     assert!(
         !desktops[1].is_cancelled(),
         "closing one computer's desktop leaves the other's open"
     );
-    let kept = hosted(&hosts[1], &controller).ok_or("the other host serves the Desktop")?;
+    let kept = hosts[1]
+        .hosted_for(ServiceKind::Desktop, &controller)
+        .ok_or("the other host serves the Desktop")?;
     hosts[1]
         .core
-        .publish_desktop_video(kept.id, kept.generation, picture(2, vec![9])?)?;
+        .publish_desktop_video(kept.id, kept.generation, keyframe(2, vec![9]))?;
     assert_eq!(
         next_picture(&videos[1], "the other computer's next picture").payload,
         vec![9],
@@ -392,24 +270,27 @@ fn adapters_change_while_no_desktop_is_open_and_are_refused_while_one_is() -> Te
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     let connection = pair.connect_services();
-    host.set_capture(Box::new(Screen))?;
-    Applied::install(&pair.host)?;
-    let desktop = open(&pair.controller, &connection)?;
+    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
+    InputLog::install(&pair.host, SCREEN)?;
+    let desktop = pair.controller.open_desktop(&connection)?;
     assert!(
-        matches!(host.set_capture(Box::new(Screen)), Err(Error::Busy)),
+        matches!(
+            host.set_capture(Box::new(MonitorCapture(SCREEN))),
+            Err(Error::Busy)
+        ),
         "an open desktop refuses a new capture"
     );
     assert!(
-        matches!(Applied::install(&pair.host), Err(Error::Busy)),
+        matches!(InputLog::install(&pair.host, SCREEN), Err(Error::Busy)),
         "an open desktop refuses a new input desktop"
     );
     desktop.close();
     wait_for(
         "the closed desktop to free the input desktop",
         DEFAULT_WAIT,
-        || Applied::install(&pair.host).ok(),
+        || InputLog::install(&pair.host, SCREEN).ok(),
     );
-    host.set_capture(Box::new(Screen))?;
+    host.set_capture(Box::new(MonitorCapture(SCREEN)))?;
     assert_eq!(
         pair.controller.core.controller_session(connection.id)?,
         connection,
@@ -426,11 +307,11 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controllers = [Engine::start("first"), Engine::start("second")];
-    Applied::install(&host)?;
+    InputLog::install(&host, SCREEN)?;
     let mut opened = Vec::new();
     for controller in &controllers {
         pair(&host, controller)?;
-        let connection = connect(&host, controller)?;
+        let connection = controller.connect_services(&host)?;
         let owner = controller.core.attach_controller_service(
             connection.id,
             connection.generation,
@@ -439,7 +320,9 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
         let desktop = controller
             .core
             .open_desktop_service(owner.id, owner.generation)?;
-        let remote = hosted(&host, controller).ok_or("the host serves the Desktop")?;
+        let remote = host
+            .hosted_for(ServiceKind::Desktop, &controller)
+            .ok_or("the host serves the Desktop")?;
         let video = desktop.subscribe_video()?;
         opened.push((desktop, owner, remote, connection, video));
     }
@@ -451,12 +334,12 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
     host.core.publish_desktop_video(
         first_remote.id,
         first_remote.generation,
-        picture(1, vec![31; 64])?,
+        keyframe(1, vec![31; 64]),
     )?;
     host.core.publish_desktop_video(
         second_remote.id,
         second_remote.generation,
-        picture(2, vec![32; 64])?,
+        keyframe(2, vec![32; 64]),
     )?;
     assert_eq!(
         next_picture(first_video, "the first desktop's picture").timestamp_us,
@@ -479,7 +362,7 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
     host.core.publish_desktop_video(
         second_remote.id,
         second_remote.generation,
-        picture(3, vec![33; 64])?,
+        keyframe(3, vec![33; 64]),
     )?;
     assert_eq!(
         next_picture(second_video, "the second desktop's next picture").timestamp_us,
@@ -505,7 +388,7 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
             "a service's close leaves its connection up"
         );
     }
-    host_released_desktops(&host);
+    host.wait_released(Some(ServiceKind::Desktop));
     trace.wait_for_records("service phase", 4);
     expect![[r#"
         first:

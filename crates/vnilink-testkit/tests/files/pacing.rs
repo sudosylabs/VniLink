@@ -5,41 +5,13 @@
 use expect_test::expect;
 use std::time::{Duration, Instant};
 
-use vnilink::{
-    ConflictChoice, JobDestination, JobItem, JobState, RemoteFilesService, ServiceInfo,
-    ServiceKind, SessionInfo, SessionPhase,
+use vnilink::{ConflictChoice, JobDestination, JobItem, JobState};
+use vnilink_testkit::files::{
+    self, drive, drive_to_end, finished, payload, received, settled, tree,
 };
-use vnilink_testkit::files::{drive, drive_to_end, finished, payload, received, settled, tree};
 use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 const TRANSFER: Duration = Duration::from_secs(30);
-
-/// The controller's control session to the host, once open.
-fn control_session(pair: &Pair) -> Result<SessionInfo, vnilink::Error> {
-    let controller = &pair.controller.core;
-    let pending = controller.begin_connect(&pair.host.endpoint())?;
-    Ok(wait_for(
-        "the control session to open",
-        DEFAULT_WAIT,
-        || {
-            let session = controller.controller_session(pending.id).ok()?;
-            (session.phase == SessionPhase::Active).then_some(session)
-        },
-    ))
-}
-
-/// A Files service on `session`, with its pipe, as a Files tab opens one
-/// beside a desktop.
-fn owned_files(
-    pair: &Pair,
-    session: &SessionInfo,
-) -> Result<(ServiceInfo, RemoteFilesService), vnilink::Error> {
-    let controller = &pair.controller.core;
-    let owner =
-        controller.attach_controller_service(session.id, session.generation, ServiceKind::Files)?;
-    let pipe = controller.open_files_service(owner.id, owner.generation)?;
-    Ok((owner, pipe))
-}
 
 /// `read`'s value once it stayed the same for `quiet`, within `within`.
 fn settled_value<T: PartialEq + Clone>(
@@ -74,13 +46,7 @@ fn a_small_file_completes_promptly_on_its_own() -> TestResult {
         std::fs::write(pair.controller.root().join(name), vec![7u8; 2500])?;
         // Submitting scans and offers the file: it counts.
         let started = std::time::Instant::now();
-        let job = pair.controller.core.job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.root_id(),
-            name,
-            pair.host.root_id(),
-            "",
-        )?;
+        let job = files::upload(&pair, name, "")?;
         wait_for(
             &format!("{name} to complete within two seconds"),
             Duration::from_secs(2),
@@ -113,8 +79,8 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
     let (controller, host) = (&pair.controller.core, &pair.host.core);
     let bytes = payload(512 * 1024, 917);
     std::fs::write(pair.controller.root().join("carry.bin"), &bytes)?;
-    let session = control_session(&pair)?;
-    let (lost, pipe) = owned_files(&pair, &session)?;
+    let session = pair.connect_control();
+    let (lost, pipe) = pair.controller.open_files(&session)?;
     let job = controller.files_service_upload(
         lost.id,
         lost.generation,
@@ -144,10 +110,8 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
         JobState::Interrupted,
         "a job whose owner went waits to resume, not cancelled"
     );
-    wait_for("the host to release the lost owner", DEFAULT_WAIT, || {
-        host.hosted_services().ok()?.is_empty().then_some(())
-    });
-    let (fresh, _pipe) = owned_files(&pair, &session)?;
+    pair.host.wait_released(None);
+    let (fresh, _pipe) = pair.controller.open_files(&session)?;
     let resumed = controller.files_service_resume_orphans(fresh.id, fresh.generation)?;
     assert_eq!(
         resumed.iter().map(|job| job.id).collect::<Vec<_>>(),
@@ -201,7 +165,7 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
 fn the_other_computers_folder_says_when_it_changes() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
-    let (_owner, pipe) = owned_files(&pair, &control_session(&pair)?)?;
+    let (_owner, pipe) = pair.controller.open_files(&pair.connect_control())?;
     let root = pair.host.root_id();
     pipe.watch(Some((root, String::new())));
     // The watch's first answer is the folder as it is, and only a change
@@ -259,13 +223,7 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
     }
     pair.controller.core.connect(&pair.host.endpoint())?;
     drive(&pair);
-    let job = pair.controller.core.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.root_id(),
-        "many",
-        pair.host.root_id(),
-        "",
-    )?;
+    let job = files::upload(&pair, "many", "")?;
     let receiver = received(&pair.host.core);
     let asking = settled(&pair.host.core, receiver, Duration::from_secs(5));
     assert_eq!(
@@ -339,13 +297,7 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
     std::fs::write(pair.host.root().join("same.txt"), b"mine")?;
     controller.connect(&pair.host.endpoint())?;
     drive(&pair);
-    let job = controller.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.root_id(),
-        "same.txt",
-        pair.host.root_id(),
-        "",
-    )?;
+    let job = files::upload(&pair, "same.txt", "")?;
     wait_for(
         "the sender to mirror the question",
         Duration::from_secs(5),
@@ -421,14 +373,7 @@ fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
     let pair = Pair::for_files();
     let (controller, host) = (&pair.controller.core, &pair.host.core);
     controller.connect(&pair.host.endpoint())?;
-    let pending = controller.begin_connect_services(&pair.host.endpoint())?;
-    let link = wait_for("the services link to open", DEFAULT_WAIT, || {
-        let link = controller.controller_session(pending.id).ok()?;
-        (link.phase == SessionPhase::Active).then_some(link)
-    });
-    let owner =
-        controller.attach_controller_service(link.id, link.generation, ServiceKind::Files)?;
-    let _pipe = controller.open_files_service(owner.id, owner.generation)?;
+    let (owner, _pipe) = pair.controller.open_files(&pair.connect_services())?;
     let receiver_of = |name: &str| {
         wait_for("the host's job", DEFAULT_WAIT, || {
             host.job_list()
@@ -442,13 +387,7 @@ fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
         let name = format!("plain-{index}.bin");
         let bytes = payload(2048, 300 + index);
         std::fs::write(pair.controller.root().join(&name), &bytes)?;
-        let job = controller.job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.root_id(),
-            &name,
-            pair.host.root_id(),
-            "",
-        )?;
+        let job = files::upload(&pair, &name, "")?;
         let (sender, got) = drive_to_end(controller, job, host, receiver_of(&name), TRANSFER);
         assert_eq!(
             (sender.state, got.state),
@@ -503,7 +442,7 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
     std::fs::write(pick.join("Photos/one.jpg"), payload(900, 502))?;
     std::fs::write(pick.join("Photos/two.jpg"), payload(1100, 503))?;
     std::fs::write(pick.join("left.txt"), b"not chosen")?;
-    let (owner, _pipe) = owned_files(&pair, &control_session(&pair)?)?;
+    let (owner, _pipe) = pair.controller.open_files(&pair.connect_control())?;
     let names = ["a.txt".to_owned(), "Photos".to_owned()];
     assert!(
         controller
@@ -650,13 +589,7 @@ fn diagnostics_count_a_finished_transfer() -> TestResult {
     let bytes = payload(200 * 1024, 1901);
     std::fs::write(pair.controller.root().join("counted.bin"), &bytes)?;
     pair.controller.core.connect(&pair.host.endpoint())?;
-    let job = pair.controller.core.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.root_id(),
-        "counted.bin",
-        pair.host.root_id(),
-        "arrived",
-    )?;
+    let job = files::upload(&pair, "counted.bin", "arrived")?;
     let receiver = received(&pair.host.core);
     let (sender, got) = drive_to_end(
         &pair.controller.core,

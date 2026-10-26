@@ -8,7 +8,7 @@ use expect_test::expect;
 use std::time::{Duration, Instant};
 
 use vnilink::{Core, JobSnapshot, JobState, SessionPhase};
-use vnilink_testkit::files::{payload, poll_until_files_done, received};
+use vnilink_testkit::files::{self, payload, received};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult};
 
 /// Well inside the 30 s a dial to a stopped engine waits.
@@ -41,14 +41,10 @@ fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResul
     let controller = &pair.controller.core;
     let session = controller.connect(&pair.host.endpoint())?;
     controller.create_dir(pair.controller.root_id(), "", "got")?;
-    let job = controller.job_submit_download(
-        &pair.host.endpoint(),
-        pair.host.root_id(),
-        "",
-        pair.controller.root_id(),
-        "got",
-    )?;
-    poll_until_files_done(controller, job, 1);
+    let job = files::download(&pair, "", "got")?;
+    files::poll_within(controller, job, 20, "the first file to land", |s| {
+        s.files_done == 1
+    });
     pair.host.core.shutdown();
     let (snapshot, took) = poll_until_stopped(controller, job);
     assert_eq!(
@@ -100,15 +96,11 @@ fn a_controller_that_shuts_down_mid_upload_leaves_the_receiver_retrying_and_says
     std::fs::write(source.join("one.txt"), payload(512, 1803))?;
     std::fs::write(source.join("two.txt"), payload(512, 1804))?;
     controller.connect(&pair.host.endpoint())?;
-    controller.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.root_id(),
-        "set",
-        pair.host.root_id(),
-        "arrived",
-    )?;
+    files::upload(&pair, "set", "arrived")?;
     let job = received(host);
-    poll_until_files_done(host, job, 1);
+    files::poll_within(host, job, 20, "the first file to land", |s| {
+        s.files_done == 1
+    });
     controller.shutdown();
     let started = Instant::now();
     let snapshot = host.job_poll(job)?;
