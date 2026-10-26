@@ -791,15 +791,17 @@ async fn apply_host_input(
     });
     // Dropping the async join wait leaves the bounded native worker alive.
     // Its slot and late-release fence remain until actual completion.
+    // An input already applied counts as applied, whatever stopped since:
+    // the worker's result is looked at first.
     let result = tokio::select! {
         biased;
+        result = worker => result.unwrap_or(Err(Error::NoSession)),
         _ = wait_native_stop(&mut stop) => return discard("the session stopped while it applied"),
         _ = wait_native_stop(&mut desktop_stop) => return discard("the desktop stopped while it applied"),
         _ = async move {
             if let Some(link) = link { link.closed().await; }
             else { std::future::pending::<()>().await; }
         } => return discard("the connection closed while it applied"),
-        result = worker => result.unwrap_or(Err(Error::NoSession)),
     };
     match result {
         Ok(()) => true,
