@@ -10,7 +10,7 @@ use vnilink::{
     ServiceKind, SessionInfo, SessionPhase,
 };
 use vnilink_testkit::files::{drive, drive_to_end, finished, payload, received, settled, tree};
-use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 const TRANSFER: Duration = Duration::from_secs(30);
 
@@ -39,21 +39,6 @@ fn owned_files(
         controller.attach_controller_service(session.id, session.generation, ServiceKind::Files)?;
     let pipe = controller.open_files_service(owner.id, owner.generation)?;
     Ok((owner, pipe))
-}
-
-/// Asks `check` throughout `period` and fails naming `what` the first time
-/// it does not hold: the bound of a contract that something does not happen.
-fn holds(what: &str, period: Duration, mut check: impl FnMut() -> bool) {
-    let started = Instant::now();
-    while started.elapsed() < period {
-        assert!(
-            check(),
-            "{what} stopped holding after {:?}",
-            started.elapsed()
-        );
-        std::thread::yield_now();
-    }
-    assert!(check(), "{what} stopped holding at {period:?}");
 }
 
 /// `read`'s value once it stayed the same for `quiet`, within `within`.

@@ -22,3 +22,19 @@ pub fn wait_for<T>(what: &str, within: Duration, mut check: impl FnMut() -> Opti
         std::thread::sleep(pause);
     }
 }
+
+/// Asks `check` throughout `period` and fails naming `what` the first time
+/// it does not hold: the bound of a contract that something does not
+/// happen. It looks again every millisecond, so a test holds for `period`.
+pub fn holds(what: &str, period: Duration, mut check: impl FnMut() -> bool) {
+    let started = Instant::now();
+    while started.elapsed() < period {
+        assert!(
+            check(),
+            "{what} stopped holding after {:?}",
+            started.elapsed()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(check(), "{what} stopped holding at {period:?}");
+}
