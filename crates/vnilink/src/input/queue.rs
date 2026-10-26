@@ -321,15 +321,22 @@ impl InputOutbox {
 
     /// Focus loss discards pending input without discarding encoder settings
     /// or clearing a fault from an ended owner.
-    pub(crate) fn clear_pending_input(&self) {
-        self.queue
+    /// Drops queued input, keeping quality and display requests; returns
+    /// how many inputs it dropped.
+    pub(crate) fn clear_pending_input(&self) -> usize {
+        let mut queue = self
+            .queue
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .retain(|item| matches!(item, Outbound::Quality(_) | Outbound::Displays(_)));
+            .unwrap_or_else(|poison| poison.into_inner());
+        let before = queue.len();
+        queue.retain(|item| matches!(item, Outbound::Quality(_) | Outbound::Displays(_)));
+        let dropped = before - queue.len();
+        drop(queue);
         *self
             .last_pointer
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()) = None;
+        dropped
     }
 
     pub(crate) fn drain(&self) -> Vec<Outbound> {

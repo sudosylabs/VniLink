@@ -315,7 +315,16 @@ impl DesktopRuntime {
     }
     fn release_input(&self) {
         let mut keyboard = lock(&self.keyboard);
-        self.input.clear_pending_input();
+        let dropped = self.input.clear_pending_input();
+        if dropped > 0 {
+            tracing::debug!(
+                target: crate::trace::INPUT,
+                service = self.info.service.id,
+                dropped,
+                why = "input was released",
+                "input discarded"
+            );
+        }
         keyboard.plan.clear();
         keyboard.pointer.reset();
         keyboard.held = HeldInput::default();
@@ -340,7 +349,24 @@ impl DesktopRuntime {
         let mut keyboard = lock(&self.keyboard);
         let previous = *self.control_state.borrow();
         if previous != (status, epoch) {
-            self.input.clear_pending_input();
+            tracing::info!(
+                target: crate::trace::INPUT,
+                service = self.info.service.id,
+                state = ?status,
+                epoch,
+                "control changed"
+            );
+            // Input queued under the old control is not sent under the new.
+            let dropped = self.input.clear_pending_input();
+            if dropped > 0 {
+                tracing::debug!(
+                    target: crate::trace::INPUT,
+                    service = self.info.service.id,
+                    dropped,
+                    why = "control changed before it was sent",
+                    "input discarded"
+                );
+            }
             self.release.take();
             keyboard.plan.clear();
             keyboard.pointer.reset();

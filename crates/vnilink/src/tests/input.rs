@@ -524,7 +524,11 @@ fn selecting_a_display_allows_an_unchanged_pointer_retry_and_survives_focus_loss
     );
     outbox.push_displays(vec![1]).unwrap();
     outbox.push(InputEvent::key_down(usage::A)).unwrap();
-    outbox.clear_pending_input();
+    assert_eq!(
+        outbox.clear_pending_input(),
+        1,
+        "the one queued key is dropped"
+    );
     assert_eq!(
         outbox.drain(),
         vec![crate::input::Outbound::Displays(vec![1])]

@@ -157,6 +157,15 @@ fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
             transfer: false,
         })
         .unwrap();
+    // Once the viewer knows, a key it sends reaches the host, which decides;
+    // input queued before is the viewer's to drop.
+    wait_for("the viewer to learn it only views", DEFAULT_WAIT, || {
+        trace
+            .named("control changed")
+            .iter()
+            .any(|event| event["engine"] == "controller" && event["state"] == "Viewing")
+            .then_some(())
+    });
     session
         .service
         .submit_input(InputEvent::key_down(usage::A))
@@ -165,6 +174,8 @@ fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
         (!trace.named("input discarded").is_empty()).then_some(())
     });
     expect![[r#"
+        controller:
+          input: control changed epoch=2 service=1 state=Viewing
         host:
           input: input discarded kind=key down service=1 why=the peer may not control this computer
     "#]]
