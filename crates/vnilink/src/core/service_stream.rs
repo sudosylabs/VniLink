@@ -1050,7 +1050,8 @@ pub(super) async fn serve(
             tracing::info!(
                 target: crate::trace::HOSTING,
                 connection = connection_id,
-                kind = ?service_kind,
+                // An unknown kind is left out.
+                kind = service_kind.as_ref().map(tracing::field::debug),
                 status = refusal(status),
                 "service refused"
             );

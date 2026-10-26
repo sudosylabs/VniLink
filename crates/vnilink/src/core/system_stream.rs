@@ -1295,7 +1295,25 @@ fn restore_privacy_lease(lease: &PrivacyLease) -> ((bool, bool), Option<Error>) 
         None
     };
     let remainder = (display_error.is_some(), input_error.is_some());
-    (remainder, display_error.or(input_error))
+    let error = display_error.or(input_error);
+    match &error {
+        None => tracing::info!(
+            target: crate::trace::SYSTEM,
+            connection = lease.connection_id,
+            display = lease.display_private,
+            input = lease.input_blocked,
+            "privacy restored"
+        ),
+        Some(error) => tracing::warn!(
+            target: crate::trace::SYSTEM,
+            connection = lease.connection_id,
+            display_held = remainder.0,
+            input_held = remainder.1,
+            failure = error.name(),
+            "privacy not restored: it stays held until a restore works"
+        ),
+    }
+    (remainder, error)
 }
 
 /// Releases the active privacy lease after a saved policy revoked its
