@@ -1,4 +1,5 @@
 //! Invitations, pairing files, and the wait for control approval.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -184,7 +185,11 @@ impl Core {
             .ok_or(Error::NoControlRequest)?;
         drop(state);
         tracing::info!(target: crate::trace::PAIRING, "control request rejected");
-        let _ = pending.decision.send(false);
+        crate::ignored!(
+            crate::trace::PAIRING,
+            "the asking computer stopped waiting for the answer",
+            pending.decision.send(false)
+        );
         Ok(())
     }
 
@@ -290,7 +295,11 @@ impl Core {
             .take()
             .ok_or(Error::NoControlRequest)?;
         if check != pending.check {
-            let _ = pending.decision.send(false);
+            crate::ignored!(
+                crate::trace::PAIRING,
+                "the asking computer stopped waiting for the answer",
+                pending.decision.send(false)
+            );
             return Err(Error::PairingCheckMismatch);
         }
         let previous_trust = state.trust.clone();
@@ -301,7 +310,11 @@ impl Core {
             Ok(now_ms) => now_ms,
             Err(error) => {
                 state.pairing_window = previous_window;
-                let _ = pending.decision.send(false);
+                crate::ignored!(
+                    crate::trace::PAIRING,
+                    "the asking computer stopped waiting for the answer",
+                    pending.decision.send(false)
+                );
                 return Err(error);
             }
         };
@@ -309,7 +322,11 @@ impl Core {
             .as_ref()
             .is_some_and(|window| now_ms >= window.expires_at_ms)
         {
-            let _ = pending.decision.send(false);
+            crate::ignored!(
+                crate::trace::PAIRING,
+                "the asking computer stopped waiting for the answer",
+                pending.decision.send(false)
+            );
             return Err(Error::InvitationExpired);
         }
         // Pairing remembers identity; only global sharing settings grant services.
@@ -330,7 +347,11 @@ impl Core {
             direct: pending.direct.clone(),
         }) {
             state.pairing_window = previous_window;
-            let _ = pending.decision.send(false);
+            crate::ignored!(
+                crate::trace::PAIRING,
+                "the asking computer stopped waiting for the answer",
+                pending.decision.send(false)
+            );
             return Err(error);
         }
         if let Err(error) = persist_paired(&self.shared, &mut state, previous_trust) {
@@ -338,11 +359,19 @@ impl Core {
             if !state.shut_down {
                 state.pairing_window = previous_window;
             }
-            let _ = pending.decision.send(false);
+            crate::ignored!(
+                crate::trace::PAIRING,
+                "the asking computer stopped waiting for the answer",
+                pending.decision.send(false)
+            );
             return Err(error);
         }
         drop(state);
-        let _ = pending.decision.send(true);
+        crate::ignored!(
+            crate::trace::PAIRING,
+            "the asking computer stopped waiting for the answer",
+            pending.decision.send(true)
+        );
         self.shared.events.publish(CoreEvent::DevicePaired {
             endpoint_id: info.endpoint_id.clone(),
         });

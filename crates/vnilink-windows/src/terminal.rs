@@ -2,6 +2,7 @@
 //! pending writes can be cancelled and output remains drained during Close.
 //! Each worker blocks on its pipe, queue or handles, so input and output move
 //! as soon as ConPTY allows.
+// trace: records every ignored failure
 use crate::terminal_io::write_input;
 use std::{
     fs::File,
@@ -169,7 +170,11 @@ struct Finished(Arc<OwnedHandle>);
 impl Drop for Finished {
     fn drop(&mut self) {
         unsafe {
-            let _ = SetEvent(handle(&*self.0));
+            ignored_hr!(
+                vnilink::trace::TERMINAL,
+                "a supervisor already gone needs no wake-up",
+                SetEvent(handle(&*self.0))
+            );
         }
     }
 }
@@ -182,7 +187,8 @@ impl Attributes {
     fn new(console: HPCON) -> Result<Self, Error> {
         let mut bytes = 0;
         unsafe {
-            let _ = InitializeProcThreadAttributeList(None, 1, None, &mut bytes);
+            // Asks only for the size: it fails with ERROR_INSUFFICIENT_BUFFER by design.
+            let _sized = InitializeProcThreadAttributeList(None, 1, None, &mut bytes);
         }
         if bytes == 0 || bytes > 1024 * 1024 {
             return Err(Error::Unsupported("Windows process attributes"));
@@ -230,7 +236,8 @@ impl IoWorker {
         if let Some(thread) = &self.thread {
             loop {
                 unsafe {
-                    let _ = CancelSynchronousIo(handle(thread));
+                    // Nothing pending to cancel is its usual answer between retries.
+                    let _cancelled = CancelSynchronousIo(handle(thread));
                 }
                 if unsafe { WaitForSingleObject(handle(thread), millis(CANCEL_RETRY)) }
                     != WAIT_TIMEOUT
@@ -239,7 +246,9 @@ impl IoWorker {
                 }
             }
         }
-        let _ = self.join.join();
+        if self.join.join().is_err() {
+            tracing::warn!(target: vnilink::trace::TERMINAL, "the terminal writer panicked");
+        }
     }
 }
 struct Session {
@@ -261,7 +270,11 @@ impl Session {
         if let Some(process) = &self.process {
             unsafe {
                 if WaitForSingleObject(handle(process), 0) != WAIT_OBJECT_0 {
-                    let _ = TerminateProcess(handle(process), 1);
+                    ignored_hr!(
+                        vnilink::trace::TERMINAL,
+                        "a shell that cannot be ended ends with its console",
+                        TerminateProcess(handle(process), 1)
+                    );
                 }
             }
         }
@@ -277,10 +290,14 @@ impl Session {
             }
         }
         if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+            if reader.join().is_err() {
+                tracing::warn!(target: vnilink::trace::TERMINAL, "the terminal reader panicked");
+            }
         }
         if let Some(gatherer) = self.gatherer.take() {
-            let _ = gatherer.join();
+            if gatherer.join().is_err() {
+                tracing::warn!(target: vnilink::trace::TERMINAL, "the terminal output gatherer panicked");
+            }
         }
         self.process.take();
     }
@@ -464,7 +481,11 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                         }
                     }
                     Err(error) => {
-                        let _ = ready.send(Err(error));
+                        vnilink::ignored!(
+                            vnilink::trace::TERMINAL,
+                            "the opener stopped waiting for the terminal",
+                            ready.send(Err(error))
+                        );
                         return;
                     }
                 }
@@ -540,7 +561,11 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                 let event = code
                     .map(TerminalEvent::Exited)
                     .unwrap_or_else(|| TerminalEvent::Failed("Windows terminal I/O ended".into()));
-                let _ = output.blocking_send(event);
+                vnilink::ignored!(
+                    vnilink::trace::TERMINAL,
+                    "the session already left the terminal",
+                    output.blocking_send(event)
+                );
             }
         };
         std::thread::Builder::new()
