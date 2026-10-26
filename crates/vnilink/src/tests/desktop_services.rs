@@ -70,7 +70,8 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() {
         .open_files_service(files_owner.id, files_owner.generation)
         .unwrap();
     let remote = host_owner(&host);
-    host.force_desktop_stream(remote.id, remote.generation);
+    host.force_desktop_stream(remote.id, remote.generation)
+        .unwrap();
     let video = desktop.subscribe_video().unwrap();
     let image = Arc::new(crate::CursorImage::new(2, 2, (1, 1), vec![255; 16]).unwrap());
     let cursor = crate::CursorState {

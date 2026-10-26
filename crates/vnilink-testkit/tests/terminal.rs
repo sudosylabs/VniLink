@@ -1,6 +1,19 @@
 //! The Terminal service alone: the host's real shell, a terminal opened
 //! from the controller as the application opens one.
 
+#[cfg(unix)]
+#[path = "terminal/admission.rs"]
+mod admission;
+#[cfg(unix)]
+#[path = "terminal/lifecycle.rs"]
+mod lifecycle;
+#[cfg(unix)]
+#[path = "terminal/persistence.rs"]
+mod persistence;
+#[cfg(unix)]
+#[path = "terminal/support.rs"]
+mod support;
+
 use expect_test::expect;
 use std::time::Duration;
 

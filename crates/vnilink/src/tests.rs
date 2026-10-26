@@ -10,8 +10,6 @@ mod clipboard_files_tests;
 mod clipboard_tests;
 #[path = "tests/datagram.rs"]
 mod datagram_tests;
-#[path = "tests/desktop_clipboard.rs"]
-mod desktop_clipboard_tests;
 #[path = "tests/diagnostics.rs"]
 mod diagnostics_tests;
 #[path = "tests/error.rs"]

@@ -1,13 +1,119 @@
-//! The shared clipboard alone: text copied on either computer reaching the
-//! other through the Remote Desktop service, under the host's grant.
+//! The shared clipboard alone: text and file selections copied on either
+//! computer reaching the other, over a control session or through the
+//! Remote Desktop service, under the host's grant.
+
+#[path = "clipboard/desktops.rs"]
+mod desktops;
+#[path = "clipboard/files.rs"]
+mod files;
+#[path = "clipboard/text.rs"]
+mod text;
 
 use std::sync::{Arc, Mutex};
 
 use expect_test::expect;
 
-use vnilink::{Error, MAX_CLIPBOARD_TEXT};
+use vnilink::{Error, Grants, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{DesktopSession, RecordingClipboard, Script, ScriptedScreen};
-use vnilink_testkit::traced;
+use vnilink_testkit::{traced, Engine, Pair, Traced};
+
+/// What the host shares: it may be seen and controlled, and its clipboard
+/// shared when `clipboard`.
+fn sharing(clipboard: bool) -> Grants {
+    Grants {
+        view: true,
+        control: true,
+        clipboard,
+        transfer: false,
+    }
+}
+
+/// What a controller shares: nothing.
+const NOTHING: Grants = Grants {
+    view: false,
+    control: false,
+    clipboard: false,
+    transfer: false,
+};
+
+/// A host and a controller paired, the host sharing its clipboard when
+/// `clipboard`.
+fn paired(clipboard: bool) -> Pair {
+    Pair::new(sharing(clipboard), NOTHING)
+}
+
+/// The clipboard's records of what crossed and what was refused, without
+/// how its stream ended: a connection that closes or is revoked ends the
+/// stream on each side at moments of its own, told or not before a story
+/// is read.
+const CROSSINGS: &[&str] = &[
+    "clipboard adapter installed",
+    "clipboard stream opened",
+    "clipboard sent",
+    "clipboard answered",
+    "clipboard received",
+    "clipboard not delivered",
+];
+
+/// The text a host's clipboard was given, in order.
+#[derive(Clone)]
+struct Copied(Arc<Mutex<Vec<String>>>);
+
+impl Copied {
+    /// Installs a clipboard on `host` that records the text it is given.
+    fn install(host: &Engine) -> Result<Self, Error> {
+        let texts = Arc::new(Mutex::new(Vec::new()));
+        host.core.set_clipboard(Box::new(RecordingClipboard {
+            texts: Arc::clone(&texts),
+        }))?;
+        Ok(Self(texts))
+    }
+
+    fn texts(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+}
+
+/// `story` with each engine's lines sorted, for a scenario whose work on
+/// both computers at once is recorded in either order.
+fn unordered(story: &str) -> String {
+    let mut told = String::new();
+    let mut lines: Vec<&str> = Vec::new();
+    for line in story.lines() {
+        if line.starts_with(' ') {
+            lines.push(line);
+            continue;
+        }
+        lines.sort_unstable();
+        for line in lines.drain(..) {
+            told.push_str(line);
+            told.push('\n');
+        }
+        told.push_str(line);
+        told.push('\n');
+    }
+    lines.sort_unstable();
+    for line in lines {
+        told.push_str(line);
+        told.push('\n');
+    }
+    told
+}
+
+/// Fails if anything the engines recorded holds one of `content`: what was
+/// copied is the person's, never the record's.
+fn assert_unrecorded(trace: &Traced, content: &[&str]) {
+    let everything = trace.events().join("\n");
+    for content in content {
+        assert!(
+            !everything.contains(content),
+            "copied content was recorded: {content}"
+        );
+    }
+}
 
 fn session() -> (DesktopSession, Arc<Mutex<Vec<String>>>) {
     let texts = Arc::new(Mutex::new(Vec::new()));
