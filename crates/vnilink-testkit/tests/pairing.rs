@@ -67,7 +67,7 @@ fn a_pairing_file_and_its_digits_pair_both_computers() {
 
     expect![[r#"
         controller:
-          pairing: pairing file opened bytes=320
+          pairing: pairing file opened bytes=284
           pairing: invitation accepted
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
@@ -104,7 +104,7 @@ fn mismatched_digits_save_nothing() {
     assert!(controller.core.snapshot().unwrap().devices.is_empty());
     expect![[r#"
         controller:
-          pairing: pairing file opened bytes=320
+          pairing: pairing file opened bytes=284
           pairing: pairing digits did not match
         host:
           pairing: pairing file exported allow_control=false direct=1 relays=0 ttl_s=60
@@ -125,8 +125,9 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
     let controller = Engine::start("controller");
     let file = host.core.export_pairing_file(FILE_LIFETIME, false).unwrap();
     let mut damaged = file.bytes.clone();
-    let middle = damaged.len() / 2;
-    damaged[middle] ^= 0x55;
+    // The signature ends the file: damage there is refused the same way every time.
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0x55;
     assert!(controller.core.open_pairing_file(&damaged).is_err());
     let preview = controller.core.open_pairing_file(&file.bytes).unwrap();
     controller
@@ -139,8 +140,8 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
     ));
     expect![[r#"
         controller:
-          pairing: pairing file opened bytes=320 reason=unrecognized invitation refused=invalid invitation
-          pairing: pairing file opened bytes=320
+          pairing: pairing file opened bytes=284 reason=signature does not match refused=invalid invitation
+          pairing: pairing file opened bytes=284
           pairing: invitation accepted
           pairing: invitation accepted refused=invitation replayed
         host:

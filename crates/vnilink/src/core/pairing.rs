@@ -27,7 +27,7 @@ impl Core {
             &direct,
             ttl,
             SystemTime::now(),
-            crate::hostname::local_hostname(),
+            self.shared.local_hostname(),
         )?;
         tracing::info!(
             target: crate::trace::PAIRING,
@@ -72,7 +72,7 @@ impl Core {
             &direct,
             ttl,
             now,
-            crate::hostname::local_hostname(),
+            self.shared.local_hostname(),
         )?;
         let (_, nonce) = invitation::open(&token, now)?;
         let bytes = crate::pairing::enclose(&token)?;

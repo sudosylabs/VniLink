@@ -324,6 +324,7 @@ impl Core {
             system_actions: Mutex::new(None),
             privacy_serial: Mutex::new(()),
             system_notice: Mutex::new(crate::system::SYSTEM_ACTION_NOTICE),
+            hostname: Mutex::new(None),
             terminal_sessions: Mutex::new(HashMap::new()),
             clipboard_available: AtomicBool::new(false),
             video_inbox: Mutex::new(None),

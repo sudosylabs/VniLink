@@ -42,8 +42,10 @@ impl Engine {
     }
 
     fn prepare(name: &str, core: Core) -> Self {
-        // Every event this engine records says it is `name`.
+        // Every event this engine records says it is `name`, and other
+        // engines know its computer by that name, wherever the suite runs.
         core.set_trace_name(name);
+        core.set_hostname(name).expect("a computer name");
         let scratch = Scratch::new(name);
         // A session needs codecs to open, whatever it carries.
         core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "testkit"))

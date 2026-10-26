@@ -649,7 +649,7 @@ pub(super) async fn establish(
                 services_only,
                 separate_cursor: cursor_receiver,
                 bt601: 0,
-                hostname: crate::hostname::local_hostname(),
+                hostname: shared.local_hostname(),
                 os: crate::OperatingSystem::local(),
             },
         )

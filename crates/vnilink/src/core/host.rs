@@ -559,7 +559,7 @@ pub(super) async fn handle_host_request(
                                             0
                                         },
                                     quality: info.quality.unwrap_or(agreed),
-                                    hostname: crate::hostname::local_hostname(),
+                                    hostname: shared.local_hostname(),
                                     os: crate::OperatingSystem::local(),
                                 },
                             )

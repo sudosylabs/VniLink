@@ -575,6 +575,9 @@ struct Shared {
     privacy_serial: Mutex<()>,
     /// [`crate::system::SYSTEM_ACTION_NOTICE`], shortened by tests.
     system_notice: Mutex<Duration>,
+    /// The name other computers are told, when a test gives this engine
+    /// one; otherwise the operating system's.
+    hostname: Mutex<Option<String>>,
     terminal_sessions: Mutex<HashMap<String, Arc<terminal_runtime::HostedTerminal>>>,
     /// Latest text published by the controlled computer. Not logged.
     video_inbox: Mutex<Option<Arc<VideoInbox>>>,
@@ -711,6 +714,17 @@ impl Core {
     /// test runs two in one process. The application keeps `engine`.
     pub fn set_trace_name(&self, name: &str) {
         self.shared.span.record("name", name);
+    }
+
+    /// Tells other computers `name` rather than this computer's own, for
+    /// tests: what engines exchange then does not depend on where they run.
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn set_hostname(&self, name: &str) -> Result<(), Error> {
+        let _engine = self.engine();
+        let name =
+            crate::clean_hostname(name).ok_or(Error::InvalidSetting("invalid computer name"))?;
+        *lock(&self.shared.hostname) = Some(name);
+        Ok(())
     }
 
     fn alive_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Error> {
@@ -1136,5 +1150,14 @@ fn round_trip<R>(
     match reply_rx.recv_timeout(Duration::from_secs(10)) {
         Ok(result) => result,
         Err(_) => Err(Error::Timeout),
+    }
+}
+
+impl Shared {
+    /// The name other computers are told: a test's, or this computer's.
+    fn local_hostname(&self) -> Option<String> {
+        lock(&self.hostname)
+            .clone()
+            .or_else(crate::hostname::local_hostname)
     }
 }
