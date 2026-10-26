@@ -4,8 +4,6 @@
 //! Jobs here are driven by hand (`job_poll`, `drive_to_end`), so a root
 //! changes between two exact files of a transfer.
 
-#![cfg(unix)]
-
 use expect_test::expect;
 use std::path::PathBuf;
 use std::time::Duration;

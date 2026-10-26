@@ -5,7 +5,7 @@
 use vnilink::{Error, FolderKind};
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 
-use vnilink_testkit::files::Location;
+use vnilink_testkit::files::{link_folder, Location};
 use vnilink_testkit::store::Installed;
 
 use super::{deep_folder, is_message, only_root, read, UNSAFE_PATH};
@@ -61,7 +61,6 @@ fn whole_filesystem_browses_siblings_without_folder_configuration() -> TestResul
 }
 
 #[test]
-#[cfg(unix)]
 fn roots_start_empty_and_jail_traversal() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
@@ -102,9 +101,9 @@ fn roots_start_empty_and_jail_traversal() -> TestResult {
     );
     assert!(!scratch.join("x").exists(), "nothing escaped the root");
 
-    // A symlink is not an acceptable root.
+    // A link (a junction on Windows) is not an acceptable root.
     let link = scratch.join("linked-root");
-    std::os::unix::fs::symlink(&root, &link)?;
+    link_folder(&root, &link)?;
     assert!(
         core.set_file_roots(vec![link]).is_err(),
         "a link is refused as a root"
@@ -122,7 +121,6 @@ fn roots_start_empty_and_jail_traversal() -> TestResult {
 }
 
 #[test]
-#[cfg(unix)]
 fn symlink_parent_replacement_is_refused() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
@@ -143,9 +141,9 @@ fn symlink_parent_replacement_is_refused() -> TestResult {
         "the folder lists before it is replaced"
     );
 
-    // Swap the parent for a symlink after listing.
+    // Swap the parent for a link (a junction on Windows) after listing.
     std::fs::remove_dir_all(root.join("real"))?;
-    std::os::unix::fs::symlink(&outside, root.join("real"))?;
+    link_folder(&outside, &root.join("real"))?;
     assert!(
         core.list_dir(shared, "real/sub", 0, 10).is_err(),
         "a listing through a link is refused"
@@ -173,7 +171,6 @@ fn symlink_parent_replacement_is_refused() -> TestResult {
 }
 
 #[test]
-#[cfg(unix)]
 fn approved_root_replaced_by_symlink_cannot_escape() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
@@ -191,9 +188,10 @@ fn approved_root_replaced_by_symlink_cannot_escape() -> TestResult {
         "the approved folder lists"
     );
 
-    // Replace the approved folder itself with a symlink to outside.
+    // Replace the approved folder itself with a link (a junction on
+    // Windows) to outside.
     std::fs::remove_dir(&approved)?;
-    std::os::unix::fs::symlink(&outside, &approved)?;
+    link_folder(&outside, &approved)?;
 
     // Every anchored operation must refuse instead of writing outside.
     assert!(
@@ -296,9 +294,7 @@ fn deep_folders_list_and_the_depth_limit_holds() -> TestResult {
 /// A path from the system's file manager is named as the panes name an
 /// item: its folder's root and path, and its own name. A link keeps its
 /// own name rather than its target's, and a path outside what is shared
-/// is not named at all. Unix only: rooted Files operations need
-/// handle-relative Windows support (`fs/roots.rs`).
-#[cfg(unix)]
+/// is not named at all.
 #[test]
 fn a_dropped_path_is_named_by_its_folder_and_its_own_name() -> TestResult {
     let _trace = traced();
@@ -315,7 +311,8 @@ fn a_dropped_path_is_named_by_its_folder_and_its_own_name() -> TestResult {
         Some((location.root, location.path(""), "note.txt".into())),
         "a dropped file is named by its folder and its name"
     );
-    std::os::unix::fs::symlink(folder.join("note.txt"), folder.join("shortcut"))?;
+    std::fs::create_dir(folder.join("inner"))?;
+    link_folder(&folder.join("inner"), &folder.join("shortcut"))?;
     assert_eq!(
         core.locate(&folder.join("shortcut"))?,
         Some((location.root, location.path(""), "shortcut".into())),

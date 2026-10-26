@@ -321,10 +321,64 @@ pub fn identity(path: &Path) -> Option<u64> {
     std::fs::symlink_metadata(path).ok().map(|meta| meta.ino())
 }
 
+/// The object `path` names, where the platform says: its file index on
+/// Windows, read without following a link.
+#[cfg(windows)]
+pub fn identity(path: &Path) -> Option<u64> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the open File keeps its handle live through the call, and the
+    // output is a correctly laid out, writable BY_HANDLE_FILE_INFORMATION.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+        return None;
+    }
+    Some((u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow))
+}
+
 /// The object `path` names, where the platform says: nothing here.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn identity(_path: &Path) -> Option<u64> {
     None
+}
+
+/// Plants a link to the folder `target` at `link`, as something trying to
+/// lead an operation out of a root would: a symbolic link on Unix, and on
+/// Windows a junction, which any account can make (a symbolic link needs
+/// Developer Mode or elevation) and which Windows follows as it follows a
+/// symbolic link to a folder.
+pub fn link_folder(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("mklink /J failed"))
+        }
+    }
 }
 
 /// The names a delete set aside in `folder` while it worked and did not

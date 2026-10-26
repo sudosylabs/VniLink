@@ -28,9 +28,6 @@ pub(crate) struct Source {
     pub(crate) size: u64,
     /// Zero when unknown.
     pub(crate) mtime_ms: u64,
-    /// Pins the path to the opened object while it is read.
-    #[cfg(windows)]
-    pub(crate) _hold: vnilink_rename::windows::VerifiedSource,
 }
 
 /// The request a stream starts with, or `None` when it does not arrive

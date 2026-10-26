@@ -8,11 +8,19 @@
 //!
 //! Windows uses MoveFileExW without replacement or copy flags. Remaining
 //! targets use the documented check-then-rename fallback.
+//!
+//! [`anchored`] holds the handle-relative operations approved roots use, on
+//! Unix and Windows alike.
 
 #[cfg(windows)]
 pub mod windows;
 
+/// Directory-handle confinement for owner-approved roots: one API, opened
+/// with `openat` on Unix and `NtCreateFile` relative to a handle on Windows.
 #[cfg(unix)]
+pub mod anchored;
+#[cfg(windows)]
+#[path = "anchored_windows.rs"]
 pub mod anchored;
 
 pub mod recording_retention;

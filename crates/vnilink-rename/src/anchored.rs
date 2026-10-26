@@ -13,6 +13,22 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::path::Path;
 
+/// An open directory: the handle every child operation is relative to.
+pub type Dir = OwnedFd;
+/// A borrowed [`Dir`].
+pub type DirRef<'a> = BorrowedFd<'a>;
+
+/// Borrows a directory handle as [`DirRef`], whatever the platform's handle.
+pub trait AsDir {
+    fn as_dir(&self) -> DirRef<'_>;
+}
+
+impl<T: std::os::fd::AsFd> AsDir for T {
+    fn as_dir(&self) -> DirRef<'_> {
+        self.as_fd()
+    }
+}
+
 fn cstr(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path holds NUL"))
@@ -64,6 +80,23 @@ pub fn open_child(parent: BorrowedFd, name: &str) -> io::Result<OwnedFd> {
     }
     // SAFETY: fresh owned fd on success.
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// [`open_root`] for a mutation. A Unix descriptor cannot keep a folder
+/// from being renamed, so this is the same open; Windows holds the folder.
+pub fn open_root_held(path: &Path) -> io::Result<OwnedFd> {
+    open_root(path)
+}
+
+/// [`open_child`] for a mutation; the same open on Unix (see
+/// [`open_root_held`]).
+pub fn open_child_held(parent: BorrowedFd, name: &str) -> io::Result<OwnedFd> {
+    open_child(parent, name)
+}
+
+/// Unix file systems keep stable inode numbers, so every root qualifies.
+pub fn require_stable_ids(_dir: BorrowedFd) -> io::Result<()> {
+    Ok(())
 }
 
 /// Creates one directory level under `parent`. `AlreadyExists` maps to
@@ -173,6 +206,21 @@ pub fn fstat_dev_ino(fd: BorrowedFd) -> io::Result<(u64, u64)> {
         return Err(io::Error::last_os_error());
     }
     Ok((st.st_dev as u64, st.st_ino as u64))
+}
+
+/// [`fstat_dev_ino`] with the creation time where the platform reports one
+/// through `fstat` (macOS), which tells a recycled inode apart.
+pub fn fstat_identity(fd: BorrowedFd) -> io::Result<Identity> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `fstat` writes the borrowed stat struct for a live fd.
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Identity {
+        dev: st.st_dev as u64,
+        ino: st.st_ino as u64,
+        born: born(&st),
+    })
 }
 
 /// What names one filesystem object: its device and inode, and its creation

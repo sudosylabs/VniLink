@@ -39,7 +39,7 @@ const STAGED_SEGMENTS: &str = "segments";
 /// cross-volume path on a single volume, and park a barrier in the copy
 /// (`probe`), the parent-mkdir phase (`mkdir_probe`) or the final stage
 /// sync (`sync_probe`) to prove global locks stay free.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub struct PrestageHooks {
     /// The engine the job belongs to ([`Core::prestage_key`]): job ids are
     /// per engine, and tests run several engines in one process.
@@ -51,7 +51,7 @@ pub struct PrestageHooks {
     pub sync_probe: Option<fn(u64)>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) static PRESTAGE_HOOKS: std::sync::Mutex<PrestageHooks> =
     std::sync::Mutex::new(PrestageHooks {
         engine: 0,
@@ -1815,8 +1815,10 @@ impl Core {
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             (record.local_root, record.local_rel.clone())
         };
-        let dest = self.receiver_dest(id, local_root, &local_rel, &entry.path)?;
-        if std::fs::symlink_metadata(&dest).is_err() {
+        if self
+            .receiver_entry(id, local_root, &local_rel, &entry.path, None)?
+            .is_none()
+        {
             return Ok(Some(ConflictChoice::Replace));
         }
         let jobs = lock(&self.shared.jobs);
@@ -1877,6 +1879,52 @@ impl Core {
         Ok(dest)
     }
 
+    /// The entry `name` (by default the manifest path's own name) in the
+    /// receiver's folder for `path`, stated without following a link: its
+    /// size when it is a plain file, `u64::MAX` for anything else there, and
+    /// `None` when nothing is. Rooted receivers state it through anchored
+    /// handles, so a folder swapped for a link is never read through.
+    fn receiver_entry(
+        &self,
+        id: u64,
+        root: u64,
+        rel: &str,
+        path: &str,
+        name: Option<&str>,
+    ) -> Result<Option<u64>, Error> {
+        let dest = self.receiver_dest(id, root, rel, path)?;
+        let (parent_rel, own) = path.rsplit_once('/').unwrap_or(("", path));
+        let name = name.unwrap_or(own);
+        #[cfg(any(unix, windows))]
+        {
+            use vnilink_rename::anchored::AsDir;
+            let _ = dest;
+            let full = match (rel.is_empty(), parent_rel.is_empty()) {
+                (true, _) => parent_rel.to_owned(),
+                (_, true) => rel.to_owned(),
+                _ => format!("{rel}/{parent_rel}"),
+            };
+            let dir = lock(&self.shared.file_roots).open_dir_fd(root, &full)?;
+            match vnilink_rename::anchored::stat_at(dir.as_dir(), name) {
+                Ok(stat) if stat.is_file && !stat.is_symlink => Ok(Some(stat.size)),
+                Ok(_) => Ok(Some(u64::MAX)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Ok(Some(u64::MAX)),
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let dest = dest.with_file_name(name);
+            Ok(std::fs::symlink_metadata(&dest).ok().map(|meta| {
+                if meta.is_file() {
+                    meta.len()
+                } else {
+                    u64::MAX
+                }
+            }))
+        }
+    }
+
     fn receiver_available_storage(&self, id: u64, path: &str) -> Result<u64, Error> {
         let (root, rel) = {
             let jobs = lock(&self.shared.jobs);
@@ -1894,7 +1942,16 @@ impl Core {
             let fd = lock(&self.shared.file_roots).open_dir_fd(root, &full)?;
             super::file_resources::available_fd(&fd)?
         };
-        #[cfg(not(unix))]
+        // Asked of the anchored folder's handle, never of a path a link
+        // could steer to another volume.
+        #[cfg(windows)]
+        let destination = {
+            use vnilink_rename::anchored::AsDir;
+            let dir = lock(&self.shared.file_roots).open_dir_fd(root, &full)?;
+            vnilink_rename::anchored::available_space(dir.as_dir())
+                .map_err(|_| Error::InvalidSetting("available storage could not be checked"))?
+        };
+        #[cfg(not(any(unix, windows)))]
         let destination = {
             let path = lock(&self.shared.file_roots).resolve_dir(root, &full)?;
             super::file_resources::available(&path)?
@@ -2059,7 +2116,7 @@ impl Core {
                 record.local_pin = pin;
             }
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let mkdir_probe = {
             let hooks = lock(&PRESTAGE_HOOKS);
             if hooks.engine == self.prestage_key() && hooks.job_id == Some(id) {
@@ -2068,7 +2125,7 @@ impl Core {
                 None
             }
         };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(probe) = mkdir_probe {
             probe(id);
         }
@@ -2111,11 +2168,11 @@ impl Core {
             ConflictChoice::KeepBoth => manifest::PublishPolicy::KeepBoth,
             ConflictChoice::Skip => return Ok(None),
         };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.publish_staged_anchored(id, &entry.path, staged, policy, local_root, &local_rel)
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let dest = self.receiver_dest(id, local_root, &local_rel, &entry.path)?;
             let dest_dir = dest
@@ -2156,14 +2213,14 @@ impl Core {
 
     /// Test hooks for cross-volume pre-staging; see [`PRESTAGE_HOOKS`].
     /// Production leaves them unset.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub fn set_prestage_hooks(hooks: PrestageHooks) {
         *lock(&PRESTAGE_HOOKS) = hooks;
     }
 
     /// Identifies this engine to its test hooks: [`PrestageHooks`] on
-    /// Unix, and [`PREPARE_SCAN_HOOKS`] everywhere.
-    #[cfg(any(unix, test, feature = "test-probes"))]
+    /// Unix and Windows, and [`PREPARE_SCAN_HOOKS`] everywhere.
+    #[cfg(any(unix, windows, test, feature = "test-probes"))]
     pub fn prestage_key(&self) -> usize {
         let _engine = self.engine();
         Arc::as_ptr(&self.shared) as usize
@@ -2204,7 +2261,7 @@ impl Core {
     /// is not stood down, the peer keeps the transfer grant, and the Files
     /// owner (if any) is still live. Locks are taken and released per
     /// call; the copy loop never holds them across I/O.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn prestage_live(&self, id: u64) -> bool {
         let (owner, peer_key) = {
             let jobs = lock(&self.shared.jobs);
@@ -2234,12 +2291,12 @@ impl Core {
     /// same-filesystem rename. Returns the stage to commit, `None` for
     /// the same-volume fast path, or stands the file down (record
     /// updated, siblings cleaned) and returns `None` with `stood_down`.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn prestage_cross_volume<'a>(
         &self,
         id: u64,
         staged: &std::path::Path,
-        dir_fd: std::os::unix::io::BorrowedFd<'a>,
+        dir_fd: vnilink_rename::anchored::DirRef<'a>,
     ) -> Result<(Option<vnilink_rename::anchored::SiblingStage<'a>>, bool), Error> {
         use std::io::Read;
         let (force, probe, sync_probe) = {
@@ -2347,15 +2404,16 @@ impl Core {
     }
 
     /// Anchored publication: the destination parent is opened as a directory
-    /// handle and the staged file is committed with `renameat`, so a parent
-    /// replaced by a symlink cannot redirect the write outside the root.
+    /// handle and the staged file is committed by a rename relative to it
+    /// (`renameat`, or a rename by handle on Windows), so a parent replaced
+    /// by a link cannot redirect the write outside the root.
     /// Cross-volume bytes are pre-staged to a destination sibling BEFORE
     /// locking; the final authorization/state decision is synchronized with
     /// the commit: both the job and grant locks are held across the re-check
     /// and the fast same-filesystem `renameat` only, so receiver
     /// cancellation (`Cancelled`) or revocation (`Interrupted` via grant
     /// loss) completing before the rename prevents destination creation.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn publish_staged_anchored(
         &self,
         id: u64,
@@ -2365,7 +2423,7 @@ impl Core {
         local_root: u64,
         local_rel: &str,
     ) -> Result<Option<String>, Error> {
-        use std::os::unix::io::AsFd;
+        use vnilink_rename::anchored::AsDir;
         let (parent_rel, file_name) = match manifest_path.rfind('/') {
             Some(slash) => (&manifest_path[..slash], &manifest_path[slash + 1..]),
             None => ("", manifest_path),
@@ -2417,7 +2475,7 @@ impl Core {
         // re-verify the leg first so a rebound destination fails instead
         // of binding the new directory.
         verify_leg_pin(&roots, local_root, &mut pin)?;
-        let dir_fd = roots.open_dir_fd(local_root, &full_parent)?;
+        let dir_fd = roots.open_dir_held(local_root, &full_parent)?;
         drop(roots);
         // For KeepBoth, choose the free name through the anchored listing
         // before locking; the no-replace commit below decides atomically and
@@ -2426,7 +2484,7 @@ impl Core {
             manifest::PublishPolicy::Replace => None,
             manifest::PublishPolicy::KeepBoth => {
                 let existing: std::collections::HashSet<String> =
-                    vnilink_rename::anchored::list_names(dir_fd.as_fd())
+                    vnilink_rename::anchored::list_names(dir_fd.as_dir())
                         .map_err(|_| Error::InvalidSetting(PUBLISH_FAILED))?
                         .into_iter()
                         .filter_map(|os| os.into_string().ok())
@@ -2440,7 +2498,7 @@ impl Core {
         // the commit below only renames within one filesystem, so slow
         // destination I/O never holds global locks. A stood-down file
         // (cancelled/revoked/failed mid-copy) already updated its record.
-        let (mut stage, stood_down) = self.prestage_cross_volume(id, staged, dir_fd.as_fd())?;
+        let (mut stage, stood_down) = self.prestage_cross_volume(id, staged, dir_fd.as_dir())?;
         if stood_down {
             return Ok(None);
         }
@@ -2457,7 +2515,7 @@ impl Core {
             } else {
                 vnilink_rename::anchored::rename_from_staged(
                     staged,
-                    dir_fd.as_fd(),
+                    dir_fd.as_dir(),
                     dest_name,
                     replace,
                 )?;
@@ -2520,7 +2578,7 @@ impl Core {
                     // explicit Replace (stored choice or apply-remaining) may
                     // overwrite an existing destination.
                     let dest_exists =
-                        vnilink_rename::anchored::stat_at(dir_fd.as_fd(), file_name).is_ok();
+                        vnilink_rename::anchored::stat_at(dir_fd.as_dir(), file_name).is_ok();
                     let at = record.file_index;
                     let explicit_replace = record.choices.get(&at).copied()
                         == Some(ConflictChoice::Replace)
@@ -2738,13 +2796,8 @@ impl Core {
                 Some(_) if choices.get(&index).copied() == Some(ConflictChoice::Skip) => continue,
                 Some(name) => name,
             };
-            let dest = self.receiver_dest(id, local_root, &local_rel, &entry.path)?;
-            let dest = dest
-                .parent()
-                .ok_or(Error::InvalidSetting(VERIFY_FAILED))?
-                .join(name);
-            let size = std::fs::metadata(&dest)
-                .map(|meta| meta.len())
+            let size = self
+                .receiver_entry(id, local_root, &local_rel, &entry.path, Some(name.as_str()))?
                 .unwrap_or(u64::MAX);
             if size != entry.size {
                 return self.mark_failed(id, VERIFY_FAILED);
@@ -3136,25 +3189,15 @@ fn source_identity(
     parent_rel: &str,
     name: &str,
 ) -> Option<SourceIdentity> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
-        use std::os::unix::io::AsFd;
+        use vnilink_rename::anchored::AsDir;
         let parent = roots.open_dir_fd(root, parent_rel).ok()?;
-        let st = vnilink_rename::anchored::stat_at(parent.as_fd(), name).ok()?;
+        let st = vnilink_rename::anchored::stat_at(parent.as_dir(), name).ok()?;
         (st.is_file && !st.is_symlink).then_some(SourceIdentity {
             id: st.ino,
             size: st.size,
             mtime_ms: st.mtime_ms,
-        })
-    }
-    #[cfg(windows)]
-    {
-        let (source, _) =
-            super::transfer::open_verified_source(roots, root, parent_rel, name).ok()?;
-        Some(SourceIdentity {
-            id: source.identity().1,
-            size: source.size(),
-            mtime_ms: source.mtime_ms(),
         })
     }
     #[cfg(not(any(unix, windows)))]
@@ -3372,41 +3415,31 @@ pub(super) fn open_served_file(
     let adopted = pin.is_none();
     // The opens run under one short roots hold, so the pin they verify is
     // the root they walk.
-    #[cfg(unix)]
+    // The file is served from the handle the anchored walk opened: on
+    // Windows it is shared for reading only, so it is not written, renamed
+    // or deleted while it is read.
+    #[cfg(any(unix, windows))]
     let (opened, identity) = {
-        use std::os::unix::io::AsFd;
+        use vnilink_rename::anchored::AsDir;
         let roots = lock(&shared.file_roots);
         verify_leg_pin(&roots, local_root, &mut pin).map_err(|_| STATUS_DENIED)?;
         let parent = roots
             .open_dir_fd(local_root, parent_rel)
             .map_err(|_| STATUS_CHANGED)?;
         let st =
-            vnilink_rename::anchored::stat_at(parent.as_fd(), name).map_err(|_| STATUS_CHANGED)?;
+            vnilink_rename::anchored::stat_at(parent.as_dir(), name).map_err(|_| STATUS_CHANGED)?;
         if !st.is_file || st.is_symlink {
             return Err(STATUS_CHANGED);
         }
-        let fd = vnilink_rename::anchored::open_file_verified(parent.as_fd(), name, st.dev, st.ino)
-            .map_err(|_| STATUS_CHANGED)?;
+        let fd =
+            vnilink_rename::anchored::open_file_verified(parent.as_dir(), name, st.dev, st.ino)
+                .map_err(|_| STATUS_CHANGED)?;
         let identity = SourceIdentity {
             id: st.ino,
             size: st.size,
             mtime_ms: st.mtime_ms,
         };
         (std::fs::File::from(fd), identity)
-    };
-    #[cfg(windows)]
-    let (opened, identity) = {
-        let roots = lock(&shared.file_roots);
-        verify_leg_pin(&roots, local_root, &mut pin).map_err(|_| STATUS_DENIED)?;
-        let (source, _) =
-            super::transfer::open_verified_source(&roots, local_root, parent_rel, name)
-                .map_err(|_| STATUS_CHANGED)?;
-        let identity = SourceIdentity {
-            id: source.identity().1,
-            size: source.size(),
-            mtime_ms: source.mtime_ms(),
-        };
-        (source, identity)
     };
     if !entry_matches(&entry, scanned_id, identity) {
         return Err(STATUS_CHANGED);
@@ -3428,18 +3461,10 @@ pub(super) fn open_served_file(
     if !still_serving(shared, peer, job) {
         return Err(STATUS_DENIED);
     }
-    #[cfg(unix)]
     let served = crate::transfer::Source {
         file: opened,
         size: entry.size,
         mtime_ms: entry.source_mtime_ms,
-    };
-    #[cfg(windows)]
-    let served = crate::transfer::Source {
-        file: opened.file().try_clone().map_err(|_| STATUS_CHANGED)?,
-        size: entry.size,
-        mtime_ms: entry.source_mtime_ms,
-        _hold: opened,
     };
     Ok(served)
 }
@@ -3804,20 +3829,20 @@ pub(super) fn load_jobs(shared: &Shared) {
 fn reconcile_staging(shared: &Shared, dir: &std::path::Path) {
     let policy = *lock(&shared.file_retention_policy);
     let keep = retained_job_ids(&lock(&shared.jobs), policy, retention_now());
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     reconcile_staging_at(dir, &keep);
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let _ = (dir, keep);
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn reconcile_staging_at(dir: &std::path::Path, keep: &std::collections::HashSet<u64>) {
-    use std::os::fd::AsFd;
     use vnilink_rename::anchored;
+    use vnilink_rename::anchored::AsDir;
     let Ok(root) = anchored::open_root(dir) else {
         return;
     };
-    if let Ok(staging) = anchored::open_child(root.as_fd(), STAGING_DIR) {
-        if let Ok(entries) = anchored::list_names(staging.as_fd()) {
+    if let Ok(staging) = anchored::open_child(root.as_dir(), STAGING_DIR) {
+        if let Ok(entries) = anchored::list_names(staging.as_dir()) {
             for name in entries {
                 let Some(name) = name.to_str() else { continue };
                 let Some(id) = name
@@ -3832,7 +3857,7 @@ fn reconcile_staging_at(dir: &std::path::Path, keep: &std::collections::HashSet<
                 crate::ignored!(
                     crate::trace::FILES,
                     "staging left behind is swept on the next start",
-                    anchored::remove_tree_at(staging.as_fd(), name)
+                    anchored::remove_tree_at(staging.as_dir(), name)
                 );
             }
         }

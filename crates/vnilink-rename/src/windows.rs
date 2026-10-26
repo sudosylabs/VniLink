@@ -1,5 +1,135 @@
 //! Small Windows filesystem primitives; callers still own path confinement.
 use std::{io, os::windows::ffi::OsStrExt, path::Path};
+
+use std::os::windows::io::{AsHandle, AsRawHandle as _, BorrowedHandle};
+use windows_sys::Win32::Storage::FileSystem::{
+    FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, GetVolumeInformationByHandleW,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_ID_INFO,
+};
+
+/// Microsoft's reparse tag bit for a tag that names another object: a
+/// symbolic link, a junction or mount point, and similar redirections.
+const NAME_SURROGATE: u32 = 0x2000_0000;
+/// Cloud-file placeholders: `IO_REPARSE_TAG_CLOUD` and its sixteen
+/// variants, which differ only in the bits of `IO_REPARSE_TAG_CLOUD_MASK`.
+const CLOUD_TAG: u32 = 0x9000_001A;
+const CLOUD_TAG_MASK: u32 = 0x0000_F000;
+
+/// The identity every Windows identity check shares: the 64-bit volume
+/// serial number and the 128-bit file id (`FileIdInfo`). NTFS ids fit in
+/// 64 bits and are used as they are; a wider id (ReFS) is folded to 64 bits
+/// by a fixed mix, so a collision needs two ids on one volume whose halves
+/// mix to the same value. An all-zero or all-ones id names nothing stable,
+/// as some network servers report, and is refused.
+pub fn object_identity(handle: BorrowedHandle<'_>) -> io::Result<(u64, u64)> {
+    let mut information = FILE_ID_INFO::default();
+    // SAFETY: the borrowed handle is live; the output is a writable,
+    // correctly laid out FILE_ID_INFO and its exact size is passed.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            FileIdInfo,
+            (&mut information as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let id = information.FileId.Identifier;
+    if id == [0; 16] || id == [0xFF; 16] {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the volume reports no stable file id",
+        ));
+    }
+    let low = u64::from_le_bytes(id[..8].try_into().expect("eight bytes"));
+    let high = u64::from_le_bytes(id[8..].try_into().expect("eight bytes"));
+    Ok((information.VolumeSerialNumber, low ^ mix(high)))
+}
+
+/// splitmix64's finalizer: a fixed bijection with zero mapped to zero, so an
+/// id whose high half is zero keeps its low half.
+fn mix(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+/// The reparse tag of the object `handle` is open on; zero when it is no
+/// reparse point.
+pub fn reparse_tag(handle: BorrowedHandle<'_>) -> io::Result<u32> {
+    let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+    // SAFETY: the borrowed handle is live; the output is a writable
+    // FILE_ATTRIBUTE_TAG_INFO and its exact size is passed.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            FileAttributeTagInfo,
+            (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(if tag.FileAttributes & 0x400 != 0 {
+        tag.ReparseTag
+    } else {
+        0
+    })
+}
+
+/// Whether a reparse `tag` names another object: a link.
+pub fn is_link_tag(tag: u32) -> bool {
+    tag != 0 && tag & NAME_SURROGATE != 0
+}
+
+/// A folder anchored code and pins walk into: a directory that is either no
+/// reparse point or a cloud-file placeholder. Every other reparse folder is
+/// refused, links first among them.
+pub fn walkable_directory(attributes: u32, tag: u32) -> bool {
+    attributes & 0x10 != 0 && (attributes & 0x400 == 0 || tag & !CLOUD_TAG_MASK == CLOUD_TAG)
+}
+
+/// Refuses a volume whose file ids are not stable object identities: FAT
+/// and exFAT derive them from an entry's position, so a renamed or replaced
+/// entry can take another's id.
+pub fn require_stable_ids(handle: BorrowedHandle<'_>) -> io::Result<()> {
+    let mut name = [0u16; 64];
+    // SAFETY: the borrowed handle is live; only the file system name buffer
+    // is requested, writable and of the length passed; other outputs are null.
+    if unsafe {
+        GetVolumeInformationByHandleW(
+            handle.as_raw_handle(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let length = name
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(name.len());
+    let system = String::from_utf16_lossy(&name[..length]);
+    if ["FAT", "FAT12", "FAT16", "FAT32", "exFAT"]
+        .iter()
+        .any(|fat| system.eq_ignore_ascii_case(fat))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the volume's file ids are entry positions",
+        ));
+    }
+    object_identity(handle).map(drop)
+}
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetLogicalDrives() -> u32;
@@ -51,38 +181,26 @@ pub fn directory_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
     if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    if information.attributes & 0x400 != 0 || information.attributes & 0x10 == 0 {
+    if !walkable_directory(information.attributes, reparse_tag(file.as_handle())?) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "expected a real directory",
         ));
     }
-    Ok((
-        u64::from(information.volume),
-        (u64::from(information.index_high) << 32) | u64::from(information.index_low),
-    ))
+    object_identity(file.as_handle())
 }
 
 /// Queries a listed object's identity without following a final reparse
 /// point. Unlike recording admission, listings also identify directories
 /// and files with multiple hard links, and need no content-read permission.
 pub fn entry_identity(path: &Path) -> io::Result<(u64, u64)> {
-    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use std::os::windows::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()
-        .access_mode(0)
+        .access_mode(0x80) // FILE_READ_ATTRIBUTES, which FileIdInfo needs
         .share_mode(1 | 2 | 4)
         .custom_flags(0x0200_0000 | 0x0020_0000)
         .open(path)?;
-    let mut info = HandleInformation::default();
-    // SAFETY: the owned File keeps the handle live, and the correctly laid
-    // out information structure remains writable throughout the syscall.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok((
-        u64::from(info.volume),
-        (u64::from(info.index_high) << 32) | u64::from(info.index_low),
-    ))
+    object_identity(file.as_handle())
 }
 
 pub fn open_single_link_file_rw(path: &Path) -> io::Result<std::fs::File> {
@@ -214,10 +332,7 @@ pub fn file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
     if info.attributes & (0x400 | 0x10) != 0 || info.links != 1 {
         return Err(io::ErrorKind::InvalidInput.into());
     }
-    Ok((
-        u64::from(info.volume),
-        (u64::from(info.index_high) << 32) | u64::from(info.index_low),
-    ))
+    object_identity(file.as_handle())
 }
 /// A source file held so that its absolute path resolves to this object for
 /// as long as the value lives: every ancestor directory is pinned against
@@ -292,12 +407,10 @@ pub fn open_source_verified(path: &Path) -> io::Result<VerifiedSource> {
     // FILETIME counts 100 ns intervals since 1601-01-01.
     const UNIX_EPOCH_MS: u64 = 11_644_473_600_000;
     let written = (u64::from(info.written[1]) << 32) | u64::from(info.written[0]);
+    let identity = object_identity(file.as_handle())?;
     Ok(VerifiedSource {
         file,
-        identity: (
-            u64::from(info.volume),
-            (u64::from(info.index_high) << 32) | u64::from(info.index_low),
-        ),
+        identity,
         size: (u64::from(info.size_high) << 32) | u64::from(info.size_low),
         mtime_ms: (written / 10_000).saturating_sub(UNIX_EPOCH_MS),
         _ancestors: pins,
@@ -426,10 +539,7 @@ fn delete_pinned_node(
     if unsafe { GetFileInformationByHandle(node.as_raw_handle(), &mut info) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let identity = (
-        u64::from(info.volume),
-        (u64::from(info.index_high) << 32) | u64::from(info.index_low),
-    );
+    let identity = object_identity(node.as_handle())?;
     if identity.0 != volume || expected.is_some_and(|expected| expected != identity) {
         return Err(io::Error::other("managed subtree changed"));
     }

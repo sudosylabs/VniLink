@@ -6,8 +6,6 @@
 //! barriers (`vnilink::probes::PrestageHooks`); jobs are driven by hand, so
 //! the revocation falls while one is parked.
 
-#![cfg(unix)]
-
 use expect_test::expect;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

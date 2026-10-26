@@ -5,7 +5,7 @@
 use vnilink::Error;
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 
-use vnilink_testkit::files::{identity, set_aside, token_of, Location};
+use vnilink_testkit::files::{identity, link_folder, set_aside, token_of, Location};
 
 use super::{is_message, is_stale, names_in, past_the_tick_of, read, DELETE_FAILED};
 
@@ -416,7 +416,6 @@ fn delete_missing_source_and_bad_names_fail_cleanly() -> TestResult {
 }
 
 #[test]
-#[cfg(unix)]
 fn delete_refuses_a_listed_symlink() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
@@ -425,7 +424,12 @@ fn delete_refuses_a_listed_symlink() -> TestResult {
     std::fs::create_dir_all(&root)?;
     std::fs::create_dir(&outside)?;
     std::fs::write(outside.join("secret.txt"), b"secret-bytes")?;
+    // A link to a file on Unix; Windows plants a junction to the folder,
+    // since a symbolic link there needs Developer Mode or elevation.
+    #[cfg(unix)]
     std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("link"))?;
+    #[cfg(windows)]
+    link_folder(&outside, &root.join("link"))?;
     let (engine, files) = sharing_the_disk(&root)?;
     let core = &engine.core;
 
@@ -452,7 +456,6 @@ fn delete_refuses_a_listed_symlink() -> TestResult {
 }
 
 #[test]
-#[cfg(unix)]
 fn delete_folder_unlinks_symlink_children_without_following() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
@@ -463,8 +466,11 @@ fn delete_folder_unlinks_symlink_children_without_following() -> TestResult {
     std::fs::write(outside.join("secret.txt"), b"secret-bytes")?;
     std::fs::write(outside.join("dir/nested.txt"), b"nested-bytes")?;
     std::fs::write(root.join("pack/real.txt"), b"real-bytes")?;
+    // Windows plants only the junction: a symbolic link to a file there
+    // needs Developer Mode or elevation.
+    #[cfg(unix)]
     std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("pack/link"))?;
-    std::os::unix::fs::symlink(outside.join("dir"), root.join("pack/dirlink"))?;
+    link_folder(&outside.join("dir"), &root.join("pack/dirlink"))?;
     let (engine, files) = sharing_the_disk(&root)?;
     let core = &engine.core;
 

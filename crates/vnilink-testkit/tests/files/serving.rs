@@ -57,7 +57,6 @@ fn a_source_in_transfer_cannot_be_renamed_until_its_job_ends() -> TestResult {
 /// A source's folder swapped for a link to outside the root after the
 /// offer, with the same name and size, is refused when it is opened: no
 /// byte from outside the root reaches the receiver.
-#[cfg(unix)]
 #[test]
 fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
     let trace = traced();
@@ -76,7 +75,7 @@ fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "docs/public.txt", "got")?;
     std::fs::remove_dir_all(&docs)?;
-    std::os::unix::fs::symlink(&outside, &docs)?;
+    files::link_folder(&outside, &docs)?;
     let receiver = received(&pair.host.core);
     let (_, got) = drive_to_end(
         &pair.controller.core,
@@ -406,7 +405,7 @@ fn windows_serve_holds_its_source_against_replacement() -> TestResult {
     let original = payload(64 * 1024, 1711);
     let source = folder.join("held.bin");
     std::fs::write(&source, &original)?;
-    // Windows shares whole disks, not folders.
+    // Shared as the application shares it: the whole disk.
     let (source_root, source_path) = whole_disk(&pair.controller, "folder/held.bin")?;
     let (destination_root, destination) = whole_disk(&pair.host, "arrived")?;
     controller.connect_files(&pair.host.endpoint())?;

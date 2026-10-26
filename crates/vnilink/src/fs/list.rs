@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::Error;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use super::entry::stat;
 use super::entry::FsEntry;
 use super::roots::RootSet;
@@ -111,11 +111,11 @@ pub(crate) fn list_page_with_hooks(
         }
         return Err(Error::NoSession);
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         list_page_anchored(roots, id, rel, offset, limit, cancelled, hooks)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         list_page_pathname(roots, id, rel, offset, limit, cancelled, hooks)
     }
@@ -161,7 +161,7 @@ fn list_probe(unit: u64, cancelled: &AtomicBool, hooks: ListHooks) -> bool {
     false
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn list_page_anchored(
     roots: &RootSet,
     id: u64,
@@ -171,7 +171,7 @@ fn list_page_anchored(
     cancelled: &AtomicBool,
     hooks: ListHooks,
 ) -> Result<DirPage, Error> {
-    use std::os::unix::io::AsFd;
+    use vnilink_rename::anchored::AsDir;
     let aborted = || -> Result<DirPage, Error> {
         if let Some(finish) = hooks.finish_probe {
             finish(true);
@@ -184,7 +184,7 @@ fn list_page_anchored(
     // (a second scan of the handle would see an exhausted offset, not
     // the directory).
     let (raw, raw_truncated) =
-        vnilink_rename::anchored::list_names_bounded(dir_fd.as_fd(), MAX_LISTED + 1)
+        vnilink_rename::anchored::list_names_bounded(dir_fd.as_dir(), MAX_LISTED + 1)
             .map_err(|_| Error::InvalidSetting("the folder cannot be listed"))?;
     let mut names: Vec<String> = Vec::new();
     let mut non_utf8_skipped = 0u64;
@@ -232,7 +232,7 @@ fn list_page_anchored(
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn list_page_pathname(
     roots: &RootSet,
     id: u64,
@@ -294,10 +294,10 @@ fn list_page_pathname(
     })
 }
 
-#[cfg(unix)]
-fn stat_anchored(dir_fd: &std::os::unix::io::OwnedFd, name: &str) -> FsEntry {
-    use std::os::unix::io::AsFd;
-    match vnilink_rename::anchored::stat_at(dir_fd.as_fd(), name) {
+#[cfg(any(unix, windows))]
+fn stat_anchored(dir_fd: &vnilink_rename::anchored::Dir, name: &str) -> FsEntry {
+    use vnilink_rename::anchored::AsDir;
+    match vnilink_rename::anchored::stat_at(dir_fd.as_dir(), name) {
         Ok(st) => {
             let kind = if st.is_symlink {
                 super::entry::EntryKind::Symlink
@@ -334,7 +334,7 @@ fn stat_anchored(dir_fd: &std::os::unix::io::OwnedFd, name: &str) -> FsEntry {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn dir_has_more(dir: &std::path::Path, at_least: usize) -> bool {
     match std::fs::read_dir(dir) {
         Ok(read) => read.count() > at_least,

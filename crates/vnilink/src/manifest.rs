@@ -162,11 +162,11 @@ pub(crate) fn scan_with_hooks(
         }
         return Ok(file);
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         scan_anchored(roots, id, rel, cancelled, hooks)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         scan_pathname(roots, id, rel, cancelled, hooks)
     }
@@ -208,7 +208,7 @@ fn scan_probe(unit: u64, cancelled: &AtomicBool, hooks: ScanHooks) -> bool {
     false
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn scan_anchored(
     roots: &RootSet,
     id: u64,
@@ -216,7 +216,7 @@ fn scan_anchored(
     cancelled: &AtomicBool,
     hooks: ScanHooks,
 ) -> Result<Scan, Error> {
-    use std::os::unix::io::AsFd;
+    use vnilink_rename::anchored::AsDir;
     let aborted = || -> Result<Scan, Error> {
         if let Some(finish) = hooks.finish_probe {
             finish(true);
@@ -228,7 +228,7 @@ fn scan_anchored(
     let mut skipped_symlinks = 0u64;
     // (root-relative rel, dir fd); the base is verified through handles.
     let base_fd = roots.open_dir_fd(id, rel)?;
-    let mut stack: Vec<(String, std::os::unix::io::OwnedFd)> = vec![(rel.to_owned(), base_fd)];
+    let mut stack: Vec<(String, vnilink_rename::anchored::Dir)> = vec![(rel.to_owned(), base_fd)];
     // Probe indices continue the scan sequence: 0 fired before any access.
     let mut unit: u64 = 1;
     while let Some((dir_rel, dir_fd)) = stack.pop() {
@@ -241,7 +241,7 @@ fn scan_anchored(
         // here instead of after unbounded work.
         let remaining = MAX_MANIFEST_FILES.saturating_sub(files.len() + dirs.len());
         let (raw, truncated) =
-            vnilink_rename::anchored::list_names_bounded(dir_fd.as_fd(), remaining + 1)
+            vnilink_rename::anchored::list_names_bounded(dir_fd.as_dir(), remaining + 1)
                 .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
         if truncated {
             return Err(Error::InvalidSetting(MANIFEST_LIMIT));
@@ -267,7 +267,7 @@ fn scan_anchored(
             if manifest_rel.split('/').count() > MAX_MANIFEST_DEPTH {
                 return Err(Error::InvalidSetting(MANIFEST_LIMIT));
             }
-            let st = vnilink_rename::anchored::stat_at(dir_fd.as_fd(), &name)
+            let st = vnilink_rename::anchored::stat_at(dir_fd.as_dir(), &name)
                 .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
             if st.is_symlink {
                 skipped_symlinks += 1;
@@ -277,7 +277,7 @@ fn scan_anchored(
                 // Re-resolve through the jail: a parent swapped by a symlink
                 // after listing refuses here (handle-verified).
                 let _ = roots.resolve_dir(id, &child_rel)?;
-                let child_fd = vnilink_rename::anchored::open_child(dir_fd.as_fd(), &name)
+                let child_fd = vnilink_rename::anchored::open_child(dir_fd.as_dir(), &name)
                     .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
                 dirs.push(manifest_rel.clone());
                 stack.push((child_rel, child_fd));
@@ -305,25 +305,14 @@ fn scan_anchored(
     })
 }
 
-/// The scanned file's index on its volume, so sending can refuse a file
-/// renamed over it after the scan: the Windows file index, matching what
-/// `vnilink_rename::windows::open_source_verified` reports for the file.
-#[cfg(not(unix))]
+/// No platform identity here: sending compares size and time alone.
+#[cfg(not(any(unix, windows)))]
 fn scan_file_id(path: &Path, unreadable: &'static str) -> Result<u64, Error> {
-    #[cfg(windows)]
-    {
-        vnilink_rename::windows::entry_identity(path)
-            .map(|(_, index)| index)
-            .map_err(|_| Error::InvalidSetting(unreadable))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (path, unreadable);
-        Ok(0)
-    }
+    let _ = (path, unreadable);
+    Ok(0)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn scan_pathname(
     roots: &RootSet,
     id: u64,
@@ -397,19 +386,12 @@ fn scan_pathname(
                 stack.push((full, child_rel));
             } else if meta.is_file() {
                 let size = meta.len();
-                #[cfg(not(unix))]
                 let ino = scan_file_id(&full, "the source folder cannot be read")?;
                 files.push(ScannedFile {
                     rel: manifest_rel,
                     root_rel: child_rel,
                     size,
                     mtime_ms: mtime_ms(&meta),
-                    #[cfg(unix)]
-                    ino: {
-                        use std::os::unix::fs::MetadataExt;
-                        meta.ino()
-                    },
-                    #[cfg(not(unix))]
                     ino,
                 });
             }
@@ -452,13 +434,13 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
         None => ("", rel),
     };
     crate::fs::check_name(name).map_err(|_| Error::InvalidSetting(MANIFEST_UNSAFE))?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
-        use std::os::unix::io::AsFd;
+        use vnilink_rename::anchored::AsDir;
         let parent_fd = roots
             .open_dir_fd(id, parent_rel)
             .map_err(|_| Error::InvalidSetting(NOT_A_SCAN_DIR))?;
-        let st = vnilink_rename::anchored::stat_at(parent_fd.as_fd(), name)
+        let st = vnilink_rename::anchored::stat_at(parent_fd.as_dir(), name)
             .map_err(|_| Error::InvalidSetting(NOT_A_SCAN_DIR))?;
         if !st.is_file || st.is_symlink {
             return Err(Error::InvalidSetting(NOT_A_SCAN_DIR));
@@ -475,7 +457,7 @@ fn scan_single_file(roots: &RootSet, id: u64, rel: &str) -> Result<Scan, Error> 
             skipped_symlinks: 0,
         })
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let parent = roots
             .resolve_dir(id, parent_rel)

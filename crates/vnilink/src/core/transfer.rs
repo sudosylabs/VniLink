@@ -79,26 +79,6 @@ impl Default for ServeGate {
     }
 }
 
-/// Windows counterpart of the Unix verified open: resolves `parent_rel/name`
-/// under `root` and holds the file so its absolute path keeps naming this
-/// object (ancestors pinned, file shared for reading only) while the result
-/// lives. Callers hold the roots lock, as Unix holds it across its opens.
-#[cfg(windows)]
-pub(super) fn open_verified_source(
-    roots: &crate::fs::RootSet,
-    root: u64,
-    parent_rel: &str,
-    name: &str,
-) -> Result<(vnilink_rename::windows::VerifiedSource, std::path::PathBuf), Error> {
-    let absolute = roots
-        .resolve_parent(root, parent_rel, name)
-        .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?
-        .1;
-    let source = vnilink_rename::windows::open_source_verified(&absolute)
-        .map_err(|_| Error::InvalidSetting("the source file cannot be read"))?;
-    Ok((source, absolute))
-}
-
 /// The managed transfer directory, created the first time a job needs it:
 /// job journals and the partial files of arriving jobs.
 pub(super) fn transfer_directory(shared: &Shared) -> Result<std::path::PathBuf, Error> {

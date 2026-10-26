@@ -122,7 +122,7 @@ pub mod trace;
 /// for this crate's tests and the `test-probes` feature (the test kit's).
 #[cfg(any(test, feature = "test-probes"))]
 pub mod probes {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub use crate::core::PrestageHooks;
     /// The test agent's channel, which only the `test-probes` build has.
     #[cfg(feature = "test-probes")]

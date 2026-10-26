@@ -4,8 +4,8 @@
 //! token from listing must still name the same object, otherwise the entry
 //! was replaced and the mutation is refused instead of renaming a different
 //! object. The destination must not exist; the atomic primitive in
-//! `vnilink-rename` enforces that without a check-then-rename race on Linux
-//! and macOS. Renaming a folder never transfers or rewrites its children:
+//! `vnilink-rename` enforces that without a check-then-rename race on Linux,
+//! macOS and Windows. Renaming a folder never transfers or rewrites its children:
 //! the directory entry itself moves.
 //!
 //! Case-only renames on case-insensitive filesystems go through a temporary
@@ -17,12 +17,12 @@
 
 use crate::error::Error;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use super::entry::stat;
 use super::entry::{EntryKind, EntryToken};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::path::check_name;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use super::path::{check_name, UNSAFE_NAME};
 use super::roots::RootSet;
 
@@ -42,10 +42,10 @@ pub(crate) fn rename_entry(
     if name == new_name {
         return Ok(());
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
-        use std::os::unix::io::AsFd;
-        let dir = roots.open_dir_fd(id, rel)?;
+        use vnilink_rename::anchored::AsDir;
+        let dir = roots.open_dir_held(id, rel)?;
         let before = stat_anchored(&dir, name)?;
         if before.kind == EntryKind::Other && before.token == EntryToken::NONE {
             return Err(Error::InvalidSetting(RENAME_FAILED));
@@ -66,7 +66,7 @@ pub(crate) fn rename_entry(
         {
             return rename_case_only_anchored(&dir, name, new_name);
         }
-        match vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), name, new_name) {
+        match vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), name, new_name) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 Err(Error::FileExists)
@@ -77,7 +77,7 @@ pub(crate) fn rename_entry(
             Err(_) => Err(Error::InvalidSetting(RENAME_FAILED)),
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let (_parent, source) = roots.resolve_parent(id, rel, name)?;
         let (_parent, dest) = roots.resolve_parent(id, rel, new_name)?;
@@ -117,13 +117,13 @@ pub(crate) fn rename_entry(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn stat_anchored(
-    dir: &std::os::unix::io::OwnedFd,
+    dir: &vnilink_rename::anchored::Dir,
     name: &str,
 ) -> Result<super::entry::FsEntry, Error> {
-    use std::os::unix::io::AsFd;
-    match vnilink_rename::anchored::stat_at(dir.as_fd(), name) {
+    use vnilink_rename::anchored::AsDir;
+    match vnilink_rename::anchored::stat_at(dir.as_dir(), name) {
         Ok(st) => {
             let kind = if st.is_symlink {
                 EntryKind::Symlink
@@ -154,9 +154,9 @@ fn stat_anchored(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn dest_exists_pointing_at_anchored(
-    dir: &std::os::unix::io::OwnedFd,
+    dir: &vnilink_rename::anchored::Dir,
     dest: &str,
     source: EntryToken,
 ) -> bool {
@@ -166,26 +166,26 @@ fn dest_exists_pointing_at_anchored(
     source.is_strong() && after.token.is_strong() && source.same_object(after.token)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn rename_case_only_anchored(
-    dir: &std::os::unix::io::OwnedFd,
+    dir: &vnilink_rename::anchored::Dir,
     source: &str,
     dest: &str,
 ) -> Result<(), Error> {
-    use std::os::unix::io::AsFd;
+    use vnilink_rename::anchored::AsDir;
     for attempt in 0..8u32 {
         let temp = format!(".vnlcase.{attempt}.tmp");
         // Skip occupied temp names without touching them.
         if stat_anchored(dir, &temp).is_ok() {
             continue;
         }
-        vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), source, &temp)
+        vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), source, &temp)
             .map_err(|_| Error::InvalidSetting(RENAME_FAILED))?;
-        match vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), &temp, dest) {
+        match vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), &temp, dest) {
             Ok(()) => return Ok(()),
             Err(_) => {
                 if let Err(error) =
-                    vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), &temp, source)
+                    vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), &temp, source)
                 {
                     tracing::warn!(
                         target: crate::trace::FILES,
@@ -207,7 +207,7 @@ fn same_spelling_different_case(a: &str, b: &str) -> bool {
 /// True when the destination already resolves to the source object itself,
 /// i.e. a case-only rename on a case-insensitive filesystem where both
 /// spellings address one entry.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn dest_exists_pointing_at(dest: &std::path::Path, source: EntryToken) -> bool {
     let after = stat(dest, String::new());
     source.is_strong() && after.token.is_strong() && source.same_object(after.token)
@@ -216,7 +216,7 @@ fn dest_exists_pointing_at(dest: &std::path::Path, source: EntryToken) -> bool {
 /// Moves aside through a unique temporary sibling, then onto the new
 /// spelling. Either step failing leaves the temporary name for a later
 /// sweep; the original bytes are never copied.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn rename_case_only(source: &std::path::Path, dest: &std::path::Path) -> Result<(), Error> {
     let parent = source.parent().ok_or(Error::InvalidSetting(UNSAFE_NAME))?;
     for attempt in 0..8u32 {

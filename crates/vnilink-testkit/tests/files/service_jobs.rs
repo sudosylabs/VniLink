@@ -1076,7 +1076,6 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
 /// removes staging no job owns and a record rewrite torn by the stop; the
 /// sender's source is untouched.
 #[test]
-#[cfg(unix)]
 fn a_restart_removes_orphaned_staging_and_keeps_an_interrupted_jobs() -> TestResult {
     let trace = traced();
     let mut pair = Pair::for_files();

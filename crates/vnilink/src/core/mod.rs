@@ -60,7 +60,7 @@ mod host;
 mod host_input;
 mod job_journal;
 mod jobs;
-#[cfg(all(unix, any(test, feature = "test-probes")))]
+#[cfg(all(any(unix, windows), any(test, feature = "test-probes")))]
 pub use jobs::PrestageHooks;
 #[cfg(test)]
 pub(crate) use jobs::PREPARE_SCAN_HOOKS;
