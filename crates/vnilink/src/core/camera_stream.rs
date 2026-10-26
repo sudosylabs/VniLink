@@ -12,6 +12,9 @@ use crate::{
 use iroh::endpoint::{RecvStream, SendStream};
 use std::time::Instant;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a viewer whose requests failed still reads for the host's
+/// last word, which a host ending the stream sends after it stops reading.
+const LAST_WORD: Duration = Duration::from_secs(1);
 const LIST: u8 = 2;
 /// Last message on a camera stream: the host closed it, its capture failed,
 /// or it withdrew the camera (access revoked or its camera setting changed).
@@ -320,7 +323,18 @@ impl Core {
                         Ok::<(), Error>(())
                     };
                     let run = async {
-                        tokio::select! { result = pictures => result, result = requests => result }
+                        tokio::pin!(pictures);
+                        let asked = tokio::select! {
+                            result = &mut pictures => return result,
+                            result = requests => result,
+                        };
+                        // A host ending the stream stops reading it before its
+                        // last word arrives here, so asking can fail first:
+                        // that word is still worth a moment's wait.
+                        match tokio::time::timeout(LAST_WORD, &mut pictures).await {
+                            Ok(read) => read,
+                            Err(_) => asked,
+                        }
                     };
                     if lease.run(run).await.is_err() && !lease.is_cancelled() {
                         phase = ServicePhase::Failed("camera pipe ended".into());
