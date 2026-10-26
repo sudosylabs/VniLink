@@ -139,6 +139,11 @@ pub(super) struct JobRecord {
     /// resumes that file from the store's own record.
     #[serde(skip)]
     in_flight: u64,
+    /// Which run of the job this is. It advances when a stopped job runs
+    /// again, so what a stopped run's fetch finds as it winds down is not
+    /// taken for the new run's. Not saved: a restart starts a run.
+    #[serde(skip)]
+    pub(super) attempt: u64,
     /// Files landed since the journal last heard, oldest first.
     #[serde(skip)]
     unsaved_landed: Vec<(usize, String)>,
@@ -157,6 +162,11 @@ impl JobRecord {
     /// The only way a job changes state, so that every change is recorded:
     /// which job, which side, from and to. Never a path or a peer's message.
     pub(super) fn enter(&mut self, state: JobState) {
+        let stopped =
+            |state: JobState| matches!(state, JobState::Cancelled | JobState::Interrupted);
+        if stopped(self.state) && !stopped(state) && !state.is_terminal() {
+            self.attempt += 1;
+        }
         if self.state != state {
             let (from, to) = (self.state.name(), state.name());
             if state.is_terminal() {
@@ -206,6 +216,7 @@ impl JobRecord {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            attempt: 0,
             unsaved_landed: Vec::new(),
             retry: None,
             sent_at: None,
@@ -702,6 +713,7 @@ impl Core {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            attempt: 0,
             unsaved_landed: Vec::new(),
             retry: None,
             sent_at: None,
@@ -899,6 +911,7 @@ impl Core {
                     apply_remaining: None,
                     error: None,
                     in_flight: 0,
+                    attempt: 0,
                     unsaved_landed: Vec::new(),
                     retry: None,
                     sent_at: None,
@@ -1569,7 +1582,9 @@ impl Core {
             };
         // Fetch into the file's partial with a per-poll cancel watch.
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        {
+        // The run this fetch belongs to: what it finds is applied only while
+        // the job is still that run.
+        let attempt = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             let state = lock(&self.shared.state);
@@ -1578,7 +1593,8 @@ impl Core {
             }
             super::service_jobs::check_owner(&state, record.owner)?;
             lock(&self.shared.job_cancel).insert(id, stop_tx);
-        }
+            record.attempt
+        };
         // A partial kept from an earlier attempt resumes where it ended.
         let (staged, segments) = self.stage_paths(id, &entry.path)?;
         for path in [&staged, &segments] {
@@ -1623,11 +1639,16 @@ impl Core {
         if watcher.join().is_err() {
             tracing::warn!(target: crate::trace::FILES, job = id, "a transfer's cancel watcher panicked");
         }
-        lock(&self.shared.job_cancel).remove(&id);
-        // A cancel or interruption during fetch preserves its state even if bytes arrived.
+        // A cancel or interruption during fetch preserves its state even if
+        // bytes arrived; a job that stopped and runs again is a later run's,
+        // whose cancel handle this fetch leaves in place.
         {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            if record.attempt != attempt {
+                return Ok(record.snapshot());
+            }
+            lock(&self.shared.job_cancel).remove(&id);
             if matches!(record.state, JobState::Cancelled | JobState::Interrupted) {
                 drop(jobs);
                 save_jobs(&self.shared)?;
@@ -1657,9 +1678,8 @@ impl Core {
             Err(_) => return self.retry_later(id, UNREACHABLE),
             Ok(Received::Changed) => return self.mark_failed(id, SOURCE_CHANGED),
             Ok(Received::Mismatch) => return self.mark_failed(id, VERIFY_FAILED),
-            // A job still cancelled or interrupted returned above. One that is
-            // not was resumed while this stopped attempt wound down: the
-            // state is the new attempt's, and this one leaves it alone.
+            // A stopped fetch belongs to a job still cancelled or interrupted,
+            // or to an earlier run: both returned above.
             Ok(Received::Cancelled) => return self.job_snapshot(id),
         };
         // The partial holds the verified file: publish it per the decision.
@@ -4572,6 +4592,7 @@ pub(super) async fn handle_upload_offer(
                 apply_remaining: None,
                 error: None,
                 in_flight: 0,
+                attempt: 0,
                 unsaved_landed: Vec::new(),
                 retry: None,
                 sent_at: None,
@@ -4720,6 +4741,7 @@ pub(super) async fn handle_download_request(
                 apply_remaining: None,
                 error: None,
                 in_flight: 0,
+                attempt: 0,
                 unsaved_landed: Vec::new(),
                 retry: None,
                 sent_at: None,
@@ -5107,6 +5129,7 @@ mod lifecycle_tests {
             apply_remaining: None,
             error: None,
             in_flight: 0,
+            attempt: 0,
             unsaved_landed: Vec::new(),
             retry: None,
             sent_at: None,
