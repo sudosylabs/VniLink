@@ -10,6 +10,7 @@
 //! This build does not link a software H.264 encoder: Cisco's OpenH264 patent grant covers Cisco's binary, not a
 //! source build compiled here, and x264 is GPL. Other codecs fall back to
 //! the shared software encoders ([`vnilink_media::CodecEncoder`]).
+// trace: records every ignored failure
 
 use vnilink::YuvMatrix;
 #[cfg(target_os = "linux")]
@@ -79,6 +80,10 @@ impl LinuxEncoder {
             for choice in crate::gpu::encoders(&crate::gpu::inventory()) {
                 // A GPU without this codec or these settings leaves it to
                 // the next.
+                let name = match &choice {
+                    EncoderChoice::Nvenc { .. } => "NVENC",
+                    EncoderChoice::Vaapi { .. } => "VA-API",
+                };
                 let opened = match choice {
                     EncoderChoice::Nvenc { pci_address } => crate::nvenc::Encoder::open(
                         pci_address.as_deref(),
@@ -105,6 +110,21 @@ impl LinuxEncoder {
                         None => continue,
                     },
                 };
+                match &opened {
+                    Ok(_) => tracing::info!(
+                        target: vnilink::trace::ENCODE,
+                        encoder = name,
+                        codec = ?codec,
+                        "hardware encoder opened"
+                    ),
+                    Err(error) => tracing::debug!(
+                        target: vnilink::trace::ENCODE,
+                        encoder = name,
+                        failure = vnilink::trace::Failure::failure_name(error),
+                        reason = vnilink::trace::Failure::failure_reason(error),
+                        "a hardware encoder did not open; trying the next"
+                    ),
+                }
                 match opened {
                     Ok(backend) => {
                         return Ok(Self {

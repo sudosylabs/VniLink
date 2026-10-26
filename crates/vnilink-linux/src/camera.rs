@@ -4,6 +4,7 @@
 //! node, and capture opens through the held instance, never the
 //! recyclable path. A replacement unit with identical facts therefore
 //! loses consent even when no enumeration observed the gap.
+// trace: records every ignored failure
 #[cfg(target_os = "linux")]
 use crate::LinuxEncoder;
 use std::collections::{HashMap, HashSet};
@@ -456,7 +457,17 @@ impl HostCameraFactory for LinuxCameraFactory {
                             &ready,
                             &worker_startup,
                         ) {
-                            let _ = ready.try_send(Err(error));
+                            tracing::warn!(
+                                target: vnilink::trace::CAMERA,
+                                failure = vnilink::trace::Failure::failure_name(&error),
+                                reason = vnilink::trace::Failure::failure_reason(&error),
+                                "the camera did not run"
+                            );
+                            vnilink::ignored!(
+                                vnilink::trace::CAMERA,
+                                "the opener stopped waiting for the camera",
+                                ready.try_send(Err(error))
+                            );
                             source.fail();
                         }
                         source.close();
@@ -471,7 +482,7 @@ impl HostCameraFactory for LinuxCameraFactory {
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (&open_path, &node, worker_held);
+                let _unused = (&open_path, &node, worker_held);
                 Err(Error::Unsupported("camera capture"))
             }
         };

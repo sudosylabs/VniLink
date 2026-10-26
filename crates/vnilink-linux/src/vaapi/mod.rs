@@ -17,6 +17,7 @@
 //! [`vnilink::PICTURE_DRAIN`] of the bitrate ([`RateControl`]), and takes a new
 //! bitrate or frame rate between pictures without reopening
 //! ([`Session::retune`]).
+// trace: records every ignored failure
 
 mod convert;
 mod h264;
@@ -208,11 +209,16 @@ impl Session {
                 converts,
             }),
             Ok(Err(err)) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::warn!(target: vnilink::trace::ENCODE, "the VA-API encoder thread panicked");
+                }
                 Err(err)
             }
             Err(_) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::warn!(target: vnilink::trace::ENCODE, "the VA-API encoder thread panicked");
+                }
+                tracing::warn!(target: vnilink::trace::ENCODE, "VA-API did not open in time");
                 Err(Error::Unsupported(codec.name()))
             }
         }
@@ -261,9 +267,15 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.tx.send(Job::Stop);
+        vnilink::ignored!(
+            vnilink::trace::ENCODE,
+            "an encoder thread already gone needs no stop",
+            self.tx.send(Job::Stop)
+        );
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            if thread.join().is_err() {
+                tracing::warn!(target: vnilink::trace::ENCODE, "the VA-API encoder thread panicked");
+            }
         }
     }
 }
@@ -283,11 +295,19 @@ fn worker(
     let mut encoder =
         match Encoder::open(node, codec, width, height, frame_rate, bitrate_bps, matrix) {
             Ok(encoder) => {
-                let _ = ready.send(Ok(encoder.converter.is_some()));
+                vnilink::ignored!(
+                    vnilink::trace::ENCODE,
+                    "the opener stopped waiting for the encoder",
+                    ready.send(Ok(encoder.converter.is_some()))
+                );
                 encoder
             }
             Err(err) => {
-                let _ = ready.send(Err(err));
+                vnilink::ignored!(
+                    vnilink::trace::ENCODE,
+                    "the opener stopped waiting for the encoder",
+                    ready.send(Err(err))
+                );
                 return;
             }
         };
@@ -300,7 +320,11 @@ fn worker(
                 reply,
             } => {
                 let result = encoder.encode(input, force_keyframe);
-                let _ = reply.send(result);
+                vnilink::ignored!(
+                    vnilink::trace::ENCODE,
+                    "the caller stopped waiting for its picture",
+                    reply.send(result)
+                );
             }
             Job::Retune {
                 bitrate_bps,
@@ -308,7 +332,11 @@ fn worker(
                 reply,
             } => {
                 encoder.rate.retune(bitrate_bps, frame_rate);
-                let _ = reply.send(());
+                vnilink::ignored!(
+                    vnilink::trace::ENCODE,
+                    "the caller stopped waiting for the retune",
+                    reply.send(())
+                );
             }
         }
     }

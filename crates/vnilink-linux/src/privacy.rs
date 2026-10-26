@@ -1,5 +1,6 @@
 //! X11 display privacy changes scanout gamma, leaving capture pixels intact.
 //! Wayland has no compositor-independent gamma API; never claim support there.
+// trace: records every ignored failure
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -146,7 +147,14 @@ impl Native {
 }
 impl Drop for Native {
     fn drop(&mut self) {
-        let _ = self.restore();
+        if let Err(error) = self.restore() {
+            tracing::warn!(
+                target: vnilink::trace::SYSTEM,
+                failure = vnilink::trace::Failure::failure_name(&error),
+                reason = vnilink::trace::Failure::failure_reason(&error),
+                "the display could not be restored: it may stay dark"
+            );
+        }
     }
 }
 pub(crate) fn supported() -> bool {
@@ -187,7 +195,11 @@ impl Privacy {
                         match recv.recv_timeout(Duration::from_millis(250)) {
                             Ok(command) => {
                                 if Instant::now() >= command.deadline {
-                                    let _ = command.reply.send(Err(Error::Timeout));
+                                    vnilink::ignored!(
+                                        vnilink::trace::SYSTEM,
+                                        "the caller stopped waiting for its answer",
+                                        command.reply.send(Err(Error::Timeout))
+                                    );
                                     continue;
                                 }
                                 let result = match native.as_mut() {
@@ -226,7 +238,14 @@ impl Privacy {
                                 active.store(private, Ordering::Release);
                             }
                             if !private {
-                                let _ = n.restore();
+                                if let Err(error) = n.restore() {
+                                    tracing::warn!(
+                                        target: vnilink::trace::SYSTEM,
+                                        failure = vnilink::trace::Failure::failure_name(&error),
+                                        reason = vnilink::trace::Failure::failure_reason(&error),
+                                        "the display could not be restored: it may stay dark"
+                                    );
+                                }
                             }
                         }
                     }
@@ -261,7 +280,9 @@ impl Drop for Privacy {
             .take()
         {
             drop(worker.send);
-            let _ = worker.thread.join();
+            if worker.thread.join().is_err() {
+                tracing::warn!(target: vnilink::trace::SYSTEM, "the privacy worker panicked");
+            }
         }
     }
 }

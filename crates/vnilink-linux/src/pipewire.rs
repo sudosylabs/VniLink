@@ -12,6 +12,7 @@
 //! capture on shared memory, as does every capture not asked to.
 //! The bytes are screen content: do not log them. One connected node is that
 //! compositor's permission, not universal unattended access.
+// trace: records every ignored failure
 
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
@@ -216,11 +217,22 @@ impl PortalCapture {
                 Ok(capture)
             }
             Ok(Err(err)) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::warn!(target: vnilink::trace::CAPTURE, "the PipeWire capture thread panicked");
+                }
+                tracing::warn!(
+                    target: vnilink::trace::CAPTURE,
+                    failure = vnilink::trace::Failure::failure_name(&err),
+                    reason = vnilink::trace::Failure::failure_reason(&err),
+                    "PipeWire capture did not start"
+                );
                 Err(err)
             }
             Err(_) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::warn!(target: vnilink::trace::CAPTURE, "the PipeWire capture thread panicked");
+                }
+                tracing::warn!(target: vnilink::trace::CAPTURE, "PipeWire capture did not start in time");
                 Err(Error::CaptureRejected(
                     "the screen cast portal did not start",
                 ))
@@ -282,7 +294,11 @@ impl PortalCapture {
                 reply: reply_tx,
             })
             .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
-        let _ = self.wake.send(&[1]);
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a full wake queue already holds a wake-up",
+            self.wake.send(&[1])
+        );
         match reply_rx.recv_timeout(FRAME_TIMEOUT) {
             Ok(Ok(Some((frame, delivery)))) => {
                 self.seen.store(generation, Ordering::Release);
@@ -307,10 +323,20 @@ impl PortalCapture {
 
 impl Drop for PortalCapture {
     fn drop(&mut self) {
-        let _ = self.tx.send(Command::Stop);
-        let _ = self.wake.send(&[1]);
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a capture thread already gone needs no stop",
+            self.tx.send(Command::Stop)
+        );
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a full wake queue already holds a wake-up",
+            self.wake.send(&[1])
+        );
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            if thread.join().is_err() {
+                tracing::warn!(target: vnilink::trace::CAPTURE, "the PipeWire capture thread panicked");
+            }
         }
     }
 }
@@ -329,7 +355,11 @@ fn capture_thread(
     if let Err(err) = run(
         remote, node_id, &shared, &commands, wake, &ready, &startup, gpu,
     ) {
-        let _ = ready.send(Err(err));
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "the opener stopped waiting for the capture",
+            ready.send(Err(err))
+        );
     }
 }
 
@@ -475,7 +505,7 @@ fn serve(
                 "the screen cast portal did not start",
             ));
         }
-        let _ = mainloop
+        let _dispatched = mainloop
             .loop_()
             .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
     };
@@ -526,7 +556,7 @@ fn dispatch_commands(
         match commands.try_recv() {
             Ok(Command::Stop) | Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {
-                let _ = mainloop
+                let _dispatched = mainloop
                     .loop_()
                     .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(50)));
             }
@@ -534,7 +564,11 @@ fn dispatch_commands(
                 timestamp_us,
                 reply,
             }) => {
-                let _ = reply.send(wait_frame(&mainloop, shared, timestamp_us));
+                vnilink::ignored!(
+                    vnilink::trace::CAPTURE,
+                    "the caller stopped waiting for its picture",
+                    reply.send(wait_frame(&mainloop, shared, timestamp_us))
+                );
             }
         }
     }
@@ -548,7 +582,7 @@ fn wait_frame(
 ) -> Result<Option<(RawFrame, PortalDelivery)>, Error> {
     // Drain ready compositor events without sleeping before using cached pixels.
     // Waiting 50ms here and again in dispatch caps even idle capture at ~10fps.
-    let _ = mainloop
+    let _dispatched = mainloop
         .loop_()
         .iterate(pw::loop_::Timeout::Finite(Duration::ZERO));
     match shared.channel.try_latest()? {

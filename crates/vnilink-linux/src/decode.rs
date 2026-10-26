@@ -11,6 +11,7 @@
 //! 0, sliding-window reference marking, and 4:2:0 eight-bit pictures. The
 //! syntax reader refuses anything outside that subset with an explicit
 //! error instead of misdecoding it.
+// trace: records every ignored failure
 
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -136,9 +137,15 @@ impl Default for LinuxDecoder {
 impl Drop for LinuxDecoder {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.as_mut() {
-            let _ = worker.tx.send(Job::Stop);
+            vnilink::ignored!(
+                vnilink::trace::DECODE,
+                "a decoder thread already gone needs no stop",
+                worker.tx.send(Job::Stop)
+            );
             if let Some(thread) = worker.thread.take() {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::warn!(target: vnilink::trace::DECODE, "the VA-API decoder thread panicked");
+                }
             }
         }
     }
@@ -184,7 +191,11 @@ fn worker(jobs: Receiver<Job>) {
                 reply,
             } => {
                 let result = decode_picture(&mut open, &payload, keyframe, timestamp_us);
-                let _ = reply.send(result);
+                vnilink::ignored!(
+                    vnilink::trace::DECODE,
+                    "the caller stopped waiting for its picture",
+                    reply.send(result)
+                );
             }
         }
     }

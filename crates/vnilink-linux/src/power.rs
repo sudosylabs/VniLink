@@ -1,4 +1,5 @@
 //! Display idle cookies and system sleep FDs have distinct native lifetimes.
+// trace: records every ignored failure
 use std::time::Duration;
 use vnilink::power::{HostPowerFactory, PowerInhibitor, PowerKind};
 use vnilink::{BackendStartup, Error};
@@ -29,12 +30,20 @@ impl Drop for DisplayInhibitor {
         // Should no thread start, the proxy is leaked rather than dropped
         // here, and the bus ends the inhibition with this process.
         let proxy = std::mem::ManuallyDrop::new(proxy);
-        let _ = std::thread::Builder::new()
-            .name("vnilink-display-inhibit".into())
-            .spawn(move || {
-                let proxy = std::mem::ManuallyDrop::into_inner(proxy);
-                let _ = proxy.call_noreply(release, &cookie);
-            });
+        vnilink::ignored!(
+            vnilink::trace::POWER,
+            "without its thread the inhibition ends with this process",
+            std::thread::Builder::new()
+                .name("vnilink-display-inhibit".into())
+                .spawn(move || {
+                    let proxy = std::mem::ManuallyDrop::into_inner(proxy);
+                    vnilink::ignored!(
+                        vnilink::trace::POWER,
+                        "a release the desktop missed ends with this process",
+                        proxy.call_noreply(release, &cookie)
+                    );
+                })
+        );
     }
 }
 #[derive(Default)]

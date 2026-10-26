@@ -3,6 +3,7 @@
 //! This is compiled on Linux only. The phase record in [`PortalSession`] is
 //! what tests exercise. Calling [`open_monitor`] asks the compositor for one
 //! monitor and does not claim that grant works on every desktop.
+// trace: records every ignored failure
 
 use std::os::fd::OwnedFd;
 
@@ -79,7 +80,11 @@ pub async fn open_monitor(
         "the screen cast portal did not start",
     ))?;
     if matches!(stream.source_type(), Some(kind) if kind != SourceType::Monitor) {
-        let _ = remote.close().await;
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a refused screen cast is closed at best",
+            remote.close().await
+        );
         return Err(Error::Unsupported("only one monitor is supported"));
     }
     let node = stream.pipe_wire_node_id();
@@ -88,7 +93,14 @@ pub async fn open_monitor(
             session.set_restore_token(token.to_string())?;
             if let Some(grant) = grant {
                 // A grant that cannot be kept asks again next time.
-                let _ = grant.keep(token);
+                if let Err(error) = grant.keep(token) {
+                    tracing::warn!(
+                        target: vnilink::trace::CAPTURE,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "the screenshot grant was not kept: the next screenshot asks again"
+                    );
+                }
             }
         }
     }
@@ -106,7 +118,12 @@ fn refused<T>(
     response: &Result<T, ashpd::Error>,
 ) -> Result<(), Error> {
     if let Err(ashpd::Error::Response(_)) = response {
-        let _ = session.refuse();
+        tracing::info!(target: vnilink::trace::CAPTURE, "the screen cast was declined on this computer");
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a declined session that cannot record it is declined anyway",
+            session.refuse()
+        );
         return Err(Error::CaptureDenied("the screen cast was not allowed"));
     }
     Ok(())

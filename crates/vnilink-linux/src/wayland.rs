@@ -1,6 +1,7 @@
 //! One compositor-authorized RemoteDesktop session owns capture and input.
 //! D-Bus Notify methods work without an EIS connection. The worker serializes
 //! them on its own runtime: core input callbacks can run inside Tokio already.
+// trace: records every ignored failure
 use std::os::fd::OwnedFd;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -43,7 +44,11 @@ impl Connection {
     fn close(&self) {
         if !self.closed.swap(true, Ordering::AcqRel) {
             // Wake the worker if idle. If busy/full, it observes closed itself.
-            let _ = self.tx.try_send(Command::Close);
+            vnilink::ignored!(
+                vnilink::trace::INPUT,
+                "a busy or ended worker notices the close itself",
+                self.tx.try_send(Command::Close)
+            );
         }
     }
 }
@@ -320,8 +325,25 @@ async fn open_grant(
         // Each start answers with the token for the next; the one offered
         // is spent. A grant that cannot be kept asks again next time.
         if let (Some(grant), Some(token)) = (grant, response.restore_token()) {
-            let _ = grant.keep(token);
+            if let Err(error) = grant.keep(token) {
+                tracing::warn!(
+                    target: vnilink::trace::CAPTURE,
+                    failure = vnilink::trace::Failure::failure_name(&error),
+                    reason = vnilink::trace::Failure::failure_reason(&error),
+                    "the screen sharing grant was not kept: the next session asks again"
+                );
+            }
         }
+        tracing::info!(
+            target: vnilink::trace::CAPTURE,
+            offered_token = token.is_some(),
+            kept = response.restore_token().is_some(),
+            control = response
+                .devices()
+                .contains(DeviceType::Keyboard | DeviceType::Pointer),
+            cursor_metadata,
+            "the RemoteDesktop portal granted a session"
+        );
         let streams = response.streams();
         let stream = streams
             .first()
@@ -358,11 +380,38 @@ async fn open_grant(
             control,
         }),
         Err(error) => {
-            let _ = tokio::time::timeout(INPUT_TIMEOUT, session.close()).await;
+            tracing::info!(
+                target: vnilink::trace::CAPTURE,
+                declined = matches!(
+                    error,
+                    ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)
+                ),
+                failure = portal_failure(&error),
+                "the RemoteDesktop portal did not grant a session"
+            );
+            vnilink::ignored!(
+                vnilink::trace::CAPTURE,
+                "a refused portal session is closed at best",
+                tokio::time::timeout(INPUT_TIMEOUT, session.close()).await
+            );
             Err(grant_error(&error))
         }
     }
 }
+/// What the portal said, by kind only: its messages are the desktop's text.
+fn portal_failure(error: &ashpd::Error) -> &'static str {
+    match error {
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled) => "declined",
+        ashpd::Error::Response(_) => "response failed",
+        ashpd::Error::Portal(_) => "portal error",
+        ashpd::Error::Zbus(_) => "bus error",
+        ashpd::Error::NoResponse => "no response",
+        ashpd::Error::RequiresVersion(..) => "portal too old",
+        ashpd::Error::PortalNotFound(_) => "portal not found",
+        _ => "other",
+    }
+}
+
 /// Someone at this computer declining the dialog is a denial; anything
 /// else, including a grant without exactly one screen, is not.
 fn grant_error(error: &ashpd::Error) -> Error {
@@ -384,9 +433,14 @@ fn worker_main(
         .enable_all()
         .build()
     else {
-        let _ = ready.send(Err(Error::CaptureRejected(
-            "the Wayland input runtime could not start",
-        )));
+        tracing::warn!(target: vnilink::trace::INPUT, "the Wayland input runtime could not start");
+        vnilink::ignored!(
+            vnilink::trace::INPUT,
+            "the opener stopped waiting for the portal",
+            ready.send(Err(Error::CaptureRejected(
+                "the Wayland input runtime could not start",
+            )))
+        );
         return;
     };
     // zbus drops proxies by spawning cleanup tasks. Keep a runtime context
@@ -395,7 +449,11 @@ fn worker_main(
     let grant = match runtime.block_on(open_grant(&startup, grant.as_ref())) {
         Ok(grant) => grant,
         Err(error) => {
-            let _ = ready.send(Err(error));
+            vnilink::ignored!(
+                vnilink::trace::INPUT,
+                "the opener stopped waiting for the portal",
+                ready.send(Err(error))
+            );
             return;
         }
     };
@@ -410,11 +468,24 @@ fn worker_main(
     } = grant;
     let mut closed = match runtime.block_on(session.receive_closed()) {
         Ok(closed) => Box::pin(closed),
-        Err(_) => {
-            let _ = ready.send(Err(Error::CaptureRejected(
-                "the Wayland permission session could not be monitored",
-            )));
-            let _ = runtime.block_on(session.close());
+        Err(error) => {
+            tracing::warn!(
+                target: vnilink::trace::CAPTURE,
+                failure = portal_failure(&error),
+                "the portal session could not be watched for its end"
+            );
+            vnilink::ignored!(
+                vnilink::trace::INPUT,
+                "the opener stopped waiting for the portal",
+                ready.send(Err(Error::CaptureRejected(
+                    "the Wayland permission session could not be monitored",
+                )))
+            );
+            vnilink::ignored!(
+                vnilink::trace::CAPTURE,
+                "an unwatched portal session is closed at best",
+                runtime.block_on(session.close())
+            );
             return;
         }
     };
@@ -465,13 +536,22 @@ fn worker_main(
                             ))
                         }
                     };
-                    let _ = reply.send(result);
+                    vnilink::ignored!(
+                        vnilink::trace::INPUT,
+                        "the caller stopped waiting for its input's answer",
+                        reply.send(result)
+                    );
                 }
             }
         }
     }
     connection.closed.store(true, Ordering::Release);
-    let _ = runtime.block_on(async { tokio::time::timeout(INPUT_TIMEOUT, session.close()).await });
+    tracing::info!(target: vnilink::trace::INPUT, "the portal session ended");
+    vnilink::ignored!(
+        vnilink::trace::CAPTURE,
+        "an ending portal session is closed at best",
+        runtime.block_on(async { tokio::time::timeout(INPUT_TIMEOUT, session.close()).await })
+    );
 }
 async fn deliver(
     proxy: &RemoteDesktop,

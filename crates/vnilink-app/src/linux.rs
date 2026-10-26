@@ -1,5 +1,6 @@
 //! Linux screen hosting: one monitor through the desktop portal, served to
 //! every viewer.
+// trace: records every ignored failure
 //!
 //! Starting a host asks the RemoteDesktop portal for one screen, keyboard
 //! and pointer, and returns at once: someone at this computer answers the
@@ -100,7 +101,9 @@ impl LinuxHost {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            let _ = worker.join();
+            if worker.join().is_err() {
+                tracing::warn!(target: vnilink::trace::CAPTURE, "the screen hosting worker panicked");
+            }
         }
     }
 }
@@ -156,13 +159,29 @@ fn publish_topology(core: &Core, (width, height): (u16, u16)) {
         scale_percent: 100,
         revision,
     };
-    let _ = core.set_topology(revision, &[display]);
+    if let Err(error) = core.set_topology(revision, &[display]) {
+        tracing::warn!(
+            target: vnilink::trace::TOPOLOGY,
+            failure = error.name(),
+            reason = error.reason(),
+            "the screen's size was not published: viewers keep the last one"
+        );
+    }
 }
 
 /// Peers learn why the screen cannot be viewed or controlled.
 fn report_consent(core: &Core, view: bool, control: bool) {
-    let _ = core.report_os_permission(vnilink::Capability::DesktopView, !view);
-    let _ = core.report_os_permission(vnilink::Capability::DesktopControl, !control);
+    tracing::info!(target: vnilink::trace::CAPTURE, view, control, "the desktop's consent");
+    vnilink::ignored!(
+        vnilink::trace::CAPTURE,
+        "a permission report to a shut-down engine is moot",
+        core.report_os_permission(vnilink::Capability::DesktopView, !view)
+    );
+    vnilink::ignored!(
+        vnilink::trace::INPUT,
+        "a permission report to a shut-down engine is moot",
+        core.report_os_permission(vnilink::Capability::DesktopControl, !control)
+    );
 }
 
 /// Stands in for input when the grant allowed the screen without remote
@@ -279,7 +298,14 @@ fn serve(
     let kept = grant.as_ref().map(vnilink_linux::ScreenGrant::at);
     let remember = |screen| {
         if let Some(kept) = &kept {
-            let _ = kept.keep_screen(screen);
+            if let Err(error) = kept.keep_screen(screen) {
+                tracing::warn!(
+                    target: vnilink::trace::CAPTURE,
+                    failure = vnilink::trace::Failure::failure_name(&error),
+                    reason = vnilink::trace::Failure::failure_reason(&error),
+                    "the shared screen was not remembered: the next session asks again"
+                );
+            }
         }
     };
     let remembered = kept

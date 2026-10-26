@@ -11,6 +11,7 @@
 //! sandboxed the portal cannot tell which program offers it, so it is kept
 //! in a file only this user can read, beside the engine's other private
 //! state, and never logged.
+// trace: records every ignored failure
 
 use std::fmt;
 use std::io::Write;
@@ -112,7 +113,11 @@ fn replace_private(path: &Path, contents: &str) -> Result<(), Error> {
         .and_then(|()| file.sync_all())
         .and_then(|()| std::fs::rename(&temporary, path));
     if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a temporary grant file left behind is replaced next time",
+            std::fs::remove_file(&temporary)
+        );
     }
     written.map_err(failed)
 }
