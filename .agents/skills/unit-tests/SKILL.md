@@ -23,9 +23,20 @@ Run the smallest checks that actually cover the change, plus format/lint/type ch
 
 ## Meaningful tests
 
-Assert complete behavior or non-obvious invariants. Prefer observable success, failure/recovery, isolation and teardown over snapshots mirroring the implementation. Test changed limits/authorization and stale/disposed work where relevant. Avoid tests added solely to raise counts; reversible low-impact edits may be covered by existing checks.
+Assert complete behavior or non-obvious invariants. Prefer observable success, failure/recovery, isolation and teardown, and the story a service records, over snapshots of internal structure. Test changed limits/authorization and stale/disposed work where relevant. Avoid tests added solely to raise counts; reversible low-impact edits may be covered by existing checks.
 
 Rust tests follow the owning area's organization, including inline tests and registered `src/tests` modules. Node validators test exact fields, bounds and rejected extras. Browser scenarios are independent and selectable through maintained infrastructure (`build-test-infrastructure`), not selected by editing a runner or invoking unrelated areas under a tabs test.
+
+## Writing a Rust test
+
+A test is one scenario, named as the behaviour it proves (`a_key_after_control_is_withdrawn_is_discarded_and_says_why`). Behaviour across two engines belongs in the service's `vnilink-testkit` suite and takes engines, fakes and waits from the kit; a module's unit tests stay beside it. Existing tests move to this form when their service is next worked on.
+
+- Hold `traced()` for the whole test, so a failure prints the engines' records.
+- State the **story**: `expect![[…]].assert_eq(&trace.story(&["area"]))` with the `vnilink::trace` areas the scenario touches. `detailed_story` adds per-event `trace` records; `concurrent_story` sorts items that parallel work records in any order. Generate with `UPDATE_EXPECT=1`, run it several times to see it stable, and review a changed story as a behaviour change.
+- Wait with bounded `wait_for` on state or on the last record the story states.
+- Each assert's message names the contract it guards. Values that vary between runs, as drop counts, are bounded outside the story.
+- Where a service handles user content, assert that `trace.events()` holds none of it.
+- New tests return `Result` and use `?` for setup.
 
 ## Binary freshness and outcomes
 
