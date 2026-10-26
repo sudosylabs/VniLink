@@ -405,7 +405,7 @@ test('a task is ready only when it can run here; a second computer is optional a
 	const other = ready.results.find(result => result.id === 'second-computer');
 	assert.deepEqual(other, {
 		id: 'second-computer', title: 'A second computer', kind: 'computer', status: 'unknown', optional: true,
-		detail: 'only --remote runs use one; every task runs on this computer without it', fix: [], packages: [],
+		detail: '--remote runs reach one over SSH, and --peer runs a suite or measurement against `vnilink-testkit agent` there, built from the same commit; every task runs on this computer without it', fix: [], packages: [],
 	});
 	assert.equal(ready.results.find(result => result.id === 'ssh').status, 'missing', 'no ssh on this fake PATH, and still ready');
 	// Before, the task was ready with neither permission: the driver then failed.
@@ -427,7 +427,7 @@ test('a task is ready only when it can run here; a second computer is optional a
 	assert.equal(latency.reason, 'cannot be checked before it runs: Screen Recording for the development VniLink');
 	const text = formatDoctor([ready, latency], 'header', [], []);
 	assert.match(text, /\n\nPermissions\n {2}ok {10}Screen Recording for the application running the task: granted/);
-	assert.match(text, /\n\nOther computers\n {2}optional {4}A second computer: only --remote runs use one/);
+	assert.match(text, /\n\nOther computers\n {2}optional {4}A second computer: --remote runs reach one over SSH/);
 	assert.match(text, /\nTasks\n {2}ready {7}measure:perceived\n {2}unknown {5}measure:latency: cannot be checked before it runs: Screen Recording for the development VniLink$/m);
 });
 
@@ -469,5 +469,10 @@ test('requirement and task entries have only known fields, and every task can ru
 			assert.ok(taskRequirements(manifest, task).includes(id), `${task} lists ${id}`);
 			assert.equal(manifest.requirements[id].optional, true, id);
 		}
+	}
+	// --peer runs reach the test agent on a second computer without SSH.
+	for (const task of ['test:service', 'bench:service']) {
+		assert.ok(taskRequirements(manifest, task).includes('second-computer'), `${task} lists the second computer`);
+		assert.ok(!taskRequirements(manifest, task).includes('ssh'), `${task} needs no SSH`);
 	}
 });

@@ -609,7 +609,7 @@
       "title": "A second computer",
       "kind": "computer",
       "optional": true,
-      "purpose": "Measurements run on this computer; with `--remote` they run one side on a second, Linux computer with a built checkout, reached over SSH.",
+      "purpose": "Every task runs on this computer. `--remote` measurements run one side on a second, Linux computer with a built checkout, reached over SSH; `--peer` runs a suite or measurement against `node build/run.ts testkit:agent` on a second computer built from the same commit.",
       "check": {
         "custom": "second-computer"
       }
@@ -695,10 +695,16 @@
     },
     "test:service": {
       "description": "Run one service's functional suite on this computer",
-      "same": "build"
+      "same": "build",
+      "requires": ["second-computer"]
     },
     "bench:service": {
       "description": "Measure one service's performance on this computer",
+      "same": "build",
+      "requires": ["second-computer"]
+    },
+    "testkit:agent": {
+      "description": "Serve suites run with --peer on another computer",
       "same": "build"
     },
     "test:linux": {

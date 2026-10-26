@@ -1,7 +1,7 @@
 /** Test runners that own processes: the Electron UI suite, Rust tests and the Linux validation container. */
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
 import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
@@ -63,30 +63,105 @@ export function selectServices(available: readonly string[], args: readonly stri
 	return args.length > 0 ? [...args] : [...available];
 }
 
-/** Runs the functional suites of the named services, each alone with its engines on this computer. */
+/** A suite's run against the test agent on another computer, out of its arguments: `--peer <file.vnl>` and `--peer-check <digits>`. */
+export interface PeerSelection {
+	/** The arguments that name services. */
+	readonly services: string[];
+	/** What tells the suite about the agent: `VNILINK_PEER` and `VNILINK_PEER_CHECK`, empty without `--peer`. */
+	readonly env: Readonly<Record<string, string>>;
+}
+
+/** Takes `--peer` and `--peer-check` out of `args`; each needs a value, and one needs the other. */
+export function selectPeer(args: readonly string[], cwd = process.cwd()): PeerSelection {
+	const services: string[] = [];
+	let file: string | undefined;
+	let check: string | undefined;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg !== '--peer' && arg !== '--peer-check') {
+			services.push(arg);
+			continue;
+		}
+		const value = args.at(++index);
+		if (value === undefined || value.startsWith('--')) {
+			throw new Error(`${arg} needs a value: --peer <the agent's .vnl file> --peer-check <the digits the agent printed>`);
+		}
+		if (arg === '--peer') {
+			file = resolve(cwd, value);
+		} else {
+			check = value;
+		}
+	}
+	if (file === undefined && check === undefined) {
+		return { services, env: {} };
+	}
+	if (file === undefined || check === undefined) {
+		throw new Error('--peer and --peer-check go together: the agent\'s .vnl file and the digits it printed beside it');
+	}
+	if (!/^\d{3}$/.test(check)) {
+		throw new Error('--peer-check takes the three digits the agent printed');
+	}
+	return { services, env: { VNILINK_PEER: file, VNILINK_PEER_CHECK: check } };
+}
+
+/** Runs the functional suites of the named services, each alone with its engines on this computer, or against the agent named by `--peer`. */
 export async function testService(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
-	const services = selectServices(await testkitServices(root, 'tests'), args);
-	await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])]);
+	const peer = selectPeer(args);
+	const services = selectServices(await testkitServices(root, 'tests'), peer.services);
+	await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])], { env: peer.env });
 }
 
 /**
  * Runs the performance suites of the named services. Each run is saved under
  * `.build/bench` and compared with the previous one; a regression fails the task.
+ * With `--peer` a run measures against the agent on another computer, is saved
+ * apart and only reports regressions.
  */
 export async function benchService(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
-	const services = selectServices(await testkitServices(root, 'benches'), args);
-	await runTestkit(root, signal, ['bench', ...services.flatMap(name => ['--bench', name])], { VNILINK_BENCH_DIR: join(root, '.build/bench') });
+	const peer = selectPeer(args);
+	const services = selectServices(await testkitServices(root, 'benches'), peer.services);
+	await runTestkit(root, signal, ['bench', ...services.flatMap(name => ['--bench', name])], { env: { VNILINK_BENCH_DIR: join(root, '.build/bench'), ...peer.env } });
+}
+
+/**
+ * Runs the test agent (`vnilink-testkit agent`), the host half of suites run
+ * with `--peer` on another computer: it writes a pairing file, by default
+ * `.build/testkit/agent.vnl`, prints its digits and asks on this terminal for
+ * the digits that computer's suite prints.
+ */
+export async function runTestkitAgent(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const out = args.includes('--out') ? [] : ['--out', join(root, '.build/testkit/agent.vnl')];
+	// Measurements need the optimized build that bench:service runs.
+	await runTestkit(root, signal, ['run', '--release', '--bin', 'vnilink-testkit', '--', 'agent', ...out, ...args], { typing: true });
+}
+
+interface TestkitOptions {
+	readonly env?: Readonly<Record<string, string>>;
+	/** Passes this terminal's typing on: the process runs in a process group of its own, which the terminal would stop when it reads. */
+	readonly typing?: boolean;
 }
 
 /** Cargo on the test kit with the addon's target and toolchain, as `testRust` runs it. */
-async function runTestkit(root: string, signal: AbortSignal, command: readonly string[], env: Readonly<Record<string, string>> = {}): Promise<void> {
+async function runTestkit(root: string, signal: AbortSignal, command: readonly string[], options: TestkitOptions = {}): Promise<void> {
 	const processes = new ProcessRunner(signal);
 	try {
 		const native = defaultNativeOptions();
 		const target = native.target ? ['--target', native.target] : [];
 		const [verb, ...suites] = command;
-		await processes.run('cargo', [verb, '--locked', '--target-dir', 'target/electron', ...target, '-p', 'vnilink-testkit', ...suites], { cwd: root, env: { ...nativeEnvironment(native), ...env } });
+		const launched = processes.start('cargo', [verb, '--locked', '--target-dir', 'target/electron', ...target, '-p', 'vnilink-testkit', ...suites], {
+			cwd: root,
+			env: { ...nativeEnvironment(native), ...options.env },
+			...options.typing ? { stdio: ['pipe', 'inherit', 'inherit'] } : {},
+		});
+		if (options.typing && launched.child.stdin) {
+			process.stdin.pipe(launched.child.stdin);
+		}
+		await launched.result;
 	} finally {
+		if (options.typing) {
+			process.stdin.unpipe();
+			process.stdin.pause();
+		}
 		await processes.stop();
 	}
 }

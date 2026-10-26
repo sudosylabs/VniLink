@@ -34,6 +34,7 @@ pub mod desktop;
 mod engine;
 pub mod events;
 pub mod files;
+pub mod peer;
 pub mod power;
 pub mod relay;
 mod scratch;
@@ -44,7 +45,9 @@ pub mod terminal;
 mod trace;
 mod wait;
 
-pub use engine::{pair_cores, pair_cores_for_control, Engine, Pair, FILES, SEEN_AND_CONTROLLED};
+pub use engine::{
+    pair_cores, pair_cores_for_control, Engine, Pair, Reach, FILES, SEEN_AND_CONTROLLED,
+};
 pub use scratch::Scratch;
 pub use trace::{traced, Story, Traced};
 pub use wait::{holds, wait_for, DEFAULT_WAIT};

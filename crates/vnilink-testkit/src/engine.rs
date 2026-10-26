@@ -9,6 +9,16 @@ use vnilink::{
 
 use crate::{wait_for, Scratch, DEFAULT_WAIT};
 
+/// Where an engine listens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// Loopback only, with no relay: nothing leaves this computer.
+    Loopback,
+    /// Every network this computer has and the public relays, as the
+    /// application listens.
+    Network,
+}
+
 /// A real engine on loopback, as the application runs one, with its own
 /// identity in memory and its own folders: `root`, the one folder it may
 /// read and write for files, and `transfers`, where incoming bytes stage.
@@ -24,6 +34,7 @@ pub struct Engine {
 impl Engine {
     /// `name` tags its folders, such as `host` or `controller`.
     pub fn start(name: &str) -> Self {
+        crate::peer::refuse_peer();
         let store = MemoryStore::empty();
         // Named from its first record, as binding its endpoint.
         vnilink::trace::name_next_engine(name);
@@ -47,6 +58,7 @@ impl Engine {
     /// An engine with no direct address, whose only way to its peers is the
     /// relay at `relay` ([`crate::relay::LocalRelay`]).
     pub fn relayed(name: &str, relay: &str) -> Self {
+        crate::peer::refuse_peer();
         let settings =
             RelaySettings::custom(vec![vnilink::CustomRelay::new(relay).expect("a relay URL")])
                 .expect("relay settings");
@@ -62,6 +74,21 @@ impl Engine {
             },
         )
         .expect("a relayed engine");
+        Self::prepare(name, core, store)
+    }
+
+    /// An engine another computer can reach, as the application opens one,
+    /// or one on loopback only for `Reach::Loopback`: the test agent's and
+    /// the suite's engines when they pair by file. Its identity lives in
+    /// memory and ends with the process.
+    pub fn reachable(name: &str, reach: Reach) -> Self {
+        if reach == Reach::Loopback {
+            return Self::start(name);
+        }
+        let store = MemoryStore::empty();
+        vnilink::trace::name_next_engine(name);
+        let core = Core::open(Arc::new(store.clone()), vnilink::OpenConfig::default())
+            .expect("an engine on this computer's network");
         Self::prepare(name, core, store)
     }
 

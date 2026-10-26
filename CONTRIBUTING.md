@@ -324,6 +324,15 @@ reports the OS permissions a task needs, as granted, missing, or unknown until
 the run asks for them. [LATENCY.md](build/LATENCY.md) and
 [PERCEIVED.md](build/PERCEIVED.md) describe each run and what it proves.
 
+A service's suites (`node build/run.ts test:service <service>` and
+`bench:service <service>`) run both engines on this computer. With
+`--peer <file.vnl> --peer-check <digits>` the host half runs instead on a second
+computer built from the same commit, in `node build/run.ts testkit:agent`: the
+agent writes that file and its digits, and asks on its own terminal for the
+digits the suite prints. So far only the files measurement has a peer scenario;
+other suites refuse `--peer`. A peer run is saved apart from this computer's
+runs and reports regressions without failing.
+
 A build on macOS does not exercise Windows or Linux native code. Synthetic
 frames and loopback sessions do not prove an interactive remote desktop across
 the internet. For integration changes, record hardware, OS, desktop session,

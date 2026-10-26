@@ -3,6 +3,13 @@
 //! compared with the previous run on this computer, so "slower than
 //! usual" is a number. A run records the platform and build profile, never
 //! the computer's name or its user's.
+//!
+//! A run against the test agent on another computer ([`Report::against`])
+//! goes to `peer-<os>-<arch>/` beside them and records the peer's platform
+//! and path, never its name or fingerprint. It is compared only with runs
+//! against the same kind of peer over the same kind of path, and a
+//! regression is reported without failing: a network varies more than
+//! [`REGRESSION`] allows.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -30,10 +37,40 @@ struct Measurement {
     better: Better,
 }
 
+/// The other computer a run measured against, and the path between them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Peer {
+    pub platform: crate::peer::Platform,
+    /// Whether the connection went through a relay rather than directly.
+    pub relay: bool,
+    /// The round trip when the run started, in milliseconds.
+    pub rtt_ms: u64,
+}
+
+impl Peer {
+    fn record(&self) -> Value {
+        json!({
+            "os": self.platform.os,
+            "arch": self.platform.arch,
+            "profile": self.platform.profile,
+            "path": if self.relay { "relay" } else { "direct" },
+            "rtt_ms": self.rtt_ms,
+        })
+    }
+}
+
+/// What makes two runs' peers comparable: everything but the round trip.
+fn peer_key(run: &Value) -> Option<Value> {
+    let mut peer = run.get("peer")?.clone();
+    peer.as_object_mut()?.remove("rtt_ms");
+    Some(peer)
+}
+
 /// One run of one service's performance suite.
 pub struct Report {
     service: String,
     measurements: Vec<Measurement>,
+    peer: Option<Peer>,
 }
 
 impl Report {
@@ -41,7 +78,13 @@ impl Report {
         Self {
             service: service.to_owned(),
             measurements: Vec::new(),
+            peer: None,
         }
+    }
+
+    /// Marks this run as measured against `peer` on another computer.
+    pub fn against(&mut self, peer: Peer) {
+        self.peer = Some(peer);
     }
 
     /// Records one result and prints it.
@@ -56,14 +99,19 @@ impl Report {
     }
 
     fn folder(&self) -> PathBuf {
-        std::env::var_os("VNILINK_BENCH_DIR")
+        let folder = std::env::var_os("VNILINK_BENCH_DIR")
             .filter(|folder| !folder.is_empty())
             .map_or_else(|| PathBuf::from(DEFAULT_FOLDER), PathBuf::from)
-            .join(&self.service)
+            .join(&self.service);
+        match &self.peer {
+            Some(peer) => folder.join(format!("peer-{}-{}", peer.platform.os, peer.platform.arch)),
+            None => folder,
+        }
     }
 
     /// Writes this run, compares it with the previous one, and returns the
-    /// measurements that regressed.
+    /// measurements that regressed: none for a run against a peer, whose
+    /// regressions are printed only.
     pub fn finish(self) -> Vec<String> {
         let folder = self.folder();
         std::fs::create_dir_all(&folder).expect("the bench folder");
@@ -73,7 +121,7 @@ impl Report {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        let run = json!({
+        let mut run = json!({
             "service": self.service,
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
@@ -85,6 +133,9 @@ impl Report {
                 "better": if measurement.better == Better::Higher { "higher" } else { "lower" },
             })).collect::<Vec<_>>(),
         });
+        if let Some(peer) = &self.peer {
+            run["peer"] = peer.record();
+        }
         let path = folder.join(format!("{now}.json"));
         std::fs::write(&path, serde_json::to_string_pretty(&run).expect("JSON"))
             .expect("the run's results");
@@ -95,6 +146,12 @@ impl Report {
         };
         if previous.get("profile") != run.get("profile") {
             println!("the previous run ({name}) was another build profile; not compared");
+            return Vec::new();
+        }
+        if peer_key(&previous) != peer_key(&run) {
+            println!(
+                "the previous run ({name}) measured another kind of peer or path; not compared"
+            );
             return Vec::new();
         }
         println!("compared with {name}:");
@@ -126,6 +183,10 @@ impl Report {
                 measurement.unit,
                 change * 100.0
             );
+        }
+        if self.peer.is_some() && !regressed.is_empty() {
+            println!("a network varies more than one computer; regressions against a peer are reported, not failed");
+            return Vec::new();
         }
         regressed
     }

@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { define, execute, parallel, series } from '../../build/lib/task.ts';
 import { ProcessRunner } from '../../build/lib/processes.ts';
 import { assertNativeFresh, compileNative, stageNative } from '../../build/lib/native.ts';
-import { selectServices, testkitServices } from '../../build/lib/test.ts';
+import { selectPeer, selectServices, testkitServices } from '../../build/lib/test.ts';
 
 test('series runs in order, parallel settles every task, and failures stop later steps', async () => {
 	const events = [];
@@ -149,4 +149,19 @@ test('each service with a suite in the test kit runs alone, and a service withou
 	assert.deepEqual(selectServices(tests, ['files']), ['files']);
 	assert.deepEqual(selectServices(tests, []), tests);
 	assert.throws(() => selectServices(tests, ['files', 'fax']), /No suite for fax\. Services: .*files/);
+});
+
+test('--peer and --peer-check name the agent a suite runs against, and nothing else is taken for a service', () => {
+	assert.deepEqual(selectPeer(['files', 'desktop']), { services: ['files', 'desktop'], env: {} });
+	assert.deepEqual(selectPeer(['files', '--peer', 'agent.vnl', '--peer-check', '042'], '/work'), {
+		services: ['files'],
+		env: { VNILINK_PEER: join('/work', 'agent.vnl'), VNILINK_PEER_CHECK: '042' },
+	});
+	assert.deepEqual(selectPeer(['--peer-check', '042', '--peer', '/elsewhere/agent.vnl', 'files'], '/work').env.VNILINK_PEER, resolve('/elsewhere/agent.vnl'), 'an absolute file stays where it is');
+	assert.throws(() => selectPeer(['files', '--peer', 'agent.vnl']), /--peer and --peer-check go together/);
+	assert.throws(() => selectPeer(['--peer-check', '042']), /--peer and --peer-check go together/);
+	assert.throws(() => selectPeer(['files', '--peer']), /--peer needs a value/);
+	assert.throws(() => selectPeer(['--peer', '--peer-check', '042']), /--peer needs a value/);
+	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', '42']), /three digits/);
+	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', 'abc']), /three digits/);
 });

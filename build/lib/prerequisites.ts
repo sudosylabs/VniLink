@@ -628,7 +628,7 @@ const customChecks: Readonly<Record<string, CustomCheck>> = {
 		: { status: 'missing', detail: 'this process is in no signed-in desktop (SESSIONNAME is unset, as over SSH or in a service)' }),
 	root: (_requirement, _manifest, host) => Promise.resolve(host.uid === 0 ? { status: 'ready' } : { status: 'missing', detail: 'not running as root' }),
 	// Nothing here can reach another computer before a run names one.
-	'second-computer': () => Promise.resolve({ status: 'unknown', detail: 'only --remote runs use one; every task runs on this computer without it' }),
+	'second-computer': () => Promise.resolve({ status: 'unknown', detail: '--remote runs reach one over SSH, and --peer runs a suite or measurement against `vnilink-testkit agent` there, built from the same commit; every task runs on this computer without it' }),
 	docker: async (_requirement, _manifest, host, probe) => {
 		if (!await findCommand(host, probe, 'docker')) {
 			return { status: 'missing', detail: 'docker is not installed' };

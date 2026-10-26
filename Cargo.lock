@@ -5888,6 +5888,7 @@ dependencies = [
  "blake3",
  "expect-test",
  "iroh-relay",
+ "serde",
  "serde_json",
  "tokio",
  "vnilink",
