@@ -2100,20 +2100,26 @@ pub(super) async fn serve(
     );
     write(&mut send, &response).await?;
     if !*parent_stop.borrow() && !*service_stop.borrow() {
-        let viewer_left = tokio::select! {
+        let stream_ended = tokio::select! {
             biased;
             _ = parent_stop.changed() => false, _ = service_stop.changed() => false,
             _ = host_receive(&shared, &desktop, &mut recv) => true,
-            _ = host_send(&shared, &desktop, &mut send) => false,
+            _ = host_send(&shared, &desktop, &mut send) => true,
         };
-        // The viewer finished or dropped its side: it closed the desktop.
-        // A cause this computer set first, as a failed capture, stays.
-        if viewer_left {
+        // The stream ended while its connection lives: the viewer finished
+        // its side or stopped reading ours, so it closed the desktop. A lost
+        // connection is the backstop's to name, and a cause this computer
+        // set first, as a failed capture, stays.
+        if stream_ended {
             let mut state = lock(&shared.state);
+            let connected = state
+                .incoming
+                .get(&desktop.info.service.connection_id)
+                .is_some_and(|session| session.phase == SessionPhase::Active);
             if let Some(record) = state
                 .hosted_services
                 .get_mut(&desktop.info.service.id)
-                .filter(|record| record.info.generation == parent.generation)
+                .filter(|record| connected && record.info.generation == parent.generation)
             {
                 record.change(
                     parent.generation,
