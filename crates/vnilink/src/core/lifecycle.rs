@@ -262,6 +262,8 @@ impl Core {
             teardown_cv: Condvar::new(),
             #[cfg(any(test, feature = "test-probes"))]
             close_count: AtomicUsize::new(0),
+            #[cfg(feature = "test-probes")]
+            agent: Mutex::new(None),
             #[cfg(test)]
             teardown_budget_ms: AtomicU64::new(0),
             #[cfg(test)]

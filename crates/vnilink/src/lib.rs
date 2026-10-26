@@ -121,6 +121,9 @@ pub mod trace;
 pub mod probes {
     #[cfg(unix)]
     pub use crate::core::PrestageHooks;
+    /// The test agent's channel, which only the `test-probes` build has.
+    #[cfg(feature = "test-probes")]
+    pub use crate::core::{AgentChannel, AgentListener, AGENT_ALPN, MAX_AGENT_FRAME};
     pub use crate::core::{MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
     pub use crate::manifest::ScanHooks;
 }

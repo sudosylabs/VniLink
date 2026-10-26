@@ -37,6 +37,10 @@ use crate::trust::{Device, Trust};
 use crate::video::{HostCapture, VideoInbox, VideoOutbox};
 
 mod activity;
+#[cfg(feature = "test-probes")]
+mod agent;
+#[cfg(feature = "test-probes")]
+pub use agent::{AgentChannel, AgentListener, AGENT_ALPN, MAX_AGENT_FRAME};
 mod audio_stream;
 mod availability;
 mod camera_stream;
@@ -576,6 +580,9 @@ struct Shared {
     teardown_cv: Condvar,
     #[cfg(any(test, feature = "test-probes"))]
     close_count: AtomicUsize,
+    /// Where channels to the test agent go while it listens (`agent`).
+    #[cfg(feature = "test-probes")]
+    agent: Mutex<Option<std::sync::mpsc::Sender<agent::AgentChannel>>>,
     /// Non-zero test budget, in milliseconds, for a blocked endpoint
     /// close. A real close keeps the production limit.
     #[cfg(test)]

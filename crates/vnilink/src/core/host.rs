@@ -220,6 +220,12 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
             match incoming.await {
                 Ok(connection) => {
                     super::transfer::peer_reached(&shared, connection.remote_id().as_bytes());
+                    // Only a `test-probes` build has the agent's protocol.
+                    #[cfg(feature = "test-probes")]
+                    if super::agent::is_agent_connection(&connection) {
+                        super::agent::serve_agent_connection(shared, connection).await;
+                        return;
+                    }
                     if is_files_connection(&connection) {
                         serve_files_connection(shared, connection).await;
                     } else {
@@ -969,6 +975,39 @@ mod tests {
             send.finish().unwrap();
             let received = recv.read_to_end(PAYLOAD).await.unwrap();
             assert_eq!(received.len(), PAYLOAD);
+        });
+    }
+
+    /// An engine offers the test agent's protocol only while its agent
+    /// listens, and one built without `test-probes` has no agent at all: a
+    /// dial naming that protocol fails its handshake.
+    #[test]
+    fn an_engine_without_an_agent_refuses_its_protocol() {
+        const AGENT_PROTOCOL: &[u8] = b"vnilink-agent/1";
+        #[cfg(feature = "test-probes")]
+        assert_eq!(AGENT_PROTOCOL, super::super::agent::AGENT_ALPN);
+        let host = crate::test_support::loopback_core();
+        let address = host.shared.endpoint.addr();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let dialer = bind_endpoint(
+                SecretKey::generate(),
+                RelayMode::Disabled,
+                Listen::Loopback,
+                true,
+            )
+            .await
+            .unwrap();
+            let dialed = tokio::time::timeout(
+                Duration::from_secs(10),
+                dialer.connect(address, AGENT_PROTOCOL),
+            )
+            .await
+            .expect("the handshake ends");
+            assert!(dialed.is_err(), "the agent's protocol is refused");
         });
     }
 
