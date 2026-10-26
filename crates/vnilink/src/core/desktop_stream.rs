@@ -1421,10 +1421,33 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                                 desktop.stamp,
                             ));
                             let control = async {
-                                tokio::select! {
+                                let sent = tokio::select! {
                                     result = client_send(&shared, &link, &desktop, &mut send) => result,
-                                    result = client_receive(&shared, &desktop, &mut recv) => result,
+                                    result = client_receive(&shared, &desktop, &mut recv) => return result,
+                                };
+                                // A host ending the stream stops reading it before
+                                // its `END` arrives here, so sending can fail first:
+                                // the `END` is still worth a moment's wait.
+                                match tokio::time::timeout(
+                                    END_PATIENCE,
+                                    client_receive(&shared, &desktop, &mut recv),
+                                )
+                                .await
+                                {
+                                    Ok(received) => {
+                                        crate::ignored!(
+                                            crate::trace::STREAM,
+                                            "the stream is ending; an END read here said why",
+                                            received
+                                        );
+                                    }
+                                    Err(_) => tracing::debug!(
+                                        target: crate::trace::STREAM,
+                                        service = id,
+                                        "the host said nothing more after sending stopped"
+                                    ),
                                 }
+                                sent
                             };
                             tokio::pin!(control);
                             loop {
