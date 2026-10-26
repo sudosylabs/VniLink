@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 pub struct Scratch {
     path: PathBuf,
     /// Owns the folder: dropping it removes it.
-    _folder: tempfile::TempDir,
+    folder: tempfile::TempDir,
 }
 
 impl Scratch {
@@ -28,7 +28,7 @@ impl Scratch {
         let folder = builder.tempdir_in(parent).expect("a scratch folder");
         Self {
             path: folder.path().to_path_buf(),
-            _folder: folder,
+            folder,
         }
     }
 
@@ -38,6 +38,12 @@ impl Scratch {
 
     pub fn join(&self, name: impl AsRef<Path>) -> PathBuf {
         self.path.join(name)
+    }
+
+    /// Removes the folder, saying why when it could not be: dropping it
+    /// removes it too, silently.
+    pub fn close(self) -> std::io::Result<()> {
+        self.folder.close()
     }
 }
 

@@ -329,15 +329,24 @@ A service's suites (`node build/run.ts test:service <service>` and
 `--peer <file.vnl> --peer-check <digits>` the host half runs instead on a second
 computer built from the same commit, in `node build/run.ts testkit:agent`: the
 agent writes that file and its digits, and asks on its own terminal for the
-digits the suite prints. The files, desktop and camera measurements have peer
-scenarios; desktop and camera convert the agent's times to this computer's
-clock, within half the fastest round trip of the estimate, and record that
-error with the run. Other suites refuse `--peer`. A peer run is saved apart
-from this computer's runs and reports regressions without failing. The latency
-and perceived-quality measurements reach the same agent through
-`vnilink-testkit bridge`, and the agent starts their other side from its own
-checkout; the latency sides show its real screen, so they run only when the
-agent was started with `--allow screen`.
+digits the suite prints. The files, desktop, camera and terminal measurements
+have peer scenarios; desktop and camera convert the agent's times to this
+computer's clock, within half the fastest round trip of the estimate, and
+record that error with the run. The terminal scenario gives the suite a real
+shell on the agent's computer, working in a folder of the scenario's own that
+the agent names on its terminal. When the scenario stops, or the agent is
+interrupted, idles or loses its suite, the agent ends the shell and what it
+started, in the background or under `nohup` too, and removes the folder. On
+macOS a process that leaves the shell's session after its parent ended is not
+found. The scenario runs only when the agent was started with
+`--allow terminal`. Other suites
+refuse `--peer`. A peer run is saved apart from this computer's runs and
+reports regressions without failing. The latency and perceived-quality
+measurements reach the same agent through `vnilink-testkit bridge`, and the
+agent starts their other side from its own checkout; the latency sides show
+its real screen, so they run only when the agent was started with
+`--allow screen`. `--allow` repeats or takes a comma list
+(`--allow screen,terminal`).
 
 A build on macOS does not exercise Windows or Linux native code. Synthetic
 frames and loopback sessions do not prove an interactive remote desktop across

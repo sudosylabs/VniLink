@@ -41,9 +41,57 @@ pub struct Agent {
     /// before it shuts down.
     listener: AgentListener,
     engine: Engine,
-    /// Whether the agent's owner lets scenarios show or read this
-    /// computer's real screen (`--allow screen`).
-    screen: bool,
+    /// What the agent's owner lets scenarios do here (`--allow`).
+    allowed: Vec<Allowance>,
+}
+
+/// What a scenario may do on the agent's computer only when the agent's
+/// owner allows it on the agent's command line (`--allow <name>`, repeated
+/// or as a comma list).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Allowance {
+    /// Show or read this computer's real screen: the latency sides.
+    Screen,
+    /// Give the paired computer a shell here: the terminal scenario.
+    Terminal,
+}
+
+impl Allowance {
+    pub const ALL: [Self; 2] = [Self::Screen, Self::Terminal];
+
+    /// Its name on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Screen => "screen",
+            Self::Terminal => "terminal",
+        }
+    }
+
+    /// What it lets a scenario do, as the agent tells its owner.
+    pub fn effect(self) -> &'static str {
+        match self {
+            Self::Screen => "shows and reads this computer's screen",
+            Self::Terminal => "gives the paired computer a shell on this computer",
+        }
+    }
+
+    /// The allowances `value` names, one or a comma list.
+    pub fn parse(value: &str) -> Result<Vec<Self>, String> {
+        value
+            .split(',')
+            .map(|name| {
+                Self::ALL
+                    .into_iter()
+                    .find(|allowance| allowance.name() == name.trim())
+                    .ok_or_else(|| {
+                        format!(
+                            "--allow takes {}, or several separated by commas",
+                            Self::ALL.map(Self::name).join(" or ")
+                        )
+                    })
+            })
+            .collect()
+    }
 }
 
 impl Agent {
@@ -61,14 +109,16 @@ impl Agent {
         Ok(Self {
             engine,
             listener,
-            screen: false,
+            allowed: Vec::new(),
         })
     }
 
-    /// Lets scenarios that show or read this computer's real screen run:
-    /// the latency sides. Its owner says so on its command line.
-    pub fn allow_screen(&mut self) {
-        self.screen = true;
+    /// Lets the scenarios that need `allowance` run. Its owner says so on
+    /// its command line.
+    pub fn allow(&mut self, allowance: Allowance) {
+        if !self.allowed.contains(&allowance) {
+            self.allowed.push(allowance);
+        }
     }
 
     pub fn engine(&self) -> &Engine {
@@ -148,7 +198,7 @@ impl Agent {
         };
         let mut session = Session {
             engine: &self.engine,
-            screen: self.screen,
+            allowed: &self.allowed,
             running: None,
         };
         let ending = session.answer(&channel, idle, stop);
@@ -160,7 +210,7 @@ impl Agent {
 /// One suite's requests and the scenario they started.
 struct Session<'a> {
     engine: &'a Engine,
-    screen: bool,
+    allowed: &'a [Allowance],
     running: Option<Running>,
 }
 
@@ -239,10 +289,14 @@ impl Session<'_> {
                         scenarios::NAMES.join(", ")
                     ));
                 };
-                if scenarios::shows_screen(&scenario) && !self.screen {
-                    return refused(format!(
-                        "the {scenario} scenario shows this computer's screen; its owner allows that by starting the agent with --allow screen"
-                    ));
+                if let Some(needed) = scenarios::needs(&scenario) {
+                    if !self.allowed.contains(&needed) {
+                        return refused(format!(
+                            "the {scenario} scenario {}; its owner allows that by starting the agent with --allow {}",
+                            needed.effect(),
+                            needed.name()
+                        ));
+                    }
                 }
                 let since = vnilink_log::now_ms();
                 match started.start(self.engine, &params) {
@@ -348,6 +402,14 @@ impl Session<'_> {
     }
 }
 
+/// However the service ends, a panic in a reply included, the running
+/// scenario stops and removes what it made.
+impl Drop for Session<'_> {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 /// The agent's records since `since`, its last ones within a report's
 /// bounds.
 fn records_since(since: u64) -> Vec<String> {
@@ -373,4 +435,27 @@ fn records_since(since: u64) -> Vec<String> {
         .count();
     records.drain(..records.len() - keep);
     records
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Allowance;
+
+    /// `--allow` takes one allowance or a comma list of them, and nothing
+    /// it does not know.
+    #[test]
+    fn allow_takes_one_allowance_or_a_comma_list() {
+        assert_eq!(Allowance::parse("screen"), Ok(vec![Allowance::Screen]));
+        assert_eq!(
+            Allowance::parse("screen, terminal"),
+            Ok(vec![Allowance::Screen, Allowance::Terminal])
+        );
+        for unknown in ["", "input", "screen,", "terminal,files"] {
+            assert!(
+                Allowance::parse(unknown)
+                    .is_err_and(|reason| reason.contains("screen or terminal")),
+                "{unknown:?} is refused, naming what --allow takes"
+            );
+        }
+    }
 }

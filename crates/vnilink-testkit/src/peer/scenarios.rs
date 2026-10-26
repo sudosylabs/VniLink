@@ -3,13 +3,16 @@
 //! works only in the agent's own folders; the suite names it and passes
 //! parameters, never a command or a path.
 //!
-//! `files`, `desktop` and `camera` serve a suite on the agent's engine;
-//! `latency-host`, `latency-viewer` and `perceived-stimulus` start one side
-//! of a measurement from the agent's own checkout ([`launch`]).
+//! `files`, `desktop`, `camera` and `terminal` serve a suite on the agent's
+//! engine; `latency-host`, `latency-viewer` and `perceived-stimulus` start
+//! one side of a measurement from the agent's own checkout ([`launch`]).
+//! A scenario that reaches beyond the agent's engine runs only with its
+//! owner's allowance ([`needs`]).
 
 mod camera;
 mod desktop;
 mod launch;
+mod terminal;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -18,14 +21,16 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use vnilink::Grants;
 
+use super::agent::Allowance;
 use super::Polled;
 use crate::Engine;
 
 /// Every scenario's name, for the agent's refusal of another.
-pub(crate) const NAMES: [&str; 6] = [
+pub(crate) const NAMES: [&str; 7] = [
     "files",
     "desktop",
     "camera",
+    "terminal",
     "latency-host",
     "latency-viewer",
     "perceived-stimulus",
@@ -55,10 +60,15 @@ pub(crate) trait Scenario: Send {
     }
 }
 
-/// Whether the scenario `name` shows or reads this computer's real screen,
-/// which the agent's owner must allow (`--allow screen`).
-pub(crate) fn shows_screen(name: &str) -> bool {
-    matches!(name, "latency-host" | "latency-viewer")
+/// What the agent's owner must allow before the scenario `name` runs: the
+/// latency sides show and read this computer's real screen, and `terminal`
+/// gives the paired computer a real shell here.
+pub(crate) fn needs(name: &str) -> Option<Allowance> {
+    match name {
+        "latency-host" | "latency-viewer" => Some(Allowance::Screen),
+        "terminal" => Some(Allowance::Terminal),
+        _ => None,
+    }
 }
 
 /// The scenario named `name`.
@@ -67,6 +77,7 @@ pub(crate) fn named(name: &str) -> Option<Box<dyn Scenario>> {
         "files" => Some(Box::new(FilesHost::default())),
         "desktop" => Some(Box::new(desktop::DesktopHost::default())),
         "camera" => Some(Box::new(camera::CameraHost::default())),
+        "terminal" => Some(Box::new(terminal::TerminalHost::default())),
         "latency-host" => Some(Box::new(launch::Launched::new(launch::Side::LatencyHost))),
         "latency-viewer" => Some(Box::new(launch::Launched::new(launch::Side::LatencyViewer))),
         "perceived-stimulus" => Some(Box::new(launch::Launched::new(

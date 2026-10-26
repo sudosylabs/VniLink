@@ -28,6 +28,8 @@ use serde_json::{json, Value};
 
 use super::Scenario;
 use crate::peer::folders::Folders;
+#[cfg(unix)]
+use crate::peer::processes::{descendants, same, Started};
 use crate::peer::Polled;
 use crate::Engine;
 
@@ -381,6 +383,8 @@ impl Scenario for Launched {
 /// The launcher's process, in a process group of its own (a job object on
 /// Windows), watched by a thread that says when it exited.
 struct SideProcess {
+    /// Leads the side's process group; on Windows its job holds it.
+    #[cfg(unix)]
     pid: u32,
     /// Closing it asks the launcher to stop its side.
     stdin: Option<ChildStdin>,
@@ -404,6 +408,7 @@ impl SideProcess {
                 return Err(error);
             }
         };
+        #[cfg(unix)]
         let pid = child.id();
         let stdin = child.stdin.take();
         let (sender, exited) = mpsc::channel();
@@ -412,6 +417,7 @@ impl SideProcess {
             let _ = sender.send(());
         });
         Ok(Self {
+            #[cfg(unix)]
             pid,
             stdin,
             exited,
@@ -428,7 +434,8 @@ impl SideProcess {
     /// group and every process it started that is still there.
     fn end(mut self, name: &str) {
         // Every process the side started, while they are still its own.
-        let started = descendants(self.pid);
+        #[cfg(unix)]
+        let started = descendants(&[self.pid]);
         drop(self.stdin.take());
         let quit = self.exited.recv_timeout(QUIT_WAIT).is_ok();
         if !quit {
@@ -438,7 +445,6 @@ impl SideProcess {
         terminate(self.pid, &started, quit);
         #[cfg(windows)]
         {
-            let _ = started;
             // Closing the job ends every process in it, the launcher's too.
             drop(self.job.take());
         }
@@ -446,71 +452,6 @@ impl SideProcess {
             eprintln!("the {name} side could not be ended");
         }
     }
-}
-
-/// A process the side started: its id and when it started, so a later
-/// process that reuses the id is never mistaken for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Started {
-    pid: u32,
-    since: String,
-}
-
-/// Every process's id, parent and start time, as `ps` lists them.
-#[cfg(unix)]
-fn processes(only: Option<u32>) -> Vec<(Started, u32)> {
-    let mut command = Command::new("ps");
-    match only {
-        Some(pid) => command.args(["-p", &pid.to_string()]),
-        None => command.arg("-A"),
-    };
-    let Ok(listing) = command
-        .args(["-o", "pid=", "-o", "ppid=", "-o", "lstart="])
-        .env("LC_ALL", "C")
-        .output()
-    else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&listing.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let pid = fields.next()?.parse().ok()?;
-            let parent = fields.next()?.parse().ok()?;
-            let since = fields.collect::<Vec<_>>().join(" ");
-            Some((Started { pid, since }, parent))
-        })
-        .collect()
-}
-
-/// The processes `pid` started, and theirs, now.
-#[cfg(unix)]
-fn descendants(pid: u32) -> Vec<Started> {
-    let all = processes(None);
-    let mut found: Vec<Started> = Vec::new();
-    let mut parents = vec![pid];
-    while let Some(parent) = parents.pop() {
-        for (child, _) in all.iter().filter(|(_, of)| *of == parent) {
-            if !found.iter().any(|known| known.pid == child.pid) {
-                found.push(child.clone());
-                parents.push(child.pid);
-            }
-        }
-    }
-    found
-}
-
-#[cfg(windows)]
-fn descendants(_pid: u32) -> Vec<Started> {
-    Vec::new()
-}
-
-/// Whether `started` still runs as the same process it was.
-#[cfg(unix)]
-fn same(started: &Started) -> bool {
-    processes(Some(started.pid))
-        .first()
-        .is_some_and(|(now, _)| now == started)
 }
 
 /// Ends the launcher's group, if it did not quit, and whatever of
@@ -547,39 +488,11 @@ fn terminate(pid: u32, started: &[Started], quit: bool) {
 /// with `child` in it. The launcher's own children join it as they start.
 #[cfg(windows)]
 fn kill_on_close(child: &Child) -> std::io::Result<std::os::windows::io::OwnedHandle> {
-    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
+    use std::os::windows::io::AsRawHandle;
 
-    // SAFETY: no attributes and no name: an anonymous job owned by the agent.
-    let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-    if raw.is_null() {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `raw` is a new handle nothing else owns.
-    let job = unsafe { OwnedHandle::from_raw_handle(raw) };
-    // SAFETY: an all-zero limit is a valid value of that plain C struct.
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    // SAFETY: `limits` is valid for the call and its size is the one passed.
-    let set = unsafe {
-        SetInformationJobObject(
-            job.as_raw_handle(),
-            JobObjectExtendedLimitInformation,
-            std::ptr::from_ref(&limits).cast(),
-            u32::try_from(std::mem::size_of_val(&limits)).unwrap_or(u32::MAX),
-        )
-    };
-    // SAFETY: both handles are open for the call's duration.
-    if set == 0
-        || unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) } == 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(job)
+    let job = crate::peer::processes::Job::new()?;
+    job.assign(child.as_raw_handle())?;
+    Ok(job.into_handle())
 }
 
 #[cfg(test)]

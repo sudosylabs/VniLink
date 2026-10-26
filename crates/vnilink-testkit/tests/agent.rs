@@ -10,8 +10,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use vnilink_testkit::peer::processes::runs;
 use vnilink_testkit::peer::{PeerError, RemoteHost};
-use vnilink_testkit::{traced, Engine, Scratch, TestResult};
+use vnilink_testkit::{terminal, traced, Engine, Scratch, TestResult};
 
 /// How long the agent waits for a request before it stops, in seconds.
 const IDLE: u64 = 10;
@@ -27,21 +28,18 @@ struct AgentProcess {
 
 impl AgentProcess {
     fn start(file: &std::path::Path) -> Self {
-        Self::start_with(file, &[])
+        Self::start_with(file, &[], &[])
     }
 
-    /// As [`Self::start`], with `env` added to the agent's environment.
-    fn start_with(file: &std::path::Path, env: &[(&str, &std::path::Path)]) -> Self {
+    /// As [`Self::start`], with `args` added to its command line and `env`
+    /// to its environment.
+    fn start_with(file: &std::path::Path, args: &[&str], env: &[(&str, &std::path::Path)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_vnilink-testkit"))
             .args(["agent", "--loopback", "--ttl", "60", "--idle"])
             .arg(IDLE.to_string())
             .arg("--out")
             .arg(file)
-            .args(if env.is_empty() {
-                &[][..]
-            } else {
-                &["--allow", "screen"][..]
-            })
+            .args(args)
             .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -159,6 +157,177 @@ fn the_agent_serves_the_one_computer_its_owner_approved_and_stops_when_idle() ->
     Ok(())
 }
 
+/// An agent started with `args`, and a suite in this process paired with
+/// it as a person pairs them.
+fn paired(
+    scratch: &Scratch,
+    args: &[&str],
+) -> Result<(AgentProcess, Engine, RemoteHost), PeerError> {
+    let file = scratch.join("agent.vnl");
+    let mut agent = AgentProcess::start_with(&file, args, &[]);
+    let check = agent.line("check digits: ")["check digits: ".len()..][..3].to_owned();
+    let bytes = std::fs::read(&file).map_err(PeerError::File)?;
+    let suite = Engine::start("controller");
+    let host = std::thread::scope(|scope| {
+        let pairing = scope.spawn(|| RemoteHost::pair(&suite, &bytes, &check));
+        agent.line("a computer asks to be approved");
+        agent.type_line(&suite.core.control_check());
+        pairing.join().expect("the pairing thread")
+    })?;
+    agent.line("approved");
+    Ok((agent, suite, host))
+}
+
+/// A shell the terminal scenario shares, opened from the suite: the folder
+/// the agent named for it, and the ids of the shell and of what it started
+/// that a terminal's own ending leaves running.
+struct SharedShell {
+    folder: std::path::PathBuf,
+    processes: Vec<u32>,
+    _terminal: vnilink::RemoteTerminalService,
+}
+
+impl SharedShell {
+    fn open(
+        agent: &AgentProcess,
+        suite: &Engine,
+        host: &mut RemoteHost,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        host.start("terminal", Value::Null)?;
+        let opened = agent.line("the paired computer now has a shell on this computer");
+        let folder = std::path::PathBuf::from(
+            opened
+                .split_once("working in ")
+                .ok_or("the agent names the shell's folder")?
+                .1,
+        );
+        assert!(folder.is_dir(), "the shell's folder exists while it runs");
+        let connection = suite.connect_services_to(host.endpoint())?;
+        let terminal = suite.open_terminal(
+            &connection,
+            vnilink::terminal::TerminalOptions {
+                size: terminal::SIZE,
+                persistent: false,
+                resume_id: None,
+            },
+        )?;
+        let mut processes = terminal::start_lingering(&terminal);
+        processes.push(terminal.session().process_id);
+        assert!(
+            processes.iter().all(|pid| runs(*pid)),
+            "the shell and what it started run"
+        );
+        Ok(Self {
+            folder,
+            processes,
+            _terminal: terminal,
+        })
+    }
+
+    /// Asserts the agent said the shell ended and its folder went, and
+    /// that nothing of it is left.
+    fn assert_ended(&self, agent: &AgentProcess) {
+        let ended = agent.line("the paired computer's shell here");
+        assert!(
+            ended.contains("has ended") && ended.contains(&self.folder.display().to_string()),
+            "the agent says the shell ended and which folder went: {ended}"
+        );
+        assert!(!self.folder.exists(), "the shell's folder is removed");
+        let running: Vec<_> = self.processes.iter().filter(|pid| runs(**pid)).collect();
+        assert!(
+            running.is_empty(),
+            "neither the shell nor anything it started is left: {running:?}"
+        );
+    }
+}
+
+/// The terminal scenario runs only when the agent's owner allowed it
+/// apart from the screen; the agent then tells its owner the paired
+/// computer has a shell here and in which folder, and once the scenario
+/// stops, that the shell and everything it started ended and the folder
+/// is gone.
+#[test]
+fn the_agent_shares_a_shell_only_when_its_owner_allowed_it_and_says_so() -> TestResult {
+    let _trace = traced();
+    let scratch = Scratch::new("terminal-refused");
+    let (_agent, _suite, mut host) = paired(&scratch, &["--allow", "screen"])?;
+    assert!(
+        matches!(
+            host.start("terminal", Value::Null),
+            Err(PeerError::Refused(reason)) if reason.contains("--allow terminal")
+        ),
+        "the refusal names the flag that allows a shell"
+    );
+    drop(host);
+
+    let scratch = Scratch::new("terminal-allowed");
+    let (mut agent, suite, mut host) =
+        paired(&scratch, &["--allow", "screen", "--allow", "terminal"])?;
+    let shell = SharedShell::open(&agent, &suite, &mut host)?;
+    host.stop()?;
+    shell.assert_ended(&agent);
+    drop(host);
+    agent.line("the suite went away");
+    assert!(
+        agent.exited(Duration::from_secs(10)).success(),
+        "the agent stops cleanly"
+    );
+    Ok(())
+}
+
+/// A shared shell ends with the scenario however the agent's service ends
+/// without a stop: nothing asked for its idle limit, or the suite gone.
+#[test]
+fn a_shared_shell_ends_when_the_agent_idles_or_its_suite_goes() -> TestResult {
+    let _trace = traced();
+    for (tag, ending) in [
+        ("idle", "nothing was asked for"),
+        ("gone", "the suite went away"),
+    ] {
+        let scratch = Scratch::new(tag);
+        let (mut agent, suite, mut host) = paired(&scratch, &["--allow", "terminal"])?;
+        let shell = SharedShell::open(&agent, &suite, &mut host)?;
+        // Gone: the suite closes its channel. Idle: it stays, asking nothing.
+        let kept = (tag == "idle").then_some(host);
+        shell.assert_ended(&agent);
+        agent.line(ending);
+        assert!(
+            agent.exited(Duration::from_secs(10)).success(),
+            "the agent stops cleanly after {tag}"
+        );
+        drop(kept);
+    }
+    Ok(())
+}
+
+/// Interrupting the agent (Ctrl-C), or its terminal closing (SIGHUP),
+/// while it shares a shell ends the shell and everything it started, and
+/// removes its folder, before the agent exits.
+#[cfg(unix)]
+#[test]
+fn a_shared_shell_ends_when_the_agent_is_interrupted_or_its_terminal_closes() -> TestResult {
+    let _trace = traced();
+    for signal in ["INT", "HUP"] {
+        let scratch = Scratch::new(&format!("terminal-{signal}"));
+        let (mut agent, suite, mut host) = paired(&scratch, &["--allow", "terminal"])?;
+        let shell = SharedShell::open(&agent, &suite, &mut host)?;
+        let sent = Command::new("kill")
+            .arg(format!("-{signal}"))
+            .arg(agent.child.id().to_string())
+            .status()?;
+        assert!(sent.success(), "the agent was sent SIG{signal}");
+        shell.assert_ended(&agent);
+        agent.line("asked to stop");
+        assert_eq!(
+            agent.exited(Duration::from_secs(60)).code(),
+            Some(130),
+            "the agent exits as interrupted by SIG{signal}"
+        );
+        drop(host);
+    }
+    Ok(())
+}
+
 /// An agent that allows screen scenarios and runs [`FAKE_SIDE`] as its
 /// Node, and a bridge paired with it as a person pairs them.
 #[cfg(unix)]
@@ -171,7 +340,11 @@ fn paired_with_fake_side(
     std::fs::write(&side, FAKE_SIDE)?;
     std::fs::set_permissions(&side, std::fs::Permissions::from_mode(0o755))?;
     let file = scratch.join("agent.vnl");
-    let mut agent = AgentProcess::start_with(&file, &[("VNILINK_AGENT_NODE", side.as_path())]);
+    let mut agent = AgentProcess::start_with(
+        &file,
+        &["--allow", "screen"],
+        &[("VNILINK_AGENT_NODE", side.as_path())],
+    );
     let check = agent.line("check digits: ")["check digits: ".len()..][..3].to_owned();
     let bridge = BridgeProcess::start(&file, &check);
     let approve = bridge.next();

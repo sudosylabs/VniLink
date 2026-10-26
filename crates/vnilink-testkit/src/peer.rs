@@ -26,6 +26,7 @@ pub mod agent;
 pub mod bridge;
 pub mod clock;
 mod folders;
+pub mod processes;
 mod scenarios;
 
 use std::fmt;
@@ -238,7 +239,7 @@ impl From<vnilink::Error> for PeerError {
 /// misreading each other. Line endings are ignored, as a Windows checkout
 /// writes them differently.
 pub fn revision() -> String {
-    const SOURCES: [&str; 17] = [
+    const SOURCES: [&str; 20] = [
         include_str!("../../../build/lib/latency.ts"),
         include_str!("../../../build/lib/perceived.ts"),
         include_str!("../../../build/lib/remote.ts"),
@@ -252,10 +253,13 @@ pub fn revision() -> String {
         include_str!("peer/agent.rs"),
         include_str!("peer/clock.rs"),
         include_str!("peer/folders.rs"),
+        include_str!("peer/processes.rs"),
         include_str!("peer/scenarios.rs"),
         include_str!("peer/scenarios/camera.rs"),
         include_str!("peer/scenarios/desktop.rs"),
         include_str!("peer/scenarios/launch.rs"),
+        include_str!("peer/scenarios/terminal.rs"),
+        include_str!("terminal.rs"),
     ];
     let mut hasher = blake3::Hasher::new();
     for source in SOURCES {
@@ -584,7 +588,7 @@ fn active(engine: &Engine, id: u64, within: Duration) -> Result<u64, PeerError> 
 
 #[cfg(test)]
 mod tests {
-    use super::agent::Agent;
+    use super::agent::{Agent, Allowance};
     use super::*;
     use crate::{traced, TestResult};
     use serde_json::json;
@@ -646,7 +650,19 @@ mod tests {
     /// Runs `test` against an agent in this process, paired as two
     /// computers pair, which serves until the test drops its handle.
     fn with_agent(test: impl FnOnce(&Engine, &mut RemoteHost) -> TestResult) -> TestResult {
-        let agent = Agent::open(Reach::Loopback)?;
+        with_agent_allowing(&[], |_agent, suite, host| test(suite, host))
+    }
+
+    /// As [`with_agent`], for an agent whose owner allowed `allowed`; the
+    /// test also sees the agent's engine.
+    fn with_agent_allowing(
+        allowed: &[Allowance],
+        test: impl FnOnce(&Engine, &Engine, &mut RemoteHost) -> TestResult,
+    ) -> TestResult {
+        let mut agent = Agent::open(Reach::Loopback)?;
+        for allowance in allowed {
+            agent.allow(*allowance);
+        }
         let file = agent.export(Duration::from_secs(60))?;
         let suite = Engine::start("controller");
         let suite_check = suite.core.control_check();
@@ -658,7 +674,7 @@ mod tests {
                 agent.serve(&controller, Duration::from_secs(30))
             });
             let mut host = RemoteHost::pair(&suite, &file.bytes, &file.check)?;
-            test(&suite, &mut host)?;
+            test(agent.engine(), &suite, &mut host)?;
             drop(host);
             serving.join().expect("the agent's thread")?;
             Ok(())
@@ -813,6 +829,167 @@ mod tests {
                     "{scenario} needs --allow screen"
                 );
             }
+            Ok(())
+        })
+    }
+
+    /// The terminal scenario gives the paired computer a real shell, so it
+    /// runs only when the agent's owner allowed exactly that: allowing the
+    /// screen is not enough.
+    #[test]
+    fn the_terminal_scenario_needs_the_owner_s_allowance() -> TestResult {
+        let _trace = traced();
+        with_agent_allowing(&[Allowance::Screen], |agent, _suite, host| {
+            assert!(
+                matches!(
+                    host.start("terminal", Value::Null),
+                    Err(PeerError::Refused(reason)) if reason.contains("--allow terminal")
+                ),
+                "the terminal scenario needs --allow terminal"
+            );
+            assert_eq!(
+                agent.core.sharing_policy()?,
+                vnilink::SharingPolicy::default(),
+                "a refused scenario shares nothing"
+            );
+            Ok(())
+        })
+    }
+
+    /// While the terminal scenario runs the agent shares its shell and
+    /// nothing else, keeps none past its connection, and runs it in the
+    /// scenario's own folder; stopping it ends the shell and everything it
+    /// started, in the background or under `nohup` too, removes the folder
+    /// and shares nothing again, and the shell cannot be resumed. Nothing
+    /// typed or printed is recorded, on either side or in the agent's
+    /// report.
+    #[test]
+    fn the_terminal_scenario_shares_a_shell_in_its_own_folder_until_stopped() -> TestResult {
+        use crate::peer::processes::runs;
+        use crate::terminal::{contains, read_until, start_lingering, ENTER, OUTPUT_FILE, SIZE};
+        use vnilink::terminal::TerminalOptions;
+        use vnilink::{ServicePermissions, SharingPolicy};
+
+        let trace = traced();
+        with_agent_allowing(&[Allowance::Terminal], |agent, suite, host| {
+            let facts = host.start("terminal", json!({ "output_bytes": 4096 }))?;
+            assert_eq!(
+                facts,
+                json!({ "output_file": OUTPUT_FILE }),
+                "the agent wrote the file a shell types"
+            );
+            assert_eq!(
+                agent.core.sharing_policy()?,
+                SharingPolicy {
+                    terminal: true,
+                    ..SharingPolicy::default()
+                },
+                "the agent shares the terminal and nothing else"
+            );
+            assert_eq!(
+                agent.core.service_permissions(&suite.endpoint())?,
+                ServicePermissions {
+                    terminal: true,
+                    ..ServicePermissions::default()
+                },
+                "the suite may open the agent's terminal and nothing else"
+            );
+            let connection = suite.connect_services_to(host.endpoint())?;
+            let options = |persistent| TerminalOptions {
+                size: SIZE,
+                persistent,
+                resume_id: None,
+            };
+            assert!(
+                matches!(
+                    suite.open_terminal(&connection, options(true)),
+                    Err(vnilink::Error::Unauthorized)
+                ),
+                "no shell is kept past its connection"
+            );
+            let terminal = suite.open_terminal(&connection, options(false))?;
+            let shell = terminal.session();
+            let mut processes = start_lingering(&terminal);
+            processes.push(shell.process_id);
+            assert!(
+                processes.iter().all(|pid| runs(*pid)),
+                "the shell and what it started run"
+            );
+
+            // The typed line holds a quote or caret the printed one lacks.
+            #[cfg(unix)]
+            let (typed, printed) = ("echo 'vnilink-pr''inted'; pwd", "vnilink-printed");
+            #[cfg(windows)]
+            let (typed, printed) = ("echo vnilink-pr^inted & cd", "vnilink-printed");
+            terminal.input(format!("{typed}{ENTER}").as_bytes())?;
+            let mut output = Vec::new();
+            read_until(
+                &terminal,
+                &mut output,
+                "the shell's answer",
+                Duration::from_secs(20),
+                |output| contains(output, printed) && contains(output, "vnilink-testkit-terminal-"),
+            );
+            let text = String::from_utf8_lossy(&output);
+            let folder = text
+                .lines()
+                .map(str::trim)
+                .find(|line| line.contains("vnilink-testkit-terminal-") && !line.contains(typed))
+                .map(std::path::PathBuf::from)
+                .expect("the shell names its folder");
+            assert!(
+                folder.join(OUTPUT_FILE).is_file(),
+                "the shell works in the scenario's folder: {}",
+                folder.display()
+            );
+            assert!(
+                !folder.starts_with(agent.root()),
+                "never in the agent's own root"
+            );
+
+            let records = host.stop()?;
+            assert!(
+                agent.core.hosted_terminal_sessions()?.is_empty(),
+                "no shell outlives the stop"
+            );
+            assert!(
+                processes.iter().all(|pid| !runs(*pid)),
+                "neither the shell nor anything it started outlives the stop: {:?}",
+                processes
+                    .iter()
+                    .filter(|pid| runs(**pid))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                suite
+                    .open_terminal(
+                        &connection,
+                        TerminalOptions {
+                            resume_id: Some(shell.id.clone()),
+                            ..options(true)
+                        }
+                    )
+                    .is_err(),
+                "a stopped shell cannot be resumed"
+            );
+            assert!(!folder.exists(), "the scenario's folder is removed");
+            assert_eq!(
+                agent.core.sharing_policy()?,
+                SharingPolicy::default(),
+                "the agent shares nothing again"
+            );
+            assert!(
+                agent.core.terminal_policy()?.allow_persistence,
+                "the agent's own terminal policy is as it was"
+            );
+            for content in [typed, printed] {
+                assert!(
+                    records.iter().all(|record| !record.contains(content)),
+                    "the agent's report holds no terminal content"
+                );
+            }
+            trace.assert_unrecorded("terminal content", &[typed, printed]);
+            suite.core.disconnect_session(connection.id)?;
             Ok(())
         })
     }
