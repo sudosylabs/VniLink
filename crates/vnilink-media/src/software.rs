@@ -708,10 +708,27 @@ impl<N: VideoEncoder> CodecEncoder<N> {
             .ok_or(Error::Unsupported("negotiated codec"))?;
         match native(codec, w, h, fps, bps) {
             Ok(encoder) => Ok(Self::Native(encoder)),
-            Err(error) if codec == vnilink::VideoCodec::H264 => Err(error),
-            Err(_) => Ok(Self::Software(SoftwareEncoder::open(
-                codec, matrix, w, h, fps, bps,
-            )?)),
+            Err(error) if codec == vnilink::VideoCodec::H264 => {
+                tracing::warn!(
+                    target: vnilink::trace::ENCODE,
+                    failure = vnilink::trace::Failure::failure_name(&error),
+                    reason = vnilink::trace::Failure::failure_reason(&error),
+                    "no H.264 encoder opened, and H.264 has no software encoder"
+                );
+                Err(error)
+            }
+            Err(error) => {
+                tracing::info!(
+                    target: vnilink::trace::ENCODE,
+                    codec = ?codec,
+                    failure = vnilink::trace::Failure::failure_name(&error),
+                    reason = vnilink::trace::Failure::failure_reason(&error),
+                    "this computer's encoder did not open: the software encoder serves instead"
+                );
+                Ok(Self::Software(SoftwareEncoder::open(
+                    codec, matrix, w, h, fps, bps,
+                )?))
+            }
         }
     }
 }
