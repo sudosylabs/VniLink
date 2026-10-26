@@ -30,8 +30,9 @@ fn a_connection_without_a_direct_route_goes_through_the_relay() {
     );
     assert!(relay.carried() > 0, "the relay carried nothing");
     expect![[r#"
-        engine:
+        controller:
           relay: endpoint bound listen=RelayOnly relay=true
+        host:
           relay: endpoint bound listen=RelayOnly relay=true
     "#]]
     .assert_eq(&trace.story(&["relay"]));

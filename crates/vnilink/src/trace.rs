@@ -181,9 +181,28 @@ pub fn ignored_counts() -> Vec<(&'static str, &'static str, u64)> {
 /// The span that names an engine; see the module documentation.
 pub const ENGINE: &str = "vnilink::engine";
 
-/// A new engine's span, named `engine` until [`crate::Core::set_trace_name`].
+/// A new engine's span, named `engine` until [`crate::Core::set_trace_name`],
+/// or as [`name_next_engine`] chose.
 pub(crate) fn engine_span() -> tracing::Span {
+    #[cfg(any(test, feature = "test-probes"))]
+    if let Some(name) = NEXT_ENGINE_NAME.with(|next| next.borrow_mut().take()) {
+        return tracing::error_span!(target: ENGINE, "engine", name = name.as_str());
+    }
     tracing::error_span!(target: ENGINE, "engine", name = "engine")
+}
+
+#[cfg(any(test, feature = "test-probes"))]
+thread_local! {
+    static NEXT_ENGINE_NAME: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Names the next engine this thread opens `name` from its first record, as
+/// binding its endpoint, which [`crate::Core::set_trace_name`] comes too late
+/// for. For tests that open several engines in one process.
+#[cfg(any(test, feature = "test-probes"))]
+pub fn name_next_engine(name: &str) {
+    NEXT_ENGINE_NAME.with(|next| *next.borrow_mut() = Some(name.to_owned()));
 }
 
 /// `work`, to run on another thread inside `span`.

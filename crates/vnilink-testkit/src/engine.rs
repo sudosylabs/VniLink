@@ -25,6 +25,8 @@ impl Engine {
     /// `name` tags its folders, such as `host` or `controller`.
     pub fn start(name: &str) -> Self {
         let store = MemoryStore::empty();
+        // Named from its first record, as binding its endpoint.
+        vnilink::trace::name_next_engine(name);
         let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
             .expect("a loopback engine");
         Self::prepare(name, core, store)
@@ -35,6 +37,7 @@ impl Engine {
     /// folders.
     pub fn restart(&mut self) {
         self.core.shutdown();
+        vnilink::trace::name_next_engine(&self.name);
         let core = Core::open_direct(Arc::new(self.store.clone()), RelaySettings::public_n0())
             .expect("a loopback engine");
         configure(&self.name, &core, &self.scratch);
@@ -48,6 +51,8 @@ impl Engine {
             RelaySettings::custom(vec![vnilink::CustomRelay::new(relay).expect("a relay URL")])
                 .expect("relay settings");
         let store = MemoryStore::empty();
+        // Named from its first record, as binding its endpoint.
+        vnilink::trace::name_next_engine(name);
         let core = Core::open(
             Arc::new(store.clone()),
             vnilink::OpenConfig {
