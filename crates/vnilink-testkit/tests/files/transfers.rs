@@ -5,6 +5,7 @@ use expect_test::expect;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::shared::whole_disk;
 use vnilink::{ConflictChoice, JobState};
 use vnilink_testkit::files::{self, drive_to_end, received, tree, write_files, Entry};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult};
@@ -1208,31 +1209,6 @@ fn a_download_whose_host_forgets_the_controller_lands_nothing_more() -> TestResu
     "#]]
     .assert_eq(&trace.story(&["files"]));
     Ok(())
-}
-
-/// Shares `engine`'s whole disk rather than its one folder, and names
-/// `inside` (a path in its folder) from the disk's root: the root's id and
-/// the path within it.
-fn whole_disk(
-    engine: &vnilink_testkit::Engine,
-    inside: &str,
-) -> Result<(u64, String), vnilink::Error> {
-    engine.core.enable_filesystem_access()?;
-    let folder = engine.root().join(inside);
-    let (id, base) = engine
-        .core
-        .file_roots()?
-        .into_iter()
-        .find(|(_, path)| folder.starts_with(path))
-        .expect("a disk root holds the engine's folder");
-    let path = folder
-        .strip_prefix(&base)
-        .expect("inside the root")
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/");
-    Ok((id, path))
 }
 
 /// As [`a_restarted_sender_resumes_a_nested_source`], with each computer

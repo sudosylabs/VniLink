@@ -183,6 +183,7 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
     trace.wait_for_records("desktop ended", 2);
     expect![[r#"
         controller:
+          session: session phase from=connecting generation=1 role=Controller session=1 to=active
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           session: desktop ended hosted=false reason=revoked service=2
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: PeerClose

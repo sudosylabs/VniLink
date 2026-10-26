@@ -138,11 +138,14 @@ pub fn drive_to_end(
         .job_snapshot(receiver_job)
         .expect("the receiver's job");
     wait_for("both sides of the job to end", within, || {
+        // A poll that fails fails the job's drive: a transfer polls cleanly.
         if !got.state.is_terminal() {
-            got = receiver.job_poll(receiver_job).ok()?;
+            got = receiver
+                .job_poll(receiver_job)
+                .expect("the receiver's poll");
         }
         if !sent.state.is_terminal() {
-            sent = sender.job_poll(sender_job).ok()?;
+            sent = sender.job_poll(sender_job).expect("the sender's poll");
         }
         let asking = got.state == vnilink::JobState::WaitingDecision;
         (asking || (got.state.is_terminal() && sent.state.is_terminal()))

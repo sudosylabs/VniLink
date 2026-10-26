@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use iroh::{RelayMode, SecretKey};
@@ -7,13 +7,11 @@ use iroh::{RelayMode, SecretKey};
 use crate::address::{self, Announcement};
 use crate::core::{Core, CoreConfig, Listen};
 use crate::error::Error;
-use crate::events::CoreEvent;
-use crate::input::{HostDesktop, InputEvent};
 use crate::installation::MemoryStore;
 use crate::invitation::{self, MAX_DIRECT_ADDRS};
 use crate::protocol::ControlMessage;
-use crate::relay::{CustomRelay, RelaySettings};
-use crate::session::{Grants, SessionPhase, SessionRole};
+use crate::relay::RelaySettings;
+use crate::session::{Grants, SessionPhase};
 use crate::trust::Device;
 
 fn start_direct() -> Core {
@@ -30,46 +28,12 @@ fn start_direct() -> Core {
     core
 }
 
-fn start_custom(url: &str) -> Core {
-    let relay = RelaySettings::custom(vec![CustomRelay::new(url).unwrap()]).unwrap();
-    let core = Core::boot(
-        CoreConfig {
-            listen: Listen::Loopback,
-            relay,
-            ..CoreConfig::default()
-        },
-        RelayMode::Disabled,
-    )
-    .expect("loopback core");
-    core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
-        .expect("flags");
-    core
-}
-
 fn open_stored(store: &MemoryStore) -> Core {
     let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
         .expect("store opens");
     core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .expect("flags");
     core
-}
-
-struct RecordingDesktop {
-    events: Arc<Mutex<Vec<InputEvent>>>,
-}
-
-impl HostDesktop for RecordingDesktop {
-    fn apply(&mut self, event: InputEvent) -> Result<(), Error> {
-        self.events
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .push(event);
-        Ok(())
-    }
-
-    fn monitor(&self) -> (u16, u16) {
-        (1920, 1080)
-    }
 }
 
 fn stale() -> SocketAddr {
@@ -130,36 +94,6 @@ fn wait_until(mut ready: impl FnMut() -> bool) {
         }
         if std::time::Instant::now() > deadline {
             panic!("condition was not met");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn wait_closed(core: &Core, role: SessionRole) {
-    wait_until(|| {
-        let snapshot = core.snapshot().unwrap();
-        let session = match role {
-            SessionRole::Host => snapshot.incoming,
-            SessionRole::Controller => snapshot.outgoing,
-        };
-        session
-            .as_ref()
-            .is_some_and(|session| session.phase == SessionPhase::Closed)
-    });
-}
-
-fn wait_applied(events: &Mutex<Vec<InputEvent>>, expected: &[InputEvent]) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let got = events.lock().unwrap_or_else(|poison| poison.into_inner());
-        if got.len() >= expected.len() {
-            assert_eq!(got.as_slice(), expected);
-            return;
-        }
-        drop(got);
-        if std::time::Instant::now() > deadline {
-            let got = events.lock().unwrap_or_else(|poison| poison.into_inner());
-            panic!("applied events did not settle: {got:?}");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -241,25 +175,6 @@ fn a_session_replaces_stale_addresses_and_keeps_the_grant() {
 }
 
 #[test]
-fn a_custom_home_relay_is_what_the_peer_stores() {
-    let host = start_custom("https://relay.example.com");
-    let controller = start_direct();
-    pair(&host, &controller, None);
-    controller.connect(&host.endpoint_id()).unwrap();
-    let expected = host.snapshot().unwrap().relay_urls;
-    assert_eq!(expected, vec!["https://relay.example.com/".to_string()]);
-    wait_until(|| device(&controller, &host.endpoint_id()).relays == expected);
-    assert_eq!(
-        device(&controller, &host.endpoint_id()).grants,
-        Grants::default()
-    );
-    let granted = device(&host, &controller.endpoint_id());
-    assert!(granted.grants.control);
-    assert!(!granted.grants.clipboard);
-    assert!(!granted.grants.transfer);
-}
-
-#[test]
 fn a_failed_save_keeps_the_previous_addresses() {
     let host_store = MemoryStore::empty();
     let controller_store = MemoryStore::empty();
@@ -317,116 +232,4 @@ fn refreshed_addresses_survive_a_restart() {
     assert!(restored_grant.grants.control);
     assert!(!restored_grant.grants.clipboard);
     assert!(!restored_grant.grants.transfer);
-}
-
-#[test]
-fn a_dropped_session_dials_again_without_a_new_file() {
-    let host = start_direct();
-    let controller = start_direct();
-    let applied = Arc::new(Mutex::new(Vec::new()));
-    host.set_desktop(Box::new(RecordingDesktop {
-        events: Arc::clone(&applied),
-    }))
-    .unwrap();
-    pair(&host, &controller, None);
-    let session = controller.connect(&host.endpoint_id()).unwrap();
-    let events = controller.subscribe().unwrap();
-    controller
-        .submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_down(crate::input::usage::A),
-        )
-        .unwrap();
-    wait_applied(&applied, &[InputEvent::key_down(crate::input::usage::A)]);
-    controller.drop_link().unwrap();
-    wait_until(|| {
-        controller
-            .snapshot()
-            .unwrap()
-            .outgoing
-            .as_ref()
-            .is_some_and(|outgoing| outgoing.phase != SessionPhase::Active)
-    });
-    assert!(matches!(
-        controller.submit_input(
-            session.id,
-            session.generation,
-            InputEvent::key_down(crate::input::usage::B),
-        ),
-        Err(Error::NoSession | Error::StaleSession)
-    ));
-    wait_until(|| {
-        let outgoing = controller.snapshot().unwrap().outgoing.unwrap();
-        outgoing.phase == SessionPhase::Active
-            && (outgoing.id != session.id || outgoing.generation != session.generation)
-    });
-    let again = controller.snapshot().unwrap().outgoing.unwrap();
-    assert_ne!(again.generation, session.generation);
-    controller
-        .submit_input(
-            again.id,
-            again.generation,
-            InputEvent::key_down(crate::input::usage::C),
-        )
-        .unwrap();
-    wait_applied(
-        &applied,
-        &[
-            InputEvent::key_down(crate::input::usage::A),
-            InputEvent::key_up(crate::input::usage::A),
-            InputEvent::key_down(crate::input::usage::C),
-        ],
-    );
-    let mut saw_reconnecting = false;
-    while let Some(event) = events.try_recv() {
-        if let CoreEvent::SessionChanged {
-            phase: SessionPhase::Reconnecting,
-            ..
-        } = event
-        {
-            saw_reconnecting = true;
-        }
-    }
-    assert!(saw_reconnecting);
-}
-
-#[test]
-fn a_local_disconnect_does_not_dial_again() {
-    let host = start_direct();
-    let controller = start_direct();
-    pair(&host, &controller, None);
-    controller.connect(&host.endpoint_id()).unwrap();
-    controller.disconnect().unwrap();
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
-    std::thread::sleep(Duration::from_millis(700));
-    assert_eq!(
-        controller.snapshot().unwrap().outgoing.unwrap().phase,
-        SessionPhase::Closed
-    );
-    assert_eq!(
-        host.snapshot().unwrap().incoming.unwrap().phase,
-        SessionPhase::Closed
-    );
-}
-
-#[test]
-fn the_host_closing_the_session_does_not_dial_again() {
-    let host = start_direct();
-    let controller = start_direct();
-    pair(&host, &controller, None);
-    controller.connect(&host.endpoint_id()).unwrap();
-    host.stop_hosted_session().unwrap();
-    wait_closed(&host, SessionRole::Host);
-    wait_closed(&controller, SessionRole::Controller);
-    std::thread::sleep(Duration::from_millis(700));
-    assert_eq!(
-        controller.snapshot().unwrap().outgoing.unwrap().phase,
-        SessionPhase::Closed
-    );
-    assert_eq!(
-        host.snapshot().unwrap().incoming.unwrap().phase,
-        SessionPhase::Closed
-    );
 }

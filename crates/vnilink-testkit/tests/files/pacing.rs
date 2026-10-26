@@ -642,3 +642,95 @@ fn diagnostics_count_a_finished_transfer() -> TestResult {
     );
     Ok(())
 }
+
+/// While a job takes one file, it fetches the next small files ahead, so a
+/// folder of small files lands without a round trip per file; they still
+/// land in order and exactly. Cancelling stops what is ahead.
+#[test]
+fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_files();
+    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let many: Vec<(String, usize)> = (0..20)
+        .map(|n| (format!("many/f{n:02}.bin"), 3000))
+        .collect();
+    write_named(&pair.controller.root(), &many, 2000);
+    controller.connect(&pair.host.endpoint())?;
+    let job = files::upload(&pair, "many", "")?;
+    let receiver = files::only_job(host)?;
+
+    let first = host.job_poll(receiver)?;
+    assert_eq!(first.files_done, 1, "the first poll lands the first file");
+    assert_eq!(
+        host.fetching_ahead(receiver),
+        7,
+        "seven files are fetched ahead of the second"
+    );
+    let second = host.job_poll(receiver)?;
+    assert_eq!(
+        second.files_done, 2,
+        "each later poll lands exactly the next file"
+    );
+    let (sent, got) = drive_to_end(controller, job, host, receiver, TRANSFER);
+    assert_eq!(
+        (sent.state, got.state),
+        (JobState::Complete, JobState::Complete),
+        "the folder completes on both sides"
+    );
+    assert_eq!(
+        tree(&pair.host.root().join("many")),
+        tree(&pair.controller.root().join("many")),
+        "the small files land exactly"
+    );
+    assert_eq!(
+        host.fetching_ahead(receiver),
+        0,
+        "a finished job fetches nothing ahead"
+    );
+
+    // A second job, cancelled with files ahead, stops them.
+    let again: Vec<(String, usize)> = (0..10)
+        .map(|n| (format!("again/g{n:02}.bin"), 3000))
+        .collect();
+    write_named(&pair.controller.root(), &again, 2100);
+    files::upload(&pair, "again", "")?;
+    let receiver = host
+        .job_list()?
+        .into_iter()
+        .find(|listed| !listed.sender && listed.state != JobState::Complete)
+        .ok_or("the second job's receiver")?
+        .id;
+    host.job_poll(receiver)?;
+    assert!(
+        host.fetching_ahead(receiver) > 0,
+        "the second job fetches ahead"
+    );
+    host.job_cancel(receiver)?;
+    assert_eq!(
+        host.fetching_ahead(receiver),
+        0,
+        "cancelling stops the files fetched ahead"
+    );
+    trace.wait_for_records("job state", 4);
+    expect![[r#"
+        controller:
+          files: job state from=preparing job=1 sender=true to=serving
+          files: job state done_bytes=60000 files_done=20 from=serving job=1 sender=true to=complete
+          files: job state from=preparing job=2 sender=true to=serving
+          files: job state done_bytes=0 files_done=0 from=serving job=2 sender=true to=cancelled
+        host:
+          files: job state done_bytes=60000 files_done=20 from=transferring job=1 sender=false to=complete
+          files: job state done_bytes=3000 files_done=1 from=transferring job=2 sender=false to=cancelled
+    "#]].assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
+    Ok(())
+}
+
+/// Writes each of `files` (relative path, size) under `folder`, the n-th
+/// with the contents of seed `first_seed + n`.
+fn write_named(folder: &std::path::Path, files: &[(String, usize)], first_seed: u64) {
+    for (n, (path, size)) in files.iter().enumerate() {
+        let path = folder.join(path);
+        std::fs::create_dir_all(path.parent().expect("a file in a folder")).expect("a folder");
+        std::fs::write(path, payload(*size, first_seed + n as u64)).expect("a file");
+    }
+}

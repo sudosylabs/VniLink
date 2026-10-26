@@ -66,81 +66,6 @@ fn saw(events: &EventSubscription, kind: fn(&CoreEvent) -> bool) -> bool {
 }
 
 #[test]
-fn restart_keeps_the_endpoint_grants_and_addresses() {
-    let store = MemoryStore::empty();
-    let host = open_loop(&store, RelaySettings::public_n0());
-    let controller = peer();
-    host.start_hosting().unwrap();
-    let invitation = controller
-        .create_invitation(Duration::from_secs(60))
-        .unwrap();
-    host.accept_invitation(&invitation).unwrap();
-    host.set_desktop_sharing(all_grants()).unwrap();
-    let id = host.endpoint_id();
-    let secret = host.export_identity();
-    let devices = host.snapshot().unwrap().devices;
-    assert!(host.snapshot().unwrap().hosting);
-    assert_eq!(devices.len(), 1);
-    assert_eq!(devices[0].grants, all_grants());
-    assert!(!devices[0].direct.is_empty());
-    drop(host);
-
-    let host = open_loop(&store, credentialed_relay());
-    assert_eq!(host.endpoint_id(), id);
-    assert!(
-        host.export_identity() == secret,
-        "restart changed the installation secret"
-    );
-    let snapshot = host.snapshot().unwrap();
-    assert!(!snapshot.hosting);
-    assert!(snapshot.incoming.is_none());
-    assert!(snapshot.outgoing.is_none());
-    assert!(snapshot.public_relay);
-    assert_eq!(snapshot.devices, devices);
-    assert_eq!(format!("{store:?}"), "MemoryStore");
-}
-
-#[test]
-fn a_used_invitation_cannot_be_replayed_after_restart() {
-    let store = MemoryStore::empty();
-    let host = open_loop(&store, RelaySettings::public_n0());
-    let controller = peer();
-    let invitation = controller
-        .create_invitation(Duration::from_secs(60))
-        .unwrap();
-    host.accept_invitation(&invitation).unwrap();
-    drop(host);
-    let host = open_loop(&store, RelaySettings::public_n0());
-    assert!(matches!(
-        host.accept_invitation(&invitation),
-        Err(Error::InvitationReplayed)
-    ));
-}
-
-#[test]
-fn reaccepting_an_invitation_keeps_saved_grants() {
-    let store = MemoryStore::empty();
-    let host = open_loop(&store, RelaySettings::public_n0());
-    let controller = peer();
-    let first = controller
-        .create_invitation(Duration::from_secs(60))
-        .unwrap();
-    host.accept_invitation(&first).unwrap();
-    host.set_desktop_sharing(all_grants()).unwrap();
-    let second = controller
-        .create_invitation(Duration::from_secs(60))
-        .unwrap();
-    let paired = host.accept_invitation(&second).unwrap();
-    assert_eq!(paired.grants, all_grants());
-    drop(host);
-
-    let host = open_loop(&store, RelaySettings::public_n0());
-    let device = &host.snapshot().unwrap().devices[0];
-    assert_eq!(device.endpoint_id, controller.endpoint_id());
-    assert_eq!(device.grants, all_grants());
-}
-
-#[test]
 fn locked_and_unavailable_stores_fail_without_writing() {
     assert_eq!(
         Error::StoreLocked.to_string(),
@@ -395,48 +320,6 @@ fn a_core_without_a_store_does_not_save() {
     assert_eq!(core.endpoint_id(), id);
     assert!(core.snapshot().is_ok());
     assert!(core.snapshot().unwrap().devices.is_empty());
-}
-
-#[test]
-fn unpair_removal_and_rollback_persist() {
-    let store = MemoryStore::empty();
-    let host = open_loop(&store, RelaySettings::public_n0());
-    let controller = peer();
-    let events = host.subscribe().unwrap();
-    host.start_hosting().unwrap();
-    let invitation = controller
-        .create_invitation(Duration::from_secs(60))
-        .unwrap();
-    host.accept_invitation(&invitation).unwrap();
-    assert_eq!(host.snapshot().unwrap().devices.len(), 1);
-
-    host.set_peer_pet_name(&controller.endpoint_id(), Some("Office computer"))
-        .unwrap();
-    let before = host.snapshot().unwrap().devices;
-    assert_eq!(before[0].os, Some(crate::OperatingSystem::local()));
-    // A failed save restores the entire identity and metadata, and emits nothing.
-    store.fail_next_save(Error::StoreLocked);
-    drain(&events);
-    assert!(matches!(
-        host.unpair(&controller.endpoint_id()),
-        Err(Error::StoreLocked)
-    ));
-    assert_eq!(host.snapshot().unwrap().devices, before);
-    assert!(!saw(&events, |event| {
-        matches!(event, CoreEvent::DeviceUnpaired { .. })
-    }));
-
-    // Removal survives a reopen.
-    host.unpair(&controller.endpoint_id()).unwrap();
-    assert!(saw(&events, |event| {
-        matches!(event, CoreEvent::DeviceUnpaired { .. })
-    }));
-    let reopened = open_loop(&store, RelaySettings::public_n0());
-    assert!(reopened.snapshot().unwrap().devices.is_empty());
-    assert!(matches!(
-        reopened.unpair(&controller.endpoint_id()),
-        Err(Error::NotPaired)
-    ));
 }
 
 #[test]

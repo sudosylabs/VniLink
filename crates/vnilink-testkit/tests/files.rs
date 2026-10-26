@@ -2,8 +2,12 @@
 //! between their roots, with both job drivers running as in the
 //! application.
 
+#[path = "files/owners.rs"]
+mod owners;
 #[path = "files/pacing.rs"]
 mod pacing;
+#[path = "files/publishing.rs"]
+mod publishing;
 #[path = "files/rebinding.rs"]
 mod rebinding;
 #[path = "files/remote_disk.rs"]
@@ -12,6 +16,8 @@ mod remote_disk;
 mod service_jobs;
 #[path = "files/serving.rs"]
 mod serving;
+#[path = "files/shared.rs"]
+mod shared;
 #[path = "files/shutdown.rs"]
 mod shutdown;
 #[path = "files/transfers.rs"]

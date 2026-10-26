@@ -414,6 +414,7 @@ fn desktop_idle_expiry_keeps_parent_and_files_owner_and_does_not_count_media_req
     trace.wait_for_records("service phase", 2);
     expect![[r#"
         controller:
+          session: session phase from=connecting generation=1 role=Controller session=1 to=active
           session: desktop ended hosted=false reason=peerClosed service=1
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:

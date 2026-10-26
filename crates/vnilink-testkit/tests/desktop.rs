@@ -2,12 +2,24 @@
 //! through its real picture pipeline, and a viewer connected as the
 //! application connects one.
 
+#[path = "desktop/codecs.rs"]
+mod codecs;
 #[path = "desktop/control.rs"]
 mod control;
 #[path = "desktop/displays.rs"]
 mod displays;
+#[path = "desktop/input.rs"]
+mod input;
+#[path = "desktop/keyboard.rs"]
+mod keyboard;
 #[path = "desktop/lifecycle.rs"]
 mod lifecycle;
+#[path = "desktop/services.rs"]
+mod services;
+#[path = "desktop/snapshot.rs"]
+mod snapshot;
+#[path = "desktop/stills.rs"]
+mod stills;
 #[path = "desktop/streams.rs"]
 mod streams;
 

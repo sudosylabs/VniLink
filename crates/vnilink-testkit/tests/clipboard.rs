@@ -4,6 +4,8 @@
 
 #[path = "clipboard/desktops.rs"]
 mod desktops;
+#[path = "clipboard/dropped.rs"]
+mod dropped;
 #[path = "clipboard/files.rs"]
 mod files;
 #[path = "clipboard/text.rs"]

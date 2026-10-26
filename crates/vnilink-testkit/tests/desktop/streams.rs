@@ -697,6 +697,7 @@ fn a_picture_the_viewer_closed_has_no_host_end() -> TestResult {
     );
     expect![[r#"
         controller:
+          session: session phase from=connecting generation=1 role=Controller session=1 to=active
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
@@ -840,8 +841,13 @@ fn encoded_frames_reach_the_controller_without_blocking_input() -> TestResult {
         "a picture after the viewer left is refused"
     );
     expect![[r#"
+        controller:
+          session: session phase from=connecting generation=1 role=Controller session=1 to=active
+          session: session phase from=active generation=1 role=Controller session=1 to=stopping
+          session: session phase from=stopping generation=1 role=Controller session=1 to=closed
         host:
           input: the session's control stream ended error=network session=1
+          session: session phase from=active generation=1 role=Host session=1 to=closed
     "#]]
     .assert_eq(&trace.story(&["session", "input"]));
     Ok(())

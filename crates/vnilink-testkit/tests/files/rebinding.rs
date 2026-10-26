@@ -10,6 +10,7 @@ use expect_test::expect;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::shared::ServeProbe;
 use vnilink::{ConflictChoice, JobState};
 use vnilink_testkit::files::{self, drive_to_end, payload};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult};
@@ -397,6 +398,79 @@ fn a_sending_root_rebound_mid_upload_interrupts_and_resumes_once_restored() -> T
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
+          files: file received outcome=received resumed_at=0 size=512 took=512
+          files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
+    "#]].assert_eq(&trace.story(&["files"]));
+    Ok(())
+}
+
+/// A serve that opened its source before the sender's root is rebound
+/// finishes with the bytes it opened, not the rebound root's decoy of the
+/// same size: only opens after the rebind are refused.
+#[test]
+fn a_source_opened_before_a_rebind_serves_its_own_bytes() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_files();
+    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    // The dialed side cannot rebind mid-session, so the controller sends;
+    // the host receives one file at a time, to park the second one's serve.
+    host.fetch_one_file_at_a_time();
+    let one = payload(512, 1601);
+    let two = payload(512, 1602);
+    std::fs::write(pair.controller.root().join("one.txt"), &one)?;
+    std::fs::write(pair.controller.root().join("two.txt"), &two)?;
+    controller.connect(&pair.host.endpoint())?;
+    let job = controller.job_submit_upload(
+        &pair.host.endpoint(),
+        pair.controller.root_id(),
+        "",
+        pair.host.root_id(),
+        "arrived",
+    )?;
+    let receiver = files::only_job(host)?;
+    files::poll_within(host, receiver, 20, "the first file to land", |s| {
+        s.files_done == 1
+    });
+
+    // The decoy second file has the same size and other bytes.
+    let rebound = beside(&pair.controller, "rebound");
+    std::fs::create_dir_all(&rebound)?;
+    std::fs::write(rebound.join("one.txt"), &one)?;
+    std::fs::write(rebound.join("two.txt"), payload(512, 1609))?;
+    let probe = ServeProbe::arm(controller, job);
+    let polled = std::thread::scope(|scope| {
+        let polling = scope.spawn(|| host.job_poll(receiver));
+        probe.wait_until_parked();
+        let rebinding = controller.set_file_roots(vec![rebound]);
+        probe.release();
+        rebinding?;
+        polling.join().expect("the receiver's poll")
+    })?;
+    drop(probe);
+    assert_eq!(
+        polled.files_done, 2,
+        "the open serve finishes the second file across the rebind"
+    );
+    assert_eq!(
+        std::fs::read(pair.host.root().join("arrived/two.txt"))?,
+        two,
+        "the open serve sent the bytes it opened, not the decoy"
+    );
+    let (sent, got) = drive_to_end(controller, job, host, receiver, TRANSFER);
+    assert_eq!(
+        (sent.state, got.state),
+        (JobState::Complete, JobState::Complete),
+        "the job completes on both sides"
+    );
+    trace.wait_for_records("job state", 2);
+    expect![[r#"
+        controller:
+          files: job state from=preparing job=1 sender=true to=serving
+          files: file served ended=sent from=0 sent=512 size=512
+          files: file served ended=sent from=0 sent=512 size=512
+          files: job state done_bytes=1024 files_done=2 from=serving job=1 sender=true to=complete
+        host:
+          files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
     "#]].assert_eq(&trace.story(&["files"]));

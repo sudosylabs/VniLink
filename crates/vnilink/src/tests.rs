@@ -1,7 +1,5 @@
 #[path = "tests/admission.rs"]
 mod admission_tests;
-#[path = "tests/apply.rs"]
-mod apply_tests;
 #[path = "tests/availability.rs"]
 mod availability_tests;
 #[path = "tests/clipboard_files.rs"]
