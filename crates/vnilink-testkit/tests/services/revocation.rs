@@ -7,9 +7,9 @@ use std::collections::BTreeSet;
 
 use vnilink::{CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase};
 use vnilink_testkit::desktop::MonitorCapture;
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{hosted_closes, pair_for_control, phase, whole_disk};
+use super::support::{hosted_closes, phase, whole_disk};
 
 /// A Files pipe beside a Desktop: refused until the host grants Transfer,
 /// opened once, carrying real operations without taking the connection's
@@ -182,7 +182,7 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
           service: service phase from=active generation=1 kind=Files service=1 to=closed: OwnerClose
           hosting: service released service=1
           hosting: service opened connection=1 kind=Some(Files) service=2
-          hosting: service ended without closing kind=Files phase=closed: DeviceLoss service=2
+          hosting: service closed kind=Files phase=closed: PeerClose service=2
           hosting: service released service=2
           hosting: service opened connection=1 kind=Some(Files) service=3
           service: service phase from=active generation=1 kind=Files service=3 to=closed: Revoked
@@ -198,19 +198,16 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
 #[test]
 fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothing() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let a = Engine::start("viewer-a");
-    let b = Engine::start("viewer-b");
-    whole_disk(&host)?;
+    let pair = Pair::for_desktop();
+    let (host, a) = (&pair.host, &pair.controller);
+    let b = pair.add_viewer("viewer");
+    whole_disk(host)?;
     host.core
         .set_capture(Box::new(MonitorCapture((1920, 1080))))?;
-    for viewer in [&a, &b] {
-        pair_for_control(&host, viewer)?;
-    }
     host.core.set_service_sharing(ServiceKind::Files, true)?;
     let mut connections = Vec::new();
-    for viewer in [&a, &b] {
-        let parent = viewer.connect_services(&host)?;
+    for viewer in [a, &b] {
+        let parent = viewer.connect_services(host)?;
         let desktop = viewer.open_desktop(&parent)?;
         let (owner, files) = viewer.open_files(&parent)?;
         connections.push((viewer, parent, owner, files, desktop));
@@ -273,6 +270,8 @@ fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothin
     }
     // The two viewers' pipes end and open side by side.
     expect![[r#"
+        controller:
+          service: service phase from=active generation=1 kind=Files service=2 to=closed: PeerClose
         host:
           hosting: service opened connection=1 kind=Some(Files) service=2
           hosting: service opened connection=2 kind=Some(Files) service=4
@@ -282,9 +281,7 @@ fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothin
           hosting: service released service=4
           hosting: service opened connection=1 kind=Some(Files) service=5
           hosting: service opened connection=2 kind=Some(Files) service=6
-        viewer-a:
-          service: service phase from=active generation=1 kind=Files service=2 to=closed: PeerClose
-        viewer-b:
+        viewer:
           service: service phase from=active generation=2 kind=Files service=2 to=closed: PeerClose
     "#]]
     .assert_eq(&trace.concurrent_story(&["service", "hosting"]));

@@ -370,7 +370,7 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
           hosting: service opened connection=1 kind=Some(Camera) service=4
           hosting: service refused connection=1 kind=Files status=busy
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-          hosting: service ended without closing kind=Files phase=closed: DeviceLoss service=2
+          hosting: service closed kind=Files phase=closed: PeerClose service=2
           hosting: service released service=2
           hosting: service closed kind=Terminal phase=closed: PeerClose service=3
           hosting: service released service=3
@@ -435,9 +435,7 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
         "Desktop needs a real backend"
     );
     assert!(
-        pair.host
-            .hosted_for(ServiceKind::Desktop, &pair.controller)
-            .is_none(),
+        pair.host.hosted(Some(ServiceKind::Desktop)).is_empty(),
         "the refused Desktop is not served"
     );
     assert_eq!(

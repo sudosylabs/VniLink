@@ -155,9 +155,13 @@ fn a_redial_keeps_the_files_owner_and_fences_its_old_pipe() -> TestResult {
         "closing the pipe leaves the connection"
     );
     assert_eq!(
-        hosted_ends(&trace, "host").first(),
-        Some(&(1, "closed: ParentLoss".to_owned())),
-        "the host ends the old generation's Files as its lost parent"
+        hosted_ends(&trace, "host"),
+        [
+            (1, "closed: ParentLoss".to_owned()),
+            (2, "closed: PeerClose".to_owned())
+        ],
+        "the host ends the old generation's Files as its lost parent, and names the \
+         next one's close by its viewer"
     );
     // The host names that end on either of two paths, at a moment of its
     // own; the controller's side is the story.
@@ -227,9 +231,13 @@ fn a_redial_fences_the_old_desktop_handle_without_retiring_its_replacement() -> 
         "closing the Desktop leaves the connection"
     );
     assert_eq!(
-        hosted_ends(&trace, "host").first(),
-        Some(&(1, "closed: ParentLoss".to_owned())),
-        "the host ends the old generation's Desktop as its lost parent"
+        hosted_ends(&trace, "host"),
+        [
+            (1, "closed: ParentLoss".to_owned()),
+            (2, "closed: PeerClose".to_owned())
+        ],
+        "the host ends the old generation's Desktop as its lost parent, and names the \
+         next one's close by its viewer"
     );
     // The host names that end on either of two paths, at a moment of its
     // own; the controller's side is the story.

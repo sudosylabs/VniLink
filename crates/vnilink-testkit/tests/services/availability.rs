@@ -3,10 +3,10 @@
 //! platform's adapters report.
 
 use vnilink::{
-    AvailabilityReason, BackendState, Capability, Error, HostDesktop, InputEvent, RemoteStatus,
-    ServiceKind, SystemPolicy, VideoCodecCaps,
+    AvailabilityReason, BackendState, Capability, Error, RemoteStatus, ServiceKind, SystemPolicy,
+    VideoCodecCaps,
 };
-use vnilink_testkit::desktop::{MonitorCapture, RecordingClipboard};
+use vnilink_testkit::desktop::{InputLog, MonitorCapture, RecordingClipboard};
 use vnilink_testkit::{traced, Engine, Pair, TestResult};
 
 /// The reasons `capability` is unavailable on `engine`, to `peer` or to its
@@ -211,19 +211,6 @@ fn reported_backend_state_joins_the_answer_and_clears() -> TestResult {
     Ok(())
 }
 
-/// A desktop that applies input and reports its size.
-struct Input;
-
-impl HostDesktop for Input {
-    fn monitor(&self) -> (u16, u16) {
-        (64, 64)
-    }
-
-    fn apply(&mut self, _: InputEvent) -> Result<(), Error> {
-        Ok(())
-    }
-}
-
 /// Codecs and an input desktop do not make view available, nor clipboard;
 /// a capture makes view available and a clipboard makes clipboard so.
 #[test]
@@ -232,7 +219,7 @@ fn codecs_and_input_do_not_claim_capture_or_clipboard() -> TestResult {
     let host = Engine::start("host");
     let core = &host.core;
     core.set_video_codecs(VideoCodecCaps::h264_full(64, 64, "test"))?;
-    core.set_desktop(Box::new(Input))?;
+    InputLog::install(&host, (64, 64))?;
     assert!(
         !core
             .capability_availability(None, Capability::DesktopView)?

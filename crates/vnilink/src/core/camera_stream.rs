@@ -507,9 +507,16 @@ pub(super) async fn serve(
         }
         // Held for the whole serve; drops on every exit path.
         let mut device_guard: Option<CameraDeviceGuard> = None;
+        // Whether the viewer ended its stream while the camera opened.
+        let viewer_left = std::sync::atomic::AtomicBool::new(false);
         let startup = async {
+            // A stream that ends before its request is a viewer that left.
+            let request = read(&mut recv).await.map_err(|_| {
+                viewer_left.store(true, std::sync::atomic::Ordering::Relaxed);
+                Error::NoSession
+            })?;
             let config: CameraConfig =
-                serde_json::from_slice(&read(&mut recv).await?).map_err(|_| Error::Malformed)?;
+                serde_json::from_slice(&request).map_err(|_| Error::Malformed)?;
             config.validate()?;
             if *startup_parent.borrow() || *startup_stop.borrow() {
                 return Err(Error::NoSession);
@@ -559,7 +566,11 @@ pub(super) async fn serve(
                 biased;
                 _ = startup_parent.changed() => return Err(Error::NoSession),
                 _ = startup_stop.changed() => return Err(Error::NoSession),
-                _ = read(&mut recv) => return Err(Error::NoSession),
+                // The viewer ended its stream: it closed the camera.
+                _ = read(&mut recv) => {
+                    viewer_left.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return Err(Error::NoSession);
+                }
                 result = open => result
                     .map_err(|_| Error::Unsupported("camera startup"))??,
             };
@@ -589,6 +600,10 @@ pub(super) async fn serve(
         }
         let backend = match opened {
             Ok(Ok(backend)) => backend,
+            Ok(Err(Error::NoSession)) if viewer_left.load(std::sync::atomic::Ordering::Relaxed) => {
+                ending.why(HostedEnd::ViewerClosed);
+                return Err(Error::NoSession);
+            }
             Ok(Err(Error::NoSession)) | Err(_)
                 if *startup_parent.borrow() || *startup_stop.borrow() =>
             {
@@ -606,12 +621,24 @@ pub(super) async fn serve(
                 return Err(Error::Unsupported("camera startup"));
             }
         };
-        write_status_only(&mut send, 0).await?;
+        // A viewer that left while the camera opened can no longer hear it,
+        // and the camera never opened for it.
+        if write_status_only(&mut send, 0).await.is_err() {
+            tracing::info!(
+                target: crate::trace::CAMERA,
+                service = id,
+                error = Error::NoSession.name(),
+                "camera not opened"
+            );
+            ending.why(HostedEnd::ViewerClosed);
+            return Err(Error::NoSession);
+        }
         write(
             &mut send,
             serde_json::to_vec(&backend.config).map_err(|_| Error::Malformed)?,
         )
-        .await?;
+        .await
+        .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
         tracing::info!(
             target: crate::trace::CAMERA,
             service = id,

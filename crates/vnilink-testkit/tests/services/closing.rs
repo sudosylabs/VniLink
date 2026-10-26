@@ -289,7 +289,10 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
         "the Camera closed by its owner"
     );
     // The late backend completes into a dropped task: counted, never
-    // admitted, and the host's record stays finished.
+    // admitted, and the host's record stays finished. It is let go once the
+    // host has seen its viewer leave, which a backend finishing first would
+    // race.
+    trace.wait_for_records("camera not opened", 1);
     release.send(())?;
     wait_for("the late backend to finish", DEFAULT_WAIT, || {
         (stall.late.load(Ordering::SeqCst) == 1).then_some(())
@@ -309,12 +312,17 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
         "the late backend is never served"
     );
     trace.wait_for_records("service released", 1);
-    // The host's side varies: the late backend is either refused or opened
-    // and ended at once (reported as a product race).
+    // The host learns its viewer closed the camera while it was opening.
     expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Camera service=1 to=closed: OwnerClose
-    "#]].assert_eq(&trace.engine_story("controller", &["camera", "service"]));
+        host:
+          hosting: service opened connection=1 kind=Some(Camera) service=1
+          camera: camera not opened error=no session service=1
+          camera: camera stream ended ended=viewer closed service=1
+          hosting: service closed kind=Camera phase=closed: PeerClose service=1
+          hosting: service released service=1
+    "#]].assert_eq(&trace.story(&["camera", "service", "hosting"]));
     Ok(())
 }
 
@@ -383,7 +391,7 @@ fn close_adopted_desktop(close: DesktopClose) -> TestResult {
     let button = InputEvent::button_down(PointerButton::Left);
     controller.submit_input(session.id, session.generation, key)?;
     controller.submit_input(session.id, session.generation, button)?;
-    applied.wait_for(2);
+    applied.exactly(2);
     let remote = pair
         .host
         .hosted_for(ServiceKind::Desktop, &pair.controller)

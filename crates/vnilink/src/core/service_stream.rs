@@ -845,14 +845,20 @@ impl Drop for HostedGuard {
                         _ => CloseCause::ParentLoss,
                     }
                 };
-                record.info.phase = ServicePhase::Closed(cause);
-                tracing::info!(
-                    target: crate::trace::HOSTING,
-                    service = self.id,
-                    kind = ?record.info.kind,
-                    phase = record.info.phase.label(),
-                    "service ended without closing"
-                );
+                // A lost connection or shutdown reads as any service's
+                // phase change; only a died backend is called out.
+                if cause == CloseCause::DeviceLoss {
+                    record.info.phase = ServicePhase::Closed(cause);
+                    tracing::info!(
+                        target: crate::trace::HOSTING,
+                        service = self.id,
+                        kind = ?record.info.kind,
+                        phase = record.info.phase.label(),
+                        "service ended without closing"
+                    );
+                } else {
+                    record.change(record.info.generation, ServicePhase::Closed(cause));
+                }
                 self.shared.events.publish(CoreEvent::HostedServiceChanged {
                     service: record.info,
                 });
@@ -1345,7 +1351,8 @@ pub(super) async fn serve(
                 biased;
                 _ = parent_stop.changed() => {},
                 _ = service_stop.changed() => {},
-                _ = recv.read(&mut unexpected) => {},
+                // The viewer ended its lease: it closed the service.
+                _ = recv.read(&mut unexpected) => close_hosted(&shared, id, CloseCause::PeerClose),
             }
         }
         crate::ignored!(
@@ -1362,7 +1369,14 @@ pub(super) async fn serve(
         let request = tokio::select! {
             _ = parent_stop.changed() => break,
             _ = service_stop.changed() => break,
-            request = read(&mut recv) => match request { Ok(request) => request, Err(_) => break },
+            // The viewer ended its pipe: it closed the service.
+            request = read(&mut recv) => match request {
+                Ok(request) => request,
+                Err(_) => {
+                    close_hosted(&shared, id, CloseCause::PeerClose);
+                    break;
+                }
+            },
         };
         // The existing handler checks current peer, generation, Transfer grant
         // and approved roots at each operation, under the mutation locks.
