@@ -129,6 +129,7 @@ impl Core {
         &self,
         policy: crate::terminal::TerminalPolicy,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         if !state.terminal_pending.is_empty() || !lock(&self.shared.terminal_sessions).is_empty() {
@@ -146,6 +147,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn crate::terminal::HostTerminalFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         // Lock order is always state, then factory.
         *lock(&self.shared.terminal_factory) = factory;
@@ -177,6 +179,7 @@ impl Core {
         &self,
         factory: Arc<dyn crate::terminal::HostTerminalFactory>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         if !state.terminal_pending.is_empty() || !lock(&self.shared.terminal_sessions).is_empty() {
             return Err(Error::Busy);
@@ -221,6 +224,7 @@ impl Core {
         generation: u64,
         size: TerminalSize,
     ) -> Result<RemoteTerminalService, Error> {
+        let _engine = self.engine();
         self.open_terminal_service_with_options(
             id,
             generation,
@@ -237,6 +241,7 @@ impl Core {
         generation: u64,
         options: TerminalOptions,
     ) -> Result<RemoteTerminalService, Error> {
+        let _engine = self.engine();
         options.size.validate()?;
         if options
             .resume_id
@@ -713,6 +718,7 @@ impl Core {
         connection: u64,
         generation: u64,
     ) -> Result<Vec<TerminalSessionInfo>, Error> {
+        let _engine = self.engine();
         let bytes = self.terminal_registry_request(connection, generation, None)?;
         let sessions: Vec<TerminalSessionInfo> =
             serde_json::from_slice(&bytes).map_err(|_| Error::Malformed)?;
@@ -730,6 +736,7 @@ impl Core {
         generation: u64,
         id: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         if id.len() != 32 || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err(Error::InvalidSetting("terminal resume ID is invalid"));
         }

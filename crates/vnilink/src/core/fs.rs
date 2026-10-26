@@ -126,6 +126,7 @@ impl Core {
         offset: u64,
         limit: u16,
     ) -> Result<DirPage, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         // Snapshot under a short lock; enumeration runs off every lock.
         let snapshot = lock(&self.shared.file_roots).clone();
@@ -154,6 +155,7 @@ impl Core {
         expected: Option<crate::fs::EntryToken>,
         new_name: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         if super::jobs::rename_blocked(&self.shared, root, path, name) {
             return Err(Error::InvalidSetting(
@@ -177,6 +179,7 @@ impl Core {
         name: &str,
         expected: Option<crate::fs::EntryToken>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         if super::jobs::rename_blocked(&self.shared, root, path, name) {
             return Err(Error::InvalidSetting(
@@ -200,6 +203,7 @@ impl Core {
         name: &str,
         expected: Option<crate::fs::EntryToken>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         if super::jobs::rename_blocked(&self.shared, root, path, name) {
             return Err(Error::InvalidSetting(
@@ -239,6 +243,7 @@ impl Core {
         offset: u64,
         limit: u16,
     ) -> Result<DirPage, Error> {
+        let _engine = self.engine();
         match self.fs_round_trip(
             session_id,
             generation,
@@ -265,6 +270,7 @@ impl Core {
         path: &str,
         name: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         match self.fs_round_trip(
             session_id,
             generation,
@@ -295,6 +301,7 @@ impl Core {
         expected: Option<crate::fs::EntryToken>,
         new_name: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         match self.fs_round_trip(
             session_id,
             generation,
@@ -325,6 +332,7 @@ impl Core {
         name: &str,
         expected: Option<crate::fs::EntryToken>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         match self.fs_round_trip(
             session_id,
             generation,

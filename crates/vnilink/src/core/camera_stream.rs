@@ -88,6 +88,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn HostCameraFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.replace_camera_factory(factory, false)
     }
     /// Stops offering a camera this computer has: paired computers read it
@@ -128,6 +129,7 @@ impl Core {
         connection: u64,
         generation: u64,
     ) -> Result<Vec<CameraDevice>, Error> {
+        let _engine = self.engine();
         let (link, stamp) = self.service_link(connection, generation)?;
         let mut stop = {
             let state = self.alive_state()?;
@@ -162,6 +164,7 @@ impl Core {
         generation: u64,
         config: CameraConfig,
     ) -> Result<RemoteCameraService, Error> {
+        let _engine = self.engine();
         config.validate()?;
         if !lock(&self.shared.video_caps).can_decode() {
             return Err(Error::Unsupported("camera H.264 decoder"));

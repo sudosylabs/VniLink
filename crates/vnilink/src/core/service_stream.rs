@@ -300,6 +300,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<ServiceSupport, Error> {
+        let _engine = self.engine();
         let (link, stamp) = self.service_link(id, generation)?;
         let flags = self.runtime.block_on(async {
             tokio::time::timeout(TIMEOUT, async {
@@ -333,6 +334,7 @@ impl Core {
         generation: u64,
         failure: crate::StreamFailure,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.end_hosted_service(id, generation, CloseCause::Failed(failure))
     }
     fn end_hosted_service(&self, id: u64, generation: u64, cause: CloseCause) -> Result<(), Error> {
@@ -373,6 +375,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<RemoteFilesService, Error> {
+        let _engine = self.engine();
         let mut lease = self.service_lease(id, generation)?;
         if lease.info().kind != ServiceKind::Files {
             return Err(Error::InvalidSetting("this is not a Files service"));
@@ -527,6 +530,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<RemoteDesktopService, Error> {
+        let _engine = self.engine();
         let neutral = {
             let state = self.alive_state()?;
             state

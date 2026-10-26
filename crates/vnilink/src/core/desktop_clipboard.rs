@@ -121,6 +121,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<Option<String>, Error> {
+        let _engine = self.engine();
         let desktop = runtime(&*self.alive_state()?, id, generation, false)?;
         if desktop.clipboard.closed.load(Ordering::Acquire) {
             return Err(Error::Unsupported("Desktop clipboard pipe ended"));

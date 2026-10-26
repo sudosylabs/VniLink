@@ -167,6 +167,7 @@ impl Core {
         generation: u64,
         kind: ServiceKind,
     ) -> Result<ServiceInfo, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let session = state.outgoing.get(&connection_id).ok_or(Error::NoSession)?;

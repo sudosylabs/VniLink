@@ -38,6 +38,7 @@ impl Core {
         generation: u64,
         cursor: CursorState,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state
             .incoming

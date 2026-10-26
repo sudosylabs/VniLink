@@ -303,6 +303,7 @@ impl Core {
         &self,
         actions: Option<Arc<dyn crate::system::HostSystemActions>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         // Serial first (privacy order), then state, then the adapter slot:
         // a replacement never interleaves with an in-flight enable, level
         // change or restore.
@@ -439,6 +440,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<RemoteSystemService, Error> {
+        let _engine = self.engine();
         let mut lease = self.service_lease(id, generation)?;
         if lease.info().kind != ServiceKind::System {
             return Err(Error::InvalidSetting("this is not a System service"));

@@ -145,6 +145,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<Option<String>, Error> {
+        let _engine = self.engine();
         let controller = self.controller_state(id, generation)?;
         let text = lock(&controller.clipboard).clone();
         Ok(text)
@@ -278,6 +279,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<Option<StoredFileSelection>, Error> {
+        let _engine = self.engine();
         let controller = self.controller_state(id, generation)?;
         let stored = lock(&controller.clipboard_files).clone();
         Ok(stored.filter(|stored| !stored.selection.entries.is_empty()))
@@ -292,6 +294,7 @@ impl Core {
         &self,
         session_id: u64,
     ) -> Result<Option<StoredFileSelection>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = live_session(&state, true, session_id)?;
         Ok(session

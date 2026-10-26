@@ -27,6 +27,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn crate::snapshot::HostSnapshotFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         drop(self.alive_state()?);
         *lock(&self.shared.snapshot_factory) = factory;
         Ok(())
@@ -44,6 +45,7 @@ impl Core {
         cancel: &Arc<AtomicBool>,
         prompt: bool,
     ) -> Result<ScreenSnapshot, Error> {
+        let _engine = self.engine();
         if cancel.load(Ordering::Acquire) {
             return Ok(ScreenSnapshot::Cancelled);
         }
@@ -72,6 +74,7 @@ impl Core {
         connection_id: u64,
         generation: u64,
     ) -> Result<ScreenAccess, Error> {
+        let _engine = self.engine();
         let (link, stamp) = self.service_link(connection_id, generation)?;
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.runtime.spawn(async move {
@@ -119,6 +122,7 @@ impl Core {
         pixels: &[u8],
         display_id: &str,
     ) {
+        let _engine = self.engine();
         if !crate::snapshot::tap_is_fresh(at, std::time::Instant::now()) {
             return;
         }

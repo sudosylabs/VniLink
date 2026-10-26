@@ -428,7 +428,7 @@ impl Core {
         match observed {
             Ok(true) => mark_teardown_finished(&self.shared),
             _ => {
-                eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+                tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
                 release_teardown_claim(&self.shared);
             }
         }

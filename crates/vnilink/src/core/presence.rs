@@ -259,6 +259,7 @@ impl Core {
         &self,
         endpoint_id: &str,
     ) -> Result<Option<Vec<(crate::Capability, crate::RemoteStatus)>>, Error> {
+        let _engine = self.engine();
         let key = super::parse_endpoint_id(endpoint_id)?;
         let state = self.alive_state()?;
         if state.trust.get(&key).is_none() {

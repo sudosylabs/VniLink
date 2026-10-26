@@ -172,6 +172,7 @@ impl Core {
         session_id: u64,
         generation: u64,
     ) -> Result<Vec<DisplayInfo>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state.outgoing.get(&session_id).ok_or(Error::NoSession)?;
         if session.generation != generation {
@@ -226,6 +227,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<Option<&'static str>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let desktop = super::desktop_stream::runtime(&state, id, generation, true)?;
         let fault = *lock(&desktop.display_fault);
@@ -237,6 +239,7 @@ impl Core {
         session_id: u64,
         generation: u64,
     ) -> Result<Vec<u64>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
         if session.generation != generation {
@@ -254,6 +257,7 @@ impl Core {
         session_id: u64,
         generation: u64,
     ) -> Result<Option<&'static str>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
         if session.generation != generation {

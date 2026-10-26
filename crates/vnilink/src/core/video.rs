@@ -75,6 +75,7 @@ impl Core {
         stop: Arc<std::sync::atomic::AtomicBool>,
         timeout: std::time::Duration,
     ) -> Result<crate::BackendStartup, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let routing = video_routing_locked(&self.shared, &state);
         let mut owners = Vec::new();
@@ -157,6 +158,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<VideoSubscription, Error> {
+        let _engine = self.engine();
         {
             let state = self.alive_state()?;
             if state
@@ -342,6 +344,7 @@ impl Core {
         &self,
         decoders: Vec<crate::video_caps::WindowDecoder>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         if decoders.len() > crate::VideoCodec::ALL.len()
             || decoders.iter().enumerate().any(|(index, decoder)| {
                 decoders[..index]
@@ -388,6 +391,7 @@ impl Core {
         role: SessionRole,
         quality: Quality,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.apply_session_quality(session_id, role, None, quality)
             .map(|_| ())
     }
@@ -400,6 +404,7 @@ impl Core {
         role: SessionRole,
         quality: Quality,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.apply_session_quality(session_id, role, Some(generation), quality)
             .map(|_| ())
     }

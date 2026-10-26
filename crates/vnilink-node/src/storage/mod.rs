@@ -166,7 +166,7 @@ impl EncryptedInstallationStore {
                     let mut guard = poison.into_inner();
                     guard.phase = Phase::RecoveryRequired;
                     self.phase.store(PHASE_RECOVERY, Ordering::Release);
-                    eprintln!("vnilink: installation store lock was poisoned; restart required");
+                    tracing::error!(target: vnilink::trace::STORAGE, "the store's lock was poisoned: restart required");
                     return Err(StoreFailure::RecoveryRequired);
                 }
                 Err(TryLockError::WouldBlock) => {
@@ -182,8 +182,10 @@ impl EncryptedInstallationStore {
     fn mark_recovery(guard: &mut Inner, phase: &AtomicU8, code: i32) {
         guard.phase = Phase::RecoveryRequired;
         phase.store(PHASE_RECOVERY, Ordering::Release);
-        eprintln!(
-            "vnilink: installation save outcome is unknown (sqlite {code}); restart required"
+        tracing::error!(
+            target: vnilink::trace::STORAGE,
+            sqlite = code,
+            "whether the store saved is unknown: restart required"
         );
     }
 

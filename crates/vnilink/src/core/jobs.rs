@@ -590,6 +590,7 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
+        let _engine = self.engine();
         let (folder, names) = split_source(src_rel);
         self.submit_upload(
             peer_endpoint_id,
@@ -769,6 +770,7 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
+        let _engine = self.engine();
         let (folder, names) = split_source(src_rel);
         self.submit_download(
             peer_endpoint_id,
@@ -5228,6 +5230,7 @@ mod lifecycle_tests {
 
 impl Core {
     pub fn file_retention_policy(&self) -> Result<crate::job::FileRetentionPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.file_retention_policy)
     }
     /// Persist before publishing to GC. A failed save cannot cause eviction
@@ -5236,6 +5239,7 @@ impl Core {
         &self,
         policy: crate::job::FileRetentionPolicy,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.file_retention_policy, policy);
@@ -5250,6 +5254,7 @@ impl Core {
 
 impl Core {
     pub fn file_resource_policy(&self) -> Result<crate::job::FileResourcePolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.file_resource_policy)
     }
     /// Persist first. Reductions govern new reservations; active work retains
@@ -5258,6 +5263,7 @@ impl Core {
         &self,
         policy: crate::job::FileResourcePolicy,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.file_resource_policy, policy);

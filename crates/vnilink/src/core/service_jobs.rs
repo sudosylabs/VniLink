@@ -159,6 +159,7 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
+        let _engine = self.engine();
         let (owner, peer) = self.files_job_owner(id, generation)?;
         self.submit_upload(
             &peer,
@@ -183,6 +184,7 @@ impl Core {
         dst_root: u64,
         dst_rel: &str,
     ) -> Result<u64, Error> {
+        let _engine = self.engine();
         let (owner, peer) = self.files_job_owner(id, generation)?;
         self.submit_download(
             &peer,
@@ -254,6 +256,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         interrupt_orphaned(&self.shared);
@@ -265,6 +268,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_poll(job)
@@ -275,6 +279,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_cancel(job)
@@ -285,6 +290,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_resume(job)
@@ -297,6 +303,7 @@ impl Core {
         choice: crate::ConflictChoice,
         apply_to_remaining: bool,
     ) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_resolve(job, choice, apply_to_remaining)
@@ -307,6 +314,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let _owner_gate = lock(&self.shared.job_owner_gate);
         self.files_service_job_owner(id, generation, job)?;
         self.job_forget(job)
@@ -427,6 +435,7 @@ impl Core {
         generation: u64,
         job: u64,
     ) -> Result<JobSnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let _gate = lock(&self.shared.job_owner_gate);
         let (owner, peer_id) = self.files_job_owner(id, generation)?;
@@ -507,6 +516,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<Vec<JobSnapshot>, Error> {
+        let _engine = self.engine();
         let (owner, peer_id) = self.files_job_owner(id, generation)?;
         let peer = parse_endpoint_id(&peer_id)?;
         interrupt_orphaned(&self.shared);

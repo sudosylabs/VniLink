@@ -21,6 +21,7 @@ impl Core {
         capability: Capability,
         state: BackendState,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let mut state = state;
         if let Some(failed) = state.failed.take() {
@@ -45,6 +46,7 @@ impl Core {
         capability: Capability,
         failure: Option<String>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         lock(&self.shared.backend_state)
             .entry(capability)
@@ -91,6 +93,7 @@ impl Core {
         endpoint_id: Option<&str>,
         capability: Capability,
     ) -> Result<Availability, Error> {
+        let _engine = self.engine();
         let peer = match endpoint_id {
             Some(id) => Some(parse_endpoint_id(id)?),
             None => None,

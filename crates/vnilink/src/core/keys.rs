@@ -85,6 +85,7 @@ impl Core {
         generation: u64,
         event: InputEvent,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let outbox = self.live_outbox(session_id, generation)?;
         let controller = self.controller_state(session_id, generation)?;
         let _plan = lock(&controller.keyboard);
@@ -112,6 +113,7 @@ impl Core {
         swap: bool,
         pointer: crate::PointerSettings,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         pointer.validate()?;
         let state = self.alive_state()?;
         let controllers: Vec<_> = state
@@ -163,6 +165,7 @@ impl Core {
         generation: u64,
         settings: crate::PointerSettings,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let controller = self.controller_state(id, generation)?;
         let _plan = lock(&controller.keyboard);
         let held = lock(&controller.held);
@@ -174,6 +177,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<crate::PointerSettings, Error> {
+        let _engine = self.engine();
         let controller = self.controller_state(id, generation)?;
         let settings = lock(&controller.pointer).settings;
         Ok(settings)
@@ -189,6 +193,7 @@ impl Core {
         generation: u64,
         ids: &[u64],
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let ids = super::topology::normalize_selection(ids)?;
         let outbox = self.live_outbox(session_id, generation)?;
         outbox.push_displays(ids)
@@ -285,6 +290,7 @@ impl Core {
         generation: u64,
         key: LocalKey<'_>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let outbox = self.live_outbox(session_id, generation)?;
         let controller = self.controller_state(session_id, generation)?;
         let mut plan = lock(&controller.keyboard);
@@ -341,6 +347,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<bool, Error> {
+        let _engine = self.engine();
         Ok(self
             .controller_state(id, generation)?
             .swap
@@ -353,6 +360,7 @@ impl Core {
         generation: u64,
         mode: KeyboardMode,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let controller = self.controller_state(id, generation)?;
         let plan = lock(&controller.keyboard);
         if plan.is_held() || !lock(&controller.held).release_events().is_empty() {
@@ -370,6 +378,7 @@ impl Core {
         generation: u64,
         enabled: bool,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let controller = self.controller_state(id, generation)?;
         let plan = lock(&controller.keyboard);
         if plan.is_held() || !lock(&controller.held).release_events().is_empty() {

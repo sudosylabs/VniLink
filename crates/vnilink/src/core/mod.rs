@@ -989,7 +989,7 @@ fn schedule_endpoint_close(shared: &Shared) {
         if close_endpoint(&arc).await {
             mark_teardown_finished(&arc);
         } else {
-            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
             release_teardown_claim(&arc);
         }
     });
@@ -1042,7 +1042,7 @@ async fn wait_until_state_unlocked(shared: &Arc<Shared>) -> bool {
             Err(std::sync::TryLockError::WouldBlock) => {}
         }
         if started.elapsed() >= budget {
-            eprintln!("vnilink: installation shutdown did not start within 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "shutting down did not start within 5 s: restart required");
             return false;
         }
         tokio::time::sleep(Duration::from_millis(2)).await;
@@ -1098,7 +1098,7 @@ fn wait_for_endpoint_close(shared: &Shared) {
         }
         let left = Duration::from_secs(5).saturating_sub(started.elapsed());
         if left.is_zero() {
-            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
             return;
         }
         let (next, wait) = shared
@@ -1107,7 +1107,7 @@ fn wait_for_endpoint_close(shared: &Shared) {
             .unwrap_or_else(|poison| poison.into_inner());
         guard = next;
         if wait.timed_out() && shared.teardown_phase.load(Ordering::Acquire) == 1 {
-            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
             return;
         }
     }

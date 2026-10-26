@@ -43,6 +43,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn HostAudioFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         *lock(&self.shared.audio_factory) = factory;
         for record in state.hosted_services.values_mut().filter(|r| {
@@ -68,6 +69,7 @@ impl Core {
         generation: u64,
         kind: AudioKind,
     ) -> Result<Vec<AudioDevice>, Error> {
+        let _engine = self.engine();
         let (link, stamp) = self.service_link(connection, generation)?;
         let mut stop = self
             .alive_state()?
@@ -96,6 +98,7 @@ impl Core {
         generation: u64,
         config: AudioConfig,
     ) -> Result<RemoteAudioService, Error> {
+        let _engine = self.engine();
         config.validate()?;
         let mut lease = self.service_lease(id, generation)?;
         if lease.info().kind != config.kind.service() {

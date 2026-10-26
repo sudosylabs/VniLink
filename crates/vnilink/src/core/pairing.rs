@@ -172,6 +172,7 @@ impl Core {
         &self,
         check_from_other_screen: &str,
     ) -> Result<DeviceInfo, Error> {
+        let _engine = self.engine();
         self.finish_control_request(check_from_other_screen)
     }
 

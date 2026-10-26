@@ -61,6 +61,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn HostPowerFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let _state = self.alive_state()?;
         let mut target = lock(&self.shared.power_factory);
         target.revision = target.revision.checked_add(1).ok_or(Error::Busy)?;

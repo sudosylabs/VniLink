@@ -722,6 +722,7 @@ impl Core {
         to_id: u64,
         to_generation: u64,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let from = runtime(&state, from_id, from_generation, true)?;
         let to = runtime(&state, to_id, to_generation, true)?;
@@ -790,6 +791,7 @@ impl Core {
         capture_us: u64,
         encode_us: u64,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         if capture_us > 5_000_000 || encode_us > 5_000_000 {
             return Err(Error::InvalidSetting("producer duration is out of range"));
         }
@@ -812,6 +814,7 @@ impl Core {
         generation: u64,
         encoder: crate::EncoderImplementation,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         *lock(&runtime(&*self.alive_state()?, id, generation, true)?.encoder) = Some(encoder);
         tracing::info!(
             target: crate::trace::STREAM,
@@ -846,6 +849,7 @@ impl Core {
         generation: u64,
         mut frame: EncodedFrame,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         frame.check()?;
         let desktop = {
             let state = self.alive_state()?;
@@ -877,6 +881,7 @@ impl Core {
         generation: u64,
         cursor: CursorState,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let desktop = runtime(&state, id, generation, true)?;
         if !desktop.info.separate_cursor {
