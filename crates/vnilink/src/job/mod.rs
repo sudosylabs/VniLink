@@ -11,7 +11,7 @@ mod wire;
 pub(crate) use wire::{
     check_version, decode, encode, error_for_status, DownloadRequest, JobCancel, JobReply,
     JobResolve, JobResume, JobStateReply, JobStatus, ManifestReply, UploadOffer, JOB_VERSION,
-    MAX_JOB_FRAME, STATUS_DENIED, STATUS_ERROR, STATUS_OK, STATUS_STALE, TAG_FS, TAG_JOB_CANCEL,
+    MAX_JOB_FRAME, STATUS_DENIED, STATUS_ERROR, STATUS_OK, STATUS_STALE, TAG_JOB_CANCEL,
     TAG_JOB_DOWNLOAD, TAG_JOB_MANIFEST, TAG_JOB_RESOLVE, TAG_JOB_RESUME, TAG_JOB_STATUS,
     TAG_JOB_UPLOAD,
 };

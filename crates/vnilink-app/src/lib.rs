@@ -42,9 +42,7 @@ pub use camera::{
     FfiCameraEnd, ALL_CAMERAS,
 };
 mod clipboard;
-pub use clipboard::{
-    ClipboardWriter, FfiClipboardFileEntry, FfiFileSelection, FfiStoredFileSelection,
-};
+pub use clipboard::ClipboardWriter;
 mod error;
 mod events;
 mod files;
@@ -498,23 +496,6 @@ impl VnilinkCore {
         self.inner.reject_control_request().map_err(map_error)
     }
 
-    /// Dials for listings, changes and transfers on the shared disk only,
-    /// without requiring a video decoder or host screen sharing. Host
-    /// admission needs Transfer (Control not required).
-    pub fn connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .connect_files(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
-    pub fn begin_connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .begin_connect_files(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
     pub fn controller_sessions(&self) -> Result<Vec<FfiSessionInfo>, FfiError> {
         self.inner
             .controller_sessions()
@@ -526,13 +507,6 @@ impl VnilinkCore {
         self.inner
             .hosted_sessions()
             .map(|sessions| sessions.into_iter().map(types::session_info).collect())
-            .map_err(map_error)
-    }
-
-    pub fn clipboard_owner_session(&self) -> Result<Option<FfiSessionInfo>, FfiError> {
-        self.inner
-            .clipboard_owner_session()
-            .map(|session| session.map(types::session_info))
             .map_err(map_error)
     }
 
@@ -550,16 +524,6 @@ impl VnilinkCore {
     pub fn forget_controller_session(&self, session_id: u64) -> Result<(), FfiError> {
         self.inner
             .forget_controller_session(session_id)
-            .map_err(map_error)
-    }
-
-    pub fn session_clipboard_text(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<Option<String>, FfiError> {
-        self.inner
-            .session_clipboard_text(session_id, generation)
             .map_err(map_error)
     }
 
@@ -675,21 +639,6 @@ impl VnilinkCore {
         self.inner
             .set_desktop_quality_defaults(types::to_quality(quality)?)
             .map_err(map_error)
-    }
-
-    pub fn submit_clipboard(
-        &self,
-        session_id: u64,
-        generation: u64,
-        text: String,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_clipboard(session_id, generation, &text)
-            .map_err(map_error)
-    }
-
-    pub fn clipboard_text(&self) -> Result<Option<String>, FfiError> {
-        self.inner.clipboard_text().map_err(map_error)
     }
 
     pub fn subscribe_events(&self) -> Result<EventPoller, FfiError> {

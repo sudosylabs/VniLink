@@ -27,7 +27,9 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{ConflictChoice, JobState};
-use vnilink_testkit::files::{self, drive, finished, received, settled, tree, write_files};
+use vnilink_testkit::files::{
+    download, drive, finished, received, settled, tree, upload, write_files,
+};
 use vnilink_testkit::{traced, wait_for, Pair, DEFAULT_WAIT};
 
 /// A tree with what trips transfers up: nesting, an empty folder, a name
@@ -54,11 +56,8 @@ fn an_upload_lands_exactly() {
     drive(&pair);
     source_tree(&pair.controller.folder().join("set"));
     std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
-    let job = files::upload(&pair, "set", "inbox").unwrap();
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "set", "inbox").unwrap();
     let sent = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(sent.state, JobState::Complete, "{sent:?}");
     let receiver = received(&pair.host.core);
@@ -97,11 +96,8 @@ fn a_download_lands_exactly() {
     drive(&pair);
     source_tree(&pair.host.folder().join("shared"));
     std::fs::create_dir_all(pair.controller.folder().join("downloads")).unwrap();
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
-    let job = files::download(&pair, "shared", "downloads").unwrap();
+    let files = pair.open_files();
+    let job = download(&pair, &files, "shared", "downloads").unwrap();
     let got = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     assert_eq!(
@@ -126,11 +122,8 @@ fn conflicts_wait_for_a_choice_and_follow_it() {
     for name in ["a.txt", "b.txt", "c.txt"] {
         std::fs::write(destination.join(name), format!("old {name}")).unwrap();
     }
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
-    let job = files::upload(&pair, "set", "inbox").unwrap();
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     for (name, choice) in [
         ("a.txt", ConflictChoice::Replace),
@@ -191,11 +184,8 @@ fn a_cancelled_upload_resumes_to_the_same_tree() {
     drive(&pair);
     source_tree(&pair.controller.folder().join("set"));
     std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
-    let job = files::upload(&pair, "set", "inbox").unwrap();
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     pair.controller.core.job_cancel(job).unwrap();
     assert_eq!(
@@ -218,8 +208,9 @@ fn a_cancelled_upload_resumes_to_the_same_tree() {
 }
 
 /// A host that stops sharing files mid-transfer leaves the job interrupted,
-/// to resume, not cancelled, after the fetch it stopped has ended. Sharing
-/// again, the job resumes to the same tree.
+/// to resume, not cancelled, after the fetch it stopped has ended, and ends
+/// the Files service it rode. Sharing again, a new Files service on the
+/// same connection adopts the job and resumes it to the same tree.
 #[test]
 fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
     let trace = traced();
@@ -230,11 +221,8 @@ fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
         &[("large.bin", 128 * 1024 * 1024)],
     );
     std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
-    files::upload(&pair, "set", "inbox").unwrap();
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     wait_for("the first bytes to arrive", DEFAULT_WAIT, || {
         (pair.host.core.job_snapshot(receiver).ok()?.done_bytes > 0).then_some(())
@@ -251,13 +239,24 @@ fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
     trace.wait_for_records("file received", 1);
     let stopped = pair.host.core.job_snapshot(receiver).unwrap();
     assert_eq!(
-        stopped.state,
-        JobState::Interrupted,
-        "a withdrawn permission interrupts a job to resume: {stopped:?}"
+        (stopped.state, stopped.error.as_deref()),
+        (
+            JobState::Interrupted,
+            Some("file transfer is no longer allowed")
+        ),
+        "a withdrawn permission interrupts a job to resume, and says why: {stopped:?}"
     );
 
     pair.host.core.set_desktop_sharing(sharing).unwrap();
-    pair.host.core.job_resume(receiver).unwrap();
+    pair.host.wait_released(Some(vnilink::ServiceKind::Files));
+    let (fresh, _pipe) = pair.controller.open_files(&files.connection).unwrap();
+    let controller = &pair.controller.core;
+    controller
+        .files_service_adopt_job(fresh.id, fresh.generation, job)
+        .unwrap();
+    controller
+        .files_service_job_resume(fresh.id, fresh.generation, job)
+        .unwrap();
     let got = finished(&pair.host.core, receiver, TRANSFER);
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     assert_eq!(

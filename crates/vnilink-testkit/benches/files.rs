@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use vnilink::{Grants, JobState};
 use vnilink_testkit::bench::{Better, Report};
-use vnilink_testkit::files::{drive, finished, received, write_files};
+use vnilink_testkit::files::{self, drive, finished, received, write_files};
 use vnilink_testkit::peer::Remote;
 use vnilink_testkit::{Pair, FILES};
 
@@ -22,21 +22,9 @@ fn upload(files: &[(&str, usize)]) -> Duration {
     drive(&pair);
     write_files(&pair.controller.folder().join("set"), files);
     std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
+    let service = pair.open_files();
     let started = Instant::now();
-    pair.controller
-        .core
-        .job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.location().root,
-            &pair.controller.location().path("set"),
-            pair.host.location().root,
-            &pair.host.location().path("inbox"),
-        )
-        .unwrap();
+    files::upload(&pair, &service, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
     let done = finished(&pair.host.core, receiver, UPLOAD_WAIT);
     let took = started.elapsed();
@@ -65,20 +53,22 @@ fn upload_to(remote: &mut Remote, files: &[(&str, usize)]) -> Duration {
         .core
         .set_desktop_sharing(controller)
         .expect("sharing Files with the agent");
-    let endpoint = remote.host.endpoint().to_owned();
-    let session = remote
+    let service = remote
         .suite
-        .core
-        .connect_files(&endpoint)
-        .expect("a files session to the agent");
+        .files_at(remote.host.endpoint())
+        .expect("the agent's Files");
+    let here = remote.suite.location();
+    let (folder, names) = files::source(&here.path("set"));
     let started = Instant::now();
     remote
         .suite
         .core
-        .job_submit_upload(
-            &endpoint,
-            remote.suite.location().root,
-            &remote.suite.location().path("set"),
+        .files_service_upload(
+            service.service.id,
+            service.service.generation,
+            here.root,
+            &folder,
+            &names,
             root,
             inbox,
         )
@@ -88,8 +78,8 @@ fn upload_to(remote: &mut Remote, files: &[(&str, usize)]) -> Duration {
     remote
         .suite
         .core
-        .disconnect_session(session.id)
-        .expect("the session ends");
+        .disconnect_session(service.connection.id)
+        .expect("the connection ends");
     remote
         .suite
         .core

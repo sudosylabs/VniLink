@@ -24,7 +24,7 @@ use crate::core::{Core, CoreConfig, Listen};
 use crate::job::JobState;
 use crate::manifest;
 use crate::relay::{CustomRelay, RelaySettings};
-use crate::test_support::{pair_for_transfer, FilesystemLocation};
+use crate::test_support::{open_files, pair_for_transfer, FilesystemLocation};
 
 /// Sizes of one matrix run.
 struct Matrix {
@@ -110,7 +110,7 @@ fn boot_in(namespace: Option<String>) -> Arc<Core> {
             ),
         }
         .expect("loopback core");
-        // Admission negotiates video even for a Files-only connection.
+        // A link carries codecs even when only Files rides it.
         core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
             .expect("codec capabilities");
         Arc::new(core)
@@ -308,6 +308,7 @@ fn run_case(
     matrix: &Matrix,
     controller: &Arc<Core>,
     host: &Arc<Core>,
+    files: &crate::ServiceInfo,
     from: &FilesystemLocation,
     to: &FilesystemLocation,
     name: &str,
@@ -315,10 +316,13 @@ fn run_case(
     host_root: &Path,
 ) -> Value {
     let started = Instant::now();
-    let submitted = controller.job_submit_upload(
-        &host.endpoint_id(),
+    let (folder, names) = from.entry(name);
+    let submitted = controller.files_service_upload(
+        files.id,
+        files.generation,
         from.root,
-        &from.path(name),
+        &folder,
+        &names,
         to.root,
         &to.path(&format!("arrived-{name}")),
     );
@@ -384,7 +388,7 @@ fn run_matrix(matrix: &Matrix) -> Value {
             transfer: true,
         })
         .unwrap();
-    controller.connect_files(&host.endpoint_id()).unwrap();
+    let (files, _pipe) = open_files(&controller, &host);
     let connected = json!({ "host": selected_paths(&host), "viewer": selected_paths(&controller) });
     if matrix.driver == Driver::Background {
         host.start_job_driver();
@@ -399,6 +403,7 @@ fn run_matrix(matrix: &Matrix) -> Value {
                 matrix,
                 &controller,
                 &host,
+                &files,
                 &from,
                 &to,
                 name,
@@ -407,8 +412,7 @@ fn run_matrix(matrix: &Matrix) -> Value {
             )
         })
         .collect();
-    // Files run on their own connection, which the diagnostics do not list;
-    // with direct UDP blocked it, too, can only cross the relay.
+    // With direct UDP blocked the connection, too, can only cross the relay.
     let finished = json!({ "host": selected_paths(&host), "viewer": selected_paths(&controller) });
     json!({
         "scenario": "transfer",

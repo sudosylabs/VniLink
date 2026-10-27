@@ -289,7 +289,6 @@ impl Core {
                 record_relay,
                 incoming: HashMap::new(),
                 outgoing: HashMap::new(),
-                clipboard_owner: None,
                 desktop_control: None,
                 lock_watch: crate::power::LockAfterControl::default(),
                 next_session_id: 1,

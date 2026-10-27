@@ -5,7 +5,7 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::JobState;
-use vnilink_testkit::files::{drive, finished, received, tree, write_files};
+use vnilink_testkit::files::{self, drive, finished, received, tree, write_files};
 use vnilink_testkit::relay::LocalRelay;
 use vnilink_testkit::{traced, Pair, FILES};
 
@@ -51,20 +51,8 @@ fn files_cross_the_relay_exactly() {
         &[("a.txt", 1024), ("b/c.bin", 3 * 1024 * 1024 + 11)],
     );
     std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
-    pair.controller
-        .core
-        .job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.location().root,
-            &pair.controller.location().path("set"),
-            pair.host.location().root,
-            &pair.host.location().path("inbox"),
-        )
-        .unwrap();
+    let service = pair.open_files();
+    files::upload(&pair, &service, "set", "inbox").unwrap();
     let job = received(&pair.host.core);
     let done = finished(&pair.host.core, job, Duration::from_secs(120));
     assert_eq!(done.state, JobState::Complete, "{done:?}");

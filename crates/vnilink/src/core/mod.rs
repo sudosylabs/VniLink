@@ -7,8 +7,7 @@
 //! - [`connect`] — authorize, connect, disconnect, redial
 //! - [`keys`] — the input adapter, input defaults, and a session's control stream on the host
 //! - [`link`] — the live link and the address refresh both roles share
-//! - [`clipboard`] — clipboard stream
-//! - [`files`] — file transfer stream
+//! - [`clipboard`] — the host's clipboard adapter
 //! - [`video`] — capture consumers and codec settings
 //! - [`wire`] — control frame read and write
 // trace: records every ignored failure
@@ -23,7 +22,7 @@ use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr, PublicKey, SecretKey};
 
-use crate::clipboard::{ClipboardSender, HostClipboard};
+use crate::clipboard::HostClipboard;
 use crate::error::Error;
 use crate::events::{CoreEvent, EventHub};
 use crate::input::{HostDesktop, InputOutbox};
@@ -229,35 +228,16 @@ struct LiveSession {
     id: u64,
     /// Peer-assigned protocol identity, never used for local controller lookup.
     wire_stamp: crate::protocol::SessionStamp,
-    controller: Option<Arc<ControllerState>>,
     generation: u64,
     role: SessionRole,
     phase: SessionPhase,
     peer_id: String,
     peer_key: [u8; 32],
-    /// A presence link that services open on. Otherwise a files-only
-    /// session (Transfer grant): roots, listings and transfers, which
-    /// enforce Transfer per operation.
-    services_only: bool,
     /// Topology last received from the host. Empty until the first snapshot.
     peer_topology: Vec<crate::input::DisplayInfo>,
     stop: tokio::sync::watch::Sender<bool>,
     /// Live connection. A test can close it without asking the session to stop.
     link: Option<iroh::endpoint::Connection>,
-    clipboard: Option<ClipboardSender>,
-    /// Latest file selection this session's peer offered. Revisioned so a
-    /// paste names the offer it copies, and cleared on revoke because a
-    /// selection is a live capability, unlike inert text.
-    clipboard_files: Option<crate::clipboard::StoredFileSelection>,
-    /// This core's own file offers on this hosted session. Revisioned: a
-    /// paste may copy only the revision it names, so a same-path re-offer
-    /// cannot satisfy an older paste. An empty
-    /// offer stores an empty selection at a fresh revision instead of
-    /// dropping the chain.
-    published_files: Option<crate::clipboard::StoredFileSelection>,
-    /// Next own-offer revision minus one. Monotonic across clears and
-    /// revokes so a revision is never reused within the session.
-    published_rev: AtomicU64,
     /// On a controller's link: the host's latest report of what it allows.
     remote_availability: Option<Vec<(crate::Capability, crate::RemoteStatus)>>,
 }
@@ -300,32 +280,9 @@ impl LiveSession {
     }
 }
 
-/// All mutable controller channels belong to one session, including reconnects.
-struct ControllerState {
-    clipboard: Mutex<Option<String>>,
-    clipboard_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
-    /// This core's own file offers on this session, for binding pastes to
-    /// offers. Revisioned: a paste naming an older revision is refused
-    /// even when its paths match, and the Transfer grant alone never
-    /// authorizes copying.
-    published_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
-    /// Next own-offer revision minus one. Monotonic across clears and
-    /// revokes so a revision is never reused within the session.
-    published_rev: AtomicU64,
-}
-impl ControllerState {
-    fn new() -> Self {
-        Self {
-            clipboard: Mutex::new(None),
-            clipboard_files: Mutex::new(None),
-            published_files: Mutex::new(None),
-            published_rev: AtomicU64::new(0),
-        }
-    }
-}
-
 impl State {
-    /// Legacy APIs may address only an unambiguous outgoing session.
+    /// The one outgoing link, for calls that name none: only when it is
+    /// unambiguous.
     fn single_outgoing(&self) -> Option<&LiveSession> {
         if self.outgoing.len() == 1 {
             return self.outgoing.values().next();
@@ -339,21 +296,6 @@ impl State {
         } else {
             None
         }
-    }
-    fn outgoing_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
-        self.outgoing
-            .values()
-            .find(|s| s.peer_key == *peer && !finished(&s.phase))
-    }
-    /// Live hosted session for one peer and wire generation. Job control
-    /// frames carry no host session id, so they fence on peer identity plus
-    /// the generation inside the message.
-    fn incoming_live_for(&self, peer: &[u8; 32], generation: u64) -> Option<&LiveSession> {
-        self.incoming.values().find(|s| {
-            s.peer_key == *peer
-                && s.wire_stamp.generation == generation
-                && s.phase == SessionPhase::Active
-        })
     }
     /// The connection whose desktop holds control. A retiring desktop keeps
     /// its reservation until its held input is released.
@@ -374,8 +316,9 @@ impl State {
         }
         None
     }
-    /// A live hosted session, for legacy single-view callers. New code that
-    /// already knows the session id must use `incoming.get(&id)` instead.
+    /// A live hosted session, for tests that host one. Code that knows the
+    /// session id uses `incoming.get(&id)` instead.
+    #[cfg(any(test, feature = "test-probes"))]
     fn incoming_live(&self) -> Option<&LiveSession> {
         self.incoming.values().find(|s| !finished(&s.phase))
     }
@@ -386,14 +329,6 @@ impl State {
     }
     fn incoming_live_mut(&mut self) -> Option<&mut LiveSession> {
         self.incoming.values_mut().find(|s| !finished(&s.phase))
-    }
-    /// Live hosted sessions other than presence links, which carry no
-    /// service by themselves and are bounded by the paired devices instead.
-    fn live_incoming_count(&self) -> usize {
-        self.incoming
-            .values()
-            .filter(|s| !finished(&s.phase) && !s.services_only)
-            .count()
     }
     fn live_outgoing_count(&self) -> usize {
         self.outgoing
@@ -426,15 +361,9 @@ struct State {
     record_relay: RelaySettings,
     /// Hosted peer connections by local session id. Connection-scoped: every
     /// lookup carries the session id, never a global current session.
-    /// Capacity is enforced at admission (`MAX_LIVE_INCOMING`).
+    /// One link per paired peer, bounded by the paired devices at admission.
     incoming: HashMap<u64, LiveSession>,
     outgoing: HashMap<u64, LiveSession>,
-    /// Hosted files-only session selected for session-clipboard sync. Host OS
-    /// clipboard changes publish only to this session, and peer text applies
-    /// to the OS clipboard only from it, so one peer's selection is never
-    /// broadcast to another. Admission selects the new session; closing it
-    /// hands selection to the lowest remaining live hosted session, if any.
-    clipboard_owner: Option<u64>,
     /// Host-local Desktop service identity plus parent generation.
     desktop_control: Option<crate::protocol::SessionStamp>,
     /// Lock-after-control edge state. Grant sites arm it synchronously so
@@ -711,23 +640,6 @@ impl Core {
             Ok(state)
         }
     }
-
-    fn emit_session(
-        &self,
-        id: u64,
-        generation: u64,
-        role: SessionRole,
-        phase: SessionPhase,
-        peer_id: &str,
-    ) {
-        self.shared.events.publish(CoreEvent::SessionChanged {
-            id,
-            generation,
-            role,
-            phase,
-            peer_id: peer_id.to_owned(),
-        });
-    }
 }
 
 impl Drop for Core {
@@ -736,7 +648,6 @@ impl Drop for Core {
     }
 }
 
-const CONNECT_WAIT: Duration = Duration::from_secs(75);
 const CONTROL_APPROVAL_WAIT: Duration = Duration::from_secs(60);
 /// How long a controller waits for the answer to its Hello. The host may park
 /// an unpaired Hello for [`CONTROL_APPROVAL_WAIT`] while its owner types the
@@ -1015,6 +926,19 @@ async fn wait_until_state_unlocked(shared: &Arc<Shared>) -> bool {
     }
 }
 
+/// Closes a link this engine ends with `code` and `reason`, or, while the
+/// engine shuts down, with [`CLOSE_SHUT_DOWN`](crate::protocol::CLOSE_SHUT_DOWN):
+/// a session the shutdown stops may close its link before
+/// [`close_links_for_shutdown`] does, and the first close is what the peer
+/// reads, so it must say the other computer shut down.
+fn close_link(link: &iroh::endpoint::Connection, shutting_down: bool, code: u8, reason: &[u8]) {
+    if shutting_down {
+        link.close(crate::protocol::CLOSE_SHUT_DOWN.into(), b"shut down");
+    } else {
+        link.close(code.into(), reason);
+    }
+}
+
 /// Closes this engine's session links and files connections with
 /// [`CLOSE_SHUT_DOWN`](crate::protocol::CLOSE_SHUT_DOWN), so peers end
 /// their sessions and fetches instead of redialing. A session's own close
@@ -1124,27 +1048,6 @@ fn live_session(state: &State, incoming: bool, session_id: u64) -> Result<&LiveS
         return Err(Error::NoSession);
     }
     Ok(session)
-}
-
-/// Sends one side-stream request and waits for its reply. A full queue is
-/// busy; a gone stream and a silent one end the wait.
-fn round_trip<R>(
-    tx: &tokio::sync::mpsc::Sender<R>,
-    closed: &'static str,
-    request: impl FnOnce(std::sync::mpsc::SyncSender<Result<(), Error>>) -> R,
-) -> Result<(), Error> {
-    let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
-    match tx.try_send(request(reply_tx)) {
-        Ok(()) => {}
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => return Err(Error::Busy),
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            return Err(Error::Unsupported(closed));
-        }
-    }
-    match reply_rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(result) => result,
-        Err(_) => Err(Error::Timeout),
-    }
 }
 
 impl Shared {

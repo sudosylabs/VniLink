@@ -1,9 +1,9 @@
 //! Presence links: one idle neutral connection to every paired computer.
 //!
 //! A computer is reachable when this side holds a live neutral link to it.
-//! The link is the same `services_only` connection services open their
-//! streams on, so "connected" means "I can use this computer now". It carries
-//! no service by itself, and the host does not count it as someone connected.
+//! The link is the connection services open their streams on, so
+//! "connected" means "I can use this computer now". It carries no service
+//! by itself, and the host does not count it as someone connected.
 //! The supervisor redials with backoff, sooner when the peer dials us or the
 //! user asks for the link, and stops for unpaired computers.
 // trace: records every ignored failure
@@ -119,8 +119,8 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
         if !reached && failures == 0 {
             set_presence(&shared, &display_id, DevicePresence::Connecting);
         }
-        match start_outgoing(&shared, &handle, &display_id, true, false) {
-            Ok((info, _ready, _stop)) => {
+        match start_outgoing(&shared, &handle, &display_id) {
+            Ok(info) => {
                 if watch_link(&shared, info.id, &peer, &display_id).await {
                     reached = true;
                     failures = 0;
@@ -276,7 +276,7 @@ impl Core {
         Ok(state
             .outgoing
             .values()
-            .find(|s| s.peer_key == key && s.services_only && s.phase == SessionPhase::Active)
+            .find(|s| s.peer_key == key && s.phase == SessionPhase::Active)
             .and_then(|s| s.remote_availability.clone()))
     }
 }

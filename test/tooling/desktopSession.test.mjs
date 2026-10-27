@@ -152,7 +152,7 @@ test('input and display selection are no engine commands: they go on the desktop
 		assert(isDesktopInputCommand(command), `${command.type} is desktop input`);
 		assert(!isEngineCommand(command), `${command.type} is not an engine command`);
 	}
-	assert(isEngineCommand({ type: 'submitClipboard', ...target, text: 'a' }), 'a session pastes by command');
+	assert(!isEngineCommand({ type: 'submitClipboard', ...target, text: 'a' }), 'no command pastes: text crosses on a Desktop\'s own clipboard pipe');
 });
 
 test('a decoder that loses the picture asks for a keyframe and starts again from it', async () => {

@@ -230,8 +230,55 @@ impl Engine {
             connection.generation,
             ServiceKind::Files,
         )?;
-        let pipe = self.core.open_files_service(owner.id, owner.generation)?;
-        Ok((owner, pipe))
+        match self.core.open_files_service(owner.id, owner.generation) {
+            Ok(pipe) => Ok((owner, pipe)),
+            Err(error) => {
+                // A refused service leaves no record, as the Files tab
+                // leaves none: the next attempt is not busy with it.
+                self.core
+                    .close_controller_service(owner.id, owner.generation)?;
+                self.core.forget_controller_service(owner.id)?;
+                Err(error)
+            }
+        }
+    }
+
+    /// This engine's Files on `host`, as the Files tab reaches a computer:
+    /// a services connection and a Files service on it, once `host`
+    /// admitted both; the refusal when it refused either.
+    pub fn files_on(&self, host: &Engine) -> Result<Files, Error> {
+        self.files_at(&host.endpoint())
+    }
+
+    /// As [`Self::files_on`], on the host whose endpoint is `endpoint`,
+    /// for a host the kit did not start.
+    pub fn files_at(&self, endpoint: &str) -> Result<Files, Error> {
+        let connection = self.connect_services_to(endpoint)?;
+        let (service, pipe) = self.open_files(&connection)?;
+        Ok(Files {
+            connection,
+            service,
+            pipe,
+        })
+    }
+}
+
+/// A controller's Files on a host, as the Files tab holds them: the
+/// services connection, the Files service on it, and the pipe its listings
+/// and changes go through. Its jobs ride the service, so it lives as long
+/// as a test moves files; dropping it closes the service, and the
+/// connection stays.
+pub struct Files {
+    pub connection: SessionInfo,
+    pub service: ServiceInfo,
+    pub pipe: RemoteFilesService,
+}
+
+impl Files {
+    /// Closes the service, as closing the Files tab does: the connection
+    /// stays.
+    pub fn close(&self) {
+        self.pipe.close();
     }
 }
 
@@ -440,6 +487,14 @@ impl Pair {
         self.controller
             .connect_services(&self.host)
             .expect("an admitted connection")
+    }
+
+    /// The controller's Files on the host, as the Files tab reaches it,
+    /// once the host admitted them.
+    pub fn open_files(&self) -> Files {
+        self.controller
+            .files_on(&self.host)
+            .expect("the host's Files")
     }
 
     /// Another viewer named `name`, paired with the host as the controller

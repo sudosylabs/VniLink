@@ -59,17 +59,20 @@
 //! # Clipboard
 //!
 //! Clipboard is a separate grant from control. Text is UTF-8 and at most
-//! 256 KiB. [`Core::submit_clipboard`] sends it to the host.
-//! [`Core::publish_clipboard`] sends the host's text to the controller.
-//! Neither call reads or writes the operating-system clipboard. The steps
-//! are in `crates/vnilink/CLIPBOARD.md`.
+//! 256 KiB, and rides a Desktop's own pipe:
+//! [`RemoteDesktopService::submit_clipboard`] sends it to the host, and
+//! [`Core::publish_desktop_clipboard`] sends the host's text to one
+//! Desktop. Neither call reads or writes the operating-system clipboard.
+//! The steps are in `crates/vnilink/CLIPBOARD.md`.
 //!
 //! # File transfer
 //!
 //! File transfer is a separate grant from control and from clipboard. The
 //! owner shares the whole disk with [`Core::enable_filesystem_access`]; the
-//! peer browses it with `fs_*` calls and moves bytes with resumable transfer jobs
-//! (`job_submit_*`/`job_poll`). The steps are in `crates/vnilink/TRANSFER.md`.
+//! peer browses it through a Files service ([`RemoteFilesService`]) and
+//! moves bytes with its resumable transfer jobs (`files_service_upload`/
+//! `files_service_download`, `job_poll`). The steps are in
+//! `crates/vnilink/TRANSFER.md`.
 //!
 //! # Threading
 //!
@@ -140,10 +143,7 @@ pub use availability::{
     evaluate, policy_descriptor, Availability, AvailabilityInputs, AvailabilityReason,
     BackendState, Capability, PolicyChangeScope, PolicyDescriptor, RemoteStatus, POLICIES,
 };
-pub use clipboard::{
-    ClipboardFileEntry, FileSelection, HostClipboard, StoredFileSelection, MAX_CLIPBOARD_FILES,
-    MAX_CLIPBOARD_FILES_BYTES, MAX_CLIPBOARD_TEXT,
-};
+pub use clipboard::{HostClipboard, MAX_CLIPBOARD_TEXT};
 pub use core::service_stream::RemoteFilesService;
 pub use core::RemoteDesktopService;
 pub use core::TopologySnapshot;

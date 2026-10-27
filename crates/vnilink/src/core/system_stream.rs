@@ -606,10 +606,7 @@ fn admit_locked(state: &State, id: u64) -> Result<Admission, u8> {
     let connection_id = record.info.connection_id;
     let generation = record.info.generation;
     let session = state.incoming.get(&connection_id).ok_or(3)?;
-    if session.phase != SessionPhase::Active
-        || session.generation != generation
-        || !session.services_only
-    {
+    if session.phase != SessionPhase::Active || session.generation != generation {
         return Err(3);
     }
     let peer = session.peer_key;

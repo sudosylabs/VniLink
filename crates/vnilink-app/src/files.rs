@@ -2,8 +2,8 @@
 //!
 //! Every method follows the crate threading rule: call from a background
 //! thread, never the UI thread. `job_poll` advances at most one file but
-//! that file can take a while over the network; `fs_*` and
-//! `job_submit_*` need a live control session. File bytes never cross
+//! that file can take a while over the network. The other computer's disk
+//! is reached through a Files service (`services.rs`). File bytes never cross
 //! this boundary as whole vectors on receive: jobs stream to disk inside
 //! the core, and listings carry names, sizes and progress only.
 
@@ -471,113 +471,6 @@ impl VnilinkCore {
             self.inner.delete_entry(root, &path, &name, expected)
         }
         .map_err(map_error)
-    }
-
-    /// Lists a directory on the controlled computer. Needs the live
-    /// session id and generation.
-    pub fn fs_list(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: String,
-        offset: u64,
-        limit: u16,
-    ) -> Result<FfiDirPage, FfiError> {
-        self.inner
-            .fs_list(session_id, generation, root, &path, offset, limit)
-            .map(dir_page)
-            .map_err(map_error)
-    }
-
-    pub fn fs_mkdir(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: String,
-        name: String,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .fs_mkdir(session_id, generation, root, &path, &name)
-            .map_err(map_error)
-    }
-
-    /// Remote rename mirrors `rename_entry` on the controlled computer.
-    #[allow(clippy::too_many_arguments)]
-    pub fn fs_rename(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: String,
-        name: String,
-        expected: Option<FfiEntryToken>,
-        new_name: String,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .fs_rename(
-                session_id,
-                generation,
-                root,
-                &path,
-                &name,
-                expected.map(to_entry_token).transpose()?,
-                &new_name,
-            )
-            .map_err(map_error)
-    }
-
-    /// Remote delete mirrors `delete_entry` on the controlled computer.
-    pub fn fs_delete(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: String,
-        name: String,
-        expected: Option<FfiEntryToken>,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .fs_delete(
-                session_id,
-                generation,
-                root,
-                &path,
-                &name,
-                expected.map(to_entry_token).transpose()?,
-            )
-            .map_err(map_error)
-    }
-
-    /// Uploads a local tree to the paired peer. Returns the sender job id;
-    /// the peer adopts it. Drive with `job_poll` on both sides.
-    pub fn job_submit_upload(
-        &self,
-        peer_endpoint_id: String,
-        src_root: u64,
-        src_rel: String,
-        dst_root: u64,
-        dst_rel: String,
-    ) -> Result<u64, FfiError> {
-        self.inner
-            .job_submit_upload(&peer_endpoint_id, src_root, &src_rel, dst_root, &dst_rel)
-            .map_err(map_error)
-    }
-
-    /// Asks the paired peer to prepare a download. Returns the receiver
-    /// job id, adopted from the host. Drive with `job_poll` on both sides.
-    pub fn job_submit_download(
-        &self,
-        peer_endpoint_id: String,
-        src_root: u64,
-        src_rel: String,
-        dst_root: u64,
-        dst_rel: String,
-    ) -> Result<u64, FfiError> {
-        self.inner
-            .job_submit_download(&peer_endpoint_id, src_root, &src_rel, dst_root, &dst_rel)
-            .map_err(map_error)
     }
 
     pub fn job_snapshot(&self, id: u64) -> Result<FfiJobSnapshot, FfiError> {

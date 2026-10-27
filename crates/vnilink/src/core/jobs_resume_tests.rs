@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::core::Core;
 use crate::job::JobState;
 use crate::manifest;
-use crate::test_support::{transfer_pair, FilesystemLocation};
+use crate::test_support::{open_files, transfer_pair, FilesystemLocation};
 
 fn payload(len: usize, seed: u64) -> Vec<u8> {
     let mut state: u64 = seed;
@@ -74,15 +74,18 @@ fn a_partial_resumes_after_its_journaled_segments() {
     let unjournaled = payload(2 * 1024 * 1024 + 5, 22);
     std::fs::write(host_scratch.join("root/journaled.bin"), &journaled).unwrap();
     std::fs::write(host_scratch.join("root/unjournaled.bin"), &unjournaled).unwrap();
-    controller.connect_files(&host.endpoint_id()).unwrap();
+    let (files, _pipe) = open_files(&controller, &host);
     controller
         .create_dir(controller_files.root, &controller_files.path(""), "got")
         .unwrap();
+    let (folder, names) = host_files.entry("");
     let job = controller
-        .job_submit_download(
-            &host.endpoint_id(),
+        .files_service_download(
+            files.id,
+            files.generation,
             host_files.root,
-            &host_files.path(""),
+            &folder,
+            &names,
             controller_files.root,
             &controller_files.path("got"),
         )

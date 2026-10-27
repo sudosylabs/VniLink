@@ -301,7 +301,7 @@ pub(super) async fn probe(
         } else if !super::service_permissions::admitted(&state, &peer, ServiceKind::ScreenSnapshot)
         {
             6
-        } else if !session.services_only || lock(&shared.snapshot_factory).is_none() {
+        } else if lock(&shared.snapshot_factory).is_none() {
             1
         } else {
             0

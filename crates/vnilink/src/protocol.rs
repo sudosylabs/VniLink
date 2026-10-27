@@ -190,18 +190,10 @@ pub(crate) enum ControlMessage {
         codec: u8,
         quality: Quality,
         /// Whether the dialing viewer can decode H.264. The host refuses a
-        /// Desktop the viewer could never display. A session's Hello, which
-        /// asks for no picture, leaves this and the other desktop fields at
-        /// their defaults.
+        /// Desktop the viewer could never display. A presence link's Hello,
+        /// which asks for no picture, leaves this and the other desktop
+        /// fields at their defaults.
         decode: bool,
-        /// A session's Hello sets this: files-only for roots, listings and
-        /// transfers (Transfer-grant admission), or with `services_only` a
-        /// presence link. A host refuses a session Hello without it. A
-        /// Desktop service's Hello, on its own stream, sets false.
-        files_only: bool,
-        /// Neutral transport admission, without granting any feature.
-        /// Must also set files_only so no desktop transport is started.
-        services_only: bool,
         /// Whether the controller draws a cursor sent as its own stream. The
         /// host separates the cursor only when both sides support it.
         separate_cursor: bool,
@@ -307,14 +299,12 @@ impl ControlMessage {
                 codec,
                 quality,
                 decode,
-                files_only,
-                services_only,
                 separate_cursor,
                 bt601,
                 hostname,
                 os,
             } => {
-                let mut bytes = Vec::with_capacity(20);
+                let mut bytes = Vec::with_capacity(18);
                 bytes.push(1);
                 bytes.extend_from_slice(&version.to_be_bytes());
                 bytes.push(*codec);
@@ -323,8 +313,6 @@ impl ControlMessage {
                 bytes.push(quality.max_frame_rate);
                 bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
                 bytes.push(u8::from(*decode));
-                bytes.push(u8::from(*files_only));
-                bytes.push(u8::from(*services_only));
                 bytes.push(u8::from(*separate_cursor));
                 bytes.push(*bt601);
                 write_hostname(&mut bytes, hostname);
@@ -443,7 +431,7 @@ impl ControlMessage {
             return Err(Error::Malformed);
         }
         match bytes[0] {
-            1 if bytes.len() >= 20 => {
+            1 if bytes.len() >= 18 => {
                 let quality = Quality::new(
                     u32::from_be_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]),
                     bytes[8],
@@ -458,25 +446,17 @@ impl ControlMessage {
                     _ => Err(Error::Malformed),
                 };
                 let decode = flag(bytes[13])?;
-                let files_only = flag(bytes[14])?;
-                let services_only = flag(bytes[15])?;
-                let separate_cursor = flag(bytes[16])?;
-                let bt601 = bytes[17];
+                let separate_cursor = flag(bytes[14])?;
+                let bt601 = bytes[15];
                 if bt601 & !BT601_CODECS != 0 {
                     return Err(Error::Malformed);
                 }
-                // A service-only connection never starts desktop transport.
-                if services_only && !files_only {
-                    return Err(Error::Malformed);
-                }
-                let hostname_start = 18;
+                let hostname_start = 16;
                 Ok(Self::Hello {
                     version,
                     codec: bytes[3],
                     quality,
                     decode,
-                    files_only,
-                    services_only,
                     separate_cursor,
                     bt601,
                     hostname: read_hostname(

@@ -54,30 +54,6 @@ pub(crate) enum Grant {
     Transfer,
 }
 
-/// Host admission of a files-only session. Iroh has already authenticated
-/// the peer key. Files sharing admits it; listings, changes and
-/// transfers on the shared disk enforce that grant per operation.
-pub(crate) fn admit(
-    hosting: bool,
-    session_open: bool,
-    transfer_granted: bool,
-    version: u16,
-) -> Result<(), Error> {
-    if !hosting {
-        return Err(Error::NotHosting);
-    }
-    if version != crate::protocol::PROTOCOL_VERSION {
-        return Err(Error::IncompatibleVersion);
-    }
-    if session_open {
-        return Err(Error::Busy);
-    }
-    if !transfer_granted {
-        return Err(Error::Unauthorized);
-    }
-    Ok(())
-}
-
 /// Neutral transport gate. Pairing and an explicit host enablement admit a
 /// connection, but every feature still needs its own service permission.
 pub(crate) fn admit_services(
@@ -237,32 +213,32 @@ mod tests {
     }
 
     #[test]
-    fn admission_checks_hosting_version_capacity_and_grant() {
+    fn admission_checks_hosting_version_pairing_and_capacity() {
         assert!(matches!(
-            admit(false, false, true, PROTOCOL_VERSION),
+            admit_services(false, false, true, PROTOCOL_VERSION),
             Err(Error::NotHosting)
         ));
         for version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
             assert!(matches!(
-                admit(true, false, true, version),
+                admit_services(true, false, true, version),
                 Err(Error::IncompatibleVersion)
             ));
         }
         assert!(matches!(
-            admit(true, true, true, PROTOCOL_VERSION),
-            Err(Error::Busy)
+            admit_services(true, false, false, PROTOCOL_VERSION),
+            Err(Error::NotPaired)
         ));
         assert!(matches!(
-            admit(true, false, false, PROTOCOL_VERSION),
-            Err(Error::Unauthorized)
+            admit_services(true, true, true, PROTOCOL_VERSION),
+            Err(Error::Busy)
         ));
-        assert!(admit(true, false, true, PROTOCOL_VERSION).is_ok());
+        assert!(admit_services(true, false, true, PROTOCOL_VERSION).is_ok());
     }
 
     #[test]
     fn admission_order_prefers_hosting_and_the_control_channel_is_active() {
         assert!(matches!(
-            admit(false, false, false, 0),
+            admit_services(false, true, false, 0),
             Err(Error::NotHosting)
         ));
         assert_eq!(phase_after_admit(), SessionPhase::Active);

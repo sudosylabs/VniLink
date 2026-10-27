@@ -71,17 +71,18 @@ const STAGE_FAILED: &str = "the file could not be staged";
 // Why a job stopped short of finishing, shown with the job until it
 // resumes.
 const UNREACHABLE: &str = "the other computer could not be reached";
-const CONNECTION_ENDED: &str = "the connection to the other computer ended";
+pub(super) const CONNECTION_ENDED: &str = "the connection to the other computer ended";
 const STALLED: &str = "the transfer stalled";
 const SENDER_BUSY: &str = "the other computer is busy sending other files";
-const SENDER_STOPPED: &str = "the other computer stopped sending";
-const SENDER_SHUT_DOWN: &str = "the other computer shut down";
-const PERMISSION_OFF: &str = "file transfer is no longer allowed";
+pub(super) const SENDER_STOPPED: &str = "the other computer stopped sending";
+pub(super) const RECEIVER_STOPPED: &str = "the other computer stopped receiving";
+pub(super) const SENDER_SHUT_DOWN: &str = "the other computer shut down";
+pub(super) const PERMISSION_OFF: &str = "file transfer is no longer allowed";
 const UNPAIRED: &str = "the computers are no longer paired";
 pub(super) const OWNER_GONE: &str = "the Files window that started it closed";
 const STOPPED: &str = "the transfer stopped before the file was written";
 const VOLUME_CHANGED: &str = "the destination's disk changed";
-const APP_CLOSED: &str = "VniLink closed during the transfer";
+pub(super) const APP_CLOSED: &str = "VniLink closed during the transfer";
 
 /// Durable job record. Counters and choices survive restart; a partial
 /// file in the transfer directory keeps the bytes of the file arriving.
@@ -151,6 +152,11 @@ pub(super) struct JobRecord {
     /// while steps succeed. Not saved: a restart resumes explicitly.
     #[serde(skip)]
     retry: Option<Retry>,
+    /// Sender only: its resume is being told to its receiver. Until the
+    /// receiver has heard, what it reports is from before the resume, so
+    /// the sender does not follow it. Not saved.
+    #[serde(skip)]
+    telling_resume: bool,
     /// Sender only: the file it sends now and how far into it the stream
     /// has taken bytes, so its progress moves without waiting on its
     /// receiver's replies.
@@ -219,6 +225,7 @@ impl JobRecord {
             attempt: 0,
             unsaved_landed: Vec::new(),
             retry: None,
+            telling_resume: false,
             sent_at: None,
             source_ids: Vec::new(),
         }
@@ -545,16 +552,6 @@ fn source_rels(folder: &str, names: &[String]) -> Vec<String> {
     }
 }
 
-/// One root-relative source as its folder and its name; the whole root
-/// (empty) names nothing.
-fn split_source(rel: &str) -> (String, Vec<String>) {
-    match rel.rsplit_once('/') {
-        _ if rel.is_empty() => (String::new(), Vec::new()),
-        Some((folder, name)) => (folder.to_owned(), vec![name.to_owned()]),
-        None => (String::new(), vec![rel.to_owned()]),
-    }
-}
-
 /// What a sender may be asked to send: entries of one folder, each named
 /// once, or the whole root. A manifest holds no more entries than names.
 fn check_sources(folder: &str, names: &[String]) -> Result<(), Error> {
@@ -592,32 +589,10 @@ fn verify_leg_pin(
 }
 
 impl Core {
-    /// Uploads a local tree to the paired peer: scans, hashes, offers and
-    /// sends the manifest. The returned id is the sender record; the peer
-    /// adopts the same id for its receiver record.
-    pub fn job_submit_upload(
-        &self,
-        peer_endpoint_id: &str,
-        src_root: u64,
-        src_rel: &str,
-        dst_root: u64,
-        dst_rel: &str,
-    ) -> Result<u64, Error> {
-        let _engine = self.engine();
-        let (folder, names) = split_source(src_rel);
-        self.submit_upload(
-            peer_endpoint_id,
-            src_root,
-            &folder,
-            &names,
-            dst_root,
-            dst_rel,
-            None,
-        )
-    }
-
     /// Uploads the entries `names` of `src_folder`, or with no names the
-    /// whole root, as one job.
+    /// whole root, as one job of the Files service `owner`: scans, hashes,
+    /// offers and sends the manifest. The returned id is the sender
+    /// record; the peer adopts the same id for its receiver record.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn submit_upload(
         &self,
@@ -627,9 +602,11 @@ impl Core {
         names: &[String],
         dst_root: u64,
         dst_rel: &str,
-        owner: Option<super::service_jobs::JobOwner>,
+        owner: super::service_jobs::JobOwner,
     ) -> Result<u64, Error> {
         let _engine = self.engine();
+        let service = owner;
+        let owner = Some(service);
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
         check_sources(src_folder, names)?;
@@ -717,6 +694,7 @@ impl Core {
             attempt: 0,
             unsaved_landed: Vec::new(),
             retry: None,
+            telling_resume: false,
             sent_at: None,
             source_ids,
         };
@@ -750,7 +728,7 @@ impl Core {
         }
         let announced = (|| {
             let reply_bytes = self.service_job_round_trip(
-                owner,
+                service,
                 &peer,
                 job::TAG_JOB_UPLOAD,
                 &job::encode(&offer)?,
@@ -773,32 +751,10 @@ impl Core {
         Ok(id)
     }
 
-    /// Asks the paired peer to prepare a download from its roots. The host
-    /// scans, hashes and offers; this side adopts the host's job id for
-    /// its receiver record.
-    pub fn job_submit_download(
-        &self,
-        peer_endpoint_id: &str,
-        src_root: u64,
-        src_rel: &str,
-        dst_root: u64,
-        dst_rel: &str,
-    ) -> Result<u64, Error> {
-        let _engine = self.engine();
-        let (folder, names) = split_source(src_rel);
-        self.submit_download(
-            peer_endpoint_id,
-            src_root,
-            &folder,
-            &names,
-            dst_root,
-            dst_rel,
-            None,
-        )
-    }
-
     /// Downloads the peer's entries `names` of `src_folder`, or with no
-    /// names its whole root, as one job.
+    /// names its whole root, as one job of the Files service `owner`. The
+    /// host scans, hashes and offers; this side adopts the host's job id
+    /// for its receiver record.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn submit_download(
         &self,
@@ -808,9 +764,11 @@ impl Core {
         names: &[String],
         dst_root: u64,
         dst_rel: &str,
-        owner: Option<super::service_jobs::JobOwner>,
+        owner: super::service_jobs::JobOwner,
     ) -> Result<u64, Error> {
         let _engine = self.engine();
+        let service = owner;
+        let owner = Some(service);
         let peer = parse_endpoint_id(peer_endpoint_id)?;
         self.ensure_alive()?;
         check_sources(src_folder, names)?;
@@ -840,7 +798,7 @@ impl Core {
             names: names.to_vec(),
         };
         let reply_bytes = self.service_job_round_trip(
-            owner,
+            service,
             &peer,
             job::TAG_JOB_DOWNLOAD,
             &job::encode(&request)?,
@@ -915,6 +873,7 @@ impl Core {
                     attempt: 0,
                     unsaved_landed: Vec::new(),
                     retry: None,
+                    telling_resume: false,
                     sent_at: None,
                     source_ids: Vec::new(),
                 },
@@ -987,10 +946,22 @@ impl Core {
             }
         }
         let _driving = Driving(&self.shared, id);
-        if sender {
+        let polled = if sender {
             self.poll_sender(id)
         } else {
             self.poll_receiver(id)
+        };
+        match polled {
+            // Its Files owner went during the step: the job is interrupted,
+            // saying why, not failed.
+            Err(Error::NoSession | Error::StaleSession) => {
+                super::service_jobs::interrupt_orphaned(&self.shared);
+                match self.job_snapshot(id) {
+                    Ok(snapshot) if snapshot.state == JobState::Interrupted => Ok(snapshot),
+                    _ => polled,
+                }
+            }
+            polled => polled,
         }
     }
 
@@ -1200,7 +1171,13 @@ impl Core {
         // Resuming reactivates bulk work: respect the concurrency bound.
         Self::check_job_capacity(&self.shared)?;
         let snapshot = if sender {
-            self.resume_sender(id)?
+            match self.resume_sender(id) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    self.told_resume(id);
+                    return Err(error);
+                }
+            }
         } else {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
@@ -1225,7 +1202,18 @@ impl Core {
             id,
             self.notify_peer_resume(&peer_key, outgoing, id),
         );
+        if sender {
+            self.told_resume(id);
+        }
         Ok(snapshot)
+    }
+
+    /// A sender's resume has been told to its receiver, or will not be:
+    /// it follows its receiver again.
+    fn told_resume(&self, id: u64) {
+        if let Some(record) = lock(&self.shared.jobs).get_mut(&id) {
+            record.telling_resume = false;
+        }
     }
 
     fn notify_peer_resume(
@@ -1374,6 +1362,9 @@ impl Core {
         let (peer_key, outgoing, owner) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            if record.telling_resume {
+                return Ok(record.snapshot());
+            }
             (record.peer_key, record.outgoing, record.owner)
         };
         let generation = match self.generation_for(&peer_key, outgoing, owner) {
@@ -2554,7 +2545,16 @@ impl Core {
             if !granted || super::service_jobs::check_owner(&state_guard, record.owner).is_err() {
                 if record.state != JobState::Cancelled {
                     record.enter(JobState::Interrupted);
-                    let reason = if granted { OWNER_GONE } else { PERMISSION_OFF };
+                    let reason = if granted {
+                        super::service_jobs::orphan_reason(
+                            &state_guard,
+                            record.owner,
+                            record.sender,
+                            &peer_key,
+                        )
+                    } else {
+                        PERMISSION_OFF
+                    };
                     record.error = Some(reason.to_owned());
                     record.waiting_file = None;
                 }
@@ -2959,6 +2959,7 @@ impl Core {
             super::service_jobs::check_owner(&state, record.owner)?;
             record.enter(JobState::Serving);
             record.error = None;
+            record.telling_resume = true;
             drop(state);
             drop(jobs);
         }
@@ -3924,12 +3925,8 @@ pub(super) async fn handle_job_request(
         return Ok(());
     }
     match tag {
-        t if t == job::TAG_JOB_UPLOAD => {
-            handle_upload_offer(shared, peer, send, payload, None).await
-        }
-        t if t == job::TAG_JOB_DOWNLOAD => {
-            handle_download_request(shared, session_id, peer, send, payload, None).await
-        }
+        // An offer or a download request rides its Files service
+        // (`service_jobs::serve`); a link refuses one on its own stream.
         t if t == job::TAG_JOB_STATUS => {
             handle_status_query(shared, peer, true, send, payload).await
         }
@@ -4621,6 +4618,7 @@ pub(super) async fn handle_upload_offer(
                 attempt: 0,
                 unsaved_landed: Vec::new(),
                 retry: None,
+                telling_resume: false,
                 sent_at: None,
                 source_ids: Vec::new(),
             },
@@ -4770,6 +4768,7 @@ pub(super) async fn handle_download_request(
                 attempt: 0,
                 unsaved_landed: Vec::new(),
                 retry: None,
+                telling_resume: false,
                 sent_at: None,
                 source_ids: Vec::new(),
             },
@@ -5078,7 +5077,7 @@ mod lifecycle_tests {
             transfer: true,
         };
         host.set_desktop_sharing(grants).unwrap();
-        controller.connect_files(&host.endpoint_id()).unwrap();
+        crate::test_support::connect_link(&controller, &host);
         let (id, generation, epoch) = {
             let state = lock(&host.shared.state);
             let session = state.incoming_live().unwrap();
@@ -5158,6 +5157,7 @@ mod lifecycle_tests {
             attempt: 0,
             unsaved_landed: Vec::new(),
             retry: None,
+            telling_resume: false,
             sent_at: None,
             source_ids: Vec::new(),
         }

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use vnilink::{JobState, SessionPhase};
 use vnilink_testkit::bench::{median, Better, Report};
-use vnilink_testkit::files::{drive, finished, received, write_files};
+use vnilink_testkit::files::{self, drive, finished, received, write_files};
 use vnilink_testkit::relay::LocalRelay;
 use vnilink_testkit::{wait_for, Pair, FILES};
 
@@ -46,21 +46,9 @@ fn main() {
         &[("large.bin", BYTES)],
     );
     std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
-    pair.controller
-        .core
-        .connect_files(&pair.host.endpoint())
-        .unwrap();
+    let service = pair.open_files();
     let started = Instant::now();
-    pair.controller
-        .core
-        .job_submit_upload(
-            &pair.host.endpoint(),
-            pair.controller.location().root,
-            &pair.controller.location().path("set"),
-            pair.host.location().root,
-            &pair.host.location().path("inbox"),
-        )
-        .unwrap();
+    files::upload(&pair, &service, "set", "inbox").unwrap();
     let job = received(&pair.host.core);
     let done = finished(&pair.host.core, job, Duration::from_secs(600));
     assert_eq!(done.state, JobState::Complete, "{done:?}");

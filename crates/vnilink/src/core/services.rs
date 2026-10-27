@@ -1,9 +1,7 @@
 //! Controller service records and cancellation. No service owns its peer link.
 
 use super::*;
-use crate::service::{
-    CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePhase, ServiceSupport,
-};
+use crate::service::{CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePhase};
 
 pub(super) struct ServiceRecord {
     pub(super) info: ServiceInfo,
@@ -57,18 +55,6 @@ fn phase(session: &SessionPhase) -> ServicePhase {
         }
         SessionPhase::Failed(message) => ServicePhase::Failed(message.clone()),
         _ => ServicePhase::Waiting,
-    }
-}
-
-fn support(session: &LiveSession) -> ServiceSupport {
-    ServiceSupport {
-        desktop: session.services_only,
-        files: true,
-        terminal: session.services_only,
-        camera: session.services_only,
-        system_audio: session.services_only,
-        microphone: session.services_only,
-        system_actions: session.services_only,
     }
 }
 
@@ -145,17 +131,6 @@ pub(super) fn synchronize(state: &mut State, events: &EventHub) {
 }
 
 impl Core {
-    /// Support on this connection. This does not bypass remote authorization.
-    pub fn controller_service_support(&self, connection_id: u64) -> Result<ServiceSupport, Error> {
-        let _engine = self.engine();
-        let state = self.alive_state()?;
-        let session = state.outgoing.get(&connection_id).ok_or(Error::NoSession)?;
-        if finished(&session.phase) || session.phase == SessionPhase::Stopping {
-            return Err(Error::NoSession);
-        }
-        Ok(support(session))
-    }
-
     /// Attaches a local service owner to an existing outgoing connection.
     /// Pending admission is allowed, but work leases require Active. One live
     /// owner per kind/connection, except Desktop which allows a bounded set
@@ -176,18 +151,6 @@ impl Core {
         }
         if finished(&session.phase) || session.phase == SessionPhase::Stopping {
             return Err(Error::NoSession);
-        }
-        if !support(session).supports(kind) {
-            return Err(Error::Unsupported(match kind {
-                ServiceKind::Desktop => "desktop on a files-only connection",
-                ServiceKind::Terminal => "terminal service",
-                ServiceKind::Camera => "camera service",
-                ServiceKind::SystemAudio => "system audio service",
-                ServiceKind::Microphone => "microphone service",
-                ServiceKind::Files => "files service",
-                ServiceKind::System => "system service",
-                ServiceKind::ScreenSnapshot => "screen snapshot on a files-only connection",
-            }));
         }
         if state.services.len() >= crate::MAX_SERVICE_RECORDS {
             return Err(Error::Busy);

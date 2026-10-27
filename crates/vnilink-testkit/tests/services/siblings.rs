@@ -159,11 +159,11 @@ fn closing_a_service_ends_its_own_work_and_leaves_its_siblings() -> TestResult {
     Ok(())
 }
 
-/// A connection that offers only Files refuses every other kind without
-/// changing; its records are bounded, and forgetting one frees room for a
-/// new one under a new id.
+/// A connection's service records are bounded, closed ones count until
+/// they are forgotten, and forgetting one frees room for a new one under
+/// a new id, the connection unchanged throughout.
 #[test]
-fn unsupported_kinds_and_the_record_limit_leave_the_connection_as_it_was() -> TestResult {
+fn the_record_limit_leaves_the_connection_as_it_was() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
@@ -171,30 +171,7 @@ fn unsupported_kinds_and_the_record_limit_leave_the_connection_as_it_was() -> Te
         transfer: true,
         ..Grants::default()
     })?;
-    let pending = controller.begin_connect_files(&pair.host.endpoint())?;
-    let session = pair.controller.wait_phase(pending.id, SessionPhase::Active);
-    let support = controller.controller_service_support(session.id)?;
-    assert!(
-        !support.desktop && support.files && !support.terminal && !support.camera,
-        "a files connection supports Files alone: {support:?}"
-    );
-    for kind in [
-        ServiceKind::Desktop,
-        ServiceKind::Terminal,
-        ServiceKind::Camera,
-    ] {
-        assert!(
-            matches!(
-                controller.attach_controller_service(session.id, session.generation, kind),
-                Err(Error::Unsupported(_))
-            ),
-            "a files connection refuses {kind:?}"
-        );
-    }
-    assert!(
-        controller.controller_services()?.is_empty(),
-        "a refused kind leaves no record"
-    );
+    let session = pair.connect_services();
     for _ in 0..MAX_SERVICE_RECORDS {
         let service = pair.attach(&session, ServiceKind::Files);
         controller.close_controller_service(service.id, service.generation)?;
@@ -453,10 +430,10 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
 }
 
 /// A host whose capture and camera are ready never starts either for a
-/// files connection or for a terminal on a services connection.
+/// Files service or for a terminal on a services connection.
 #[cfg(unix)]
 #[test]
-fn files_only_and_terminal_only_connections_never_request_capture() -> TestResult {
+fn files_and_terminal_services_never_request_capture() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
@@ -471,26 +448,21 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
         ..Grants::default()
     })?;
 
-    // Files-only: the session carries jobs, never video.
-    let pending = controller.begin_connect_files(&pair.host.endpoint())?;
-    let files = pair.controller.wait_phase(pending.id, SessionPhase::Active);
+    // Files alone: the service carries listings and jobs, never video.
+    let files = pair.open_files();
     assert!(
         host.video_targets()?.is_empty(),
-        "a files connection asks for no capture"
-    );
-    assert!(
-        matches!(
-            controller.attach_controller_service(files.id, files.generation, ServiceKind::Desktop),
-            Err(Error::Unsupported(_))
-        ),
-        "a files connection carries no Desktop"
+        "a Files service asks for no capture"
     );
     assert!(
         pair.host.hosted(Some(ServiceKind::Desktop)).is_empty(),
-        "a files connection serves no Desktop"
+        "a Files service serves no Desktop"
     );
-    controller.disconnect_session(files.id)?;
-    pair.controller.wait_phase(files.id, SessionPhase::Closed);
+    files.close();
+    pair.host.wait_released(Some(ServiceKind::Files));
+    controller.disconnect_session(files.connection.id)?;
+    pair.controller
+        .wait_phase(files.connection.id, SessionPhase::Closed);
 
     // Terminal-only: a live shell with output, still no capture target.
     host.set_service_sharing(ServiceKind::Terminal, true)?;
@@ -533,13 +505,17 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
     expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
+          service: service phase from=active generation=1 kind=Files service=1 to=closed: OwnerClose
           session: session phase from=active generation=1 role=Controller session=1 to=stopping
           session: session phase from=stopping generation=1 role=Controller session=1 to=closed
           session: session phase from=connecting generation=3 role=Controller session=2 to=active
         host:
+          hosting: service opened connection=1 kind=Some(Files) service=1
+          hosting: service closed kind=Files phase=closed: PeerClose service=1
+          hosting: service released service=1
           session: the session's control stream ended error=network session=1
           session: session phase from=active generation=1 role=Host session=1 to=closed
-          hosting: service opened connection=2 kind=Some(Terminal) service=1
+          hosting: service opened connection=2 kind=Some(Terminal) service=2
     "#]]
     .assert_eq(&trace.story(&["service", "hosting", "session"]));
     Ok(())

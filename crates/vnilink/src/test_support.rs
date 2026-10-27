@@ -91,6 +91,16 @@ impl FilesystemLocation {
             format!("{}/{child}", self.relative)
         }
     }
+
+    /// [`Self::path`] as a job names what it copies: the folder it is in
+    /// and its name there.
+    pub(crate) fn entry(&self, child: &str) -> (String, Vec<String>) {
+        let path = self.path(child);
+        match path.rsplit_once('/') {
+            Some((folder, name)) => (folder.to_owned(), vec![name.to_owned()]),
+            None => (String::new(), vec![path]),
+        }
+    }
 }
 
 /// Pairs both ways and grants `controller` view and control of `host`.
@@ -115,8 +125,8 @@ pub(crate) fn pair_for_control(host: &crate::core::Core, controller: &crate::cor
 }
 
 /// Pairs both ways and grants `controller` view, control and transfer on
-/// `host`: the files-only session that carries job control is admitted on
-/// the Transfer grant.
+/// `host`: the Files service that carries job control is admitted on the
+/// Transfer grant.
 pub(crate) fn pair_for_transfer(host: &crate::core::Core, controller: &crate::core::Core) {
     pair_granting(
         host,
@@ -128,6 +138,23 @@ pub(crate) fn pair_for_transfer(host: &crate::core::Core, controller: &crate::co
             transfer: true,
         },
     );
+}
+
+/// The controller's Files on `host`: a presence link and a Files service
+/// on it, opened as the Files tab opens them. The pipe keeps the service,
+/// and so its jobs, alive: a test holds it for as long as it moves files.
+pub(crate) fn open_files(
+    controller: &crate::core::Core,
+    host: &crate::core::Core,
+) -> (crate::ServiceInfo, crate::RemoteFilesService) {
+    let link = connect_link(controller, host);
+    let owner = controller
+        .attach_controller_service(link.id, link.generation, crate::ServiceKind::Files)
+        .unwrap();
+    let pipe = controller
+        .open_files_service(owner.id, owner.generation)
+        .unwrap();
+    (owner, pipe)
 }
 
 /// Opens a presence link from `controller` to `host`, paired, and waits

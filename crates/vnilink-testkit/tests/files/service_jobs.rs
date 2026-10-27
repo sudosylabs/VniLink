@@ -1,5 +1,5 @@
-//! Transfers that ride the Files service rather than a files-only session: both
-//! directions, closing, admission and adoption, and restarts of either computer.
+//! Transfers as jobs of a Files service: both directions, closing, admission
+//! and adoption, and restarts of either computer.
 //!
 //! Jobs here are driven by hand (`drive_to_end`, `job_poll`): each scenario
 //! closes, restarts or adopts at an exact point of a transfer, which the
@@ -223,12 +223,12 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
     Ok(())
 }
 
-/// Closing a Files service interrupts its own job on both sides, which it
-/// can no longer resume, and leaves a session job of the same file (on a
-/// files-only session beside the link), the Desktop owner and the
-/// connection running.
+/// The controller closing a Files service interrupts its own job on both
+/// sides at once, which neither side can resume without a service, and
+/// leaves nothing of it; the Desktop owner and the connection the service
+/// rode keep running.
 #[test]
-fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_same_file(
+fn closing_a_files_service_interrupts_its_job_and_keeps_the_desktop_and_the_connection(
 ) -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
@@ -238,9 +238,7 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
     let connection = pair.connect_services();
     let (files, pipe) = pair.controller.open_files(&connection)?;
     let desktop = pair.attach(&connection, ServiceKind::Desktop);
-    // A job no service owns rides a files-only session.
-    controller.core.connect_files(&host.endpoint())?;
-    let scoped = controller.core.files_service_upload(
+    let job = controller.core.files_service_upload(
         files.id,
         files.generation,
         controller.location().root,
@@ -249,64 +247,38 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
         host.location().root,
         &host.location().path("cancelled"),
     )?;
-    let scoped_receiver = job_on(&host.core, false)?;
-    let session_job = controller.core.job_submit_upload(
-        &host.endpoint(),
-        controller.location().root,
-        &controller.location().path("same.bin"),
-        host.location().root,
-        &host.location().path("kept"),
-    )?;
-    let session_receiver = host
-        .core
-        .job_list()?
-        .into_iter()
-        .find(|job| job.id != scoped_receiver)
-        .expect("the session job's receiver")
-        .id;
+    let receiver = job_on(&host.core, false)?;
     controller
         .core
         .close_controller_service(files.id, files.generation)?;
     assert_eq!(
-        controller.core.job_snapshot(scoped)?.state,
+        controller.core.job_snapshot(job)?.state,
         JobState::Interrupted,
         "closing the service interrupts its job at once"
     );
     wait_for("the host to interrupt the job", DEFAULT_WAIT, || {
-        (host.core.job_snapshot(scoped_receiver).ok()?.state == JobState::Interrupted).then_some(())
+        (host.core.job_snapshot(receiver).ok()?.state == JobState::Interrupted).then_some(())
     });
     assert!(
         pipe.is_cancelled(),
         "the closed service's pipe is cancelled"
     );
     assert!(
-        matches!(controller.core.job_resume(scoped), Err(Error::NoSession)),
+        matches!(controller.core.job_resume(job), Err(Error::NoSession)),
         "a closed service's job cannot resume without one"
     );
     assert!(
-        matches!(host.core.job_resume(scoped_receiver), Err(Error::NoSession)),
+        matches!(host.core.job_resume(receiver), Err(Error::NoSession)),
         "nor can its receiver"
-    );
-    let (sent, got) = drive_to_end(
-        &controller.core,
-        session_job,
-        &host.core,
-        session_receiver,
-        TRANSFER,
-    );
-    assert_eq!(
-        both(&sent, &got),
-        (JobState::Complete, JobState::Complete),
-        "the session job of the same file completes"
-    );
-    assert_eq!(
-        std::fs::read(host.folder().join("kept/same.bin"))?,
-        bytes,
-        "the session job lands exactly"
     );
     assert!(
         !host.folder().join("cancelled").exists(),
         "the closed service's job left nothing"
+    );
+    assert_eq!(
+        std::fs::read(controller.folder().join("same.bin"))?,
+        bytes,
+        "the interrupted upload keeps its source"
     );
     assert!(
         !controller
@@ -323,15 +295,11 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
     expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
-          files: job state from=preparing job=2 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
-          files: file served ended=sent from=0 sent=32768 size=32768
-          files: job state done_bytes=32768 files_done=1 from=serving job=2 sender=true to=complete
         host:
           files: job state from=transferring job=1 sender=false to=interrupted
-          files: file received outcome=received resumed_at=0 size=32768 took=32768
-          files: job state done_bytes=32768 files_done=1 from=transferring job=2 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]]
+    .assert_eq(&trace.story(&["files"]));
     Ok(())
 }
 
@@ -417,7 +385,7 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
     std::fs::write(pair.controller.folder().join("a.bin"), payload(4096, 139))?;
     let (theirs, mine) = (pair.host.location(), pair.controller.location());
     let controller = &pair.controller.core;
-    let session = controller.connect_files(&pair.host.endpoint())?;
+    let session = pair.connect_services();
     let unopened = pair.attach(&session, ServiceKind::Files);
     assert!(
         controller
@@ -660,7 +628,7 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
     let (host, controller) = (&pair.host, &pair.controller);
     let bytes = payload(1024 * 1024, 903);
     std::fs::write(controller.folder().join("adopt.bin"), &bytes)?;
-    let session = controller.core.connect_files(&host.endpoint())?;
+    let session = pair.connect_services();
     let (old, pipe) = pair.controller.open_files(&session)?;
     let job = controller.core.files_service_upload(
         old.id,
@@ -1029,8 +997,8 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
             max_reserved_bytes: 3 * bytes.len() as u64 - 1,
             minimum_free_bytes: 0,
         })?;
-    controller.core.connect_files(&host.endpoint())?;
-    let sent = files::upload(&pair, "set", "arrived")?;
+    let files = pair.open_files();
+    let sent = files::upload(&pair, &files, "set", "arrived")?;
     let receiver = job_on(&host.core, false)?;
     let failed = host.core.job_poll(receiver)?;
     assert_eq!(failed.state, JobState::Failed, "the receiver fails the job");
@@ -1083,8 +1051,8 @@ fn a_restart_removes_orphaned_staging_and_keeps_an_interrupted_jobs() -> TestRes
         pair.controller.folder().join("source.bin"),
         b"source survives crash",
     )?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    files::upload(&pair, "", "received")?;
+    let files = pair.open_files();
+    files::upload(&pair, &files, "source.bin", "received")?;
     let receiver = job_on(&pair.host.core, false)?;
     pair.host.core.shutdown();
     pair.controller.core.shutdown();

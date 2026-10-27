@@ -2,7 +2,7 @@
 //! nothing, a grant runs one way, invitations are bounded and never widen
 //! or narrow what was granted, a connection opens only to a hosting host,
 //! a Desktop opens only between a host that can encode and a controller
-//! that can decode, and a files-only session beside at most four others.
+//! that can decode.
 
 use expect_test::expect;
 use std::time::Duration;
@@ -123,73 +123,6 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
           session: session phase from=stopping generation=1 role=Controller session=2 to=closed
     "#]]
     .assert_eq(&trace.story(&["session", "hosting", "pairing"]));
-    Ok(())
-}
-
-/// Four files-only sessions are hosted at once; a fifth is refused as
-/// busy, and the refusal leaves the four sessions as they were. (Presence
-/// links are bounded by the paired devices instead, and their Desktops by
-/// their own caps.)
-#[test]
-fn peers_past_capacity_are_rejected_while_live_sessions_stay_active() -> TestResult {
-    let trace = traced();
-    let host = Engine::start("host");
-    let peers: Vec<Engine> = (1..=5)
-        .map(|n| Engine::start(&format!("controller-{n}")))
-        .collect();
-    for controller in &peers {
-        host.pair_with(controller)?;
-    }
-    host.core.set_desktop_sharing(Grants {
-        transfer: true,
-        ..Grants::default()
-    })?;
-    let mut sessions = Vec::new();
-    for controller in &peers[..4] {
-        let session = controller.core.connect_files(&host.endpoint())?;
-        assert_eq!(
-            session.phase,
-            SessionPhase::Active,
-            "four controllers are admitted"
-        );
-        sessions.push(session);
-    }
-    assert_eq!(
-        host.core.hosted_sessions()?.len(),
-        4,
-        "four controllers are hosted"
-    );
-    let busy = peers[4].core.connect_files(&host.endpoint());
-    assert!(
-        matches!(busy, Err(Error::Busy)),
-        "a fifth concurrent controller is refused as busy: {busy:?}"
-    );
-    assert_eq!(
-        host.core.hosted_sessions()?.len(),
-        4,
-        "the refusal leaves the hosted sessions"
-    );
-    for (controller, session) in peers[..4].iter().zip(&sessions) {
-        assert_eq!(
-            controller.core.controller_session(session.id)?.phase,
-            SessionPhase::Active,
-            "the refusal leaves each live session active"
-        );
-    }
-    expect![[r#"
-        controller-1:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-        controller-2:
-          session: session phase from=connecting generation=2 role=Controller session=1 to=active
-        controller-3:
-          session: session phase from=connecting generation=3 role=Controller session=1 to=active
-        controller-4:
-          session: session phase from=connecting generation=4 role=Controller session=1 to=active
-        controller-5:
-          session: session failed failure=busy session=1
-          session: session phase from=connecting generation=0 role=Controller session=1 to=failed
-    "#]]
-    .assert_eq(&trace.story(&["session"]));
     Ok(())
 }
 

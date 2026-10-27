@@ -990,9 +990,6 @@ pub(super) async fn serve(
             if session.wire_stamp != stamp || session.peer_key != peer {
                 return Err(Error::StaleSession);
             }
-            if !session.services_only {
-                return Err(Error::Unsupported("terminal registry"));
-            }
         }
         return super::terminal_stream::registry(
             shared,
@@ -1011,17 +1008,12 @@ pub(super) async fn serve(
         return super::snapshot::probe(shared, connection_id, peer, send, stamp).await;
     }
     if body[1] == 2 && remote_id == 0 && matches!(kind, 4 | 5 | 6) {
-        let supported = {
+        {
             let state = lock(&shared.state);
             let session = live_session(&state, true, connection_id)?;
             if session.wire_stamp != stamp || session.peer_key != peer {
                 return Err(Error::StaleSession);
             }
-            session.services_only
-        };
-        if !supported {
-            write(&mut send, vec![VERSION, 1, 0]).await?;
-            return Ok(());
         }
         return if kind == 4 {
             super::camera_stream::list(shared, peer, send, parent_stop).await
@@ -1054,9 +1046,8 @@ pub(super) async fn serve(
         } else if !super::service_permissions::admitted(&state, &peer, service_kind.unwrap()) {
             Err(if kind == 2 { 2 } else { 6 })
         } else if kind != 2
-            && !(kind == 4 && session.services_only && lock(&shared.camera_factory).is_some())
+            && !(kind == 4 && lock(&shared.camera_factory).is_some())
             && !(matches!(kind, 5 | 6)
-                && session.services_only
                 && lock(&shared.audio_factory).as_ref().is_some_and(|f| {
                     f.supports(if kind == 5 {
                         crate::audio::AudioKind::System
@@ -1064,9 +1055,9 @@ pub(super) async fn serve(
                         crate::audio::AudioKind::Microphone
                     })
                 }))
-            && !(kind == 3 && session.services_only && lock(&shared.terminal_factory).is_some())
-            && !(kind == 7 && session.services_only)
-            && !(kind == 8 && session.services_only && lock(&shared.snapshot_factory).is_some())
+            && !(kind == 3 && lock(&shared.terminal_factory).is_some())
+            && kind != 7
+            && !(kind == 8 && lock(&shared.snapshot_factory).is_some())
         {
             Err(1)
         } else if state.hosted_services.len() >= 16
@@ -1127,28 +1118,12 @@ pub(super) async fn serve(
             return Ok(());
         }
         Ok(None) => {
-            let desktop = lock(&shared.state)
-                .incoming
-                .get(&connection_id)
-                .is_some_and(|s| {
-                    s.services_only
-                        && lock(&shared.video_caps).can_encode()
-                        && monitor_size(&shared) != (0, 0)
-                });
-            let terminal = lock(&shared.state)
-                .incoming
-                .get(&connection_id)
-                .is_some_and(|s| s.services_only)
-                && lock(&shared.terminal_factory).is_some();
-            let camera = lock(&shared.state)
-                .incoming
-                .get(&connection_id)
-                .is_some_and(|s| s.services_only)
-                && lock(&shared.camera_factory).is_some();
-            let audio = lock(&shared.state)
-                .incoming
-                .get(&connection_id)
-                .is_some_and(|s| s.services_only);
+            let hosted = lock(&shared.state).incoming.contains_key(&connection_id);
+            let desktop =
+                hosted && lock(&shared.video_caps).can_encode() && monitor_size(&shared) != (0, 0);
+            let terminal = hosted && lock(&shared.terminal_factory).is_some();
+            let camera = hosted && lock(&shared.camera_factory).is_some();
+            let audio = hosted;
             let factory = lock(&shared.audio_factory).clone();
             let system_audio = audio
                 && factory
@@ -1158,11 +1133,7 @@ pub(super) async fn serve(
                 && factory
                     .as_ref()
                     .is_some_and(|f| f.supports(crate::audio::AudioKind::Microphone));
-            let system_actions = lock(&shared.state)
-                .incoming
-                .get(&connection_id)
-                .is_some_and(|s| s.services_only)
-                && lock(&shared.system_actions).is_some();
+            let system_actions = hosted && lock(&shared.system_actions).is_some();
             write(
                 &mut send,
                 vec![

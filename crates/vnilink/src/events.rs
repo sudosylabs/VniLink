@@ -103,20 +103,6 @@ pub enum CoreEvent {
         id: u64,
         message: &'static str,
     },
-    /// The host published clipboard text. Read it with [`crate::Core::clipboard_text`].
-    ///
-    /// The event carries no characters. Clipboard text is not logged.
-    ClipboardReceived {
-        id: u64,
-    },
-    /// A file selection offer arrived. Read it with
-    /// [`crate::Core::clipboard_files`] or
-    /// [`crate::Core::incoming_clipboard_files`].
-    ///
-    /// The event carries no paths. Selections are not logged.
-    ClipboardFilesReceived {
-        id: u64,
-    },
     /// Host text for an exact Desktop owner. Carries no clipboard contents.
     DesktopClipboardReceived {
         service: crate::ServiceInfo,

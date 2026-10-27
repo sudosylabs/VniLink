@@ -1184,9 +1184,6 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         if session.generation != generation {
             return Err(Error::StaleSession);
         }
-        if !session.services_only {
-            return Err(Error::Unsupported("neutral Desktop transport"));
-        }
         let record = state.services.get(&id).ok_or(Error::NoSession)?;
         if record.desktop.is_some() {
             return Err(Error::Busy);
@@ -1258,8 +1255,6 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             codec: codec_offer,
                             quality: offer,
                             decode: true,
-                            files_only: false,
-                            services_only: false,
                             separate_cursor: cursor,
                             bt601,
                             hostname: None,
@@ -1893,8 +1888,6 @@ pub(super) async fn serve(
         codec,
         quality,
         decode,
-        files_only: false,
-        services_only: false,
         bt601,
         ..
     } = ControlMessage::decode(&body[26..])?
@@ -1912,7 +1905,7 @@ pub(super) async fn serve(
     let outcome = {
         let mut state = lock(&shared.state);
         let session = live_session(&state, true, connection_id)?;
-        if !session.services_only || session.peer_key != peer || session.wire_stamp != parent {
+        if session.peer_key != peer || session.wire_stamp != parent {
             Err(3)
         } else if !state.trust.service_granted(&peer, ServiceKind::Desktop) {
             Err(6)

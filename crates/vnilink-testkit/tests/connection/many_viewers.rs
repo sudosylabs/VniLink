@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use vnilink::{Error, Grants, RemoteDesktopService, ServiceInfo, ServiceKind, SessionPhase};
 use vnilink_testkit::desktop::{delta, keyframe, InputLog};
+use vnilink_testkit::files::source;
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 /// `viewer`'s Desktop on a services connection to `host`, its pictures, and
@@ -65,7 +66,7 @@ fn concurrent_peers_operate_independently() -> TestResult {
         .into_iter()
         .next()
         .ok_or("viewer b's connection")?;
-    let files_session = worker.core.connect_files(&host.endpoint())?;
+    let worker_files = worker.files_on(&host)?;
     let hosted = host.core.hosted_sessions()?;
     let mut peers: Vec<String> = hosted.iter().map(|s| s.peer_id.clone()).collect();
     peers.sort();
@@ -88,7 +89,7 @@ fn concurrent_peers_operate_independently() -> TestResult {
     desktop_ids.sort_unstable();
     assert_eq!(
         target_ids, desktop_ids,
-        "the viewers' Desktops, and no files session, consume the capture"
+        "the viewers' Desktops, and not the files peer, consume the capture"
     );
     assert!(
         desktops
@@ -97,9 +98,7 @@ fn concurrent_peers_operate_independently() -> TestResult {
         "the files peer consumes no capture"
     );
 
-    worker.core.fs_mkdir(
-        files_session.id,
-        files_session.generation,
+    worker_files.pipe.mkdir(
         host.location().root,
         &host.location().path(""),
         "from-worker",
@@ -268,7 +267,8 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
 
     let sa = fast.connect_services(&host)?;
     let sb = slow.connect_services(&host)?;
-    let sc = files.active(files.core.begin_connect_files(&host.endpoint())?.id);
+    let files_tab = files.files_on(&host)?;
+    let sc = files_tab.connection.clone();
     let sd = term.connect_services(&host)?;
     assert_eq!(
         host.core.hosted_sessions()?.len(),
@@ -312,10 +312,13 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     );
 
     // The upload, driven to completion within 200 polls while video floods.
-    let job = files.core.job_submit_upload(
-        &host.endpoint(),
+    let (folder, names) = source(&files.location().path("note.txt"));
+    let job = files.core.files_service_upload(
+        files_tab.service.id,
+        files_tab.service.generation,
         files.location().root,
-        &files.location().path("note.txt"),
+        &folder,
+        &names,
         host.location().root,
         &host.location().path("arrived"),
     )?;

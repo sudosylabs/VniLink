@@ -884,7 +884,7 @@ mod tests {
         )?;
         with_agent_allowing(&[Allowance::Files], |agent, suite, host| {
             assert!(
-                suite.core.connect_files(host.endpoint()).is_err(),
+                suite.files_at(host.endpoint()).is_err(),
                 "before the scenario the paired computer cannot reach the disk"
             );
             let facts = host.start("files", Value::Null)?;
@@ -892,10 +892,8 @@ mod tests {
             else {
                 panic!("the files scenario says where uploads land: {facts}");
             };
-            let session = suite.core.connect_files(host.endpoint())?;
-            let listed = suite
-                .core
-                .fs_list(session.id, session.generation, root, inbox, 0, 10)?;
+            let files = suite.files_at(host.endpoint())?;
+            let listed = files.pipe.list(root, inbox, 0, 10)?;
             assert_eq!(listed.total, 0, "the inbox starts empty");
             let folder = agent
                 .core
@@ -913,10 +911,8 @@ mod tests {
             host.stop()?;
             assert!(
                 matches!(
-                    suite
-                        .core
-                        .fs_list(session.id, session.generation, root, inbox, 0, 10),
-                    Err(vnilink::Error::TransferDenied | vnilink::Error::StaleSession)
+                    files.pipe.list(root, inbox, 0, 10),
+                    Err(vnilink::Error::NoSession | vnilink::Error::TransferDenied)
                 ),
                 "once the scenario stopped the disk is out of reach"
             );
@@ -926,7 +922,7 @@ mod tests {
                 "the agent shares nothing again"
             );
             assert!(!folder.exists(), "the inbox is removed");
-            suite.core.disconnect_session(session.id)?;
+            suite.core.disconnect_session(files.connection.id)?;
             Ok(())
         })
     }
@@ -982,12 +978,15 @@ mod tests {
                 transfer: true,
                 ..vnilink::Grants::default()
             })?;
-            let session = suite.core.connect_files(host.endpoint())?;
+            let files = suite.files_at(host.endpoint())?;
             let here = suite.location();
-            let job = suite.core.job_submit_upload(
-                host.endpoint(),
+            let (folder, names) = crate::files::source(&here.path("in-flight.bin"));
+            let job = suite.core.files_service_upload(
+                files.service.id,
+                files.service.generation,
                 here.root,
-                &here.path("in-flight.bin"),
+                &folder,
+                &names,
                 root,
                 inbox,
             )?;
@@ -1025,7 +1024,7 @@ mod tests {
             crate::holds("the inbox staying gone", Duration::from_millis(500), || {
                 !inbox_folder.exists()
             });
-            suite.core.disconnect_session(session.id)?;
+            suite.core.disconnect_session(files.connection.id)?;
             Ok(())
         })
     }

@@ -349,10 +349,6 @@ async fn exchange(
                     }
                     crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(clipboard::status_result(status)));
                 }
-                Frame::Ready => return Err(Error::Malformed),
-                // File selections ride the session clipboard stream, never
-                // a per-Desktop-owner stream.
-                Frame::Files { .. } => return Err(Error::Malformed),
             }
         }
     }

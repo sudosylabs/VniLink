@@ -1,7 +1,7 @@
 //! One controller, several hosts at once: each connection has its own
 //! handle and its Desktop its own channels even when both hosts number
-//! theirs alike, one failing, cancelled, reconnecting or closing leaves the
-//! others, and the controller holds at most four files-only sessions.
+//! theirs alike, and one failing, cancelled, reconnecting or closing leaves
+//! the others.
 
 use expect_test::expect;
 use std::sync::{Arc, Mutex};
@@ -11,7 +11,8 @@ use vnilink::{CoreEvent, Error, Grants, JobState, ServiceKind, SessionPhase, Ses
 use vnilink_testkit::desktop::{
     keyframe, next_picture, InputLog, MonitorCapture, RecordingClipboard,
 };
-use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::files::source;
+use vnilink_testkit::{traced, wait_for, Engine, Files, TestResult, DEFAULT_WAIT};
 
 use super::support::{cursor_at, INVITATION};
 
@@ -399,23 +400,27 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
         transfer: true,
         ..Grants::default()
     };
+    let mut tabs = Vec::new();
     for host in [&a, &b] {
         host.pair_for_control(&controller)?;
         host.core.set_desktop_sharing(transfer)?;
         controller.core.set_desktop_sharing(transfer)?;
-        controller.active(controller.core.begin_connect_files(&host.endpoint())?.id);
+        tabs.push(controller.files_on(host)?);
     }
-    let download = |host: &Engine, name: &str| {
-        controller.core.job_submit_download(
-            &host.endpoint(),
+    let download = |files: &Files, host: &Engine, name: &str| {
+        let (folder, names) = source(&host.location().path(name));
+        controller.core.files_service_download(
+            files.service.id,
+            files.service.generation,
             host.location().root,
-            &host.location().path(name),
+            &folder,
+            &names,
             controller.location().root,
             &controller.location().path(""),
         )
     };
-    let ja = download(&a, "a.txt")?;
-    let jb = download(&b, "b.txt")?;
+    let ja = download(&tabs[0], &a, "a.txt")?;
+    let jb = download(&tabs[1], &b, "b.txt")?;
     assert_ne!(ja, jb, "the controller's jobs have their own ids");
     assert_eq!(
         a.core.job_list()?[0].id,
@@ -470,15 +475,9 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
 
     std::fs::write(a.folder().join("closed.txt"), b"must stay paused")?;
     std::fs::write(b.folder().join("still-open.txt"), b"still transfers")?;
-    let closed_job = download(&a, "closed.txt")?;
-    let open_job = download(&b, "still-open.txt")?;
-    let a_session = controller
-        .core
-        .controller_sessions()?
-        .into_iter()
-        .find(|s| s.peer_id == a.endpoint())
-        .ok_or("host a's session")?;
-    controller.core.disconnect_session(a_session.id)?;
+    let closed_job = download(&tabs[0], &a, "closed.txt")?;
+    let open_job = download(&tabs[1], &b, "still-open.txt")?;
+    controller.core.disconnect_session(tabs[0].connection.id)?;
     wait_for("host a's job to be interrupted", DEFAULT_WAIT, || {
         (controller
             .core
@@ -502,76 +501,5 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
         b"still transfers",
         "the other host's job completes"
     );
-    Ok(())
-}
-
-/// A controller holds four files-only sessions; a fifth is busy and leaves
-/// no record, and once one closes the fifth host is reached while the rest
-/// stay active. (Presence links are bounded by the paired devices.)
-#[test]
-fn a_fifth_outgoing_connection_is_busy_until_one_closes() -> TestResult {
-    let trace = traced();
-    let controller = Engine::start("controller");
-    let hosts: Vec<Engine> = (1..=5)
-        .map(|n| Engine::start(&format!("host-{n}")))
-        .collect();
-    for host in &hosts {
-        host.pair_with(&controller)?;
-        host.core.set_desktop_sharing(Grants {
-            transfer: true,
-            ..Grants::default()
-        })?;
-    }
-    let files = |host: &Engine| -> Result<vnilink::SessionInfo, Error> {
-        let pending = controller.core.begin_connect_files(&host.endpoint())?;
-        Ok(controller.active(pending.id))
-    };
-    let mut live = Vec::new();
-    for host in &hosts[..4] {
-        live.push(files(host)?);
-    }
-    assert_eq!(
-        controller.core.controller_sessions()?.len(),
-        4,
-        "a controller holds four sessions"
-    );
-    assert!(
-        matches!(
-            controller.core.begin_connect_files(&hosts[4].endpoint()),
-            Err(Error::Busy)
-        ),
-        "a fifth outgoing session is busy"
-    );
-    assert_eq!(
-        controller.core.controller_sessions()?.len(),
-        4,
-        "the refused host left no session record"
-    );
-    controller.core.disconnect_session(live[0].id)?;
-    controller.wait_phase(live[0].id, SessionPhase::Closed);
-    let fifth = files(&hosts[4])?;
-    assert_eq!(
-        fifth.peer_id,
-        hosts[4].endpoint(),
-        "once one closes, the fifth host is reached"
-    );
-    for survivor in &live[1..] {
-        assert_eq!(
-            controller.core.controller_session(survivor.id)?.phase,
-            SessionPhase::Active,
-            "the other sessions stay active"
-        );
-    }
-    expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=connecting generation=1 role=Controller session=2 to=active
-          session: session phase from=connecting generation=1 role=Controller session=3 to=active
-          session: session phase from=connecting generation=1 role=Controller session=4 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=stopping
-          session: session phase from=stopping generation=1 role=Controller session=1 to=closed
-          session: session phase from=connecting generation=1 role=Controller session=5 to=active
-    "#]]
-    .assert_eq(&trace.engine_story("controller", &["session"]));
     Ok(())
 }

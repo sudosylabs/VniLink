@@ -5,8 +5,11 @@ use expect_test::expect;
 use std::path::Path;
 use std::time::Duration;
 
-use vnilink::{ConflictChoice, JobState};
-use vnilink_testkit::files::{self, drive_to_end, received, tree, write_files, Entry};
+use vnilink::{ConflictChoice, Error, JobState};
+use vnilink_testkit::files::{
+    download, drive_to_end, only_job, poll_within, received, source, tree, upload, write_files,
+    Entry,
+};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(60);
@@ -32,8 +35,8 @@ fn an_upload_lands_exactly_and_keeps_its_source() -> TestResult {
     let pair = Pair::for_files();
     let source = pair.controller.folder().join("tree");
     write_tree(&source)?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "tree", "arrived")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "tree", "arrived")?;
     let receiver = received(&pair.host.core);
     let (sent, got) = drive_to_end(
         &pair.controller.core,
@@ -112,14 +115,14 @@ fn a_download_lands_exactly_as_the_host_sender_mirrors_it() -> TestResult {
     let pair = Pair::for_files();
     let source = pair.host.folder().join("tree");
     write_tree(&source)?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     pair.controller.core.create_dir(
         pair.controller.location().root,
         &pair.controller.location().path(""),
         "got",
     )?;
-    let job = files::download(&pair, "tree", "got")?;
-    let host_job = files::only_job(&pair.host.core)?;
+    let job = download(&pair, &files, "tree", "got")?;
+    let host_job = only_job(&pair.host.core)?;
     let (sent, got) = drive_to_end(
         &pair.host.core,
         host_job,
@@ -175,8 +178,8 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
     std::fs::write(destination.join("b.txt"), b"old-b")?;
     std::fs::write(destination.join("c.txt"), b"old-c")?;
     std::fs::write(destination.join("unrelated.txt"), b"unrelated")?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "set", "dest")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "set", "dest")?;
     let receiver = received(&pair.host.core);
 
     // Each answer covers its own file, so every path is asked about: the
@@ -186,7 +189,7 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
         ("set/b.txt", ConflictChoice::Skip, 10),
         ("set/c.txt", ConflictChoice::KeepBoth, 10),
     ] {
-        let asked = files::poll_within(
+        let asked = poll_within(
             &pair.host.core,
             receiver,
             polls,
@@ -275,7 +278,8 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
 }
 
 /// A receiver that quits with files left finds its job interrupted when it
-/// starts again, saying why, and resuming it fetches only what is missing.
+/// starts again, saying why, and resuming it on a new Files service
+/// fetches only what is missing.
 #[test]
 fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
     let trace = traced();
@@ -285,20 +289,23 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
         &source,
         &[("one.txt", 1024), ("two.txt", 1024), ("three.txt", 1024)],
     );
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     pair.controller.core.create_dir(
         pair.controller.location().root,
         &pair.controller.location().path(""),
         "got",
     )?;
-    let job = files::download(&pair, "set", "got")?;
+    let job = download(&pair, &files, "set", "got")?;
 
     // Two files land and the third waits: the receiver quits here.
     pair.controller.core.job_poll(job)?;
     pair.controller.core.job_poll(job)?;
     let mid = pair.controller.core.job_snapshot(job)?;
     assert_eq!(mid.files_done, 2, "each poll lands one file: {mid:?}");
+    // The Files tab is still open when VniLink quits: the handle outlives
+    // the engine, as a window does, and goes with it.
     pair.controller.restart();
+    drop(files);
 
     let jobs = pair.controller.core.job_list()?;
     assert_eq!(
@@ -311,7 +318,7 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
         JobState::Interrupted,
         "a job VniLink quit during is interrupted: {jobs:?}"
     );
-    // A clean shutdown ends the session first; a crash leaves the record
+    // A clean shutdown ends the connection first; a crash leaves the record
     // to say VniLink closed. Either way the job says why it stopped.
     assert!(
         matches!(
@@ -322,9 +329,13 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
         ),
         "an interrupted job says why it stopped: {jobs:?}"
     );
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    pair.controller.core.job_resume(job)?;
-    let host_job = files::only_job(&pair.host.core)?;
+    // A service's job resumes only through a service: the restarted
+    // controller's new Files adopts it first.
+    let files = pair.open_files();
+    let controller = &pair.controller.core;
+    controller.files_service_adopt_job(files.service.id, files.service.generation, job)?;
+    controller.files_service_job_resume(files.service.id, files.service.generation, job)?;
+    let host_job = only_job(&pair.host.core)?;
     let (sent, got) = drive_to_end(
         &pair.host.core,
         host_job,
@@ -363,6 +374,8 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
           files: file served ended=sent from=0 sent=1024 size=1024
           files: file served ended=sent from=0 sent=1024 size=1024
           files: file served ended=sent from=0 sent=1024 size=1024
+          files: job state from=serving job=1 sender=true to=interrupted
+          files: job state from=interrupted job=1 sender=true to=serving
           files: file served ended=sent from=1024 sent=0 size=1024
           files: job state done_bytes=3072 files_done=3 from=serving job=1 sender=true to=complete
     "#]].assert_eq(&trace.story(&["files"]));
@@ -378,13 +391,13 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
     let pair = Pair::for_files();
     let source = pair.host.folder().join("set");
     write_files(&source, &[("one.txt", 2048), ("two.txt", 12 * 1024 * 1024)]);
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     pair.controller.core.create_dir(
         pair.controller.location().root,
         &pair.controller.location().path(""),
         "got",
     )?;
-    let job = files::download(&pair, "set", "got")?;
+    let job = download(&pair, &files, "set", "got")?;
     let controller = &pair.controller.core;
     controller.job_poll(job)?;
     // The 12 MiB fetch takes far longer than starting a thread and
@@ -428,7 +441,7 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
     trace.wait_for_records("file served", 2);
 
     controller.job_resume(job)?;
-    let host_job = files::only_job(&pair.host.core)?;
+    let host_job = only_job(&pair.host.core)?;
     let (_, got) = drive_to_end(&pair.host.core, host_job, controller, job, TRANSFER);
     assert_eq!(
         got.state,
@@ -515,11 +528,11 @@ fn a_refused_publication_keeps_the_original_and_resumes() -> TestResult {
         }
     }
 
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::download(&pair, "set", "got")?;
-    let host_job = files::only_job(&pair.host.core)?;
+    let files = pair.open_files();
+    let job = download(&pair, &files, "set", "got")?;
+    let host_job = only_job(&pair.host.core)?;
     // Replace, so publication is attempted.
-    files::poll_within(
+    poll_within(
         &pair.controller.core,
         job,
         10,
@@ -593,39 +606,42 @@ fn a_refused_publication_keeps_the_original_and_resumes() -> TestResult {
     Ok(())
 }
 
-/// A transfer is refused before anything is scanned without a session, a
-/// source that exists, or a root the computer knows.
+/// A transfer is refused before anything is scanned without a source that
+/// exists, a root the computer knows, or a Files service still open.
 #[test]
-fn submitting_needs_a_session_an_existing_source_and_a_known_root() -> TestResult {
+fn submitting_needs_a_files_service_an_existing_source_and_a_known_root() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
+    let files = pair.open_files();
     assert!(
         matches!(
-            files::upload(&pair, "", "x"),
-            Err(vnilink::Error::NoSession)
-        ),
-        "no transfer without a session"
-    );
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    assert!(
-        matches!(
-            files::upload(&pair, "missing", "x"),
-            Err(vnilink::Error::InvalidSetting(_))
+            upload(&pair, &files, "missing", "x"),
+            Err(Error::InvalidSetting(_))
         ),
         "no transfer from a source that does not exist"
     );
+    let (folder, names) = source(&pair.host.location().path(""));
     assert!(
         matches!(
-            pair.controller.core.job_submit_download(
-                &pair.host.endpoint(),
+            pair.controller.core.files_service_download(
+                files.service.id,
+                files.service.generation,
                 pair.host.location().root,
-                &pair.host.location().path(""),
+                &folder,
+                &names,
                 u64::MAX,
                 "x",
             ),
-            Err(vnilink::Error::InvalidSetting(_))
+            Err(Error::InvalidSetting(_))
         ),
         "no transfer into a root this computer does not know"
+    );
+    pair.controller
+        .core
+        .close_controller_service(files.service.id, files.service.generation)?;
+    assert!(
+        matches!(upload(&pair, &files, "", "x"), Err(Error::NoSession)),
+        "no transfer without a Files service"
     );
     expect![[r#""#]].assert_eq(&trace.story(&["files"]));
     Ok(())
@@ -638,8 +654,8 @@ fn an_empty_folder_tree_lands_whole() -> TestResult {
     let pair = Pair::for_files();
     std::fs::create_dir_all(pair.controller.folder().join("empty/nested"))?;
     write_files(&pair.controller.folder().join("keep"), &[("a.txt", 1)]);
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "empty", "arrived")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "empty", "arrived")?;
     let receiver = received(&pair.host.core);
     let (sent, got) = drive_to_end(
         &pair.controller.core,
@@ -685,8 +701,8 @@ fn a_job_its_sender_cancels_before_delivery_lands_nothing() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     write_files(&pair.controller.folder(), &[("a.txt", 1024)]);
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "a.txt", "got")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "a.txt", "got")?;
     let receiver = received(&pair.host.core);
     pair.controller.core.job_cancel(job)?;
     // The cancel reached the receiver inside `job_cancel`; one poll settles it.
@@ -724,8 +740,8 @@ fn driving_every_job_finishes_one_without_window_polls() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     write_files(&pair.controller.folder(), &[("a.txt", 1024)]);
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "a.txt", "got")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "a.txt", "got")?;
     let receiver = received(&pair.host.core);
     let (sent, got) = wait_for("both sides to end", TRANSFER, || {
         pair.controller.core.drive_jobs().ok()?;
@@ -772,8 +788,8 @@ fn an_upload_conflict_reaches_its_sender_who_answers_it() -> TestResult {
     let destination = pair.host.folder().join("dest");
     std::fs::create_dir_all(&destination)?;
     std::fs::write(destination.join("a.txt"), b"old")?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "a.txt", "dest")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "a.txt", "dest")?;
     let receiver = received(&pair.host.core);
     let asked = pair.host.core.job_poll(receiver)?;
     assert_eq!(
@@ -844,8 +860,8 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
         &pair.controller.folder().join("set"),
         &[("a.txt", 512), ("b.txt", 512)],
     );
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "set", "got")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "set", "got")?;
     let receiver = received(&pair.host.core);
     pair.controller.core.job_cancel(job)?;
     let sent = pair.controller.core.job_snapshot(job)?;
@@ -906,7 +922,8 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
 }
 
 /// A sender restarted after one file of a nested source resumes the files
-/// under that source, found again by its full path from the disk's root.
+/// under that source on a new Files service, found again by its full path
+/// from the disk's root.
 #[test]
 fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
     let trace = traced();
@@ -915,14 +932,18 @@ fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
         &pair.controller.folder().join("docs/pack"),
         &[("sub/a.txt", 512), ("b.txt", 512)],
     );
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "docs/pack", "got")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "docs/pack", "got")?;
     let receiver = received(&pair.host.core);
     // One file lands; then the sender quits, and the receiver keeps its job.
     pair.host.core.job_poll(receiver)?;
     pair.controller.restart();
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    pair.controller.core.job_resume(job)?;
+    drop(files);
+    // The new Files adopts the job before it resumes.
+    let files = pair.open_files();
+    let controller = &pair.controller.core;
+    controller.files_service_adopt_job(files.service.id, files.service.generation, job)?;
+    controller.files_service_job_resume(files.service.id, files.service.generation, job)?;
     let (sent, got) = drive_to_end(
         &pair.controller.core,
         job,
@@ -958,6 +979,8 @@ fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
         host:
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
+          files: job state from=transferring job=1 sender=false to=interrupted
+          files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=512 size=512 took=0
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
     "#]].assert_eq(&trace.story(&["files"]));
@@ -985,8 +1008,8 @@ fn publication_across_filesystems_lands_the_file() -> TestResult {
         pair.host.core.set_transfer_directory(&shm)?;
     }
     write_files(&pair.controller.folder(), &[("a.txt", 2048)]);
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "a.txt", "got")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "a.txt", "got")?;
     let receiver = received(&pair.host.core);
     let (sent, got) = drive_to_end(
         &pair.controller.core,
@@ -1032,8 +1055,8 @@ fn a_receivers_keep_both_unblocks_a_sender_mirroring_the_conflict() -> TestResul
     std::fs::write(pair.controller.folder().join("file.txt"), b"incoming")?;
     std::fs::create_dir_all(pair.host.folder().join("dest"))?;
     std::fs::write(pair.host.folder().join("dest/file.txt"), b"original")?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "file.txt", "dest")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "file.txt", "dest")?;
     let receiver = received(&pair.host.core);
     let asked = pair.host.core.job_poll(receiver)?;
     assert_eq!(
@@ -1106,16 +1129,17 @@ fn two_files_one_at_a_time(pair: &Pair) -> std::io::Result<()> {
 }
 
 /// A host that stops sharing files after the first of two files lands
-/// interrupts the download there, landing nothing more; sharing again, the
-/// download resumes to the exact tree.
+/// interrupts the download there, landing nothing more, and ends the Files
+/// service it rode; sharing again, a new Files service adopts the download
+/// and resumes it to the exact tree.
 #[test]
 fn a_download_the_host_stops_sharing_resumes_once_shared_again() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     two_files_one_at_a_time(&pair)?;
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    controller.connect_files(&pair.host.endpoint())?;
-    let job = files::download(&pair, "set", "got")?;
+    let files = pair.open_files();
+    let job = download(&pair, &files, "set", "got")?;
     controller.job_poll(job)?;
     host.set_service_sharing(vnilink::ServiceKind::Files, false)?;
     let stopped = controller.job_poll(job)?;
@@ -1135,13 +1159,16 @@ fn a_download_the_host_stops_sharing_resumes_once_shared_again() -> TestResult {
         "nothing fetched after the withdrawal lands"
     );
 
-    let (sharing, _) = vnilink_testkit::FILES;
-    host.set_desktop_sharing(sharing)?;
-    // The withdrawal dropped the host's offers: its sender offers again
-    // before the receiver fetches again.
-    let sender = files::only_job(host)?;
-    host.job_resume(sender)?;
-    controller.job_resume(job)?;
+    // The withdrawal ended the Files service on both sides, and the
+    // connection stays: a new Files service on it adopts the interrupted
+    // download, and resuming it there has the host's sender, adopted with
+    // it, offer again before the receiver fetches again.
+    host.set_service_sharing(vnilink::ServiceKind::Files, true)?;
+    pair.host.wait_released(Some(vnilink::ServiceKind::Files));
+    let (fresh, _pipe) = pair.controller.open_files(&files.connection)?;
+    controller.files_service_adopt_job(fresh.id, fresh.generation, job)?;
+    controller.files_service_job_resume(fresh.id, fresh.generation, job)?;
+    let sender = only_job(host)?;
     let (_, got) = drive_to_end(host, sender, controller, job, TRANSFER);
     assert_eq!(
         got.state,
@@ -1180,8 +1207,8 @@ fn a_download_whose_host_forgets_the_controller_lands_nothing_more() -> TestResu
     let pair = Pair::for_files();
     two_files_one_at_a_time(&pair)?;
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    controller.connect_files(&pair.host.endpoint())?;
-    let job = files::download(&pair, "set", "got")?;
+    let files = pair.open_files();
+    let job = download(&pair, &files, "set", "got")?;
     controller.job_poll(job)?;
     host.revoke(&pair.controller.endpoint())?;
     let stopped = controller.job_poll(job)?;
@@ -1190,10 +1217,16 @@ fn a_download_whose_host_forgets_the_controller_lands_nothing_more() -> TestResu
         JobState::Interrupted,
         "the download stops with its connection: {stopped:?}"
     );
-    assert_eq!(
-        stopped.error.as_deref(),
-        Some("the connection to the other computer ended"),
-        "the job says why it stopped"
+    // The host ends the Files service and then the link; the controller
+    // learns whichever reaches it first.
+    assert!(
+        matches!(
+            stopped.error.as_deref(),
+            Some(
+                "the other computer stopped sending" | "the connection to the other computer ended"
+            )
+        ),
+        "the job says the other computer ended it: {stopped:?}"
     );
     assert!(
         controller.job_snapshot(job)?.files_done <= 1,

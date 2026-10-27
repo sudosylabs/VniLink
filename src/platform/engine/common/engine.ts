@@ -135,7 +135,6 @@ export type EngineEvent =
 	| { type: 'sessionChanged'; id: string; generation: string; role: 'Controller' | 'Host'; phase: SessionPhase; peer_id: string }
 	| { type: 'serviceChanged' | 'hostedServiceChanged' | 'desktopClipboardReceived'; service: ServiceSummary }
 	| { type: 'inputFailed'; id: string; message: string }
-	| { type: 'clipboardReceived' | 'clipboardFilesReceived'; id: string }
 	| { type: 'topologyChanged'; revision: string }
 	| { type: 'hostLocked'; locked: boolean };
 
@@ -194,7 +193,7 @@ export type EngineCommand =
 	| { type: 'setLogFilter'; directives: string | null }
 	/** The end of the engine's own log file. */
 	| { type: 'engineLogTail' }
-	| { type: 'endpoint' | 'capabilities' | 'videoCodecs' | 'clipboardOwnerSession' | 'subscribeEvents' }
+	| { type: 'endpoint' | 'capabilities' | 'videoCodecs' | 'subscribeEvents' }
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
 	| { type: 'peerHostname'; endpointId: string }
@@ -228,7 +227,6 @@ export type EngineCommand =
 	| { type: 'disconnect' }
 	| { type: 'disconnectSession'; sessionId: string }
 	| { type: 'stopHostedPeer'; sessionId: string }
-	| { type: 'submitClipboard'; sessionId: string; generation: string; text: string }
 	| { type: 'setInputDefaults'; mode: 'Character' | 'Map' | 'Translate'; swap: boolean; pointer: PointerSettings }
 	| { type: 'enableFilesystemAccess' }
 	| { type: 'setTransferDirectory'; path: string }
@@ -257,8 +255,6 @@ export type EngineCommand =
 	| { type: 'setKeyboardMode'; mode: 'Character' | 'Map' | 'Translate' }
 	| { type: 'swapControlAndCommand' }
 	| { type: 'setSwapControlAndCommand'; enabled: boolean }
-	| { type: 'sessionClipboardText'; sessionId: string; generation: string }
-	| { type: 'clipboardText' }
 	| { type: 'startHosting' | 'stopHosting' | 'stopHostedSession' | 'resetIdentity' }
 	| { type: 'setRelayPublic' }
 	| { type: 'setRelayCustom'; urls: string[] }
@@ -297,7 +293,6 @@ export type EngineReply =
 	| { type: 'sessions'; sessions: SessionInfo[] }
 	| { type: 'services'; services: ServiceSummary[] }
 	| { type: 'peerAvailability'; report: RemoteCapabilityStatus[] | null }
-	| { type: 'text'; text: string | null }
 	| { type: 'check'; check: string }
 	| { type: 'controlRequest'; request: ControlRequestInfo | null }
 	| { type: 'nativeSharingStatus'; displays: NativeSharingStatus[] }
@@ -316,7 +311,6 @@ export type EngineReply =
 	| { type: 'capabilities'; capabilities: Capabilities }
 	| { type: 'videoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'hostname'; hostname: string | null }
-	| { type: 'ownerSession'; session: SessionInfo | null }
 	| { type: 'eventSubscription'; subscriptionId: string }
 	| { type: 'events'; events: EngineEvent[]; lagged: string }
 	| { type: 'sharingPolicy'; policy: SharingPolicy }
@@ -590,8 +584,6 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 		case 'serviceChanged': case 'hostedServiceChanged': case 'desktopClipboardReceived':
 			return serviceInfo(value.service) && Object.keys(value).length === 2;
 		case 'inputFailed': return decimal(value.id) && text(value.message) && Object.keys(value).length === 3;
-		case 'clipboardReceived': case 'clipboardFilesReceived':
-			return decimal(value.id) && Object.keys(value).length === 2;
 		case 'topologyChanged': return decimal(value.revision) && Object.keys(value).length === 2;
 		case 'hostLocked': return typeof value.locked === 'boolean' && Object.keys(value).length === 2;
 		default: return false;
@@ -738,8 +730,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'snapshot': case 'diagnosticSnapshot': case 'diagnosticRecorder': keys = []; valid = true; break;
 		case 'logFilter': case 'engineLogTail': keys = []; valid = true; break;
 		case 'setLogFilter': keys = ['directives']; valid = logFilter(value.directives); break;
-		case 'endpoint': case 'capabilities': case 'videoCodecs': case 'clipboardOwnerSession':
-		case 'subscribeEvents': keys = []; valid = true; break;
+		case 'endpoint': case 'capabilities': case 'videoCodecs': case 'subscribeEvents': keys = []; valid = true; break;
 		case 'setVideoCodecs': keys = ['codecs']; valid = videoCodecs(value.codecs); break;
 		case 'saveCustomRelays': keys = ['relays']; valid = relayInputs(value.relays); break;
 		case 'peerHostname': keys = ['endpointId']; valid = text(value.endpointId); break;
@@ -753,7 +744,6 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
 		case 'disconnect': keys = []; valid = true; break;
 		case 'disconnectSession': case 'stopHostedPeer': keys = ['sessionId']; valid = decimal(value.sessionId); break;
-		case 'submitClipboard': keys = ['sessionId', 'generation', 'text']; valid = decimal(value.sessionId) && decimal(value.generation) && longText(value.text); break;
 		case 'setInputDefaults': keys = ['mode', 'swap', 'pointer']; valid = keyboardMode(value.mode) && typeof value.swap === 'boolean' && pointerSettings(value.pointer); break;
 		case 'enableFilesystemAccess': keys = []; break;
 		case 'setTransferDirectory': keys = ['path']; valid = typeof value.path === 'string' && value.path.length > 0 && value.path.length <= 4096 && !value.path.includes('\0'); break;
@@ -783,8 +773,6 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setKeyboardMode': keys = ['mode']; valid = keyboardMode(value.mode); break;
 		case 'swapControlAndCommand': keys = []; valid = true; break;
 		case 'setSwapControlAndCommand': keys = ['enabled']; valid = typeof value.enabled === 'boolean'; break;
-		case 'sessionClipboardText': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
-		case 'clipboardText': keys = []; valid = true; break;
 		case 'startHosting': case 'stopHosting': case 'stopHostedSession': case 'resetIdentity': keys = []; valid = true; break;
 		case 'setRelayPublic': keys = []; valid = true; break;
 		case 'setRelayCustom': keys = ['urls']; valid = strings(value.urls); break;
@@ -843,7 +831,6 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'sessions': return Array.isArray(value.sessions) && sessions(value.sessions) && Object.keys(value).length === 2;
 		case 'services': return Array.isArray(value.services) && value.services.every((service: unknown) => serviceInfo(service)) && Object.keys(value).length === 2;
 		case 'peerAvailability': return (value.report === null || remoteReport(value.report)) && Object.keys(value).length === 2;
-		case 'text': return (value.text === null || longText(value.text)) && Object.keys(value).length === 2;
 		case 'check': return text(value.check) && Object.keys(value).length === 2;
 		case 'controlRequest': return controlRequest(value.request) && Object.keys(value).length === 2;
 		case 'nativeSharingStatus': return Array.isArray(value.displays) && value.displays.length <= 16 && value.displays.every(sharingStatus) && Object.keys(value).length === 2;
@@ -863,7 +850,6 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'capabilities': return capabilities(value.capabilities) && Object.keys(value).length === 2;
 		case 'videoCodecs': return videoCodecs(value.codecs) && Object.keys(value).length === 2;
 		case 'hostname': return (value.hostname === null || text(value.hostname)) && Object.keys(value).length === 2;
-		case 'ownerSession': return session(value.session) && Object.keys(value).length === 2;
 		case 'eventSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
 		case 'events': return Array.isArray(value.events) && value.events.length <= 256 && value.events.every((item: unknown) => isEngineEvent(item)) && decimal(value.lagged) && Object.keys(value).length === 3;
 		case 'sharingPolicy': return sharingPolicy(value.policy) && Object.keys(value).length === 2;

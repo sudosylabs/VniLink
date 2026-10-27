@@ -1,11 +1,11 @@
 //! The shared disk and filesystem operations.
 //!
 //! The `Core` methods here execute against this installation's own disks
-//! (the local pane). The `fs_list`/`fs_mkdir`/`fs_rename`/`fs_delete` methods reach the
-//! controlled computer instead: each request opens its own short side
-//! stream on the live control connection, carrying the versioned wire codec
-//! with the session generation, and the host re-checks generation and
-//! Files sharing per request before touching its disks.
+//! (the local pane). The other computer's disk is reached through a Files
+//! service (`service_stream.rs`), whose requests this host serves here:
+//! each carries the versioned wire codec with the link's generation, and
+//! the host re-checks generation and Files sharing per request before
+//! touching its disks.
 // trace: records every ignored failure
 
 use super::*;
@@ -208,243 +208,13 @@ impl Core {
         };
         fs::finish_trash(target)
     }
-
-    /// Stats one entry for test identity proofs without listing.
-    #[cfg(test)]
-    pub(crate) fn stat_entry(
-        &self,
-        root: u64,
-        path: &str,
-        name: &str,
-    ) -> Result<crate::fs::FsEntry, Error> {
-        self.ensure_alive()?;
-        let roots = lock(&self.shared.file_roots);
-        let (_parent, full) = roots.resolve_parent(root, path, name)?;
-        Ok(fs::stat(&full, name.to_owned()))
-    }
-
-    /// Lists a directory on the controlled computer over the filesystem
-    /// side stream. The session must be active and the generation current;
-    /// the host re-checks both plus Files sharing per request.
-    pub fn fs_list(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: &str,
-        offset: u64,
-        limit: u16,
-    ) -> Result<DirPage, Error> {
-        let _engine = self.engine();
-        match self.fs_round_trip(
-            session_id,
-            generation,
-            fs::Request::List {
-                id: 1,
-                generation,
-                root,
-                path: path.to_owned(),
-                offset,
-                limit,
-            },
-        )? {
-            FsOutcome::Page(page) => Ok(page),
-            FsOutcome::Done | FsOutcome::Places(_) => Err(Error::Malformed),
-        }
-    }
-
-    /// Creates one directory level on the controlled computer.
-    pub fn fs_mkdir(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: &str,
-        name: &str,
-    ) -> Result<(), Error> {
-        let _engine = self.engine();
-        match self.fs_round_trip(
-            session_id,
-            generation,
-            fs::Request::Mkdir {
-                id: 1,
-                generation,
-                root,
-                path: path.to_owned(),
-                name: name.to_owned(),
-            },
-        )? {
-            FsOutcome::Done => Ok(()),
-            FsOutcome::Page(_) | FsOutcome::Places(_) => Err(Error::Malformed),
-        }
-    }
-
-    /// Renames one entry on the controlled computer. `expected` carries the
-    /// listing token from a remote listing; the host refuses a replaced
-    /// source instead of renaming a different object.
-    #[allow(clippy::too_many_arguments)]
-    pub fn fs_rename(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: &str,
-        name: &str,
-        expected: Option<crate::fs::EntryToken>,
-        new_name: &str,
-    ) -> Result<(), Error> {
-        let _engine = self.engine();
-        match self.fs_round_trip(
-            session_id,
-            generation,
-            fs::Request::Rename {
-                id: 1,
-                generation,
-                root,
-                path: path.to_owned(),
-                name: name.to_owned(),
-                expected,
-                new_name: new_name.to_owned(),
-            },
-        )? {
-            FsOutcome::Done => Ok(()),
-            FsOutcome::Page(_) | FsOutcome::Places(_) => Err(Error::Malformed),
-        }
-    }
-
-    /// Deletes one entry on the controlled computer. `expected` carries the
-    /// listing token from a remote listing; the host refuses a replaced
-    /// source instead of deleting a different object.
-    pub fn fs_delete(
-        &self,
-        session_id: u64,
-        generation: u64,
-        root: u64,
-        path: &str,
-        name: &str,
-        expected: Option<crate::fs::EntryToken>,
-    ) -> Result<(), Error> {
-        let _engine = self.engine();
-        match self.fs_round_trip(
-            session_id,
-            generation,
-            fs::Request::Delete {
-                id: 1,
-                generation,
-                root,
-                path: path.to_owned(),
-                name: name.to_owned(),
-                expected,
-                trash: false,
-            },
-        )? {
-            FsOutcome::Done => Ok(()),
-            FsOutcome::Page(_) | FsOutcome::Places(_) => Err(Error::Malformed),
-        }
-    }
-
-    fn fs_round_trip(
-        &self,
-        session_id: u64,
-        generation: u64,
-        mut request: fs::Request,
-    ) -> Result<FsOutcome, Error> {
-        let connection = {
-            let state = self.alive_state()?;
-            let session = state.outgoing.get(&session_id).ok_or(Error::NoSession)?;
-            if session.id != session_id || session.phase != crate::session::SessionPhase::Active {
-                return Err(Error::NoSession);
-            }
-            if session.generation != generation {
-                return Err(Error::StaleSession);
-            }
-            match &mut request {
-                fs::Request::List { generation, .. }
-                | fs::Request::Mkdir { generation, .. }
-                | fs::Request::Rename { generation, .. }
-                | fs::Request::Delete { generation, .. }
-                | fs::Request::Watch { generation, .. }
-                | fs::Request::Places { generation, .. } => {
-                    *generation = session.wire_stamp.generation
-                }
-            }
-            session.link.clone().ok_or(Error::NoSession)?
-        };
-        let payload = fs::encode_request(&request)?;
-        let mut frame = Vec::with_capacity(1 + payload.len());
-        frame.push(crate::job::TAG_FS);
-        frame.extend_from_slice(&payload);
-        self.runtime.block_on(async {
-            let (mut send, mut recv) = connection.open_bi().await.map_err(Error::network_debug)?;
-            crate::sidestream::write_frame(
-                &mut send,
-                &frame,
-                |bytes: &Vec<u8>| encode_raw(bytes),
-                FS_DID_NOT_WRITE,
-            )
-            .await?;
-            let response_bytes: Vec<u8> = crate::sidestream::read_frame(
-                &mut recv,
-                |len| {
-                    if len > MAX_FS_FRAME {
-                        Err(Error::Malformed)
-                    } else {
-                        Ok(())
-                    }
-                },
-                |bytes| Ok(bytes.to_vec()),
-            )
-            .await?;
-            let response =
-                fs::decode_response(&response_bytes).map_err(|error| error.to_error())?;
-            if response.id != 1 {
-                return Err(Error::Malformed);
-            }
-            status_error(response.status, &response.message)?;
-            match request {
-                fs::Request::List { .. } => {
-                    let body: Vec<u8> = crate::sidestream::read_frame(
-                        &mut recv,
-                        |len| {
-                            if len > MAX_FS_FRAME {
-                                Err(Error::Malformed)
-                            } else {
-                                Ok(())
-                            }
-                        },
-                        |bytes| Ok(bytes.to_vec()),
-                    )
-                    .await?;
-                    let page = fs::decode_list_body(&body).map_err(|error| error.to_error())?;
-                    Ok(FsOutcome::Page(page))
-                }
-                fs::Request::Places { .. } => {
-                    let body: Vec<u8> = crate::sidestream::read_frame(
-                        &mut recv,
-                        |len| {
-                            if len > MAX_FS_FRAME {
-                                Err(Error::Malformed)
-                            } else {
-                                Ok(())
-                            }
-                        },
-                        |bytes| Ok(bytes.to_vec()),
-                    )
-                    .await?;
-                    let places = fs::decode_places_body(&body).map_err(|error| error.to_error())?;
-                    Ok(FsOutcome::Places(places))
-                }
-                _ => Ok(FsOutcome::Done),
-            }
-        })
-    }
 }
 
-/// Serves the auxiliary side streams for one hosted session: filesystem
-/// requests and job-control requests share one accept loop, told apart by
-/// the frame tag. Each request arrives on its own short stream; every
-/// request re-checks the session generation and Files sharing before
-/// touching the disk.
+/// Serves the side streams of one hosted link: services, Desktop streams
+/// and job control share one accept loop, told apart by the frame tag.
+/// Each request arrives on its own stream; every request re-checks the
+/// session generation and its service's permission before touching the
+/// disk.
 pub(super) async fn serve_aux_host(
     shared: Arc<Shared>,
     connection: iroh::endpoint::Connection,
@@ -508,12 +278,9 @@ async fn dispatch_aux_host(
     let Some((&tag, body)) = payload.split_first() else {
         return;
     };
-    let neutral = lock(&shared.state)
-        .incoming
-        .get(&session_id)
-        .is_some_and(|s| s.services_only);
-    if neutral
-        && tag != super::service_stream::TAG_SERVICE
+    // A link carries services, Desktop streams and the control of jobs a
+    // service owns; anything else is dropped unanswered.
+    if tag != super::service_stream::TAG_SERVICE
         && tag != super::service_jobs::TAG
         && tag != super::desktop_stream::TAG
         && tag != super::desktop_clipboard::TAG
@@ -546,12 +313,6 @@ async fn dispatch_aux_host(
                     crate::trace::FILES,
                     "a failed Files service request ends only itself",
                     super::service_jobs::serve(&shared, session_id, &peer, &mut send, body).await
-                );
-            } else if tag == crate::job::TAG_FS {
-                crate::ignored!(
-                    crate::trace::FILES,
-                    "a failed file request ends only itself",
-                    handle_fs_request(&shared, session_id, &peer, &mut send, body).await
                 );
             } else {
                 crate::ignored!(
@@ -611,10 +372,7 @@ pub(super) async fn serve_aux_controller(
             Some((tag, body)) => (*tag, body),
             None => continue,
         };
-        let neutral = lock(&shared.state)
-            .outgoing_peer(&peer)
-            .is_some_and(|s| s.services_only);
-        if neutral && !super::jobs::neutral_job_control_allowed(&shared, &peer, tag, body) {
+        if !super::jobs::neutral_job_control_allowed(&shared, &peer, tag, body) {
             continue;
         }
         if super::jobs::handle_controller_job(&shared, &peer, &mut send, body, tag)
@@ -990,7 +748,7 @@ fn map_fs_error(id: u32, error: &Error) -> fs::Response {
 #[cfg(test)]
 mod listing_tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use crate::core::{Core, CoreConfig, Listen};
@@ -1020,20 +778,14 @@ mod listing_tests {
         let session = LiveSession {
             id: session_id,
             wire_stamp: crate::protocol::SessionStamp::new(session_id, generation),
-            controller: None,
             generation,
             role: crate::session::SessionRole::Host,
             phase: crate::session::SessionPhase::Active,
             peer_id: String::new(),
             peer_key: STALE_PEER,
-            services_only: false,
             peer_topology: Vec::new(),
             stop,
             link: None,
-            clipboard: None,
-            clipboard_files: None,
-            published_files: None,
-            published_rev: AtomicU64::new(0),
             remote_availability: None,
         };
         let mut state = lock(&host.shared.state);

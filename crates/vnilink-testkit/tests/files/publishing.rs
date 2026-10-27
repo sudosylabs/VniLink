@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use vnilink::probes::PrestageHooks;
 use vnilink::{Core, Grants, JobState};
-use vnilink_testkit::files::{self, payload};
-use vnilink_testkit::{lock, traced, wait_for, Pair, TestResult, FILES};
+use vnilink_testkit::files::{only_job, payload, upload};
+use vnilink_testkit::{lock, traced, wait_for, Files, Pair, TestResult, FILES};
 
 /// How long a barrier waits to be reached.
 const REACHED_WITHIN: Duration = Duration::from_secs(8);
@@ -159,22 +159,19 @@ fn unhooked() -> PrestageHooks {
     }
 }
 
-/// The controller's upload of `big.bin` to `arrived` on the host, and the
-/// host's job receiving it.
-fn upload_big(pair: &Pair) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+/// The controller's upload of `big.bin` to `arrived` on the host, the
+/// host's job receiving it, and the Files it rides, which live as long as
+/// the test does: a job whose Files closed is interrupted for that, not
+/// for the revocation.
+fn upload_big(pair: &Pair) -> Result<(Files, u64, u64), Box<dyn std::error::Error>> {
     std::fs::write(
         pair.controller.folder().join("big.bin"),
         payload(200 * 1024, 7),
     )?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = pair.controller.core.job_submit_upload(
-        &pair.host.endpoint(),
-        pair.controller.location().root,
-        &pair.controller.location().path("big.bin"),
-        pair.host.location().root,
-        &pair.host.location().path("arrived"),
-    )?;
-    Ok((job, files::only_job(&pair.host.core)?))
+    let files = pair.open_files();
+    let job = upload(pair, &files, "big.bin", "arrived")?;
+    let receiver = only_job(&pair.host.core)?;
+    Ok((files, job, receiver))
 }
 
 /// Drives the job on its own thread, within five hundred polls of each
@@ -275,7 +272,7 @@ fn assert_nothing_landed(pair: &Pair) -> TestResult {
 fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let (job, receiver) = upload_big(&pair)?;
+    let (_files, job, receiver) = upload_big(&pair)?;
     let parked = Parked::in_copy(&pair.host.core, receiver);
     let driver = drive_receiver(&pair, job, receiver);
     COPY.wait_reached("the publication's copy to park");
@@ -317,7 +314,7 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() -> TestResult 
 fn parked_mkdir_and_stage_sync_leave_locks_free() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let (job, receiver) = upload_big(&pair)?;
+    let (_files, job, receiver) = upload_big(&pair)?;
     let parked = Parked::in_parents_and_sync(&pair.host.core, receiver);
     let driver = drive_receiver(&pair, job, receiver);
 

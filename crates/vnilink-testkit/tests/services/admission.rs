@@ -186,18 +186,6 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
         "owned",
         "the shared Files changes the host's disk"
     );
-    // Even with Transfer, the connection's own calls cannot bypass service
-    // admission.
-    assert!(
-        controller
-            .fs_mkdir(session.id, session.generation, root, &folder, "legacy")
-            .is_err(),
-        "the connection's own file calls stay refused"
-    );
-    assert!(
-        !pair.host.folder().join("legacy").exists(),
-        "a refused call changes nothing"
-    );
     let old_lease = controller.service_lease(owner.id, owner.generation)?;
     controller.drop_controller_link(session.id)?;
     pair.controller.redialed(&session);

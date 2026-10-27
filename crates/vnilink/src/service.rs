@@ -223,21 +223,6 @@ pub struct ServiceSupport {
     pub system_actions: bool,
 }
 
-impl ServiceSupport {
-    pub fn supports(self, kind: ServiceKind) -> bool {
-        match kind {
-            ServiceKind::Desktop => self.desktop,
-            ServiceKind::Files => self.files,
-            ServiceKind::Terminal => self.terminal,
-            ServiceKind::Camera => self.camera,
-            ServiceKind::SystemAudio => self.system_audio,
-            ServiceKind::Microphone => self.microphone,
-            ServiceKind::System => self.system_actions,
-            ServiceKind::ScreenSnapshot => self.desktop,
-        }
-    }
-}
-
 /// Cancellation for one service on one connection generation.
 ///
 /// Workers select `cancelled()` alongside their I/O. Closing a service,

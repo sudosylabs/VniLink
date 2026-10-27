@@ -3,13 +3,11 @@
 
 use super::*;
 
-use super::clipboard::{apply_clipboard, apply_clipboard_files, clipboard_selected};
 use super::keys::host_command_loop;
 use super::link::{remember_link, write_addresses};
 use super::pairing::{wait_for_control_approval, ControlAnswer};
 use super::transfer::{is_files_connection, serve_files_connection};
 use super::wire::{read_frame, write_frame};
-use crate::clipboard::ClipboardPayload;
 use crate::transfer::FILES_ALPN;
 
 use std::sync::Arc;
@@ -21,13 +19,7 @@ use iroh::{Endpoint, EndpointId, RelayMode, SecretKey};
 use crate::error::Error;
 use crate::events::CoreEvent;
 use crate::protocol::{error_code, ControlMessage, SessionStamp, ALPN};
-use crate::session::{self, Grant, SessionInfo, SessionPhase, SessionRole};
-
-/// Live hosted files-only sessions. Each owns its session record, clipboard
-/// and file streams; the host clipboard sync selects exactly one session
-/// (see `clipboard_owner`). Presence links are bounded by the paired
-/// devices instead, one per peer, and their services by their own caps.
-const MAX_LIVE_INCOMING: usize = 4;
+use crate::session::{self, SessionInfo, SessionPhase, SessionRole};
 
 impl Core {
     pub fn start_hosting(&self) -> Result<(), Error> {
@@ -284,7 +276,7 @@ pub(super) async fn host_connection(shared: Arc<Shared>, connection: iroh::endpo
     if let Some(session_id) = owned_session {
         finish_incoming(&shared, session_id);
     }
-    connection.close(1u8.into(), b"closed");
+    close_link(&connection, lock(&shared.state).shut_down, 1, b"closed");
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -298,32 +290,19 @@ pub(super) enum HostTurn {
 }
 
 /// One admission check for every Hello: before approval, after approval, and
-/// after the session gate. The rule lives in [`session::admit`] and
-/// [`session::admit_services`]; this only reads the state it needs.
-fn admission(
-    state: &State,
-    peer: EndpointId,
-    version: u16,
-    services_only: bool,
-) -> Result<(), Error> {
-    if services_only {
-        // One link per paired peer; a newer one replaces the older.
-        let other_links = state
-            .incoming
-            .values()
-            .filter(|s| !finished(&s.phase) && s.services_only && s.peer_key != *peer.as_bytes())
-            .count();
-        return session::admit_services(
-            state.hosting,
-            other_links >= crate::trust::MAX_DEVICES,
-            state.trust.get(peer.as_bytes()).is_some(),
-            version,
-        );
-    }
-    session::admit(
+/// after the session gate. The rule lives in [`session::admit_services`];
+/// this only reads the state it needs.
+fn admission(state: &State, peer: EndpointId, version: u16) -> Result<(), Error> {
+    // One link per paired peer; a newer one replaces the older.
+    let other_links = state
+        .incoming
+        .values()
+        .filter(|s| !finished(&s.phase) && s.peer_key != *peer.as_bytes())
+        .count();
+    session::admit_services(
         state.hosting,
-        state.live_incoming_count() >= MAX_LIVE_INCOMING,
-        state.trust.granted(peer.as_bytes(), Grant::Transfer),
+        other_links >= crate::trust::MAX_DEVICES,
+        state.trust.get(peer.as_bytes()).is_some(),
         version,
     )
 }
@@ -354,17 +333,15 @@ pub(super) async fn handle_host_request(
         }
     };
     match message {
-        // A session carries no picture: a Desktop service opens its own
-        // stream on a presence link. A Hello that asks for one is refused.
+        // A link carries no picture: a Desktop service opens its own stream
+        // on it.
         ControlMessage::Hello {
             version,
-            files_only: true,
-            services_only,
             hostname: hello_hostname,
             os: hello_os,
             ..
         } => {
-            let decision = admission(&lock(&shared.state), peer, version, services_only);
+            let decision = admission(&lock(&shared.state), peer, version);
             let decision = match decision {
                 // The file already told the controller who this host is. The
                 // digits typed here tell the host who the controller is.
@@ -373,9 +350,7 @@ pub(super) async fn handle_host_request(
                     if lock(&shared.state).trust.get(peer.as_bytes()).is_none() =>
                 {
                     match wait_for_control_approval(shared, connection, peer, stop_rx).await {
-                        ControlAnswer::Approved => {
-                            admission(&lock(&shared.state), peer, version, services_only)
-                        }
+                        ControlAnswer::Approved => admission(&lock(&shared.state), peer, version),
                         ControlAnswer::Rejected(error) => Err(error),
                     }
                 }
@@ -394,7 +369,7 @@ pub(super) async fn handle_host_request(
                     // Admission counts live sessions: one Hello passes the
                     // checks and registers before the next is decided.
                     let _gate = shared.session_gate.lock().await;
-                    let decision = admission(&lock(&shared.state), peer, version, services_only);
+                    let decision = admission(&lock(&shared.state), peer, version);
                     if let Err(error) = decision {
                         crate::ignored!(
                             crate::trace::SESSION,
@@ -404,7 +379,7 @@ pub(super) async fn handle_host_request(
                         );
                         return HostTurn::PeerShouldClose;
                     }
-                    match register_incoming(shared, peer, stop, services_only) {
+                    match register_incoming(shared, peer, stop) {
                         Ok(info) => {
                             *owned_session = Some(info.id);
                             remember_link(shared, info.id, connection.clone());
@@ -430,11 +405,10 @@ pub(super) async fn handle_host_request(
                                 "a peer's name and addresses are refreshed at the next connection",
                                 super::link::remember_peer_os(shared, peer.as_bytes(), hello_os)
                             );
-                            // Install reverse side-stream senders before Accept can
-                            // make the controller's connect call return. In particular,
-                            // a host file send immediately after connect must not race
-                            // this registration.
-                            let (clipboard, mut files) = spawn_host_streams(
+                            // Serve the link's streams before Accept can make the
+                            // controller's connect return, so a service it opens at
+                            // once is not refused.
+                            let mut streams = spawn_host_streams(
                                 shared,
                                 iroh::endpoint::Connection::clone(connection),
                                 info.id,
@@ -458,10 +432,7 @@ pub(super) async fn handle_host_request(
                             )
                             .await;
                             if wrote.is_err() || write_addresses(shared, &mut send).await.is_err() {
-                                if let Some(task) = clipboard {
-                                    task.abort();
-                                }
-                                files.abort();
+                                streams.abort();
                                 finish_incoming(shared, info.id);
                                 return HostTurn::PeerShouldClose;
                             }
@@ -469,13 +440,10 @@ pub(super) async fn handle_host_request(
                                 shared, info.id, peer, &mut send, &mut recv, stop_rx,
                             )
                             .await;
-                            if let Some(task) = clipboard {
-                                task.abort();
-                            }
                             // Service streams end on the session's stop and
                             // tell their peers why before its close below;
                             // one that has not ended by then is cut off.
-                            match tokio::time::timeout(STREAMS_ENDING, &mut files).await {
+                            match tokio::time::timeout(STREAMS_ENDING, &mut streams).await {
                                 Ok(ended) => {
                                     crate::ignored!(
                                         crate::trace::SESSION,
@@ -483,7 +451,7 @@ pub(super) async fn handle_host_request(
                                         ended
                                     );
                                 }
-                                Err(_) => files.abort(),
+                                Err(_) => streams.abort(),
                             }
                             if local_stop {
                                 crate::ignored!(
@@ -536,7 +504,6 @@ pub(super) fn register_incoming(
     shared: &Shared,
     peer: EndpointId,
     stop: &tokio::sync::watch::Sender<bool>,
-    services_only: bool,
 ) -> Result<SessionInfo, Error> {
     let mut state = lock(&shared.state);
     if state.shut_down {
@@ -545,17 +512,13 @@ pub(super) fn register_incoming(
     // Finished records are retained for status reads; drop them here so the
     // map holds only live sessions plus the latest finished one per id.
     state.incoming.retain(|_, s| !finished(&s.phase));
-    if services_only {
-        // A peer that dials again has lost its old link; end it.
-        for old in state
-            .incoming
-            .values()
-            .filter(|s| s.services_only && s.peer_key == *peer.as_bytes())
-        {
-            old.stop.send_replace(true);
-        }
-    } else if state.live_incoming_count() >= MAX_LIVE_INCOMING {
-        return Err(Error::Busy);
+    // A peer that dials again has lost its old link; end it.
+    for old in state
+        .incoming
+        .values()
+        .filter(|s| s.peer_key == *peer.as_bytes())
+    {
+        old.stop.send_replace(true);
     }
     state.generation = state.generation.saturating_add(1);
     let id = state.next_session_id;
@@ -573,32 +536,22 @@ pub(super) fn register_incoming(
         id,
         LiveSession {
             wire_stamp: crate::protocol::SessionStamp::new(id, generation),
-            controller: None,
             id,
             generation,
             role: SessionRole::Host,
             phase: session::phase_after_admit(),
             peer_id: peer_id.clone(),
             peer_key: *peer.as_bytes(),
-            services_only,
             peer_topology: Vec::new(),
             stop: stop.clone(),
             link: None,
-            clipboard: None,
-            clipboard_files: None,
-            published_files: None,
-            published_rev: std::sync::atomic::AtomicU64::new(0),
             remote_availability: None,
         },
     );
-    // Admission selects the new session for host clipboard sync.
-    state.clipboard_owner = Some(id);
     drop(state);
     session::announce_progression(&shared.events, id, generation, SessionRole::Host, &peer_id);
-    if services_only {
-        // The peer just proved it is reachable; our own link to it dials now.
-        super::presence::wake_link(shared, peer.as_bytes());
-    }
+    // The peer just proved it is reachable; our own link to it dials now.
+    super::presence::wake_link(shared, peer.as_bytes());
     Ok(info)
 }
 
@@ -618,16 +571,6 @@ pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     let session = state.incoming.get_mut(&session_id).expect("checked");
     let info = session_info(session);
     session.enter(SessionPhase::Closed);
-    // Hand clipboard selection to the lowest remaining live hosted session,
-    // if any, so sync never points at a closed session.
-    if state.clipboard_owner == Some(session_id) {
-        state.clipboard_owner = state
-            .incoming
-            .values()
-            .filter(|s| !finished(&s.phase))
-            .map(|s| s.id)
-            .min();
-    }
     super::services::synchronize(&mut state, &shared.events);
     drop(state);
     shared.events.publish(CoreEvent::SessionChanged {
@@ -639,105 +582,19 @@ pub(super) fn finish_incoming(shared: &Shared, session_id: u64) {
     });
 }
 
-/// Clipboard is accepted before the filesystem loop. Two `accept_bi`
-/// calls at once can take each other's stream, so each accept starts only
-/// after the previous one has returned. Filesystem requests open their own
-/// short streams afterwards and are accepted in a loop, so no gate is
-/// needed past this point.
+/// Serves the link's streams: services, Desktop streams and job control,
+/// each request on its own stream, until the session stops.
 pub(super) fn spawn_host_streams(
     shared: &Arc<Shared>,
     connection: iroh::endpoint::Connection,
     session_id: u64,
     peer: [u8; 32],
     stop_rx: tokio::sync::watch::Receiver<bool>,
-) -> (
-    Option<tokio::task::JoinHandle<()>>,
-    tokio::task::JoinHandle<()>,
-) {
-    if lock(&shared.state)
-        .incoming
-        .get(&session_id)
-        .is_some_and(|s| s.services_only)
-    {
-        let shared = shared.clone();
-        let aux = tokio::spawn(async move {
-            super::fs::serve_aux_host(shared, connection, session_id, peer, stop_rx).await;
-        });
-        return (None, aux);
-    }
-    let (clipboard_tx, clipboard_rx) = tokio::sync::mpsc::channel(1);
-    {
-        let mut state = lock(&shared.state);
-        if let Some(session) = state.incoming.get_mut(&session_id) {
-            session.clipboard = Some(clipboard_tx);
-        }
-    }
-    let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
-    let clipboard_connection = iroh::endpoint::Connection::clone(&connection);
-    let fs_connection = connection;
-    let fs_stop = tokio::sync::watch::Receiver::clone(&stop_rx);
-    let mut clipboard_stop = tokio::sync::watch::Receiver::clone(&stop_rx);
-    let shared_apply = Arc::clone(shared);
-    let shared_allow = Arc::clone(shared);
-    let clipboard_task = tokio::spawn(async move {
-        let opened = crate::sidestream::accept_bi(&clipboard_connection, &mut clipboard_stop).await;
-        crate::ignored!(
-            crate::trace::SESSION,
-            "the caller stopped waiting for its answer",
-            gate_tx.send(opened.is_ok())
-        );
-        if let Ok((send, recv)) = opened {
-            crate::clipboard::exchange(
-                send,
-                recv,
-                clipboard_rx,
-                clipboard_stop,
-                move |payload| match payload {
-                    ClipboardPayload::Text(text) => {
-                        if !clipboard_selected(&lock(&shared_apply.state), session_id) {
-                            return Err(Error::Busy);
-                        }
-                        apply_clipboard(&shared_apply, &peer, text)
-                    }
-                    ClipboardPayload::Files {
-                        revision,
-                        selection,
-                    } => {
-                        if !clipboard_selected(&lock(&shared_apply.state), session_id) {
-                            return Err(Error::Busy);
-                        }
-                        apply_clipboard_files(
-                            &shared_apply,
-                            &peer,
-                            session_id,
-                            *revision,
-                            selection,
-                        )
-                    }
-                },
-                move || {
-                    if lock(&shared_allow.state)
-                        .trust
-                        .granted(&peer, Grant::Clipboard)
-                    {
-                        Ok(())
-                    } else {
-                        Err(Error::ClipboardDenied)
-                    }
-                },
-                false,
-            )
-            .await;
-        }
-    });
-    let shared_fs = Arc::clone(shared);
-    let fs_task = tokio::spawn(async move {
-        if !matches!(gate_rx.await, Ok(true)) {
-            return;
-        }
-        super::fs::serve_aux_host(shared_fs, fs_connection, session_id, peer, fs_stop).await;
-    });
-    (Some(clipboard_task), fs_task)
+) -> tokio::task::JoinHandle<()> {
+    let shared = shared.clone();
+    tokio::spawn(async move {
+        super::fs::serve_aux_host(shared, connection, session_id, peer, stop_rx).await;
+    })
 }
 
 #[cfg(test)]

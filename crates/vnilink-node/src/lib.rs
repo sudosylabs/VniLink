@@ -454,12 +454,6 @@ impl EventTransfer {
             vnilink_app::FfiEvent::InputFailed { id, message } => {
                 serde_json::json!({ "type": "inputFailed", "id": id.to_string(), "message": message })
             }
-            vnilink_app::FfiEvent::ClipboardReceived { id } => {
-                serde_json::json!({ "type": "clipboardReceived", "id": id.to_string() })
-            }
-            vnilink_app::FfiEvent::ClipboardFilesReceived { id } => {
-                serde_json::json!({ "type": "clipboardFilesReceived", "id": id.to_string() })
-            }
             vnilink_app::FfiEvent::DesktopClipboardReceived { service } => {
                 serde_json::json!({ "type": "desktopClipboardReceived", "service": Self::service(service) })
             }
@@ -567,7 +561,6 @@ enum Command {
         #[serde(rename = "endpointId")]
         endpoint_id: String,
     },
-    ClipboardOwnerSession,
     ControllerSessionPaths {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -685,9 +678,9 @@ enum Command {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
-    /// Desktop input, from `SubmitKey` to `ReleaseSessionInput` save
-    /// `SubmitClipboard`: decoded on a desktop's data channel only
-    /// (`data.rs`), naming the desktop's connection and generation.
+    /// Desktop input, from `SubmitKey` to `ReleaseSessionInput`: decoded on
+    /// a desktop's data channel only (`data.rs`), naming the desktop's
+    /// connection and generation.
     SubmitKey {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -733,12 +726,6 @@ enum Command {
         dy: i32,
     },
     SubmitText {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        text: String,
-    },
-    SubmitClipboard {
         #[serde(rename = "sessionId")]
         session_id: String,
         generation: String,
@@ -892,12 +879,6 @@ enum Command {
     SetSwapControlAndCommand {
         enabled: bool,
     },
-    SessionClipboardText {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    ClipboardText,
     StartHosting,
     StopHosting,
     StopHostedSession,
@@ -1015,9 +996,6 @@ enum Reply {
         /// `null` until the paired computer's link has delivered a report.
         report: Option<Vec<serde_json::Value>>,
     },
-    Text {
-        text: Option<String>,
-    },
     Check {
         check: String,
     },
@@ -1054,9 +1032,6 @@ enum Reply {
     },
     Hostname {
         hostname: Option<String>,
-    },
-    OwnerSession {
-        session: Option<vnilink_app::FfiSessionInfo>,
     },
     EventSubscription {
         #[serde(rename = "subscriptionId")]
@@ -1498,20 +1473,10 @@ impl EngineBridge {
 }
 
 impl EngineBridge {
-    /// A session's clipboard, the input defaults the controller's desktops
-    /// open with, and this computer's own files.
+    /// The input defaults the controller's desktops open with, and this
+    /// computer's own files.
     fn input(core: &VnilinkCore, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::SubmitClipboard {
-                session_id,
-                generation,
-                text,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_clipboard(id, gen, text.clone())
-                    .map_err(core_error)?;
-                Reply::Done
-            }
             Command::SetInputDefaults {
                 mode,
                 swap,
@@ -1626,18 +1591,6 @@ impl EngineBridge {
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::SessionClipboardText {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                Reply::Text {
-                    text: core.session_clipboard_text(id, gen).map_err(core_error)?,
-                }
-            }
-            Command::ClipboardText => Reply::Text {
-                text: core.clipboard_text().map_err(core_error)?,
-            },
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
         };
         Ok(reply)
@@ -1726,9 +1679,6 @@ impl EngineBridge {
                         rx_bytes: path.rx_bytes.to_string(),
                     })
                     .collect(),
-            },
-            Command::ClipboardOwnerSession => Reply::OwnerSession {
-                session: core.clipboard_owner_session().map_err(core_error)?,
             },
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
         };
@@ -2116,13 +2066,11 @@ impl EngineBridge {
             | Command::ControllerSession { .. }
             | Command::ForgetControllerSession { .. }
             | Command::SessionPaths { .. }
-            | Command::ControllerSessionPaths { .. }
-            | Command::ClipboardOwnerSession => {
+            | Command::ControllerSessionPaths { .. } => {
                 let core = &state.core;
                 Self::sessions(core, command)
             }
-            Command::SubmitClipboard { .. }
-            | Command::SetInputDefaults { .. }
+            Command::SetInputDefaults { .. }
             | Command::EnableFilesystemAccess
             | Command::SetTransferDirectory { .. }
             | Command::LocalPlaces
@@ -2136,9 +2084,7 @@ impl EngineBridge {
             | Command::KeyboardMode
             | Command::SetKeyboardMode { .. }
             | Command::SwapControlAndCommand
-            | Command::SetSwapControlAndCommand { .. }
-            | Command::SessionClipboardText { .. }
-            | Command::ClipboardText => {
+            | Command::SetSwapControlAndCommand { .. } => {
                 let core = &state.core;
                 Self::input(core, command)
             }
@@ -2316,11 +2262,7 @@ impl CommandShape {
             "snapshot" | "diagnosticSnapshot" | "disconnect" | "shutdown" => &["type"],
             "diagnosticRecorder" | "logFilter" | "engineLogTail" => &["type"],
             "setLogFilter" => &["type", "directives"],
-            "endpoint"
-            | "capabilities"
-            | "videoCodecs"
-            | "clipboardOwnerSession"
-            | "subscribeEvents" => &["type"],
+            "endpoint" | "capabilities" | "videoCodecs" | "subscribeEvents" => &["type"],
             "beginConnectServices" => &["type", "endpointId"],
             "setVideoCodecs" => &["type", "codecs"],
             "saveCustomRelays" => &["type", "relays"],
@@ -2349,7 +2291,7 @@ impl CommandShape {
             "submitWheel" | "submitMotion" | "submitPreciseWheel" => {
                 &["type", "sessionId", "generation", "dx", "dy"]
             }
-            "submitText" | "submitClipboard" => &["type", "sessionId", "generation", "text"],
+            "submitText" => &["type", "sessionId", "generation", "text"],
             "submitLocalKey" => &[
                 "type",
                 "sessionId",
@@ -2361,7 +2303,6 @@ impl CommandShape {
             ],
             "releaseSessionInput"
             | "sessionPointerSettings"
-            | "sessionClipboardText"
             | "sessionKeyboardMode"
             | "sessionSwapControlAndCommand" => &["type", "sessionId", "generation"],
             "reportNativePermissions" => &["type", "screen", "input", "camera", "microphone"],
@@ -2417,7 +2358,6 @@ impl CommandShape {
             | "enableNativeInput"
             | "keyboardMode"
             | "swapControlAndCommand"
-            | "clipboardText"
             | "startHosting"
             | "stopHosting"
             | "stopHostedSession"

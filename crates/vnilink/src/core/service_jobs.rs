@@ -1,7 +1,7 @@
 //! Files-owned jobs reuse the transfer engine, with an explicit peer owner.
 // trace: records every ignored failure
 use super::*;
-use crate::{job, JobSnapshot, JobState, ServiceKind, ServicePhase};
+use crate::{job, CloseCause, JobSnapshot, JobState, ServiceKind, ServicePhase};
 use serde::{Deserialize, Serialize};
 
 // Scoped submissions carry their Files owner separately from unowned jobs.
@@ -63,21 +63,89 @@ pub(super) fn job_session<'a>(
         &state.incoming
     };
     let live = |session: &&LiveSession| session.peer_key == *peer && !finished(&session.phase);
-    match owner {
-        Some(owner) => {
-            let records = if owner.hosted {
-                &state.hosted_services
-            } else {
-                &state.services
-            };
-            let record = records.get(&owner.id)?;
-            sessions.get(&record.info.connection_id).filter(live)
+    // A job rides the connection of the Files service that owns it.
+    let owner = owner?;
+    let records = if owner.hosted {
+        &state.hosted_services
+    } else {
+        &state.services
+    };
+    let record = records.get(&owner.id)?;
+    sessions.get(&record.info.connection_id).filter(live)
+}
+
+/// Why a job whose Files owner is gone stopped, as its owner's record
+/// tells: the window here closed, this computer or the other one shut
+/// down, the other computer ended its side or withdrew the permission, or
+/// the connection between them ended. `sender` is whether the job sends,
+/// to `peer`.
+pub(super) fn orphan_reason(
+    state: &State,
+    owner: Option<JobOwner>,
+    sender: bool,
+    peer: &[u8; 32],
+) -> &'static str {
+    use super::jobs::{
+        APP_CLOSED, CONNECTION_ENDED, OWNER_GONE, PERMISSION_OFF, RECEIVER_STOPPED,
+        SENDER_SHUT_DOWN, SENDER_STOPPED,
+    };
+    let Some(owner) = owner else {
+        return CONNECTION_ENDED;
+    };
+    if state.shut_down {
+        return APP_CLOSED;
+    }
+    let (records, sessions) = if owner.hosted {
+        (&state.hosted_services, &state.incoming)
+    } else {
+        (&state.services, &state.outgoing)
+    };
+    let ended = |sender| {
+        if sender {
+            RECEIVER_STOPPED
+        } else {
+            SENDER_STOPPED
         }
-        None => sessions
+    };
+    let Some(record) = records.get(&owner.id) else {
+        if !owner.hosted {
+            // A record forgotten since was closed here first.
+            return OWNER_GONE;
+        }
+        // A host releases a service's record as it ends: its own sharing,
+        // then what became of the link the service was on, says why. That
+        // link is the peer's of the owner's generation, not a newer one the
+        // peer dialed since.
+        if !state.trust.service_granted(peer, ServiceKind::Files) {
+            return PERMISSION_OFF;
+        }
+        let link = sessions
             .values()
-            .filter(live)
-            .filter(|session| !session.services_only)
-            .max_by_key(|session| session.id),
+            .find(|session| session.peer_key == *peer && session.generation == owner.generation);
+        return match link {
+            Some(link)
+                if link
+                    .link
+                    .as_ref()
+                    .is_some_and(crate::reconnect::peer_shut_down) =>
+            {
+                SENDER_SHUT_DOWN
+            }
+            Some(link) if link.connected() => ended(sender),
+            _ => CONNECTION_ENDED,
+        };
+    };
+    let peer_shut_down = sessions
+        .get(&record.info.connection_id)
+        .and_then(|session| session.link.as_ref())
+        .is_some_and(crate::reconnect::peer_shut_down);
+    match &record.info.phase {
+        ServicePhase::Closed(CloseCause::OwnerClose) => OWNER_GONE,
+        ServicePhase::Closed(CloseCause::Shutdown) => APP_CLOSED,
+        ServicePhase::Closed(CloseCause::Revoked) => PERMISSION_OFF,
+        _ if peer_shut_down => SENDER_SHUT_DOWN,
+        ServicePhase::Closed(CloseCause::PeerClose) => ended(sender),
+        _ => CONNECTION_ENDED,
     }
 }
 
@@ -92,8 +160,10 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
         let state = lock(&shared.state);
         jobs.values_mut()
             .filter_map(|r| {
+                // An interrupted job keeps the reason it was first given.
                 if r.owner.is_some()
                     && !r.state.is_terminal()
+                    && r.state != JobState::Interrupted
                     && check_owner(&state, r.owner).is_err()
                 {
                     // A download still being prepared has nothing to resume.
@@ -102,7 +172,8 @@ pub(super) fn interrupt_orphaned(shared: &Shared) {
                         r.error = Some("the transfer stopped before it was prepared".to_owned());
                     } else {
                         r.enter(JobState::Interrupted);
-                        r.error = Some(super::jobs::OWNER_GONE.to_owned());
+                        r.error =
+                            Some(orphan_reason(&state, r.owner, r.sender, &r.peer_key).to_owned());
                     }
                     r.waiting_file = None;
                     Some(r.id)
@@ -161,15 +232,7 @@ impl Core {
     ) -> Result<u64, Error> {
         let _engine = self.engine();
         let (owner, peer) = self.files_job_owner(id, generation)?;
-        self.submit_upload(
-            &peer,
-            src_root,
-            src_folder,
-            names,
-            dst_root,
-            dst_rel,
-            Some(owner),
-        )
+        self.submit_upload(&peer, src_root, src_folder, names, dst_root, dst_rel, owner)
     }
     /// Copies the other computer's entries `names` of `src_folder` to
     /// `dst_rel` here as one job.
@@ -186,15 +249,7 @@ impl Core {
     ) -> Result<u64, Error> {
         let _engine = self.engine();
         let (owner, peer) = self.files_job_owner(id, generation)?;
-        self.submit_download(
-            &peer,
-            src_root,
-            src_folder,
-            names,
-            dst_root,
-            dst_rel,
-            Some(owner),
-        )
+        self.submit_download(&peer, src_root, src_folder, names, dst_root, dst_rel, owner)
     }
     pub fn files_service_jobs(&self, id: u64, generation: u64) -> Result<Vec<JobSnapshot>, Error> {
         let _engine = self.engine();
@@ -321,14 +376,11 @@ impl Core {
     }
     pub(super) fn service_job_round_trip(
         &self,
-        owner: Option<JobOwner>,
+        owner: JobOwner,
         peer: &[u8; 32],
         tag: u8,
         payload: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        let Some(owner) = owner else {
-            return self.job_round_trip_side(peer, true, None, tag, payload);
-        };
         check_owner(&lock(&self.shared.state), Some(owner))?;
         let mut body = vec![1];
         body.extend_from_slice(&owner.id.to_be_bytes());
@@ -476,7 +528,7 @@ impl Core {
             generation,
             job_id: wire_id,
         })?;
-        let bytes = self.service_job_round_trip(Some(owner), &peer, TAG_ADOPT, &payload)?;
+        let bytes = self.service_job_round_trip(owner, &peer, TAG_ADOPT, &payload)?;
         let reply: job::JobReply = job::decode(&bytes)?;
         if reply.v != job::JOB_VERSION || reply.id != 0 || reply.job_id != wire_id {
             return Err(Error::Malformed);

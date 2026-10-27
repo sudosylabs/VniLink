@@ -182,13 +182,9 @@ pub(super) async fn host_command_loop(
             return false;
         }
     }
-    // A presence link tells the peer what this computer allows, now and
-    // whenever that changes. Policy and backend setters publish no event,
-    // so the report is re-evaluated on a short interval and sent on change.
-    let link = lock(&shared.state)
-        .incoming
-        .get(&session_id)
-        .is_some_and(|session| session.services_only);
+    // A link tells the peer what this computer allows, now and whenever
+    // that changes. Policy and backend setters publish no event, so the
+    // report is re-evaluated on a short interval and sent on change.
     let mut reported = Vec::new();
     let mut availability_tick = tokio::time::interval(AVAILABILITY_INTERVAL);
     availability_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -203,7 +199,7 @@ pub(super) async fn host_command_loop(
                     break true;
                 }
             }
-            _ = availability_tick.tick(), if link => {
+            _ = availability_tick.tick() => {
                 let report = super::availability::remote_report(shared, peer.as_bytes());
                 if report != reported {
                     if let Err(error) =

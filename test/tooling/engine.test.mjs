@@ -38,7 +38,7 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'endpoint', extra: true }), false);
 	assert.equal(isEngineCommand({ type: 'capabilities' }), true);
 	assert.equal(isEngineCommand({ type: 'videoCodecs' }), true);
-	assert.equal(isEngineCommand({ type: 'clipboardOwnerSession' }), true);
+	assert.equal(isEngineCommand({ type: 'clipboardOwnerSession' }), false, 'no session owns the clipboard');
 	assert.equal(isEngineCommand({ type: 'subscribeEvents' }), true);
 	for (const type of ['subscribeVideo', 'subscribeSessionVideo', 'pollVideo', 'releaseVideo', 'publishVideo']) {
 		assert.equal(isEngineCommand({ type }), false, `${type}: pictures go on a desktop's data channel`);
@@ -67,7 +67,7 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineReply({ type: 'videoCodecs', codecs }), true);
 	assert.equal(isEngineReply({ type: 'hostname', hostname: null }), true);
 	assert.equal(isEngineReply({ type: 'hostname', hostname: 'peer' }), true);
-	assert.equal(isEngineReply({ type: 'ownerSession', session: null }), true);
+	assert.equal(isEngineReply({ type: 'ownerSession', session: null }), false, 'no reply names a clipboard owner');
 	assert.equal(isEngineReply({ type: 'eventSubscription', subscriptionId: '3' }), true);
 	assert.equal(isEngineReply({ type: 'events', events: [], lagged: '0' }), true);
 	assert.equal(isEngineReply({ type: 'events', events: [{ type: 'hostingChanged', hosting: true }], lagged: '0' }), true);

@@ -1,6 +1,6 @@
 pub(crate) mod filesystem_location;
 use crate::{new_quality, FfiKeyboardMode, VnilinkCore};
-use crate::{FfiError, FfiEvent, FfiVideoCodecCaps};
+use crate::{FfiError, FfiEvent, FfiServiceKind, FfiVideoCodecCaps};
 use filesystem_location::FilesystemLocation;
 
 fn full_codecs() -> FfiVideoCodecCaps {
@@ -93,13 +93,13 @@ fn unpaired_peers_fail_before_dialing() {
     let core = open_core();
     let other = open_core();
     assert!(matches!(
-        core.connect_files(other.endpoint_id()),
+        core.begin_connect_services(other.endpoint_id()),
         Err(FfiError::NotPaired)
     ));
     assert!(matches!(core.disconnect(), Err(FfiError::NoSession)));
     core.set_desktop_sharing(true, true, false, false).unwrap();
     assert!(matches!(
-        core.connect_files(other.endpoint_id()),
+        core.begin_connect_services(other.endpoint_id()),
         Err(FfiError::NotPaired)
     ));
     assert!(matches!(
@@ -113,13 +113,13 @@ fn unpaired_peers_fail_before_dialing() {
 }
 
 #[test]
-fn commands_clipboard_and_transfer_fail_without_a_session() {
+fn services_and_transfers_fail_without_a_connection() {
     let core = open_core();
-    assert!(core.submit_clipboard(1, 1, "hi".to_string()).is_err());
-    assert!(core.clipboard_text().unwrap().is_none());
-    assert!(core.fs_list(1, 1, 0, "".to_string(), 0, 20).is_err());
     assert!(core
-        .job_submit_upload("bogus".to_string(), 0, "a.txt".into(), 0, "a.txt".into())
+        .attach_controller_service(1, 1, FfiServiceKind::Files)
+        .is_err());
+    assert!(core
+        .files_service_upload(1, 1, 0, "".into(), vec!["a.txt".into()], 0, "a.txt".into())
         .is_err());
     assert!(core.session_paths(1).is_err());
 }
@@ -438,15 +438,10 @@ fn whole_filesystem_and_local_operations_cross_the_ffi() {
     .unwrap();
     assert!(!dir.join("root/previous.txt").exists());
 
-    // A no-session job submit maps cleanly; FFI stays usable afterwards.
-    // Pair first so the failure is the missing session, not pairing.
-    let peer = open_core();
-    let token = core.create_invitation(60).unwrap();
-    peer.accept_invitation(token).unwrap();
-    let back = peer.create_invitation(60).unwrap();
-    core.accept_invitation(back).unwrap();
+    // A job submitted on no Files service maps cleanly; FFI stays usable
+    // afterwards.
     assert!(matches!(
-        core.job_submit_upload(peer.endpoint_id(), 0, "".into(), 0, "x".into()),
+        core.files_service_upload(7, 1, 0, "".into(), vec!["x".into()], 0, "x".into()),
         Err(FfiError::NoSession)
     ));
     assert!(core.job_list().unwrap().is_empty());

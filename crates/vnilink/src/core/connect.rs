@@ -3,7 +3,6 @@
 
 use super::*;
 
-use super::clipboard::open_controller_clipboard;
 use super::link::{remember_peer_addresses, write_addresses};
 use super::transfer::close_peer_files;
 use super::wire::{read_frame_within, read_session_frame, write_frame};
@@ -18,12 +17,6 @@ use crate::protocol::{ControlMessage, SessionStamp, ALPN};
 use crate::reconnect::{self, LinkEnd};
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::Device;
-
-/// Live controller-side connections, across all peers. Mirrors the host's
-/// `MAX_LIVE_INCOMING`: each outgoing session owns dial tasks, reconnect
-/// state and per-peer channels, so fan-out is bounded and the fifth peer
-/// gets a structured `Busy` instead of silent degradation.
-const MAX_LIVE_OUTGOING: usize = 4;
 
 /// Dropping a cancelled establish future must stop its side-stream workers.
 #[derive(Default)]
@@ -122,75 +115,16 @@ impl Core {
         Ok(())
     }
 
-    /// Establishes a control session for listings, changes and transfers
-    /// on the shared disk only. Admission on the host needs Files sharing,
-    /// and file operations check it again per request. Waits for the host's answer
-    /// and fails `Busy` while another files-only session is live.
-    pub fn connect_files(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
-        let _engine = self.engine();
-        let (pending, ready, stop) = self.start_controller(endpoint_id, false, true)?;
-        match ready.recv_timeout(CONNECT_WAIT) {
-            Ok(result) => result,
-            Err(_) => {
-                crate::ignored!(
-                    crate::trace::SESSION,
-                    "work that already ended needs no stop",
-                    stop.send(true)
-                );
-                crate::ignored!(
-                    crate::trace::SESSION,
-                    "a session already gone needs no disconnect",
-                    self.disconnect_session(pending.id)
-                );
-                Err(Error::Timeout)
-            }
-        }
-    }
-
-    /// Starts a files-only session without waiting for the host's answer.
-    /// The returned local id remains stable across reconnects. Observe its
-    /// phase through controller_session/controller_sessions or
-    /// SessionChanged events.
-    pub fn begin_connect_files(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
-        let _engine = self.engine();
-        self.start_controller(endpoint_id, false, false)
-            .map(|(info, _, _)| info)
-    }
-
     /// Starts a paired, feature-neutral connection. No approval of desktop,
     /// file transfer, camera or terminal is implied by connection admission.
     /// Reuses this peer's live neutral connection, including pending admission
     /// and reconnect. This does not open or replace any service owner.
     pub fn begin_connect_services(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
         let _engine = self.engine();
-        let info = self
-            .start_controller(endpoint_id, true, false)
-            .map(|(info, _, _)| info)?;
+        let info = start_outgoing(&self.shared, self.runtime.handle(), endpoint_id)?;
         // A link waiting out its backoff dials now.
         super::presence::wake_link(&self.shared, &parse_endpoint_id(endpoint_id)?);
         Ok(info)
-    }
-
-    fn start_controller(
-        &self,
-        endpoint_id: &str,
-        services_only: bool,
-        exclusive: bool,
-    ) -> Result<
-        (
-            SessionInfo,
-            std::sync::mpsc::Receiver<Result<SessionInfo, Error>>,
-            tokio::sync::watch::Sender<bool>,
-        ),
-        Error,
-    > {
-        start_outgoing(
-            &self.shared,
-            self.runtime.handle(),
-            endpoint_id,
-            services_only,
-            exclusive,
-        )
     }
 
     pub fn controller_sessions(&self) -> Result<Vec<SessionInfo>, Error> {
@@ -254,19 +188,6 @@ impl Core {
         self.disconnect_session(id)
     }
 
-    pub(super) fn controller_state(
-        &self,
-        id: u64,
-        generation: u64,
-    ) -> Result<Arc<ControllerState>, Error> {
-        let state = self.alive_state()?;
-        let session = live_session(&state, false, id)?;
-        if session.generation != generation {
-            return Err(Error::StaleSession);
-        }
-        session.controller.clone().ok_or(Error::NoSession)
-    }
-
     /// Closes controller session `id`'s connection as a network would,
     /// for tests of what a dropped link does.
     #[cfg(any(test, feature = "test-probes"))]
@@ -305,101 +226,55 @@ impl Core {
     }
 }
 
-/// Reserves and starts one outgoing session: a presence link when
-/// `services_only`, otherwise a files-only session, which `exclusive`
-/// refuses while another files-only session is live.
+/// Reserves and starts the presence link to one peer, or returns the live
+/// one it already has: one link per peer, bounded by the paired devices.
 pub(super) fn start_outgoing(
     shared: &Arc<Shared>,
     runtime: &tokio::runtime::Handle,
     endpoint_id: &str,
-    services_only: bool,
-    exclusive: bool,
-) -> Result<
-    (
-        SessionInfo,
-        std::sync::mpsc::Receiver<Result<SessionInfo, Error>>,
-        tokio::sync::watch::Sender<bool>,
-    ),
-    Error,
-> {
+) -> Result<SessionInfo, Error> {
     let key = parse_endpoint_id(endpoint_id)?;
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     // Gate and reserve in one critical section: concurrent connects cannot
-    // overwrite each other or open two control sessions to the same peer.
-    let (pending, peer_key) =
+    // overwrite each other or open two links to the same peer.
+    let (pending, peer_key) = {
+        let mut state = lock(&shared.state);
+        if state.shut_down {
+            return Err(Error::ShutDown);
+        }
+        let device = state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
+        if let Some(existing) = state
+            .outgoing
+            .values()
+            .find(|s| s.peer_key == key && !finished(&s.phase))
         {
-            let mut state = lock(&shared.state);
-            if state.shut_down {
-                return Err(Error::ShutDown);
-            }
-            let device = state.trust.get(&key).cloned().ok_or(Error::NotPaired)?;
-            // A neutral link and a files-only session to the same peer
-            // coexist; each kind has at most one live record per peer.
-            if let Some(existing) = state.outgoing.values().find(|s| {
-                s.peer_key == key && !finished(&s.phase) && s.services_only == services_only
-            }) {
-                if services_only && existing.phase != SessionPhase::Stopping {
-                    let info = session_info(existing);
-                    let (ready, result) = std::sync::mpsc::sync_channel(1);
-                    crate::ignored!(
-                        crate::trace::SESSION,
-                        "the caller stopped waiting for its answer",
-                        ready.send(Ok(info.clone()))
-                    );
-                    return Ok((info, result, existing.stop.clone()));
-                }
+            if existing.phase == SessionPhase::Stopping {
                 return Err(Error::Busy);
             }
-            if exclusive
-                && state
-                    .outgoing
-                    .values()
-                    .any(|s| !finished(&s.phase) && !s.services_only)
-            {
-                return Err(Error::Busy);
-            }
-            // Links are bounded by the paired devices; other sessions by the live cap.
-            let live = |links: bool| {
-                state
-                    .outgoing
-                    .values()
-                    .filter(|s| !finished(&s.phase) && s.services_only == links)
-                    .count()
-            };
-            if live(services_only)
-                >= if services_only {
-                    crate::trust::MAX_DEVICES
-                } else {
-                    MAX_LIVE_OUTGOING
-                }
-            {
-                return Err(Error::Busy);
-            }
-            let id = state.next_session_id;
-            state.next_session_id = id.checked_add(1).ok_or(Error::Busy)?;
-            let session = LiveSession {
-                id,
-                generation: 0,
-                wire_stamp: SessionStamp::new(0, 0),
-                controller: Some(Arc::new(ControllerState::new())),
-                role: SessionRole::Controller,
-                phase: SessionPhase::Connecting,
-                peer_id: device.display_id.clone(),
-                peer_key: key,
-                services_only,
-                peer_topology: Vec::new(),
-                stop: stop.clone(),
-                link: None,
-                clipboard: None,
-                clipboard_files: None,
-                published_files: None,
-                published_rev: std::sync::atomic::AtomicU64::new(0),
-                remote_availability: None,
-            };
-            let info = session_info(&session);
-            state.outgoing.insert(id, session);
-            (info, key)
+            return Ok(session_info(existing));
+        }
+        if state.live_outgoing_count() >= crate::trust::MAX_DEVICES {
+            return Err(Error::Busy);
+        }
+        let id = state.next_session_id;
+        state.next_session_id = id.checked_add(1).ok_or(Error::Busy)?;
+        let session = LiveSession {
+            id,
+            generation: 0,
+            wire_stamp: SessionStamp::new(0, 0),
+            role: SessionRole::Controller,
+            phase: SessionPhase::Connecting,
+            peer_id: device.display_id.clone(),
+            peer_key: key,
+            peer_topology: Vec::new(),
+            stop: stop.clone(),
+            link: None,
+            remote_availability: None,
         };
+        let info = session_info(&session);
+        state.outgoing.insert(id, session);
+        (info, key)
+    };
     shared.events.publish(CoreEvent::SessionChanged {
         id: pending.id,
         generation: 0,
@@ -407,13 +282,12 @@ pub(super) fn start_outgoing(
         phase: SessionPhase::Connecting,
         peer_id: pending.peer_id.clone(),
     });
-    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let shared = Arc::clone(shared);
     let id = pending.id;
     runtime.spawn(async move {
-        run_controller(shared, id, peer_key, stop_rx, ready_tx, services_only).await;
+        run_controller(shared, id, peer_key, stop_rx).await;
     });
-    Ok((pending, ready_rx, stop))
+    Ok(pending)
 }
 
 pub(super) async fn run_controller(
@@ -421,21 +295,14 @@ pub(super) async fn run_controller(
     local_id: u64,
     peer_key: [u8; 32],
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
-    ready_tx: std::sync::mpsc::SyncSender<Result<SessionInfo, Error>>,
-    services_only: bool,
 ) {
-    let mut ready = Some(ready_tx);
+    // Until the host first admits the link a refusal is final; after, a
+    // dropped link dials again.
+    let mut admitted = false;
     let mut drops = 0u32;
     loop {
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             finish_outgoing(&shared, local_id);
-            if let Some(ready) = ready.take() {
-                crate::ignored!(
-                    crate::trace::SESSION,
-                    "the caller stopped waiting for its answer",
-                    ready.send(Err(Error::NoSession))
-                );
-            }
             return;
         }
         if drops > 0 {
@@ -453,30 +320,16 @@ pub(super) async fn run_controller(
             Ok(device) => device,
             Err(error) => {
                 fail_outgoing(&shared, local_id, &error);
-                if let Some(ready) = ready.take() {
-                    crate::ignored!(
-                        crate::trace::SESSION,
-                        "the caller stopped waiting for its answer",
-                        ready.send(Err(error))
-                    );
-                }
                 return;
             }
         };
         let mut dial_stop = stop_rx.clone();
         let attempt = tokio::select! {
-            result = establish(&shared, local_id, device, &mut dial_stop, &mut ready, services_only) => result,
+            result = establish(&shared, local_id, device, &mut dial_stop, &mut admitted) => result,
             _ = stop_rx.changed() => Err(Error::NoSession),
         };
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             finish_outgoing(&shared, local_id);
-            if let Some(ready) = ready.take() {
-                crate::ignored!(
-                    crate::trace::SESSION,
-                    "the caller stopped waiting for its answer",
-                    ready.send(Err(Error::NoSession))
-                );
-            }
             return;
         }
         match attempt {
@@ -495,7 +348,7 @@ pub(super) async fn run_controller(
                 finish_outgoing(&shared, local_id);
                 return;
             }
-            Err(error) if ready.is_none() && reconnect::retries(&error) => {
+            Err(error) if admitted && reconnect::retries(&error) => {
                 drops += 1;
                 if drops > reconnect::ATTEMPTS {
                     fail_outgoing(&shared, local_id, &error);
@@ -504,13 +357,6 @@ pub(super) async fn run_controller(
             }
             Err(error) => {
                 fail_outgoing(&shared, local_id, &error);
-                if let Some(ready) = ready.take() {
-                    crate::ignored!(
-                        crate::trace::SESSION,
-                        "the caller stopped waiting for its answer",
-                        ready.send(Err(error))
-                    );
-                }
                 return;
             }
         }
@@ -522,8 +368,7 @@ pub(super) async fn establish(
     local_id: u64,
     device: Device,
     stop_rx: &mut tokio::sync::watch::Receiver<bool>,
-    ready: &mut Option<std::sync::mpsc::SyncSender<Result<SessionInfo, Error>>>,
-    services_only: bool,
+    admitted: &mut bool,
 ) -> Result<(bool, LinkEnd), Error> {
     let mut tasks = ControllerTasks::default();
     let addr = device_addr(&device)?;
@@ -538,14 +383,15 @@ pub(super) async fn establish(
             let mut state = lock(&shared.state);
             let session = state.outgoing.get_mut(&local_id).ok_or(Error::NoSession)?;
             if *stop_rx.borrow() || matches!(session.phase, SessionPhase::Stopping) {
-                connection.close(0u8.into(), b"cancelled");
+                close_link(&connection, state.shut_down, 0, b"cancelled");
                 return Err(Error::NoSession);
             }
+            let session = state.outgoing.get_mut(&local_id).ok_or(Error::NoSession)?;
             session.link = Some(connection.clone());
         }
         let (mut send, mut recv) = connection.open_bi().await.map_err(Error::network_debug)?;
-        // A session asks for no picture: the desktop fields of the Hello,
-        // which a Desktop service's own stream fills, stay at their defaults.
+        // A link asks for no picture: the desktop fields of the Hello, which
+        // a Desktop service's own stream fills, stay at their defaults.
         write_frame(
             &mut send,
             &ControlMessage::Hello {
@@ -553,8 +399,6 @@ pub(super) async fn establish(
                 codec: 0,
                 quality: crate::session::controller_offer(),
                 decode: false,
-                files_only: true,
-                services_only,
                 separate_cursor: false,
                 bt601: 0,
                 hostname: shared.local_hostname(),
@@ -593,10 +437,6 @@ pub(super) async fn establish(
                         if *stop_rx.borrow() || matches!(session.phase, SessionPhase::Stopping) {
                             return Err(Error::NoSession);
                         }
-                        if session.generation > 0 {
-                            session.controller.as_ref().ok_or(Error::NoSession)?;
-                            session.controller = Some(Arc::new(ControllerState::new()));
-                        }
                         session.wire_stamp = stamp;
                         session.generation =
                             session.generation.saturating_add(1).max(stamp.generation);
@@ -627,21 +467,8 @@ pub(super) async fn establish(
     if write_addresses(shared, &mut send).await.is_err() {
         return Err(Error::network("the address announcement was not written"));
     }
-    let clipboard = if services_only {
-        None
-    } else {
-        Some(
-            match open_controller_clipboard(shared, &connection, info.id, stop_rx).await {
-                Ok(clipboard) => clipboard,
-                Err(error) => return Err(error),
-            },
-        )
-    };
-    if let Some(task) = &clipboard {
-        tasks.0.push(task.abort_handle());
-    }
-    // A reconnect must not expose Active with senders from the previous
-    // connection. Both side streams are usable before the UI can act on it.
+    // A reconnect must not expose Active with work from the previous
+    // connection.
     {
         let mut state = lock(&shared.state);
         let stopped = state.shut_down || *stop_rx.borrow();
@@ -651,15 +478,9 @@ pub(super) async fn establish(
                 && !matches!(s.phase, SessionPhase::Stopping)
                 && !finished(&s.phase)
         }) else {
-            if let Some(task) = &clipboard {
-                task.abort();
-            }
             return Err(Error::NoSession);
         };
         if stopped {
-            if let Some(task) = &clipboard {
-                task.abort();
-            }
             return Err(Error::NoSession);
         }
         session.enter(SessionPhase::Active);
@@ -672,13 +493,7 @@ pub(super) async fn establish(
         SessionRole::Controller,
         &info.peer_id,
     );
-    if let Some(ready) = ready.take() {
-        crate::ignored!(
-            crate::trace::SESSION,
-            "the caller stopped waiting for its answer",
-            ready.send(Ok(info.clone()))
-        );
-    }
+    *admitted = true;
     // Host-initiated job streams (status queries for host senders) are
     // accepted here; the controller never accepts anything else.
     let aux_stop = stop_rx.clone();
@@ -706,9 +521,6 @@ pub(super) async fn establish(
     )
     .await;
     aux.abort();
-    if let Some(task) = &clipboard {
-        task.abort();
-    }
     Ok((started.elapsed() > reconnect::PAUSE, end))
 }
 
@@ -776,7 +588,7 @@ pub(super) async fn command_loop(
                     Some(Ok(ControlMessage::Availability { entries })) => {
                         let peer_id = {
                             let mut state = lock(&shared.state);
-                            state.outgoing.get_mut(&local_id).filter(|s| s.services_only).map(|session| {
+                            state.outgoing.get_mut(&local_id).map(|session| {
                                 session.remote_availability = Some(entries);
                                 session.peer_id.clone()
                             })
@@ -821,7 +633,7 @@ pub(super) async fn command_loop(
         }
     }
     let remote_close = remote_close || reconnect::peer_shut_down(&connection);
-    connection.close(1u8.into(), b"closed");
+    close_link(&connection, lock(&shared.state).shut_down, 1, b"closed");
     if *stop_rx.borrow() {
         LinkEnd::LocalStop
     } else if remote_close {
@@ -842,9 +654,9 @@ pub(super) fn finish_outgoing(shared: &Shared, local_id: u64) {
     let info = session_info(session);
     let peer_key = session.peer_key;
     if let Some(link) = session.link.take() {
-        link.close(0u8.into(), b"controller stopped");
+        close_link(&link, state.shut_down, 0, b"controller stopped");
     }
-    session.clipboard = None;
+    let session = state.outgoing.get_mut(&local_id).expect("checked");
     session.enter(SessionPhase::Closed);
     drop(state);
     settle_outgoing(shared, &info, SessionPhase::Closed, &peer_key);
@@ -857,11 +669,10 @@ pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
     };
     let info = session_info(session);
     let peer_key = session.peer_key;
-    let link_session = session.services_only;
     if let Some(link) = session.link.take() {
-        link.close(0u8.into(), b"controller failed");
+        close_link(&link, state.shut_down, 0, b"controller failed");
     }
-    session.clipboard = None;
+    let session = state.outgoing.get_mut(&local_id).expect("checked");
     tracing::info!(
         target: crate::trace::SESSION,
         session = local_id,
@@ -870,12 +681,10 @@ pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
         "session failed"
     );
     session.enter(SessionPhase::Failed(error.to_string()));
-    if link_session {
-        if matches!(error, Error::NotHosting) {
-            state.link_refused.insert(peer_key);
-        } else {
-            state.link_refused.remove(&peer_key);
-        }
+    if matches!(error, Error::NotHosting) {
+        state.link_refused.insert(peer_key);
+    } else {
+        state.link_refused.remove(&peer_key);
     }
     drop(state);
     settle_outgoing(
@@ -894,7 +703,6 @@ pub(super) fn mark_reconnecting(shared: &Shared, local_id: u64) {
     if finished(&session.phase) || matches!(session.phase, SessionPhase::Stopping) {
         return;
     }
-    session.clipboard = None;
     session.link = None;
     session.enter(SessionPhase::Reconnecting);
     let info = session_info(session);
@@ -903,23 +711,13 @@ pub(super) fn mark_reconnecting(shared: &Shared, local_id: u64) {
     settle_outgoing(shared, &info, SessionPhase::Reconnecting, &peer_key);
 }
 
-/// Clears the clipboard inbox and emits the terminal phase. The guards and
-/// the phase assignment stay with each caller: only a finished session
-/// closes, while a failure records even over one.
+/// Ends the session's services and emits the phase. The guards and the
+/// phase assignment stay with each caller: only a finished session closes,
+/// while a failure records even over one.
 fn settle_outgoing(shared: &Shared, info: &SessionInfo, phase: SessionPhase, peer_key: &[u8; 32]) {
     {
         let mut state = lock(&shared.state);
         super::services::synchronize(&mut state, &shared.events);
-    }
-    let owner = {
-        let state = lock(&shared.state);
-        state
-            .outgoing
-            .get(&info.id)
-            .and_then(|s| s.controller.clone().map(|c| (s.peer_key, c)))
-    };
-    if let Some((_, controller)) = owner {
-        *lock(&controller.clipboard) = None;
     }
     // A session that is redialing leaves its jobs to retry until it is
     // back, or until their retries run out; one that ended stops them.

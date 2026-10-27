@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use vnilink::{Core, Grants, JobState, MemoryStore, RelaySettings};
+use vnilink::{
+    Core, Grants, JobState, MemoryStore, RelaySettings, RemoteFilesService, ServiceInfo,
+    ServiceKind, SessionPhase,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -57,10 +60,19 @@ fn run(files: usize, size: usize) {
     // upload names folders inside this run's scratch folder.
     let (src_root, src_rel) = place(&controller, &source);
     let (dst_root, dst_rel) = place(&host, &scratch.0.join("host/root"));
-    let _session = controller.connect_files(&host.endpoint_id()).unwrap();
+    let (service, _pipe) = open_files(&controller, &host);
+    let (src_folder, name) = src_rel.rsplit_once('/').expect("the set in its folder");
     let started = Instant::now();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), src_root, &src_rel, dst_root, &dst_rel)
+        .files_service_upload(
+            service.id,
+            service.generation,
+            src_root,
+            src_folder,
+            &[name.to_owned()],
+            dst_root,
+            &dst_rel,
+        )
         .unwrap();
     let accepted = started.elapsed();
     loop {
@@ -97,6 +109,34 @@ fn start(dir: &Path) -> Arc<Core> {
     Arc::new(core)
 }
 
+/// The controller's Files on `host`, as the Files tab reaches a computer:
+/// a services connection and a Files service on it. The pipe keeps the
+/// service, and so its job, alive until the upload is done.
+fn open_files(controller: &Core, host: &Core) -> (ServiceInfo, RemoteFilesService) {
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let connection = loop {
+        let session = controller.controller_session(pending.id).unwrap();
+        if session.phase == SessionPhase::Active {
+            break session;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the connection did not become active: {session:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let owner = controller
+        .attach_controller_service(connection.id, connection.generation, ServiceKind::Files)
+        .unwrap();
+    let pipe = controller
+        .open_files_service(owner.id, owner.generation)
+        .unwrap();
+    (owner, pipe)
+}
+
 /// `path` as `core` names it on its shared disk: a root and the path below.
 fn place(core: &Core, path: &Path) -> (u64, String) {
     let (root, folder, name) = core
@@ -119,7 +159,7 @@ fn pair(host: &Core, controller: &Core) {
         .create_invitation(Duration::from_secs(60))
         .unwrap();
     host.accept_invitation(&back).unwrap();
-    // A files-only session opens, and files move, under transfer.
+    // A Files service opens, and files move, under transfer.
     host.set_desktop_sharing(Grants {
         view: true,
         control: true,

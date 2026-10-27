@@ -15,7 +15,7 @@ impl PowerKind {
     }
     pub(crate) const ALL: [Self; 2] = [Self::Display, Self::System];
 }
-/// Opt-in installation policy. Files-only connections, detached shells,
+/// Opt-in installation policy. Connections carrying only Files, detached shells,
 /// keepalives and ordinary frame traffic do not acquire these assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

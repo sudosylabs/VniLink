@@ -248,8 +248,8 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
     controller
         .set_desktop_sharing(false, false, false, true)
         .unwrap();
-    // Keys go on a Desktop service, by the same path as the Mac native
-    // key adapter's; clipboard and files on the session.
+    // Keys and the clipboard go on a Desktop service, by the same path as
+    // the Mac native adapters'; files on a Files service beside it.
     let (keys, desktop) = neutral_desktop(&host, &controller);
     for (usage, down, text) in [
         (227, true, ""),
@@ -278,51 +278,40 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    drop(desktop);
-    controller.disconnect_session(keys.id).unwrap();
-    let session = controller.connect_files(host.endpoint_id()).unwrap();
-    controller
-        .submit_clipboard(
-            session.id,
-            session.generation,
-            "clipboard fixture 📝".into(),
-        )
+    desktop
+        .submit_clipboard("clipboard fixture 📝".into())
         .unwrap();
     assert_eq!(
         *pasteboard.lock().unwrap(),
         Some("clipboard fixture 📝".into())
     );
-    let incoming = host.snapshot().unwrap().incoming.unwrap();
-    host.publish_clipboard(incoming.id, "return fixture".into())
+    drop(desktop);
+    let files = controller
+        .attach_controller_service(keys.id, keys.generation, FfiServiceKind::Files)
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while controller.clipboard_text().unwrap().as_deref() != Some("return fixture") {
-        assert!(
-            Instant::now() < deadline,
-            "host clipboard publication was not received"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert_eq!(
-        controller.clipboard_text().unwrap(),
-        Some("return fixture".into())
-    );
+    let _pipe = controller
+        .open_files_service(files.id, files.generation)
+        .unwrap();
     std::fs::write(controller_dir.join("sent.bin"), [0, 255, 10]).unwrap();
     std::fs::write(host_dir.join("returned.bin"), [4, 2]).unwrap();
     let up = controller
-        .job_submit_upload(
-            host.endpoint_id(),
+        .files_service_upload(
+            files.id,
+            files.generation,
             controller_files.root,
-            controller_files.path("sent.bin"),
+            controller_files.path(""),
+            vec!["sent.bin".to_owned()],
             host_files.root,
             host_files.path(""),
         )
         .unwrap();
     let down = controller
-        .job_submit_download(
-            host.endpoint_id(),
+        .files_service_download(
+            files.id,
+            files.generation,
             host_files.root,
-            host_files.path("returned.bin"),
+            host_files.path(""),
+            vec!["returned.bin".to_owned()],
             controller_files.root,
             controller_files.path(""),
         )
@@ -372,15 +361,22 @@ fn native_clipboard_and_file_delivery_still_require_their_own_grants() {
     host.install_clipboard(Box::new(Pasteboard(pasteboard.clone())))
         .unwrap();
     pair(&host, &controller, false, false);
-    // A files-only session is admitted on the Transfer grant alone.
-    assert_eq!(
-        controller.connect_files(host.endpoint_id()),
-        Err(FfiError::Unauthorized)
-    );
+    let (connection, desktop) = neutral_desktop(&host, &controller);
+    // Files opens on the Transfer grant alone.
+    let files = controller
+        .attach_controller_service(connection.id, connection.generation, FfiServiceKind::Files)
+        .unwrap();
+    assert!(matches!(
+        controller.open_files_service(files.id, files.generation),
+        Err(FfiError::TransferDenied)
+    ));
     host.set_desktop_sharing(true, true, false, true).unwrap();
-    let session = controller.connect_files(host.endpoint_id()).unwrap();
+    controller
+        .open_files_service(files.id, files.generation)
+        .unwrap();
+    // Files sharing grants no clipboard.
     assert_eq!(
-        controller.submit_clipboard(session.id, session.generation, "denied".into()),
+        desktop.submit_clipboard("denied".into()),
         Err(FfiError::ClipboardDenied)
     );
     assert_eq!(*pasteboard.lock().unwrap(), None);
@@ -426,7 +422,7 @@ fn service_jobs_cross_the_ffi_boundary() {
     controller
         .set_desktop_sharing(false, false, false, true)
         .unwrap();
-    let session = controller.connect_files(host.endpoint_id()).unwrap();
+    let session = services_connection(&host, &controller);
     let owner = controller
         .attach_controller_service(session.id, session.generation, FfiServiceKind::Files)
         .unwrap();
@@ -542,20 +538,12 @@ fn service_permissions_cross_ffi_without_enabling_missing_backends() {
     // Legacy native authorization only changes its three legacy fields.
     host.set_desktop_sharing(true, true, false, true).unwrap();
     assert!(host.service_permissions(id.clone()).unwrap().terminal);
-    // A files-only session carries files and nothing else.
-    let session = controller.connect_files(host.endpoint_id()).unwrap();
+    // The host offers no terminal or camera it has no backend for.
+    let session = services_connection(&host, &controller);
     let support = controller
         .remote_service_support(session.id, session.generation)
         .unwrap();
     assert!(!support.terminal && !support.camera);
-    assert!(matches!(
-        controller.attach_controller_service(
-            session.id,
-            session.generation,
-            FfiServiceKind::Terminal
-        ),
-        Err(FfiError::Unsupported { .. })
-    ));
     host.unpair(id.clone()).unwrap();
     assert!(matches!(
         host.service_permissions(id),
@@ -1552,44 +1540,6 @@ fn system_actions_cross_ffi_with_policy_refusal_and_no_side_effects() {
     let privacy = host.system_privacy().unwrap();
     assert!(!privacy.display_private && !privacy.input_blocked);
     assert_eq!(privacy.holder_connection, None);
-}
-
-#[test]
-fn clipboard_files_cross_the_ffi_boundary() {
-    let host = core();
-    let controller = core();
-    pair(&host, &controller, true, true);
-    controller
-        .set_desktop_sharing(true, true, true, true)
-        .unwrap();
-    let session = controller.connect_files(host.endpoint_id()).unwrap();
-    let incoming = host.snapshot().unwrap().incoming.unwrap();
-    let offer = FfiFileSelection {
-        entries: vec![FfiClipboardFileEntry {
-            path: "note.txt".into(),
-            size: 9,
-            dir: false,
-        }],
-    };
-    controller
-        .submit_clipboard_files(session.id, session.generation, offer)
-        .unwrap();
-    let stored = host.incoming_clipboard_files(incoming.id).unwrap().unwrap();
-    assert_eq!(stored.revision, 1);
-    assert_eq!(stored.selection.entries.len(), 1);
-    assert_eq!(stored.selection.entries[0].path, "note.txt");
-    // Invalid selections map to a typed FFI error.
-    let bad = FfiFileSelection {
-        entries: vec![FfiClipboardFileEntry {
-            path: "../escape".into(),
-            size: 1,
-            dir: false,
-        }],
-    };
-    assert!(matches!(
-        controller.submit_clipboard_files(session.id, session.generation, bad),
-        Err(FfiError::InvalidSetting { .. })
-    ));
 }
 
 #[test]

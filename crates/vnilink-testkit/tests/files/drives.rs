@@ -10,14 +10,60 @@ use expect_test::expect;
 use std::time::Duration;
 
 use crate::shared::ServeProbe;
-use vnilink::{ConflictChoice, JobState};
-use vnilink_testkit::files::{self, drive_to_end, payload, StandInDrive};
-use vnilink_testkit::{traced, wait_for, Pair, TestResult};
+use vnilink::{ConflictChoice, Core, Error, JobState};
+use vnilink_testkit::files::{
+    drive_to_end, only_job, payload, poll_within, received, source, Location, StandInDrive,
+};
+use vnilink_testkit::{traced, wait_for, Files, Pair, TestResult, DEFAULT_WAIT};
 
 const TRANSFER: Duration = Duration::from_secs(30);
 
 /// What a job on a drive that changed says when it fails.
 const DRIVE_CHANGED: &str = "the drive changed during the transfer";
+
+/// The controller fetches `path` below `from` on the host into `to` below
+/// `into` on its own drive, as a job of `files`.
+fn download(
+    core: &Core,
+    files: &Files,
+    from: &Location,
+    path: &str,
+    into: &Location,
+    to: &str,
+) -> Result<u64, Error> {
+    let (folder, names) = source(&from.path(path));
+    core.files_service_download(
+        files.service.id,
+        files.service.generation,
+        from.root,
+        &folder,
+        &names,
+        into.root,
+        &into.path(to),
+    )
+}
+
+/// The controller sends `path` below `from` on its own drive to `to` below
+/// `into` on the host, as a job of `files`.
+fn upload(
+    core: &Core,
+    files: &Files,
+    from: &Location,
+    path: &str,
+    into: &Location,
+    to: &str,
+) -> Result<u64, Error> {
+    let (folder, names) = source(&from.path(path));
+    core.files_service_upload(
+        files.service.id,
+        files.service.generation,
+        from.root,
+        &folder,
+        &names,
+        into.root,
+        &into.path(to),
+    )
+}
 
 /// A receiver's drive replaced mid-download by an empty volume interrupts
 /// the job before it fetches again, writing nothing to either volume; with
@@ -33,19 +79,13 @@ fn a_receiving_drive_replaced_mid_download_interrupts_without_writing() -> TestR
     std::fs::create_dir_all(host.folder().join("set"))?;
     std::fs::write(host.folder().join("set/one.txt"), &one)?;
     std::fs::write(host.folder().join("set/two.txt"), &two)?;
-    controller.core.connect_files(&host.endpoint())?;
+    let files = pair.open_files();
     let (there, here) = (host.location(), drive.location(controller));
     controller
         .core
         .create_dir(here.root, &here.path(""), "got")?;
-    let job = controller.core.job_submit_download(
-        &host.endpoint(),
-        there.root,
-        &there.path("set"),
-        here.root,
-        &here.path("got"),
-    )?;
-    files::poll_within(&controller.core, job, 20, "the first file to land", |s| {
+    let job = download(&controller.core, &files, &there, "set", &here, "got")?;
+    poll_within(&controller.core, job, 20, "the first file to land", |s| {
         s.files_done == 1
     });
     let host_job = host.core.job_list()?[0].id;
@@ -57,7 +97,7 @@ fn a_receiving_drive_replaced_mid_download_interrupts_without_writing() -> TestR
     // The check of the drive precedes the fetch, so on the other volume no
     // fetch runs and no folder or file is made.
     let original = drive.replace(controller);
-    files::poll_within(
+    poll_within(
         &controller.core,
         job,
         10,
@@ -122,15 +162,9 @@ fn a_replace_choice_applies_only_on_the_drive_it_was_made_for() -> TestResult {
         drive.files().join("got/set/one.txt"),
         b"original-local-content",
     )?;
-    controller.core.connect_files(&host.endpoint())?;
+    let files = pair.open_files();
     let (there, here) = (host.location(), drive.location(controller));
-    let job = controller.core.job_submit_download(
-        &host.endpoint(),
-        there.root,
-        &there.path("set"),
-        here.root,
-        &here.path("got"),
-    )?;
+    let job = download(&controller.core, &files, &there, "set", &here, "got")?;
     assert_eq!(
         controller.core.job_poll(job)?.state,
         JobState::WaitingDecision,
@@ -144,7 +178,7 @@ fn a_replace_choice_applies_only_on_the_drive_it_was_made_for() -> TestResult {
     std::fs::create_dir_all(drive.files().join("got/set"))?;
     std::fs::write(drive.files().join("got/set/one.txt"), &valuable)?;
     drive.read_again(controller);
-    files::poll_within(
+    poll_within(
         &controller.core,
         job,
         10,
@@ -209,21 +243,16 @@ fn a_saved_replace_choice_refuses_another_volume_at_its_drive() -> TestResult {
     std::fs::create_dir_all(drive.files().join("got/set"))?;
     std::fs::write(drive.files().join("got/set/one.txt"), b"original")?;
     let controller = &pair.controller.core;
-    controller.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     let (there, here) = (pair.host.location(), drive.location(&pair.controller));
-    let job = controller.job_submit_download(
-        &pair.host.endpoint(),
-        there.root,
-        &there.path("set"),
-        here.root,
-        &here.path("got"),
-    )?;
+    let job = download(controller, &files, &there, "set", &here, "got")?;
     assert_eq!(
         controller.job_poll(job)?.state,
         JobState::WaitingDecision,
         "a name already there waits for a choice"
     );
     controller.job_resolve(job, ConflictChoice::Replace, false)?;
+    drop(files);
     controller.shutdown();
     let original = drive.swap();
     std::fs::create_dir_all(drive.files().join("got/set"))?;
@@ -234,7 +263,10 @@ fn a_saved_replace_choice_refuses_another_volume_at_its_drive() -> TestResult {
     pair.controller.restart();
     drive.read_again(&pair.controller);
     let controller = &pair.controller.core;
-    controller.connect_files(&pair.host.endpoint())?;
+    // The restarted controller's Files are new ones: they adopt the job
+    // before resuming it.
+    let files = pair.open_files();
+    controller.files_service_adopt_job(files.service.id, files.service.generation, job)?;
     controller.job_resume(job)?;
     assert_eq!(
         controller.job_poll(job)?.state,
@@ -260,6 +292,8 @@ fn a_saved_replace_choice_refuses_another_volume_at_its_drive() -> TestResult {
           files: job state from=transferring job=1 sender=false to=interrupted
         host:
           files: job state from=preparing job=1 sender=true to=serving
+          files: job state from=serving job=1 sender=true to=interrupted
+          files: job state from=interrupted job=1 sender=true to=serving
     "#]]
     .assert_eq(&trace.story(&["files"]));
     Ok(())
@@ -280,17 +314,11 @@ fn a_sender_restarted_onto_another_volume_fails_the_resume_and_says_why() -> Tes
     std::fs::write(drive.files().join("set/one.txt"), &one)?;
     std::fs::write(drive.files().join("set/two.txt"), &two)?;
     let controller = &pair.controller.core;
-    controller.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     let (there, here) = (drive.location(&pair.host), pair.controller.location());
     controller.create_dir(here.root, &here.path(""), "got")?;
-    let job = controller.job_submit_download(
-        &pair.host.endpoint(),
-        there.root,
-        &there.path("set"),
-        here.root,
-        &here.path("got"),
-    )?;
-    files::poll_within(controller, job, 20, "the first file to land", |s| {
+    let job = download(controller, &files, &there, "set", &here, "got")?;
+    poll_within(controller, job, 20, "the first file to land", |s| {
         s.files_done == 1
     });
     let sender_job = pair.host.core.job_list()?[0].id;
@@ -302,6 +330,7 @@ fn a_sender_restarted_onto_another_volume_fails_the_resume_and_says_why() -> Tes
         Duration::from_secs(1),
         || (controller.job_poll(job).ok()?.state == JobState::Interrupted).then_some(()),
     );
+    drop(files);
     drive.swap();
     std::fs::create_dir_all(drive.files().join("set"))?;
     std::fs::write(drive.files().join("set/one.txt"), &one)?;
@@ -316,7 +345,17 @@ fn a_sender_restarted_onto_another_volume_fails_the_resume_and_says_why() -> Tes
         JobState::Interrupted,
         "the sender's job is interrupted after the restart"
     );
-    let resumed = host.job_resume(sender_job)?;
+    // A job the host serves is resumed by the controller's Files, new ones
+    // once the host is back: they adopt the job, and resuming it asks the
+    // host to serve again from the drive it offered.
+    pair.reintroduce();
+    let files = pair.open_files();
+    controller.files_service_adopt_job(files.service.id, files.service.generation, job)?;
+    controller.job_resume(job)?;
+    let resumed = wait_for("the sender to answer the resume", DEFAULT_WAIT, || {
+        let snapshot = host.job_snapshot(sender_job).ok()?;
+        snapshot.state.is_terminal().then_some(snapshot)
+    });
     assert_eq!(
         resumed.state,
         JobState::Failed,
@@ -342,14 +381,15 @@ fn a_sender_restarted_onto_another_volume_fails_the_resume_and_says_why() -> Tes
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state from=transferring job=1 sender=false to=interrupted
+          files: job state from=interrupted job=1 sender=false to=transferring
         host:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
           files: file served ended=sent from=0 sent=512 size=512
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=true to=failed
-          files: the peer was not told: its side keeps the job as it was until it next asks change=resume failure=no session job=1
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]]
+    .assert_eq(&trace.story(&["files"]));
     Ok(())
 }
 
@@ -370,17 +410,11 @@ fn a_sending_drive_replaced_mid_upload_interrupts_and_resumes_once_back() -> Tes
     std::fs::create_dir_all(drive.files().join("set"))?;
     std::fs::write(drive.files().join("set/one.txt"), &one)?;
     std::fs::write(drive.files().join("set/two.txt"), &two)?;
-    controller.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     let (here, there) = (drive.location(&pair.controller), pair.host.location());
-    let job = controller.job_submit_upload(
-        &pair.host.endpoint(),
-        here.root,
-        &here.path("set"),
-        there.root,
-        &there.path("arrived"),
-    )?;
-    let receiver = files::received(host);
-    files::poll_within(host, receiver, 20, "the first file to land", |s| {
+    let job = upload(controller, &files, &here, "set", &there, "arrived")?;
+    let receiver = received(host);
+    poll_within(host, receiver, 20, "the first file to land", |s| {
         s.files_done == 1
     });
     let arrived = pair.host.folder().join("arrived/set");
@@ -397,7 +431,7 @@ fn a_sending_drive_replaced_mid_upload_interrupts_and_resumes_once_back() -> Tes
     std::fs::write(drive.files().join("set/one.txt"), &one)?;
     std::fs::write(drive.files().join("set/two.txt"), &two)?;
     drive.read_again(&pair.controller);
-    files::poll_within(host, receiver, 10, "the job to be interrupted", |s| {
+    poll_within(host, receiver, 10, "the job to be interrupted", |s| {
         s.state == JobState::Interrupted
     });
     assert!(
@@ -455,17 +489,11 @@ fn a_source_opened_before_its_drive_changed_serves_its_own_bytes() -> TestResult
     std::fs::create_dir_all(drive.files().join("set"))?;
     std::fs::write(drive.files().join("set/one.txt"), &one)?;
     std::fs::write(drive.files().join("set/two.txt"), &two)?;
-    controller.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     let (here, there) = (drive.location(&pair.controller), pair.host.location());
-    let job = controller.job_submit_upload(
-        &pair.host.endpoint(),
-        here.root,
-        &here.path("set"),
-        there.root,
-        &there.path("arrived"),
-    )?;
-    let receiver = files::only_job(host)?;
-    files::poll_within(host, receiver, 20, "the first file to land", |s| {
+    let job = upload(controller, &files, &here, "set", &there, "arrived")?;
+    let receiver = only_job(host)?;
+    poll_within(host, receiver, 20, "the first file to land", |s| {
         s.files_done == 1
     });
 

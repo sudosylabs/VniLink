@@ -7,7 +7,10 @@ use std::time::Duration;
 
 use crate::shared::ServeProbe;
 use vnilink::{Core, JobSnapshot, JobState};
-use vnilink_testkit::files::{self, drive_to_end, files_with_bytes, payload, received};
+use vnilink_testkit::files::{
+    download, drive_to_end, files_with_bytes, job_on, link_folder, only_job, payload, received,
+    upload,
+};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(60);
@@ -24,8 +27,8 @@ fn a_source_in_transfer_cannot_be_renamed_until_its_job_ends() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     std::fs::write(pair.controller.folder().join("a.txt"), payload(512, 41))?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "a.txt", "dest")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "a.txt", "dest")?;
     received(&pair.host.core);
     let here = pair.controller.location();
     assert!(
@@ -73,10 +76,10 @@ fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
         .join("outside");
     std::fs::create_dir(&outside)?;
     std::fs::write(outside.join("public.txt"), b"secret")?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "docs/public.txt", "got")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "docs/public.txt", "got")?;
     std::fs::remove_dir_all(&docs)?;
-    files::link_folder(&outside, &docs)?;
+    link_folder(&outside, &docs)?;
     let receiver = received(&pair.host.core);
     let (_, got) = drive_to_end(
         &pair.controller.core,
@@ -91,7 +94,7 @@ fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
         "a source behind a swapped link is not delivered: {got:?}"
     );
     assert!(
-        files::files_with_bytes(&pair.host.folder(), b"secret").is_empty(),
+        files_with_bytes(&pair.host.folder(), b"secret").is_empty(),
         "the other folder's bytes reached the receiver"
     );
     expect![[r#"
@@ -114,8 +117,8 @@ fn serving_refuses_a_source_replaced_after_its_offer() -> TestResult {
     let pair = Pair::for_files();
     let source = pair.controller.folder().join("source.bin");
     std::fs::write(&source, payload(64 * 1024, 1701))?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "source.bin", "arrived")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "source.bin", "arrived")?;
     let decoy = payload(64 * 1024, 1702);
     let staged = pair.controller.folder().join("staged.bin");
     std::fs::write(&staged, &decoy)?;
@@ -134,7 +137,7 @@ fn serving_refuses_a_source_replaced_after_its_offer() -> TestResult {
         "a replaced source is not delivered: {got:?}"
     );
     assert!(
-        files::files_with_bytes(&pair.host.folder(), &decoy).is_empty(),
+        files_with_bytes(&pair.host.folder(), &decoy).is_empty(),
         "replacement bytes reached the receiver"
     );
     expect![[r#"
@@ -157,9 +160,9 @@ fn jobs_sharing_content_keep_serving_it_when_one_is_cancelled() -> TestResult {
     let bytes = payload(1024, 303);
     std::fs::write(pair.controller.folder().join("a.txt"), &bytes)?;
     std::fs::write(pair.controller.folder().join("b.txt"), &bytes)?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let first = files::upload(&pair, "a.txt", "got-a")?;
-    let second = files::upload(&pair, "b.txt", "got-b")?;
+    let files = pair.open_files();
+    let first = upload(&pair, &files, "a.txt", "got-a")?;
+    let second = upload(&pair, &files, "b.txt", "got-b")?;
     // A receiver takes its sender's id.
     pair.controller.core.job_cancel(first)?;
     pair.host.core.job_poll(first)?;
@@ -218,8 +221,8 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
     let pair = Pair::for_files();
     let bytes = payload(64 * 1024, 707);
     std::fs::write(pair.controller.folder().join("payload.bin"), &bytes)?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "payload.bin", "")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "payload.bin", "")?;
     let receiver = received(&pair.host.core);
     let (_, got) = drive_to_end(
         &pair.controller.core,
@@ -246,7 +249,7 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
 
     let second = payload(64 * 1024, 708);
     std::fs::write(pair.controller.folder().join("partial.bin"), &second)?;
-    let job = files::upload(&pair, "partial.bin", "")?;
+    let job = upload(&pair, &files, "partial.bin", "")?;
     let receiver = pair
         .host
         .core
@@ -322,17 +325,17 @@ fn senders_keep_no_copy_of_their_sources() -> TestResult {
     let down = payload(2 * 1024 * 1024, 202);
     std::fs::write(pair.controller.folder().join("up.bin"), &up)?;
     std::fs::write(pair.host.folder().join("down.bin"), &down)?;
-    controller.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
 
     // The controller uploads: it sends, the host receives.
-    let upload = files::upload(&pair, "up.bin", "got-up")?;
-    let upload_receiver = files::only_job(host)?;
+    let uploading = upload(&pair, &files, "up.bin", "got-up")?;
+    let upload_receiver = only_job(host)?;
     let (copies, (sent, got)) = copies_while_serving(
         controller,
-        upload,
+        uploading,
         &pair.controller.transfers(),
         &up,
-        || drive_to_end(controller, upload, host, upload_receiver, TRANSFER),
+        || drive_to_end(controller, uploading, host, upload_receiver, TRANSFER),
     );
     assert!(
         copies.is_empty(),
@@ -350,11 +353,11 @@ fn senders_keep_no_copy_of_their_sources() -> TestResult {
         &pair.controller.location().path(""),
         "got-down",
     )?;
-    let download = files::download(&pair, "down.bin", "got-down")?;
-    let download_sender = files::job_on(host, true)?;
+    let downloading = download(&pair, &files, "down.bin", "got-down")?;
+    let download_sender = job_on(host, true)?;
     let (copies, (sent, got)) =
         copies_while_serving(host, download_sender, &pair.host.transfers(), &down, || {
-            drive_to_end(host, download_sender, controller, download, TRANSFER)
+            drive_to_end(host, download_sender, controller, downloading, TRANSFER)
         });
     assert!(
         copies.is_empty(),
@@ -409,18 +412,9 @@ fn windows_serve_holds_its_source_against_replacement() -> TestResult {
     let original = payload(64 * 1024, 1711);
     let source = folder.join("held.bin");
     std::fs::write(&source, &original)?;
-    let (here, there) = (pair.controller.location(), pair.host.location());
-    let (source_root, source_path) = (here.root, here.path("folder/held.bin"));
-    let (destination_root, destination) = (there.root, there.path("arrived"));
-    controller.connect_files(&pair.host.endpoint())?;
-    let job = controller.job_submit_upload(
-        &pair.host.endpoint(),
-        source_root,
-        &source_path,
-        destination_root,
-        &destination,
-    )?;
-    let receiver = files::only_job(host)?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "folder/held.bin", "arrived")?;
+    let receiver = only_job(host)?;
 
     let probe = ServeProbe::arm(controller, job);
     let (sent, got) = std::thread::scope(|scope| {
@@ -470,9 +464,9 @@ fn a_late_sender_is_retried_without_a_resume() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let bytes = payload(64 * 1024, 1801);
     std::fs::write(pair.controller.folder().join("late.bin"), &bytes)?;
-    controller.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "late.bin", "arrived")?;
-    let receiver = files::only_job(host)?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "late.bin", "arrived")?;
+    let receiver = only_job(host)?;
 
     // The first serve is held past the receiver's answer deadline.
     let probe = ServeProbe::arm(controller, job);

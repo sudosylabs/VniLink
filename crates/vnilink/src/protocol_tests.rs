@@ -11,9 +11,6 @@ fn control_messages_round_trip() {
             codec: CODEC_H264,
             quality,
             decode: true,
-            files_only: false,
-            services_only: false,
-
             separate_cursor: true,
             bt601: 1 | 4,
             hostname: Some("mac-mini".to_string()),
@@ -24,9 +21,6 @@ fn control_messages_round_trip() {
             codec: CODEC_H264,
             quality,
             decode: false,
-            files_only: false,
-            services_only: false,
-
             separate_cursor: false,
             bt601: 0,
             hostname: None,
@@ -37,9 +31,6 @@ fn control_messages_round_trip() {
             codec: CODEC_H264_HIGH,
             quality,
             decode: true,
-            files_only: false,
-            services_only: false,
-
             separate_cursor: false,
             bt601: 0,
             hostname: Some("mac-mini".to_string()),
@@ -114,9 +105,6 @@ fn hello_accept_and_quality_shapes_are_validated() {
         codec: CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
-        files_only: false,
-        services_only: false,
-
         separate_cursor: false,
         bt601: 0,
         hostname: None,
@@ -134,9 +122,6 @@ fn hello_accept_and_quality_shapes_are_validated() {
         codec: CODEC_H264,
         quality: Quality::new(2_000, 30, 1920, 1080).unwrap(),
         decode: true,
-        files_only: false,
-        services_only: false,
-
         separate_cursor: false,
         bt601: 0,
         hostname: None,
@@ -172,40 +157,18 @@ fn hostname_shapes_are_validated() {
         codec: CODEC_H264,
         quality,
         decode: true,
-        files_only: false,
-        services_only: false,
-
         separate_cursor: false,
         bt601: 0,
         hostname,
         os: crate::OperatingSystem::local(),
     };
-    // The head is 18 bytes: tag, version, codec, quality, then the decode,
-    // files-only, services-only and cursor flags and the BT.601 mask. An absent name is one
-    // length byte, and the OS byte ends the frame.
+    // The head is 16 bytes: tag, version, codec, quality, then the decode
+    // and cursor flags and the BT.601 mask. An absent name is one length
+    // byte, and the OS byte ends the frame.
     // An invalid name encodes as absent; it never breaks the session.
     let encoded = hello(Some("  ".to_string())).encode();
-    assert_eq!(encoded.len(), 20);
+    assert_eq!(encoded.len(), 18);
     assert_eq!(ControlMessage::decode(&encoded).unwrap(), hello(None));
-    // Files-only round-trips its flag.
-    let mut files_hello = hello(Some("mac-mini".to_string()));
-    if let ControlMessage::Hello {
-        ref mut files_only, ..
-    } = files_hello
-    {
-        *files_only = true;
-    }
-    let files_encoded = files_hello.encode();
-    let back_files = ControlMessage::decode(&files_encoded).unwrap();
-    assert!(matches!(
-        back_files,
-        ControlMessage::Hello {
-            version: PROTOCOL_VERSION,
-            files_only: true,
-            services_only: false,
-            ..
-        }
-    ));
     // Truncated, overlong, and non-canonical names are malformed.
     let mut truncated = hello(Some("mac-mini".to_string())).encode();
     truncated.pop();
@@ -442,23 +405,21 @@ fn unmapped_errors_become_a_malformed_reject() {
 }
 
 #[test]
-fn hello_mode_and_cursor_flags_are_strict() {
+fn hello_decode_and_cursor_flags_are_strict() {
     let hello = ControlMessage::Hello {
         version: PROTOCOL_VERSION,
         codec: 0x40 | 1,
         quality: Quality::new(2000, 30, 1920, 1080).unwrap(),
         decode: false,
-        files_only: true,
-        services_only: true,
         separate_cursor: true,
         bt601: 1 | 4,
         hostname: Some("service-host".into()),
         os: crate::OperatingSystem::local(),
     };
     let bytes = hello.encode();
-    assert_eq!((bytes[14], bytes[15], bytes[16]), (1, 1, 1));
+    assert_eq!((bytes[13], bytes[14]), (0, 1));
     assert_eq!(ControlMessage::decode(&bytes).unwrap(), hello);
-    for flag in [13, 14, 15, 16] {
+    for flag in [13, 14] {
         let mut malformed = bytes.clone();
         malformed[flag] = 2;
         assert!(matches!(
@@ -468,24 +429,17 @@ fn hello_mode_and_cursor_flags_are_strict() {
     }
     // The mask names codecs by their offer bits: H.264 High's bit, the
     // flag bit and the reserved bit name none.
-    assert_eq!(bytes[17], 1 | 4);
+    assert_eq!(bytes[15], 1 | 4);
     for unknown in [2, 0x40, 0x80] {
         let mut malformed = bytes.clone();
-        malformed[17] = unknown;
+        malformed[15] = unknown;
         assert!(matches!(
             ControlMessage::decode(&malformed),
             Err(Error::Malformed)
         ));
     }
-    // A service-only connection must also be files-only.
-    let mut desktop_services = bytes.clone();
-    desktop_services[14] = 0;
     assert!(matches!(
-        ControlMessage::decode(&desktop_services),
-        Err(Error::Malformed)
-    ));
-    assert!(matches!(
-        ControlMessage::decode(&bytes[..18]),
+        ControlMessage::decode(&bytes[..16]),
         Err(Error::Malformed)
     ));
 }
@@ -624,9 +578,6 @@ fn handshake_os_is_bounded_and_every_truncation_is_rejected_without_panicking() 
                 codec: CODEC_H264,
                 quality,
                 decode: true,
-                files_only: true,
-                services_only: true,
-
                 separate_cursor: false,
                 bt601: 0,
                 hostname: Some("workstation".into()),

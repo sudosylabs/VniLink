@@ -1,23 +1,16 @@
-//! The shared clipboard alone: text and file selections copied on either
-//! computer reaching the other, over a files-only session or through the
-//! Remote Desktop service, under the host's grant.
+//! The shared clipboard alone: text copied on either computer reaching the
+//! other through the Remote Desktop service, under the host's grant.
 
 #[path = "clipboard/desktops.rs"]
 mod desktops;
-#[path = "clipboard/dropped.rs"]
-mod dropped;
-#[path = "clipboard/files.rs"]
-mod files;
-#[path = "clipboard/text.rs"]
-mod text;
 
 use std::sync::{Arc, Mutex};
 
 use expect_test::expect;
 
-use vnilink::{Error, Grants, SessionInfo, SessionPhase, MAX_CLIPBOARD_TEXT};
+use vnilink::{Error, Grants, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{DesktopSession, RecordingClipboard, Script, ScriptedScreen};
-use vnilink_testkit::{traced, wait_for, Engine, Pair, DEFAULT_WAIT};
+use vnilink_testkit::{traced, Engine};
 
 /// What the host shares: it may be seen and controlled, and its clipboard
 /// shared when `clipboard`.
@@ -29,65 +22,6 @@ fn sharing(clipboard: bool) -> Grants {
         transfer: false,
     }
 }
-
-/// What a host shares with a files-only session: transfer, which admits
-/// the session, and its clipboard when `clipboard`.
-fn files_sharing(clipboard: bool) -> Grants {
-    Grants {
-        transfer: true,
-        ..sharing(clipboard)
-    }
-}
-
-/// What a controller shares: nothing.
-pub(crate) const NOTHING: Grants = Grants {
-    view: false,
-    control: false,
-    clipboard: false,
-    transfer: false,
-};
-
-/// A host and a controller paired for a files-only session, the host
-/// sharing its clipboard when `clipboard`.
-fn paired(clipboard: bool) -> Pair {
-    Pair::new(files_sharing(clipboard), NOTHING)
-}
-
-/// `controller`'s files-only session to `host`, the session that carries
-/// the session clipboard, once active; the refusal when it was refused.
-fn files_session(controller: &Engine, host: &Engine) -> Result<SessionInfo, Error> {
-    let pending = controller.core.begin_connect_files(&host.endpoint())?;
-    wait_for(
-        "the files-only session to open",
-        DEFAULT_WAIT,
-        || match controller.core.controller_session(pending.id) {
-            Ok(session) if session.phase == SessionPhase::Active => Some(Ok(session)),
-            Ok(session)
-                if matches!(
-                    session.phase,
-                    SessionPhase::Failed(_) | SessionPhase::Closed
-                ) =>
-            {
-                Some(Err(Error::Unauthorized))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        },
-    )
-}
-
-/// The clipboard's records of what crossed and what was refused, without
-/// how its stream ended: a connection that closes or is revoked ends the
-/// stream on each side at moments of its own, told or not before a story
-/// is read.
-const CROSSINGS: &[&str] = &[
-    "clipboard adapter installed",
-    "clipboard stream opened",
-    "clipboard sent",
-    "clipboard answered",
-    "clipboard received",
-    "clipboard not delivered",
-];
 
 /// The text a host's clipboard was given, in order.
 #[derive(Clone)]
@@ -109,17 +43,6 @@ impl Copied {
             .unwrap_or_else(|poison| poison.into_inner())
             .clone()
     }
-}
-
-/// Retries the host's `publish` until its side of the clipboard stream is
-/// open: a controller sends Ready before the host installs its sender.
-/// Every other failure fails at once.
-fn publish_once_open(what: &str, mut publish: impl FnMut() -> Result<(), Error>) {
-    wait_for(what, DEFAULT_WAIT, || match publish() {
-        Ok(()) => Some(()),
-        Err(Error::Unsupported("clipboard stream is not open")) => None,
-        Err(error) => panic!("the host's publication failed: {error}"),
-    });
 }
 
 /// `story` with each engine's lines sorted, for a scenario whose work on
@@ -248,56 +171,4 @@ fn the_largest_text_crosses_and_more_is_refused() {
     assert_eq!(texts.lock().unwrap().last(), Some(&largest));
     assert!(session.service.submit_clipboard(&(largest + "a")).is_err());
     assert_eq!(texts.lock().unwrap().len(), 1);
-}
-
-/// A file selection offered on a files-only session reaches the host as names
-/// and sizes, and the story is recorded on both sides, by the engine that
-/// lived it, without a single name.
-#[test]
-fn a_file_selection_crosses_a_session_and_its_story_is_recorded() {
-    let trace = traced();
-    let share = vnilink::Grants {
-        view: true,
-        control: true,
-        clipboard: true,
-        transfer: true,
-    };
-    let none = vnilink::Grants {
-        view: false,
-        control: false,
-        clipboard: false,
-        transfer: false,
-    };
-    let pair = vnilink_testkit::Pair::new(share, none);
-    let session = files_session(&pair.controller, &pair.host).unwrap();
-    let offer = vnilink::FileSelection {
-        entries: vec![vnilink::ClipboardFileEntry {
-            path: "quarterly-report.pdf".into(),
-            size: 12_000,
-            dir: false,
-        }],
-    };
-    pair.controller
-        .core
-        .submit_clipboard_files(session.id, session.generation, &offer)
-        .unwrap();
-    let hosted = pair.host.core.snapshot().unwrap().incoming.unwrap();
-    let stored = pair
-        .host
-        .core
-        .incoming_clipboard_files(hosted.id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(stored.selection, offer);
-
-    expect![[r#"
-        controller:
-          clipboard: clipboard stream opened dial=true
-          clipboard: clipboard sent amount=1 kind=files
-          clipboard: clipboard answered amount=1 kind=files
-        host:
-          clipboard: clipboard received amount=1 kind=files
-    "#]]
-    .assert_eq(&trace.story(&["clipboard"]));
-    trace.assert_unrecorded("a copied file's name", &["quarterly"]);
 }

@@ -8,16 +8,17 @@ File transfer is a separate grant from control and from clipboard. A `.vnl`
 file and the control confirmation do not turn it on. `Core::authorize` does.
 The rules live in `src/core/jobs.rs` (scheduling, resume, peer binding),
 `src/core/service_jobs.rs` (Files ownership and adoption),
-`src/core/fs.rs` (remote browsing and auxiliary streams),
+`src/core/fs.rs` (the shared disk and serving its listings),
 `src/transfer/` (the `vnilink/files/1` protocol), `src/core/transfer.rs` (its connections) and
 `src/manifest.rs` (scanning and publish). The single-file byte-buffer API and its dedicated
 transfer stream were removed; all movement goes through jobs.
 
 ## What happens
 
-1. After Accept, the controller opens the clipboard stream and sends one
-   ready byte. The host accepts the clipboard stream, then serves the
-   filesystem auxiliary loop. Keyboard and pointer stay on the control
+1. The controller reaches the other computer's disk through a Files
+   service on its link to that computer, opened as the Files tab opens
+   it: listings and changes go through the service's pipe, and jobs ride
+   the service. Keyboard and pointer stay on the control
    stream.
 2. Each side shares its whole filesystem with
    `Core::enable_filesystem_access` (`/` on Unix, every mounted drive on
@@ -28,9 +29,9 @@ transfer stream were removed; all movement goes through jobs.
    the whole disk or nothing, and each peer operation needs Files
    sharing with that peer (the `Transfer` grant, shown as Files in the
    app's sharing settings).
-3. The peer browses with `fs_list`/`fs_mkdir`/`fs_rename` against a live
-   session. Every request re-checks Files sharing; withdrawn sharing
-   answers `TransferDenied` without ending the session. Each listed entry
+3. The peer browses with the Files service's `list`/`mkdir`/`rename`/
+   `delete`. Every request re-checks Files sharing; withdrawing it ends
+   the Files service and leaves the link. Each listed entry
    carries a token that a rename, delete or move to the Trash hands back,
    so a change made from a stale listing is refused rather than applied to
    whatever took the entry's place. The token guards against a stale
@@ -65,8 +66,7 @@ transfer stream were removed; all movement goes through jobs.
    so a file made under that name in the same instant is replaced.
 4. Bulk movement uses jobs. A Files tab submits one job per selection:
    `files_service_upload` / `files_service_download` name a folder and
-   the entries of it to copy, and one manifest holds them all
-   (`job_submit_upload` / `job_submit_download` take a single path).
+   the entries of it to copy, and one manifest holds them all.
    The sender scans its sources into a manifest of paths, sizes and
    modification times and reads nothing more ahead of time. A download the other
    computer takes long to prepare is a `Preparing` job at once: the host
@@ -81,21 +81,22 @@ transfer stream were removed; all movement goes through jobs.
    by what changed; a step that changes nothing writes nothing.
 6. Jobs are peer-scoped: one peer cannot resume, list or adopt another
    peer's job. Job control rides the connection of the Files service
-   that owns the job, else the peer's files-only session. Revoking Files
+   that owns the job. Revoking Files
    interrupts that peer's jobs, and a session that ends interrupts its
    jobs rather than replaying them. A failure that may clear on its own (a
    connection lost or redialing, a stalled stream, a sender that answers
    late) keeps the job going and tries again after 1, 2, 4, 8, 16, then
    30 s; once six tries or two minutes pass without a byte moving, the job
    is interrupted. Every interrupted job says why until it resumes. A Files job whose owner goes, with its window, pipe or
-   connection, is left Interrupted; the next Files owner for that peer
+   connection, is left Interrupted, saying which of them went: the window
+   closed, this computer or the other one shut down, the other computer
+   ended its side or withdrew Files, or the connection ended. The next
+   Files owner for that peer
    adopts and resumes it on its own (`files_service_resume_orphans`,
    which the Files channel calls as it opens), and `job_resume` resumes
    any other. Interrupted jobs do not count against the active-job
    limit until they resume. A download still being prepared has nothing
    to resume from, and fails instead.
-7. Clipboard file selections are offers of names and sizes; pasting one
-   moves its bytes through Files jobs. The steps are in `CLIPBOARD.md`.
 
 ## Moving the bytes
 

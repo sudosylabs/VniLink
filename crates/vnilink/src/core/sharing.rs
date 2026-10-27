@@ -90,9 +90,6 @@ impl Core {
                 super::transfer::close_peer_files(&self.shared, &peer);
                 super::jobs::interrupt_peer_jobs(&self.shared, &peer, false);
             }
-            if !policy.clipboard {
-                super::clipboard::drop_peer_clipboard_files(&self.shared, &peer);
-            }
             self.shared.events.publish(CoreEvent::DeviceAuthorized {
                 endpoint_id: PublicKey::from_bytes(&peer)
                     .map_err(|_| Error::Malformed)?

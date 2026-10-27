@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use vnilink::{ConflictChoice, JobDestination, JobItem, JobState};
 use vnilink_testkit::files::{
-    self, drive, drive_to_end, finished, payload, received, settled, tree,
+    drive, drive_to_end, finished, only_job, payload, received, settled, tree, upload,
 };
 use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
@@ -35,18 +35,18 @@ fn settled_value<T: PartialEq + Clone>(
 
 /// A small file arrives, and both sides see it complete, promptly with only
 /// the background drivers advancing it, as the Files tab leaves it to them;
-/// the second reuses the first one's files connection.
+/// the second rides the same Files service as the first.
 #[test]
 fn a_small_file_completes_promptly_on_its_own() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
     drive(&pair);
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     for name in ["first.bin", "second.bin"] {
         std::fs::write(pair.controller.folder().join(name), vec![7u8; 2500])?;
         // Submitting scans and offers the file: it counts.
         let started = std::time::Instant::now();
-        let job = files::upload(&pair, name, "")?;
+        let job = upload(&pair, &files, name, "")?;
         wait_for(
             &format!("{name} to complete within two seconds"),
             Duration::from_secs(2),
@@ -221,9 +221,9 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
             std::fs::write(folder.join(format!("f-{index:04}.txt")), b"x")?;
         }
     }
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     drive(&pair);
-    let job = files::upload(&pair, "many", "")?;
+    let job = upload(&pair, &files, "many", "")?;
     let receiver = received(&pair.host.core);
     let asking = settled(&pair.host.core, receiver, Duration::from_secs(5));
     assert_eq!(
@@ -285,9 +285,9 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
     let (controller, host) = (&pair.controller.core, &pair.host.core);
     std::fs::write(pair.controller.folder().join("same.txt"), b"theirs")?;
     std::fs::write(pair.host.folder().join("same.txt"), b"mine")?;
-    controller.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     drive(&pair);
-    let job = files::upload(&pair, "same.txt", "")?;
+    let job = upload(&pair, &files, "same.txt", "")?;
     wait_for(
         "the sender to mirror the question",
         Duration::from_secs(5),
@@ -350,68 +350,6 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
           files: file received outcome=received resumed_at=0 size=6 took=6
           files: job state done_bytes=6 files_done=1 from=transferring job=1 sender=false to=complete
     "#]].assert_eq(&trace.story(&["files"]));
-    Ok(())
-}
-
-/// A controller may hold both a files-only session and a services-only link
-/// with one peer. Control of a job no Files service owns rides the files-only
-/// session every time, the only one that accepts it, and a Files job rides
-/// its own service's link, whichever the sessions were stored first.
-#[test]
-fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
-    let _trace = traced();
-    let pair = Pair::for_files();
-    let (controller, host) = (&pair.controller.core, &pair.host.core);
-    controller.connect_files(&pair.host.endpoint())?;
-    let (owner, _pipe) = pair.controller.open_files(&pair.connect_services())?;
-    let receiver_of = |name: &str| {
-        wait_for("the host's job", DEFAULT_WAIT, || {
-            host.job_list()
-                .ok()?
-                .into_iter()
-                .find(|record| record.label == name)
-                .map(|record| record.id)
-        })
-    };
-    for index in 0..4u64 {
-        let name = format!("plain-{index}.bin");
-        let bytes = payload(2048, 300 + index);
-        std::fs::write(pair.controller.folder().join(&name), &bytes)?;
-        let job = files::upload(&pair, &name, "")?;
-        let (sender, got) = drive_to_end(controller, job, host, receiver_of(&name), TRANSFER);
-        assert_eq!(
-            (sender.state, got.state),
-            (JobState::Complete, JobState::Complete),
-            "a job no Files service owns is driven over the files-only session"
-        );
-        assert_eq!(
-            std::fs::read(pair.host.folder().join(&name))?,
-            bytes,
-            "{name} landed exactly"
-        );
-    }
-    let bytes = payload(2048, 399);
-    std::fs::write(pair.controller.folder().join("owned.bin"), &bytes)?;
-    let job = controller.files_service_upload(
-        owner.id,
-        owner.generation,
-        pair.controller.location().root,
-        &pair.controller.location().path(""),
-        &["owned.bin".to_owned()],
-        pair.host.location().root,
-        &pair.host.location().path(""),
-    )?;
-    let (sender, got) = drive_to_end(controller, job, host, receiver_of("owned.bin"), TRANSFER);
-    assert_eq!(
-        (sender.state, got.state),
-        (JobState::Complete, JobState::Complete),
-        "a Files job is driven over its own service's link"
-    );
-    assert_eq!(
-        std::fs::read(pair.host.folder().join("owned.bin"))?,
-        bytes,
-        "the owned file landed exactly"
-    );
     Ok(())
 }
 
@@ -579,8 +517,8 @@ fn diagnostics_count_a_finished_transfer() -> TestResult {
     let pair = Pair::for_files();
     let bytes = payload(200 * 1024, 1901);
     std::fs::write(pair.controller.folder().join("counted.bin"), &bytes)?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "counted.bin", "arrived")?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "counted.bin", "arrived")?;
     let receiver = received(&pair.host.core);
     let (sender, got) = drive_to_end(
         &pair.controller.core,
@@ -646,9 +584,9 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
         .map(|n| (format!("many/f{n:02}.bin"), 3000))
         .collect();
     write_named(&pair.controller.folder(), &many, 2000);
-    controller.connect_files(&pair.host.endpoint())?;
-    let job = files::upload(&pair, "many", "")?;
-    let receiver = files::only_job(host)?;
+    let files = pair.open_files();
+    let job = upload(&pair, &files, "many", "")?;
+    let receiver = only_job(host)?;
 
     let first = host.job_poll(receiver)?;
     assert_eq!(first.files_done, 1, "the first poll lands the first file");
@@ -684,7 +622,7 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
         .map(|n| (format!("again/g{n:02}.bin"), 3000))
         .collect();
     write_named(&pair.controller.folder(), &again, 2100);
-    files::upload(&pair, "again", "")?;
+    upload(&pair, &files, "again", "")?;
     let receiver = host
         .job_list()?
         .into_iter()

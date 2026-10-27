@@ -6,7 +6,7 @@ use expect_test::expect;
 use std::path::Path;
 
 use vnilink::{Error, Grants};
-use vnilink_testkit::files::{identity, set_aside};
+use vnilink_testkit::files::{download, identity, set_aside};
 use vnilink_testkit::{traced, Pair, TestResult};
 
 /// Replaces the file at `path` with another object holding `bytes`. The
@@ -25,7 +25,8 @@ fn sharing_the_disk_is_refused_during_an_active_session() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
     let before = pair.host.core.file_roots()?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
+    // The controller's Files hold their connection for the whole check.
+    let _files = pair.open_files();
     let refused = pair.host.core.enable_filesystem_access();
     assert!(
         matches!(refused, Err(Error::Busy)),
@@ -49,31 +50,24 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
     let root = pair.host.folder();
     std::fs::write(root.join("report.txt"), b"report-bytes")?;
     let here = pair.host.location();
-    let (files, folder) = (here.root, here.path(""));
-    let controller = &pair.controller.core;
-    let session = controller.connect_files(&pair.host.endpoint())?;
+    let (disk, folder) = (here.root, here.path(""));
+    let files = pair.open_files();
 
-    let page = controller.fs_list(session.id, session.generation, files, &folder, 0, 50)?;
+    let page = files.pipe.list(disk, &folder, 0, 50)?;
     assert_eq!(page.total, 1, "the host's folder holds one entry");
     assert_eq!(page.entries[0].name, "report.txt", "it is the host's file");
     let token = page.entries[0].token;
 
-    controller.fs_mkdir(session.id, session.generation, files, &folder, "archive")?;
+    files.pipe.mkdir(disk, &folder, "archive")?;
     assert!(
         root.join("archive").is_dir(),
         "a remote mkdir lands on the host's disk"
     );
 
     let before = identity(&root.join("report.txt"));
-    controller.fs_rename(
-        session.id,
-        session.generation,
-        files,
-        &folder,
-        "report.txt",
-        Some(token),
-        "final.txt",
-    )?;
+    files
+        .pipe
+        .rename(disk, &folder, "report.txt", Some(token), "final.txt")?;
     assert!(
         !root.join("report.txt").exists(),
         "a renamed file leaves its old name"
@@ -89,7 +83,7 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
         "a remote rename is a true rename of the same object"
     );
 
-    let again = controller.fs_list(session.id, session.generation, files, &folder, 0, 50)?;
+    let again = files.pipe.list(disk, &folder, 0, 50)?;
     let names: Vec<&str> = again.entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(
         names,
@@ -108,9 +102,9 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
     Ok(())
 }
 
-/// A request from a stale generation, one whose path or name steps out of
-/// its folder, and any after the host revoked the controller never touch
-/// the host's disk.
+/// A job for a stale generation of the service, a request whose path or
+/// name steps out of its folder, and any after the host revoked the
+/// controller never touch the host's disk.
 #[test]
 fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
     let trace = traced();
@@ -118,34 +112,29 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
     let root = pair.host.folder();
     std::fs::write(root.join("kept.txt"), b"kept-bytes")?;
     let here = pair.host.location();
-    let (files, folder) = (here.root, here.path(""));
-    let controller = &pair.controller.core;
-    let session = controller.connect_files(&pair.host.endpoint())?;
+    let (disk, folder) = (here.root, here.path(""));
+    let files = pair.open_files();
     let kept = || std::fs::read(root.join("kept.txt")).ok();
 
-    let stale = session.generation + 1;
-    let listed = controller.fs_list(session.id, stale, files, &folder, 0, 50);
-    assert!(
-        matches!(listed, Err(Error::StaleSession)),
-        "a stale generation lists nothing: {listed:?}"
-    );
-    let renamed = controller.fs_rename(
-        session.id,
-        stale,
-        files,
+    // The pipe stamps its own generation; a job names the service's, and
+    // a stale one submits nothing.
+    let mine = pair.controller.location();
+    let stale = pair.controller.core.files_service_download(
+        files.service.id,
+        files.service.generation + 1,
+        disk,
         &folder,
-        "kept.txt",
-        None,
-        "moved.txt",
+        &["kept.txt".to_owned()],
+        mine.root,
+        &mine.path("got"),
     );
     assert!(
-        matches!(renamed, Err(Error::StaleSession)),
-        "a stale generation renames nothing: {renamed:?}"
+        matches!(stale, Err(Error::StaleSession)),
+        "a stale generation submits no job: {stale:?}"
     );
-    let deleted = controller.fs_delete(session.id, stale, files, &folder, "kept.txt", None);
     assert!(
-        matches!(deleted, Err(Error::StaleSession)),
-        "a stale generation deletes nothing: {deleted:?}"
+        pair.host.core.job_list()?.is_empty(),
+        "the host was offered no job"
     );
     assert_eq!(
         kept().as_deref(),
@@ -154,30 +143,24 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
     );
     assert!(set_aside(&root).is_empty(), "nothing was set aside");
 
-    let current = session.generation;
     assert!(
-        controller
-            .fs_list(session.id, current, files, &format!("{folder}/.."), 0, 50)
+        files
+            .pipe
+            .list(disk, &format!("{folder}/.."), 0, 50)
             .is_err(),
         "a listing that steps out of its folder is refused"
     );
     assert!(
-        controller
-            .fs_rename(
-                session.id,
-                current,
-                files,
-                &folder,
-                "kept.txt",
-                None,
-                "../out.txt"
-            )
+        files
+            .pipe
+            .rename(disk, &folder, "kept.txt", None, "../out.txt")
             .is_err(),
         "a rename out of its folder is refused"
     );
     assert!(
-        controller
-            .fs_delete(session.id, current, files, &folder, "../kept.txt", None)
+        files
+            .pipe
+            .delete(disk, &folder, "../kept.txt", None, false)
             .is_err(),
         "a delete out of its folder is refused"
     );
@@ -191,12 +174,10 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
         "the file stayed"
     );
 
-    // Revocation stops the session, and with it any filesystem work.
+    // Revocation stops the connection, and with it any filesystem work.
     pair.host.core.revoke(&pair.controller.endpoint())?;
     assert!(
-        controller
-            .fs_list(session.id, current, files, &folder, 0, 50)
-            .is_err(),
+        files.pipe.list(disk, &folder, 0, 50).is_err(),
         "a revoked controller lists nothing"
     );
     assert_eq!(
@@ -224,23 +205,15 @@ fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
     let root = pair.host.folder();
     std::fs::write(root.join("a.txt"), b"a-bytes")?;
     let here = pair.host.location();
-    let (files, folder) = (here.root, here.path(""));
-    let controller = &pair.controller.core;
-    let session = controller.connect_files(&pair.host.endpoint())?;
-    let (id, generation) = (session.id, session.generation);
+    let (disk, folder) = (here.root, here.path(""));
+    let files = pair.open_files();
 
-    let page = controller.fs_list(id, generation, files, &folder, 0, 50)?;
+    let page = files.pipe.list(disk, &folder, 0, 50)?;
     let stale = page.entries[0].token;
     replace(&root.join("a.txt"), b"replacement-bytes")?;
-    let refused = controller.fs_rename(
-        id,
-        generation,
-        files,
-        &folder,
-        "a.txt",
-        Some(stale),
-        "b.txt",
-    );
+    let refused = files
+        .pipe
+        .rename(disk, &folder, "a.txt", Some(stale), "b.txt");
     assert!(
         refused.is_err(),
         "a stale token renames no replacement: {refused:?}"
@@ -253,22 +226,16 @@ fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
     );
 
     std::fs::write(root.join("b.txt"), b"b-bytes")?;
-    let fresh = controller.fs_list(id, generation, files, &folder, 0, 50)?;
+    let fresh = files.pipe.list(disk, &folder, 0, 50)?;
     let current = fresh
         .entries
         .iter()
         .find(|entry| entry.name == "a.txt")
         .ok_or("a.txt is listed")?
         .token;
-    let conflict = controller.fs_rename(
-        id,
-        generation,
-        files,
-        &folder,
-        "a.txt",
-        Some(current),
-        "b.txt",
-    );
+    let conflict = files
+        .pipe
+        .rename(disk, &folder, "a.txt", Some(current), "b.txt");
     assert!(
         matches!(conflict, Err(Error::FileExists)),
         "a rename never overwrites: {conflict:?}"
@@ -295,10 +262,10 @@ fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
     Ok(())
 }
 
-/// A files-only connection needs the transfer grant alone: the host shares
-/// neither view nor control, and the controller has no decoder.
+/// Files need the transfer grant alone: the host shares neither view nor
+/// control, and the controller has no decoder.
 #[test]
-fn files_only_needs_transfer_not_control_or_decoder() -> TestResult {
+fn files_need_transfer_not_control_or_decoder() -> TestResult {
     let _trace = traced();
     let none = Grants {
         view: false,
@@ -314,14 +281,12 @@ fn files_only_needs_transfer_not_control_or_decoder() -> TestResult {
         none,
     );
     std::fs::write(pair.host.folder().join("shared.txt"), b"shared-bytes")?;
-    // A files-only session needs no decoder.
+    // Files need no decoder.
     pair.controller
         .core
         .set_video_codecs(vnilink::VideoCodecCaps::default())?;
-    let session = pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let page = pair.controller.core.fs_list(
-        session.id,
-        session.generation,
+    let files = pair.controller.files_on(&pair.host)?;
+    let page = files.pipe.list(
         pair.host.location().root,
         &pair.host.location().path(""),
         0,
@@ -329,7 +294,7 @@ fn files_only_needs_transfer_not_control_or_decoder() -> TestResult {
     )?;
     assert!(
         page.entries.iter().any(|entry| entry.name == "shared.txt"),
-        "a files-only connection browses the host"
+        "Files on the transfer grant alone browse the host"
     );
     Ok(())
 }
@@ -344,7 +309,7 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
     let root = pair.host.folder();
     let here = pair.host.location();
     std::fs::write(root.join("a.txt"), b"transfer-bytes")?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
+    let files = pair.open_files();
     let token = host
         .list_dir(here.root, &here.path(""), 0, 50)?
         .entries
@@ -353,7 +318,7 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
         .ok_or("a.txt is listed")?
         .token;
     assert!(token.is_strong(), "a listed file carries its own identity");
-    let job = vnilink_testkit::files::download(&pair, "a.txt", "")?;
+    let job = download(&pair, &files, "a.txt", "")?;
     let serving = host.job_list()?;
     assert_eq!(serving.len(), 1, "the host serves one job");
     assert!(
@@ -412,10 +377,8 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
     std::fs::write(root.join("pack/child.txt"), b"child-bytes")?;
     std::fs::write(root.join("report.txt"), b"report-bytes")?;
     let here = pair.host.location();
-    let (files, folder) = (here.root, here.path(""));
-    let controller = &pair.controller.core;
-    let session = controller.connect_files(&pair.host.endpoint())?;
-    let (id, generation) = (session.id, session.generation);
+    let (disk, folder) = (here.root, here.path(""));
+    let files = pair.open_files();
     let token_of = |page: &vnilink::DirPage, name: &str| {
         page.entries
             .iter()
@@ -424,11 +387,13 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
             .ok_or(format!("{name} is listed"))
     };
 
-    let page = controller.fs_list(id, generation, files, &folder, 0, 50)?;
+    let page = files.pipe.list(disk, &folder, 0, 50)?;
     let report = token_of(&page, "report.txt")?;
     let pack = token_of(&page, "pack")?;
     replace(&root.join("report.txt"), b"replacement-bytes")?;
-    let refused = controller.fs_delete(id, generation, files, &folder, "report.txt", Some(report));
+    let refused = files
+        .pipe
+        .delete(disk, &folder, "report.txt", Some(report), false);
     assert!(
         refused.is_err(),
         "a stale token deletes no replacement: {refused:?}"
@@ -440,10 +405,14 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
     );
     assert!(set_aside(&root).is_empty(), "nothing was set aside");
 
-    let fresh = controller.fs_list(id, generation, files, &folder, 0, 50)?;
+    let fresh = files.pipe.list(disk, &folder, 0, 50)?;
     let current = token_of(&fresh, "report.txt")?;
-    controller.fs_delete(id, generation, files, &folder, "report.txt", Some(current))?;
-    controller.fs_delete(id, generation, files, &folder, "pack", Some(pack))?;
+    files
+        .pipe
+        .delete(disk, &folder, "report.txt", Some(current), false)?;
+    files
+        .pipe
+        .delete(disk, &folder, "pack", Some(pack), false)?;
     assert!(!root.join("report.txt").exists(), "the file was deleted");
     assert!(!root.join("pack").exists(), "the folder tree was deleted");
     assert!(set_aside(&root).is_empty(), "nothing was left aside");

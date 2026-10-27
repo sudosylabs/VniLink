@@ -574,12 +574,6 @@ pub enum FfiEvent {
         id: u64,
         message: String,
     },
-    ClipboardReceived {
-        id: u64,
-    },
-    ClipboardFilesReceived {
-        id: u64,
-    },
     DesktopClipboardReceived {
         service: crate::FfiServiceInfo,
     },
@@ -846,10 +840,6 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
             id,
             message: message.to_string(),
         },
-        vnilink::CoreEvent::ClipboardReceived { id } => FfiEvent::ClipboardReceived { id },
-        vnilink::CoreEvent::ClipboardFilesReceived { id } => {
-            FfiEvent::ClipboardFilesReceived { id }
-        }
         vnilink::CoreEvent::DesktopClipboardReceived { service } => {
             FfiEvent::DesktopClipboardReceived {
                 service: service.into(),

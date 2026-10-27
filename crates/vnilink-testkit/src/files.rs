@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use vnilink::{Core, CoreEvent, EntryToken, EventSubscription, JobSnapshot, MAX_PAGE};
 
-use crate::{holds, wait_for, Engine, Pair, DEFAULT_WAIT};
+use crate::{holds, wait_for, Engine, Files, Pair, DEFAULT_WAIT};
 
 /// `len` bytes that differ for each `seed` and compress poorly, as real
 /// files mostly do.
@@ -154,27 +154,43 @@ pub fn drive_to_end(
     })
 }
 
+/// `path`, a path with `/` below a root, as a job names what it copies:
+/// the folder and the one name in it, or for `""` the whole root.
+pub fn source(path: &str) -> (String, Vec<String>) {
+    match path.rsplit_once('/') {
+        _ if path.is_empty() => (String::new(), Vec::new()),
+        Some((folder, name)) => (folder.to_owned(), vec![name.to_owned()]),
+        None => (String::new(), vec![path.to_owned()]),
+    }
+}
+
 /// The controller sends `from`, a path in its folder, to `to` in the
-/// host's.
-pub fn upload(pair: &Pair, from: &str, to: &str) -> Result<u64, vnilink::Error> {
+/// host's, as a job of `files`.
+pub fn upload(pair: &Pair, files: &Files, from: &str, to: &str) -> Result<u64, vnilink::Error> {
     let (source, target) = (pair.controller.location(), pair.host.location());
-    pair.controller.core.job_submit_upload(
-        &pair.host.endpoint(),
+    let (folder, names) = self::source(&source.path(from));
+    pair.controller.core.files_service_upload(
+        files.service.id,
+        files.service.generation,
         source.root,
-        &source.path(from),
+        &folder,
+        &names,
         target.root,
         &target.path(to),
     )
 }
 
 /// The controller fetches `from`, a path in the host's folder, to `to` in
-/// its own.
-pub fn download(pair: &Pair, from: &str, to: &str) -> Result<u64, vnilink::Error> {
+/// its own, as a job of `files`.
+pub fn download(pair: &Pair, files: &Files, from: &str, to: &str) -> Result<u64, vnilink::Error> {
     let (source, target) = (pair.host.location(), pair.controller.location());
-    pair.controller.core.job_submit_download(
-        &pair.host.endpoint(),
+    let (folder, names) = self::source(&source.path(from));
+    pair.controller.core.files_service_download(
+        files.service.id,
+        files.service.generation,
         source.root,
-        &source.path(from),
+        &folder,
+        &names,
         target.root,
         &target.path(to),
     )

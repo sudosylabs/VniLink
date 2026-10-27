@@ -358,25 +358,6 @@ impl VnilinkCore {
             })
             .map_err(map_error)
     }
-    pub fn controller_service_support(
-        &self,
-        connection_id: u64,
-    ) -> Result<FfiServiceSupport, FfiError> {
-        let support = self
-            .inner
-            .controller_service_support(connection_id)
-            .map_err(map_error)?;
-        Ok(FfiServiceSupport {
-            desktop: support.desktop,
-            files: support.files,
-            terminal: support.terminal,
-            camera: support.camera,
-            system_audio: support.system_audio,
-            microphone: support.microphone,
-            system_actions: support.system_actions,
-        })
-    }
-
     pub fn attach_controller_service(
         &self,
         connection_id: u64,
