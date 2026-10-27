@@ -3,6 +3,7 @@
 //! One production installation exists per OS user. Persistent engines share
 //! it. The lease is `installation.lock` in the engine directory. It is taken
 //! before the key or database is inspected and is never deleted.
+// trace: records every ignored failure
 
 use std::fs::{self, File};
 use std::io::{self, ErrorKind};
@@ -604,7 +605,11 @@ impl InstallationLease {
 
 impl Drop for InstallationLease {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        vnilink::ignored!(
+            vnilink::trace::STORAGE,
+            "a lease that cannot unlock is released when its file closes",
+            self.file.unlock()
+        );
         unreserve(&self.engine_dir);
     }
 }
@@ -1050,7 +1055,8 @@ mod windows_support {
         unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
             .map_err(|_| StoreFailure::Unavailable)?;
         let mut length = 0u32;
-        let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut length) };
+        // Asks only for the size: it fails with ERROR_INSUFFICIENT_BUFFER by design.
+        let _sized = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut length) };
         let mut buffer = vec![0u8; length as usize];
         unsafe {
             GetTokenInformation(
@@ -1062,12 +1068,20 @@ mod windows_support {
             )
         }
         .map_err(|_| {
-            let _ = unsafe { windows::Win32::Foundation::CloseHandle(token) };
+            vnilink::ignored!(
+                vnilink::trace::STORAGE,
+                "a token handle that cannot close ends with the process",
+                unsafe { windows::Win32::Foundation::CloseHandle(token) }
+            );
             StoreFailure::Unavailable
         })?;
         let user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
         let text = sid_string(user.User.Sid);
-        let _ = unsafe { windows::Win32::Foundation::CloseHandle(token) };
+        vnilink::ignored!(
+            vnilink::trace::STORAGE,
+            "a token handle that cannot close ends with the process",
+            unsafe { windows::Win32::Foundation::CloseHandle(token) }
+        );
         text
     }
 

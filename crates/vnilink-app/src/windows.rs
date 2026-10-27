@@ -4,6 +4,7 @@
 //! Duplication opens only while a viewer is connected and closes when the
 //! last one leaves, so an idle host captures nothing. The secure UAC desktop
 //! is never captured.
+// trace: records every ignored failure
 use crate::{error::map_error, FfiError, VnilinkCore};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -54,7 +55,9 @@ impl WindowsHost {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            let _ = worker.join();
+            if worker.join().is_err() {
+                tracing::warn!(target: vnilink::trace::CAPTURE, "the screen hosting worker panicked");
+            }
         }
     }
 }
@@ -131,7 +134,14 @@ fn publish_topology(core: &Core, capture: &vnilink_windows::WindowsCapture) {
         scale_percent: 100,
         revision,
     };
-    let _ = core.set_topology(revision, &[display]);
+    if let Err(error) = core.set_topology(revision, &[display]) {
+        tracing::warn!(
+            target: vnilink::trace::TOPOLOGY,
+            failure = error.name(),
+            reason = error.reason(),
+            "the screen's size was not published: viewers keep the last one"
+        );
+    }
 }
 
 /// Opens Desktop Duplication for each run of viewers and closes it between them.
@@ -189,7 +199,11 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
         // capture opens again once the input desktop is the user's.
         let secure = secure_desktop(&result, opened_at.elapsed());
         if let Some(active) = secure {
-            let _ = core.report_secure_desktop(active);
+            vnilink::ignored!(
+                vnilink::trace::CAPTURE,
+                "a secure desktop report to a shut-down engine is moot",
+                core.report_secure_desktop(active)
+            );
         }
         if result.is_err() && !stop.load(Ordering::Acquire) && !startup.is_cancelled() {
             if secure != Some(true) {
