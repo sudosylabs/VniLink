@@ -381,7 +381,7 @@ fn a_shell_that_cannot_start_refuses_the_terminal_and_leaves_the_connection() ->
           hosting: service opened connection=1 kind=Some(Terminal) service=1
           terminal: terminal not opened error=unsupported reason=terminal backend startup resume=false service=1
           terminal: terminal stream ended ended=unsupported explicit_close=false service=1
-          hosting: service ended without closing kind=Terminal phase=closed: DeviceLoss service=1
+          hosting: service failed kind=Terminal reason=unsupported service=1
           hosting: service released service=1
     "#]].assert_eq(&trace.story(&["terminal", "hosting"]));
     Ok(())

@@ -741,6 +741,24 @@ impl Drop for HostedGuard {
 /// connection lives: a lost connection ends the stream too, and is the
 /// guard's to name.
 pub(super) fn close_hosted(shared: &Shared, id: u64, cause: CloseCause) {
+    settle_hosted(
+        shared,
+        id,
+        ServicePhase::Closed(cause),
+        cause == CloseCause::PeerClose,
+    );
+}
+
+/// Names hosted service `id` failed for `reason`, as a refused open, when
+/// its stream ended with that error on a live connection. A lost
+/// connection fails the stream too, and is the guard's to name.
+pub(super) fn fail_hosted(shared: &Shared, id: u64, reason: &str) {
+    settle_hosted(shared, id, ServicePhase::Failed(reason.to_owned()), true);
+}
+
+/// Moves hosted service `id` to `phase` unless a phase was set first, the
+/// engine is shutting down, or, when `on_live_link`, its connection is gone.
+fn settle_hosted(shared: &Shared, id: u64, phase: ServicePhase, on_live_link: bool) {
     let mut state = lock(&shared.state);
     let Some(connection) = state
         .hosted_services
@@ -754,20 +772,35 @@ pub(super) fn close_hosted(shared: &Shared, id: u64, cause: CloseCause) {
         .incoming
         .get(&connection)
         .is_some_and(LiveSession::connected);
-    if (cause == CloseCause::PeerClose && !connected) || state.shut_down {
+    if (on_live_link && !connected) || state.shut_down {
         return;
     }
     let Some(record) = state.hosted_services.get_mut(&id) else {
         return;
     };
-    record.info.phase = ServicePhase::Closed(cause);
-    tracing::info!(
-        target: crate::trace::HOSTING,
-        service = id,
-        kind = ?record.info.kind,
-        phase = record.info.phase.label(),
-        "service closed"
-    );
+    let failed = match &phase {
+        ServicePhase::Failed(reason) => Some(reason.clone()),
+        _ => None,
+    };
+    record.info.phase = phase;
+    if let Some(reason) = failed {
+        // The reason is an error's fixed name, never its text.
+        tracing::info!(
+            target: crate::trace::HOSTING,
+            service = id,
+            kind = ?record.info.kind,
+            reason,
+            "service failed"
+        );
+    } else {
+        tracing::info!(
+            target: crate::trace::HOSTING,
+            service = id,
+            kind = ?record.info.kind,
+            phase = record.info.phase.label(),
+            "service closed"
+        );
+    }
     let service = record.info.clone();
     drop(state);
     shared
@@ -888,8 +921,12 @@ impl HostedEnding {
             (None, Some(failure)) => failure,
             (None, None) => HostedEnd::Dropped.label(),
         });
-        if let Some(cause) = end.and_then(HostedEnd::cause) {
-            close_hosted(&self.shared, self.id, cause);
+        match (end.and_then(HostedEnd::cause), end, failure) {
+            (Some(cause), _, _) => close_hosted(&self.shared, self.id, cause),
+            // Ended by an error nothing named, as a refused open: the
+            // service failed for it, not its device.
+            (None, None, Some(failure)) => fail_hosted(&self.shared, self.id, failure),
+            _ => {}
         }
     }
 }
