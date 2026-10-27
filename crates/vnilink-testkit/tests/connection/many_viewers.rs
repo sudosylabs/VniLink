@@ -7,7 +7,7 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{Error, Grants, RemoteDesktopService, ServiceInfo, ServiceKind, SessionPhase};
-use vnilink_testkit::desktop::{delta, keyframe, InputLog, MonitorCapture};
+use vnilink_testkit::desktop::{delta, keyframe, InputLog};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 /// `viewer`'s Desktop on a services connection to `host`, its pictures, and
@@ -244,7 +244,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     let term = Engine::start("terminal");
     InputLog::install(&host, MONITOR)?;
     host.core.set_capture(Box::new(
-        MonitorCapture::new((1920, 1080)).separate_cursor(true),
+        vnilink_testkit::desktop::MonitorCapture::new((1920, 1080)).separate_cursor(true),
     ))?;
     host.core
         .set_terminal_factory(Some(shell(&std::env::temp_dir())))?;

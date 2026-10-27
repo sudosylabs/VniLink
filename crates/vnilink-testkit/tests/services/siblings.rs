@@ -6,17 +6,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
+#[cfg(unix)]
 use vnilink::terminal::TerminalEvent;
 use vnilink::{
     CloseCause, Error, Grants, ServiceInfo, ServiceKind, ServicePhase, SessionPhase,
     MAX_SERVICE_RECORDS,
 };
+#[cfg(unix)]
 use vnilink_testkit::camera::{config, StandInCameras};
+#[cfg(unix)]
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::service_changes;
+#[cfg(unix)]
 use vnilink_testkit::files::whole_disk;
+#[cfg(unix)]
 use vnilink_testkit::terminal::{shell, SIZE};
-use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, Pair, TestResult};
+#[cfg(unix)]
+use vnilink_testkit::{wait_for, DEFAULT_WAIT};
 
 /// Work a backend owns, which says when it was dropped.
 struct Resource(Arc<AtomicBool>);

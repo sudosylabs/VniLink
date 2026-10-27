@@ -931,11 +931,18 @@ mod tests {
                 |output| contains(output, printed) && contains(output, "vnilink-testkit-terminal-"),
             );
             let text = String::from_utf8_lossy(&output);
+            // The folder as the shell printed it: a console wraps it in
+            // control sequences and, on Windows, a `>` prompt.
             let folder = text
                 .lines()
-                .map(str::trim)
-                .find(|line| line.contains("vnilink-testkit-terminal-") && !line.contains(typed))
-                .map(std::path::PathBuf::from)
+                .filter(|line| !line.contains(typed))
+                .find_map(|line| {
+                    let at = line.find("vnilink-testkit-terminal-")?;
+                    let bounded = |c: char| c.is_whitespace() || c.is_control() || c == '>';
+                    let start = line[..at].rfind(bounded).map_or(0, |at| at + 1);
+                    let end = line[at..].find(bounded).map_or(line.len(), |end| at + end);
+                    Some(std::path::PathBuf::from(&line[start..end]))
+                })
                 .expect("the shell names its folder");
             assert!(
                 folder.join(OUTPUT_FILE).is_file(),
