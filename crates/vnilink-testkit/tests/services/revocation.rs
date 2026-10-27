@@ -8,7 +8,6 @@ use std::collections::BTreeSet;
 use vnilink::{CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::hosted_closes;
-use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 use super::support::phase;
@@ -22,7 +21,8 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host, "")?;
+    let here = pair.host.location();
+    let (root, folder) = (here.root, here.path(""));
     // A host offers Desktop once it has a monitor and an encoder.
     InputLog::install(&pair.host, (1920, 1080))?;
     let session = pair.connect_services();
@@ -83,11 +83,11 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
         "renamed",
     )?;
     assert!(
-        pair.host.root().join("renamed").is_dir(),
+        pair.host.folder().join("renamed").is_dir(),
         "the rename reached the host's disk"
     );
     assert!(
-        !pair.host.root().join("original").exists(),
+        !pair.host.folder().join("original").exists(),
         "the old name is gone"
     );
     let hosted = pair.host.hosted(None);
@@ -188,7 +188,6 @@ fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothin
     let pair = Pair::for_desktop();
     let (host, a) = (&pair.host, &pair.controller);
     let b = pair.add_viewer("viewer");
-    whole_disk(host, "")?;
     host.core
         .set_capture(Box::new(MonitorCapture::new((1920, 1080))))?;
     host.core.set_service_sharing(ServiceKind::Files, true)?;

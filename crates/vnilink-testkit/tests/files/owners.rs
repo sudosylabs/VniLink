@@ -30,17 +30,17 @@ fn interrupted_transfers_leave_room_for_new_ones() -> TestResult {
     for index in 0..MAX_ACTIVE_JOBS {
         let name = format!("waiting-{index}.bin");
         std::fs::write(
-            pair.controller.root().join(&name),
+            pair.controller.folder().join(&name),
             payload(512, 600 + index as u64),
         )?;
         controller.files_service_upload(
             lost.id,
             lost.generation,
-            pair.controller.root_id(),
-            "",
+            pair.controller.location().root,
+            &pair.controller.location().path(""),
             &[name],
-            pair.host.root_id(),
-            "",
+            pair.host.location().root,
+            &pair.host.location().path(""),
         )?;
     }
     controller.close_controller_service(lost.id, lost.generation)?;
@@ -62,15 +62,18 @@ fn interrupted_transfers_leave_room_for_new_ones() -> TestResult {
     });
 
     let (fresh, _pipe) = pair.controller.open_files(&session)?;
-    std::fs::write(pair.controller.root().join("ninth.bin"), payload(512, 699))?;
+    std::fs::write(
+        pair.controller.folder().join("ninth.bin"),
+        payload(512, 699),
+    )?;
     let ninth = controller.files_service_upload(
         fresh.id,
         fresh.generation,
-        pair.controller.root_id(),
-        "",
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
         &["ninth.bin".to_owned()],
-        pair.host.root_id(),
-        "",
+        pair.host.location().root,
+        &pair.host.location().path(""),
     )?;
     assert_eq!(
         controller.job_snapshot(ninth)?.state,
@@ -198,8 +201,8 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let bytes = payload(4096, 801);
-    std::fs::write(pair.host.root().join("slow.bin"), &bytes)?;
-    std::fs::write(pair.host.root().join("second.bin"), payload(4096, 802))?;
+    std::fs::write(pair.host.folder().join("slow.bin"), &bytes)?;
+    std::fs::write(pair.host.folder().join("second.bin"), payload(4096, 802))?;
     let session = pair.connect_services();
     let (owner, _pipe) = pair.controller.open_files(&session)?;
     let parked = ParkedPreparations::install(host);
@@ -207,11 +210,11 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
         controller.files_service_download(
             owner.id,
             owner.generation,
-            pair.host.root_id(),
-            "",
+            pair.host.location().root,
+            &pair.host.location().path(""),
             &[name.to_owned()],
-            pair.controller.root_id(),
-            "",
+            pair.controller.location().root,
+            &pair.controller.location().path(""),
         )
     };
 
@@ -259,7 +262,7 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
         "once prepared, the download completes on both sides"
     );
     assert_eq!(
-        std::fs::read(pair.controller.root().join("slow.bin"))?,
+        std::fs::read(pair.controller.folder().join("slow.bin"))?,
         bytes,
         "the prepared file lands exactly"
     );
@@ -293,7 +296,7 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
         || {
             host.job_snapshot(host_second)
                 .is_ok_and(|snapshot| snapshot.state == JobState::Cancelled)
-                && !pair.controller.root().join("second.bin").exists()
+                && !pair.controller.folder().join("second.bin").exists()
         },
     );
     drop(parked);

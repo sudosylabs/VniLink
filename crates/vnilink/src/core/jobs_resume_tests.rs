@@ -67,12 +67,8 @@ fn drive_to_end(
 fn a_partial_resumes_after_its_journaled_segments() {
     use crate::transfer::{SegmentHasher, SEGMENT_LEN};
     let (host, controller, host_scratch, controller_scratch) = transfer_pair("partial");
-    let host_files =
-        FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
-    let controller_files = FilesystemLocation::new(
-        controller.file_roots().unwrap(),
-        &controller_scratch.join("root"),
-    );
+    let host_files = FilesystemLocation::on(&host, &host_scratch.join("root"));
+    let controller_files = FilesystemLocation::on(&controller, &controller_scratch.join("root"));
     let segment = SEGMENT_LEN as usize;
     let journaled = payload(segment + 1024 * 1024 + 11, 21);
     let unjournaled = payload(2 * 1024 * 1024 + 5, 22);

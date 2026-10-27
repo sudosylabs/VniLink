@@ -53,10 +53,14 @@ fn run(files: usize, size: usize) {
             .collect();
         std::fs::write(source.join(format!("f{n:05}.bin")), bytes).unwrap();
     }
+    // Both cores share their whole disk, as the application does; the
+    // upload names folders inside this run's scratch folder.
+    let (src_root, src_rel) = place(&controller, &source);
+    let (dst_root, dst_rel) = place(&host, &scratch.0.join("host/root"));
     let _session = controller.connect_files(&host.endpoint_id()).unwrap();
     let started = Instant::now();
     let job = controller
-        .job_submit_upload(&host.endpoint_id(), 0, "set", 0, "")
+        .job_submit_upload(&host.endpoint_id(), src_root, &src_rel, dst_root, &dst_rel)
         .unwrap();
     let accepted = started.elapsed();
     loop {
@@ -89,9 +93,22 @@ fn start(dir: &Path) -> Arc<Core> {
     core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "bench"))
         .unwrap();
     core.set_transfer_directory(dir.join("transfers")).unwrap();
-    core.set_file_roots(vec![std::fs::canonicalize(dir.join("root")).unwrap()])
-        .unwrap();
+    core.enable_filesystem_access().unwrap();
     Arc::new(core)
+}
+
+/// `path` as `core` names it on its shared disk: a root and the path below.
+fn place(core: &Core, path: &Path) -> (u64, String) {
+    let (root, folder, name) = core
+        .locate(path)
+        .unwrap()
+        .expect("the scratch folder is on the shared disk");
+    let rel = if folder.is_empty() {
+        name
+    } else {
+        format!("{folder}/{name}")
+    };
+    (root, rel)
 }
 
 fn pair(host: &Core, controller: &Core) {

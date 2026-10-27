@@ -47,6 +47,105 @@ impl Scratch {
     }
 }
 
+/// The file systems [`ScratchVolume`] makes: those whose ids are entry
+/// positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PositionalFs {
+    Fat32,
+    ExFat,
+}
+
+/// A FAT or exFAT volume mounted inside a test's scratch folder, where
+/// this computer can make one without administrator rights: on macOS a
+/// disk image made and attached with `hdiutil`. Elsewhere mounting needs
+/// an administrator (Linux without a user mount for it, Windows), so
+/// [`Self::new`] says why there is none. Detached and removed on drop.
+pub struct ScratchVolume {
+    mount: PathBuf,
+    /// Holds the image and the mount point; dropped after the detach.
+    _scratch: Scratch,
+}
+
+impl ScratchVolume {
+    /// A new, empty volume of `fs`, or why this computer cannot make one.
+    pub fn new(fs: PositionalFs) -> Result<Self, String> {
+        #[cfg(target_os = "macos")]
+        {
+            let scratch = Scratch::new("volume");
+            let image = scratch.join("volume.dmg");
+            let mount = scratch.join("mounted");
+            std::fs::create_dir(&mount).map_err(|error| error.to_string())?;
+            let format = match fs {
+                PositionalFs::Fat32 => "MS-DOS FAT32",
+                PositionalFs::ExFat => "ExFAT",
+            };
+            let run = |args: &[&std::ffi::OsStr]| {
+                std::process::Command::new("hdiutil")
+                    .args(args)
+                    .status()
+                    .map_err(|error| format!("hdiutil could not run: {error}"))
+                    .and_then(|status| {
+                        status
+                            .success()
+                            .then_some(())
+                            .ok_or_else(|| format!("hdiutil {:?} failed: {status}", args[0]))
+                    })
+            };
+            run(&[
+                "create".as_ref(),
+                "-quiet".as_ref(),
+                "-size".as_ref(),
+                "64m".as_ref(),
+                "-fs".as_ref(),
+                format.as_ref(),
+                "-volname".as_ref(),
+                "VNLTEST".as_ref(),
+                image.as_os_str(),
+            ])?;
+            run(&[
+                "attach".as_ref(),
+                "-quiet".as_ref(),
+                "-nobrowse".as_ref(),
+                "-mountpoint".as_ref(),
+                mount.as_os_str(),
+                image.as_os_str(),
+            ])?;
+            Ok(Self {
+                mount,
+                _scratch: scratch,
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = fs;
+            Err("mounting a FAT or exFAT volume here needs an administrator".to_owned())
+        }
+    }
+
+    /// Where the volume is mounted.
+    pub fn path(&self) -> &Path {
+        &self.mount
+    }
+}
+
+impl Drop for ScratchVolume {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            let detached = std::process::Command::new("hdiutil")
+                .args(["detach", "-quiet", "-force"])
+                .arg(&self.mount)
+                .status();
+            if !detached.is_ok_and(|status| status.success()) {
+                eprintln!(
+                    "the scratch volume at {} was not detached",
+                    self.mount.display()
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

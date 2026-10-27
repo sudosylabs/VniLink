@@ -1,7 +1,9 @@
 //! The scenarios compiled into the agent: each the host half of a suite or
 //! a measurement. A scenario shares only its own service while it runs and
 //! works only in the agent's own folders; the suite names it and passes
-//! parameters, never a command or a path.
+//! parameters, never a command or a path. Files shares a whole disk or
+//! nothing, so the files scenario shares this computer's whole disk while
+//! it runs; the paths it hands the suite name only its own folder.
 //!
 //! `files`, `desktop`, `camera` and `terminal` serve a suite on the agent's
 //! engine; `latency-host`, `latency-viewer` and `perceived-stimulus` start
@@ -61,12 +63,14 @@ pub(crate) trait Scenario: Send {
 }
 
 /// What the agent's owner must allow before the scenario `name` runs: the
-/// latency sides show and read this computer's real screen, and `terminal`
-/// gives the paired computer a real shell here.
+/// latency sides show and read this computer's real screen, `terminal`
+/// gives the paired computer a real shell here, and `files` shares this
+/// computer's whole disk with it.
 pub(crate) fn needs(name: &str) -> Option<Allowance> {
     match name {
         "latency-host" | "latency-viewer" => Some(Allowance::Screen),
         "terminal" => Some(Allowance::Terminal),
+        "files" => Some(Allowance::Files),
         _ => None,
     }
 }
@@ -140,22 +144,30 @@ const NOTHING: Grants = Grants {
     transfer: false,
 };
 
-/// Receives the files the suite uploads into a fresh folder of the agent's
-/// root, over a files session, which the transfer grant alone admits.
+/// Receives the files the suite uploads into a scratch folder of its own,
+/// over a files session, which Files sharing alone admits. Files shares
+/// a whole disk or nothing, so while it runs the paired computer may read
+/// and change this computer's whole disk: it runs only with its owner's
+/// allowance (`--allow files`, which readies the disk before any computer
+/// connects), grants Files only until it stops, and says so on the agent's
+/// terminal when the disk is shared and when sharing ends. The suite is
+/// handed the inbox as the engine names it, a root and a path, and names
+/// no path itself.
 #[derive(Default)]
 struct FilesHost {
-    /// The folder the uploads land in, under the agent's root.
-    inbox: Option<String>,
+    /// The folder the uploads land in, removed at stop.
+    inbox: Option<crate::Scratch>,
     /// Jobs the agent held when the scenario started.
     earlier: HashSet<u64>,
+    /// Whether the agent told its owner the disk is shared.
+    announced: bool,
 }
 
 impl Scenario for FilesHost {
     fn start(&mut self, host: &Engine, _params: &Value) -> Result<Value, String> {
-        let inbox = format!("inbox-{}", vnilink_log::now_ms());
-        std::fs::create_dir_all(host.root().join(&inbox))
-            .map_err(|error| format!("the inbox could not be made: {}", error.kind()))?;
-        self.inbox = Some(inbox.clone());
+        let inbox = crate::Scratch::new("files-inbox");
+        let path = inbox.path().to_path_buf();
+        self.inbox = Some(inbox);
         self.earlier = host
             .core
             .job_list()
@@ -163,13 +175,30 @@ impl Scenario for FilesHost {
             .into_iter()
             .map(|job| job.id)
             .collect();
+        if host
+            .core
+            .file_roots()
+            .map_err(|error| error.to_string())?
+            .is_empty()
+        {
+            return Err(
+                "the agent's disk is not ready to share; its owner allows that with --allow files"
+                    .to_owned(),
+            );
+        }
+        let inbox = crate::files::Location::of(&host.core, &path);
         host.core
             .set_desktop_sharing(Grants {
                 transfer: true,
                 ..NOTHING
             })
             .map_err(|error| error.to_string())?;
-        Ok(json!({ "root": host.root_id(), "inbox": inbox }))
+        println!(
+            "the paired computer may now read and change this computer's whole disk; its uploads land in {}",
+            path.display()
+        );
+        self.announced = true;
+        Ok(json!({ "root": inbox.root, "inbox": inbox.relative }))
     }
 
     fn wait(&mut self, host: &Engine, what: &str, within: Duration) -> Result<Value, String> {
@@ -198,11 +227,30 @@ impl Scenario for FilesHost {
     }
 
     fn stop(&mut self, host: &Engine) {
-        if let Err(error) = host.core.set_desktop_sharing(NOTHING) {
-            eprintln!("the agent could not stop sharing: {error}");
+        // Withdrawing Files sharing ends the paired computer's reach into
+        // the disk: every request of its own is refused from here on.
+        let withdrawn = host.core.set_desktop_sharing(NOTHING);
+        let removed = self.inbox.take().map(|inbox| {
+            let path = inbox.path().to_path_buf();
+            (inbox.close(), path)
+        });
+        if !std::mem::take(&mut self.announced) {
+            if let Err(error) = withdrawn {
+                eprintln!("the agent could not stop sharing: {error}");
+            }
+            return;
         }
-        if let Some(inbox) = self.inbox.take() {
-            let _ = std::fs::remove_dir_all(host.root().join(inbox));
+        match (withdrawn, removed) {
+            (Err(error), _) => println!(
+                "the agent could not stop sharing this computer's disk ({error}); end the agent to stop it"
+            ),
+            (Ok(()), Some((Err(error), path))) => println!(
+                "the paired computer no longer has this computer's disk, but {} could not be removed ({error})",
+                path.display()
+            ),
+            (Ok(()), _) => {
+                println!("the paired computer no longer has this computer's disk")
+            }
         }
     }
 }

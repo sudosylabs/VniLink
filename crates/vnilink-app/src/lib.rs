@@ -97,7 +97,7 @@ pub use events::{EventPoller, VideoPoller};
 pub use files::{
     FfiConflictChoice, FfiDirPage, FfiEntryKind, FfiEntryToken, FfiFileResourcePolicy,
     FfiFileRetentionPolicy, FfiFileRoot, FfiFolderKind, FfiFsEntry, FfiJobDirection,
-    FfiJobSnapshot, FfiJobState, FfiPlace, FfiPlaceRoot, FfiPlaces,
+    FfiJobSnapshot, FfiJobState, FfiPlace, FfiPlaceRoot, FfiPlaces, FfiTokenKind,
 };
 pub use types::{
     new_quality, FfiCapabilities, FfiCapabilityStatus, FfiCodecPreference, FfiCodecSupport,
@@ -498,9 +498,9 @@ impl VnilinkCore {
         self.inner.reject_control_request().map_err(map_error)
     }
 
-    /// Dials for file roots/listings/transfers only, without requiring a
-    /// video decoder or host screen sharing. Host admission needs Transfer
-    /// (Control not required).
+    /// Dials for listings, changes and transfers on the shared disk only,
+    /// without requiring a video decoder or host screen sharing. Host
+    /// admission needs Transfer (Control not required).
     pub fn connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
         self.inner
             .connect_files(&endpoint_id)

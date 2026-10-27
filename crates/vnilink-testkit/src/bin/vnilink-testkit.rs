@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use vnilink_testkit::peer::agent::{Agent, Allowance, Ending};
 use vnilink_testkit::{Engine, Reach};
 
-const USAGE: &str = "usage: vnilink-testkit agent [--out <file.vnl>] [--ttl <seconds>] [--idle <seconds>] [--loopback] [--allow screen|terminal[,...]]
+const USAGE: &str = "usage: vnilink-testkit agent [--out <file.vnl>] [--ttl <seconds>] [--idle <seconds>] [--loopback] [--allow screen|terminal|files[,...]]
        vnilink-testkit bridge --peer <file.vnl> --peer-check <digits> [--loopback]";
 
 /// How long the pairing file admits a computer when `--ttl` does not say.
@@ -187,7 +187,7 @@ fn agent(options: &Options) -> Result<Ending, String> {
     }
     let mut agent = Agent::open(options.reach).map_err(|error| error.to_string())?;
     for allowance in &options.allowed {
-        agent.allow(*allowance);
+        agent.allow(*allowance).map_err(|error| error.to_string())?;
         println!(
             "a scenario that {} may run (--allow {})",
             allowance.effect(),

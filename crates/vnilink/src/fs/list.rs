@@ -179,6 +179,10 @@ fn list_page_anchored(
         Err(Error::NoSession)
     };
     let dir_fd = roots.open_dir_fd(id, rel)?;
+    // Each entry's token is an identity, or a fingerprint on a volume whose
+    // ids are entry positions; an unreadable volume lists fingerprints too.
+    let ids = vnilink_rename::anchored::volume_ids(dir_fd.as_dir())
+        .unwrap_or(vnilink_rename::VolumeIds::FAT);
     // Single bounded enumeration: at most MAX_LISTED + 1 raw entries are
     // ever allocated, and the truncation state comes from the same pass
     // (a second scan of the handle would see an exhausted offset, not
@@ -213,7 +217,7 @@ fn list_page_anchored(
         if list_probe(position as u64 + 1, cancelled, hooks) {
             return aborted();
         }
-        entries.push(stat_anchored(&dir_fd, name));
+        entries.push(stat_anchored(&dir_fd, name, ids));
     }
     let next_offset = if (end as u64) < total {
         Some(end as u64)
@@ -295,7 +299,11 @@ fn list_page_pathname(
 }
 
 #[cfg(any(unix, windows))]
-fn stat_anchored(dir_fd: &vnilink_rename::anchored::Dir, name: &str) -> FsEntry {
+fn stat_anchored(
+    dir_fd: &vnilink_rename::anchored::Dir,
+    name: &str,
+    ids: vnilink_rename::VolumeIds,
+) -> FsEntry {
     use vnilink_rename::anchored::AsDir;
     match vnilink_rename::anchored::stat_at(dir_fd.as_dir(), name) {
         Ok(st) => {
@@ -317,11 +325,7 @@ fn stat_anchored(dir_fd: &vnilink_rename::anchored::Dir, name: &str) -> FsEntry 
                     0
                 },
                 mtime_ms: st.mtime_ms,
-                token: super::entry::EntryToken {
-                    dev: Some(st.dev),
-                    ino: Some(st.ino),
-                    born: st.born,
-                },
+                token: super::entry::token_of(name, &st, ids),
             }
         }
         Err(_) => FsEntry {
@@ -384,7 +388,7 @@ mod tests {
         std::fs::write(root.join("beta.txt"), b"beta-bytes").unwrap();
         let mut roots = crate::fs::RootSet::default();
         roots.set_filesystem().unwrap();
-        let files = FilesystemLocation::new(roots.snapshot(), &root);
+        let files = FilesystemLocation::in_roots(&roots, &root);
         // Stand-in for the shared file-roots lock: the parked listing must
         // hold no lock across its worker await, so the sibling locks,
         // snapshots and completes while the first stays parked.

@@ -339,14 +339,19 @@ interrupted, idles or loses its suite, the agent ends the shell and what it
 started, in the background or under `nohup` too, and removes the folder. On
 macOS a process that leaves the shell's session after its parent ended is not
 found. The scenario runs only when the agent was started with
-`--allow terminal`. Other suites
+`--allow terminal`. Files shares a whole disk or nothing, so the files
+scenario gives the suite's computer this computer's whole disk while it
+runs: it runs only when the agent was started with `--allow files`, the
+agent says on its terminal when the disk is shared and when that ends, and
+uploads land in a folder of the scenario's own that the agent names and
+removes when the scenario stops. Other suites
 refuse `--peer`. A peer run is saved apart from this computer's runs and
 reports regressions without failing. The latency and perceived-quality
 measurements reach the same agent through `vnilink-testkit bridge`, and the
 agent starts their other side from its own checkout; the latency sides show
 its real screen, so they run only when the agent was started with
 `--allow screen`. `--allow` repeats or takes a comma list
-(`--allow screen,terminal`).
+(`--allow screen,terminal,files`).
 
 A build on macOS does not exercise Windows or Linux native code. Synthetic
 frames and loopback sessions do not prove an interactive remote desktop across

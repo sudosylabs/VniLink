@@ -1,6 +1,6 @@
 //! What several files modules share: a sender's serve parked with its source
-//! open. A computer sharing its whole disk is the kit's
-//! ([`vnilink_testkit::files::whole_disk`]).
+//! open. Paths inside an engine's folder are the kit's
+//! ([`vnilink_testkit::files::Location`]).
 
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;

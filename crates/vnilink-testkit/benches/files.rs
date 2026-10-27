@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use vnilink::JobState;
+use vnilink::{Grants, JobState};
 use vnilink_testkit::bench::{Better, Report};
 use vnilink_testkit::files::{drive, finished, received, write_files};
 use vnilink_testkit::peer::Remote;
@@ -20,8 +20,8 @@ const UPLOAD_WAIT: Duration = Duration::from_secs(600);
 fn upload(files: &[(&str, usize)]) -> Duration {
     let pair = Pair::for_files();
     drive(&pair);
-    write_files(&pair.controller.root().join("set"), files);
-    std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
+    write_files(&pair.controller.folder().join("set"), files);
+    std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
     pair.controller
         .core
         .connect_files(&pair.host.endpoint())
@@ -31,10 +31,10 @@ fn upload(files: &[(&str, usize)]) -> Duration {
         .core
         .job_submit_upload(
             &pair.host.endpoint(),
-            pair.controller.root_id(),
-            "set",
-            pair.host.root_id(),
-            "inbox",
+            pair.controller.location().root,
+            &pair.controller.location().path("set"),
+            pair.host.location().root,
+            &pair.host.location().path("inbox"),
         )
         .unwrap();
     let receiver = received(&pair.host.core);
@@ -47,7 +47,7 @@ fn upload(files: &[(&str, usize)]) -> Duration {
 /// Uploads `files` to the agent and returns how long until the agent said
 /// its receiver finished: the receiver's time plus the answer's way back.
 fn upload_to(remote: &mut Remote, files: &[(&str, usize)]) -> Duration {
-    let set = remote.suite.root().join("set");
+    let set = remote.suite.folder().join("set");
     let _ = std::fs::remove_dir_all(&set);
     write_files(&set, files);
     let facts = remote
@@ -57,6 +57,14 @@ fn upload_to(remote: &mut Remote, files: &[(&str, usize)]) -> Duration {
     let (Some(root), Some(inbox)) = (facts["root"].as_u64(), facts["inbox"].as_str()) else {
         panic!("the files scenario said where uploads land: {facts}");
     };
+    // The agent fetches what it receives, so this computer shares Files
+    // with it, its whole disk, only while the upload runs.
+    let (_, controller) = FILES;
+    remote
+        .suite
+        .core
+        .set_desktop_sharing(controller)
+        .expect("sharing Files with the agent");
     let endpoint = remote.host.endpoint().to_owned();
     let session = remote
         .suite
@@ -67,7 +75,13 @@ fn upload_to(remote: &mut Remote, files: &[(&str, usize)]) -> Duration {
     remote
         .suite
         .core
-        .job_submit_upload(&endpoint, remote.suite.root_id(), "set", root, inbox)
+        .job_submit_upload(
+            &endpoint,
+            remote.suite.location().root,
+            &remote.suite.location().path("set"),
+            root,
+            inbox,
+        )
         .expect("the upload");
     let done = remote.host.wait("received", UPLOAD_WAIT);
     let took = started.elapsed();
@@ -76,6 +90,11 @@ fn upload_to(remote: &mut Remote, files: &[(&str, usize)]) -> Duration {
         .core
         .disconnect_session(session.id)
         .expect("the session ends");
+    remote
+        .suite
+        .core
+        .set_desktop_sharing(Grants::default())
+        .expect("sharing nothing with the agent");
     let records = remote.host.stop().expect("the scenario ends");
     let done = done.unwrap_or_else(|error| {
         panic!(
@@ -97,12 +116,6 @@ fn main() {
     let mut remote = Remote::from_env();
     let mut report = Report::new("files");
     if let Some(remote) = remote.as_mut() {
-        let (_, controller) = FILES;
-        remote
-            .suite
-            .core
-            .set_desktop_sharing(controller)
-            .expect("sharing");
         remote.suite.core.start_job_driver();
     }
     let mut measure = |name: &str, files: Vec<(String, usize)>| {

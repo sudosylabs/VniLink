@@ -1,4 +1,4 @@
-//! Small Windows filesystem primitives; callers still own path confinement.
+//! Small Windows filesystem primitives; callers own how paths are resolved.
 use std::{io, os::windows::ffi::OsStrExt, path::Path};
 
 use std::os::windows::io::{AsHandle, AsRawHandle as _, BorrowedHandle};
@@ -92,10 +92,11 @@ pub fn walkable_directory(attributes: u32, tag: u32) -> bool {
     attributes & 0x10 != 0 && (attributes & 0x400 == 0 || tag & !CLOUD_TAG_MASK == CLOUD_TAG)
 }
 
-/// Refuses a volume whose file ids are not stable object identities: FAT
-/// and exFAT derive them from an entry's position, so a renamed or replaced
-/// entry can take another's id.
-pub fn require_stable_ids(handle: BorrowedHandle<'_>) -> io::Result<()> {
+/// How the volume `handle` is on names its entries: FAT and exFAT derive
+/// file ids from an entry's position, so a renamed or replaced entry can
+/// take another's id, and a volume whose `FileIdInfo` reports no usable id
+/// cannot tell its entries apart either.
+pub fn volume_ids(handle: BorrowedHandle<'_>) -> io::Result<crate::VolumeIds> {
     let mut name = [0u16; 64];
     // SAFETY: the borrowed handle is live; only the file system name buffer
     // is requested, writable and of the length passed; other outputs are null.
@@ -119,16 +120,17 @@ pub fn require_stable_ids(handle: BorrowedHandle<'_>) -> io::Result<()> {
         .position(|&unit| unit == 0)
         .unwrap_or(name.len());
     let system = String::from_utf16_lossy(&name[..length]);
-    if ["FAT", "FAT12", "FAT16", "FAT32", "exFAT"]
+    if system.eq_ignore_ascii_case("exFAT") {
+        return Ok(crate::VolumeIds::EXFAT);
+    }
+    if ["FAT", "FAT12", "FAT16", "FAT32"]
         .iter()
         .any(|fat| system.eq_ignore_ascii_case(fat))
+        || object_identity(handle).is_err()
     {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "the volume's file ids are entry positions",
-        ));
+        return Ok(crate::VolumeIds::FAT);
     }
-    object_identity(handle).map(drop)
+    Ok(crate::VolumeIds::Stable)
 }
 #[link(name = "kernel32")]
 unsafe extern "system" {

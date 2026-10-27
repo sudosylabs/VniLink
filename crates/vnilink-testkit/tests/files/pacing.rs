@@ -43,7 +43,7 @@ fn a_small_file_completes_promptly_on_its_own() -> TestResult {
     drive(&pair);
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     for name in ["first.bin", "second.bin"] {
-        std::fs::write(pair.controller.root().join(name), vec![7u8; 2500])?;
+        std::fs::write(pair.controller.folder().join(name), vec![7u8; 2500])?;
         // Submitting scans and offers the file: it counts.
         let started = std::time::Instant::now();
         let job = files::upload(&pair, name, "")?;
@@ -61,7 +61,7 @@ fn a_small_file_completes_promptly_on_its_own() -> TestResult {
             started.elapsed()
         );
         assert_eq!(
-            std::fs::read(pair.host.root().join(name))?.len(),
+            std::fs::read(pair.host.folder().join(name))?.len(),
             2500,
             "a completed small file landed whole"
         );
@@ -78,23 +78,23 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
     let pair = Pair::for_files();
     let (controller, host) = (&pair.controller.core, &pair.host.core);
     let bytes = payload(512 * 1024, 917);
-    std::fs::write(pair.controller.root().join("carry.bin"), &bytes)?;
+    std::fs::write(pair.controller.folder().join("carry.bin"), &bytes)?;
     let session = pair.connect_services();
     let (lost, pipe) = pair.controller.open_files(&session)?;
     let job = controller.files_service_upload(
         lost.id,
         lost.generation,
-        pair.controller.root_id(),
-        "",
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
         &["carry.bin".to_owned()],
-        pair.host.root_id(),
-        "inbox",
+        pair.host.location().root,
+        &pair.host.location().path("inbox"),
     )?;
     assert_eq!(
         controller.job_snapshot(job)?.destination,
         Some(JobDestination {
-            root: pair.host.root_id(),
-            folder: "inbox".into(),
+            root: pair.host.location().root,
+            folder: pair.host.location().path("inbox"),
             items: vec![JobItem {
                 name: "carry.bin".into(),
                 folder: false,
@@ -136,7 +136,7 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
         "a job taken over finishes"
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("inbox/carry.bin"))?,
+        std::fs::read(pair.host.folder().join("inbox/carry.bin"))?,
         bytes,
         "it lands where it was going"
     );
@@ -166,8 +166,8 @@ fn the_other_computers_folder_says_when_it_changes() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
     let (_owner, pipe) = pair.controller.open_files(&pair.connect_services())?;
-    let root = pair.host.root_id();
-    pipe.watch(Some((root, String::new())));
+    let here = pair.host.location();
+    pipe.watch(Some((here.root, here.path(""))));
     // The watch's first answer is the folder as it is, and only a change
     // after it counts; nothing tells when that answer came, so files are
     // made there until a change is counted. A new name, as kqueue reports
@@ -182,14 +182,14 @@ fn the_other_computers_folder_says_when_it_changes() -> TestResult {
             if made.is_none_or(|at| at.elapsed() >= Duration::from_millis(100)) {
                 count += 1;
                 let name = format!("arrived-{count}.txt");
-                std::fs::write(pair.host.root().join(name), b"new").ok()?;
+                std::fs::write(pair.host.folder().join(name), b"new").ok()?;
                 made = Some(Instant::now());
             }
             (pipe.folder_revision() > before).then_some(())
         },
     );
     assert!(
-        pipe.list(root, "", 0, 100)?
+        pipe.list(here.root, &here.path(""), 0, 100)?
             .entries
             .iter()
             .any(|entry| entry.name == "arrived-1.txt"),
@@ -197,7 +197,7 @@ fn the_other_computers_folder_says_when_it_changes() -> TestResult {
     );
     pipe.watch(None);
     let stopped = pipe.folder_revision();
-    std::fs::write(pair.host.root().join("later.txt"), b"later")?;
+    std::fs::write(pair.host.folder().join("later.txt"), b"later")?;
     holds(
         "an unwatched folder counting no changes",
         Duration::from_millis(1500),
@@ -215,7 +215,7 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     for side in [&pair.controller, &pair.host] {
-        let folder = side.root().join("many");
+        let folder = side.folder().join("many");
         std::fs::create_dir_all(&folder)?;
         for index in 0..FILES {
             std::fs::write(folder.join(format!("f-{index:04}.txt")), b"x")?;
@@ -283,8 +283,8 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     let (controller, host) = (&pair.controller.core, &pair.host.core);
-    std::fs::write(pair.controller.root().join("same.txt"), b"theirs")?;
-    std::fs::write(pair.host.root().join("same.txt"), b"mine")?;
+    std::fs::write(pair.controller.folder().join("same.txt"), b"theirs")?;
+    std::fs::write(pair.host.folder().join("same.txt"), b"mine")?;
     controller.connect_files(&pair.host.endpoint())?;
     drive(&pair);
     let job = files::upload(&pair, "same.txt", "")?;
@@ -314,7 +314,7 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
         },
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("same.txt"))?,
+        std::fs::read(pair.host.folder().join("same.txt"))?,
         b"mine",
         "the question stands before the file is touched"
     );
@@ -332,7 +332,7 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
         "the receiver completes: {got:?}"
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("same.txt"))?,
+        std::fs::read(pair.host.folder().join("same.txt"))?,
         b"theirs",
         "the answer replaced the file"
     );
@@ -376,7 +376,7 @@ fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
     for index in 0..4u64 {
         let name = format!("plain-{index}.bin");
         let bytes = payload(2048, 300 + index);
-        std::fs::write(pair.controller.root().join(&name), &bytes)?;
+        std::fs::write(pair.controller.folder().join(&name), &bytes)?;
         let job = files::upload(&pair, &name, "")?;
         let (sender, got) = drive_to_end(controller, job, host, receiver_of(&name), TRANSFER);
         assert_eq!(
@@ -385,21 +385,21 @@ fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
             "a job no Files service owns is driven over the files-only session"
         );
         assert_eq!(
-            std::fs::read(pair.host.root().join(&name))?,
+            std::fs::read(pair.host.folder().join(&name))?,
             bytes,
             "{name} landed exactly"
         );
     }
     let bytes = payload(2048, 399);
-    std::fs::write(pair.controller.root().join("owned.bin"), &bytes)?;
+    std::fs::write(pair.controller.folder().join("owned.bin"), &bytes)?;
     let job = controller.files_service_upload(
         owner.id,
         owner.generation,
-        pair.controller.root_id(),
-        "",
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
         &["owned.bin".to_owned()],
-        pair.host.root_id(),
-        "",
+        pair.host.location().root,
+        &pair.host.location().path(""),
     )?;
     let (sender, got) = drive_to_end(controller, job, host, receiver_of("owned.bin"), TRANSFER);
     assert_eq!(
@@ -408,7 +408,7 @@ fn job_control_rides_the_session_that_carries_the_job() -> TestResult {
         "a Files job is driven over its own service's link"
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("owned.bin"))?,
+        std::fs::read(pair.host.folder().join("owned.bin"))?,
         bytes,
         "the owned file landed exactly"
     );
@@ -425,8 +425,8 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     let (controller, host) = (&pair.controller.core, &pair.host.core);
-    let (controller_root, host_root) = (pair.controller.root_id(), pair.host.root_id());
-    let pick = pair.controller.root().join("pick");
+    let (mine, theirs) = (pair.controller.location(), pair.host.location());
+    let pick = pair.controller.folder().join("pick");
     std::fs::create_dir_all(pick.join("Photos"))?;
     std::fs::write(pick.join("a.txt"), payload(700, 501))?;
     std::fs::write(pick.join("Photos/one.jpg"), payload(900, 502))?;
@@ -439,11 +439,11 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
             .files_service_upload(
                 owner.id,
                 owner.generation,
-                controller_root,
-                "pick",
+                mine.root,
+                &mine.path("pick"),
                 &["a.txt".to_owned(), "a.txt".to_owned()],
-                host_root,
-                "",
+                theirs.root,
+                &theirs.path(""),
             )
             .is_err(),
         "an item chosen twice is refused"
@@ -451,11 +451,11 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
     let up = controller.files_service_upload(
         owner.id,
         owner.generation,
-        controller_root,
-        "pick",
+        mine.root,
+        &mine.path("pick"),
         &names,
-        host_root,
-        "",
+        theirs.root,
+        &theirs.path(""),
     )?;
     let sent = controller.job_snapshot(up)?;
     assert_eq!(sent.files_total, 3, "one manifest holds every chosen file");
@@ -477,8 +477,9 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
         ]),
         "the destination names each item and whether it is a folder"
     );
-    let rename =
-        |name: &str, to: &str| controller.rename_entry(controller_root, "pick", name, None, to);
+    let rename = |name: &str, to: &str| {
+        controller.rename_entry(mine.root, &mine.path("pick"), name, None, to)
+    };
     assert!(rename("a.txt", "b.txt").is_err(), "a chosen file moved");
     assert!(
         rename("Photos", "Pictures").is_err(),
@@ -495,29 +496,29 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
     assert_eq!(got.files_done, 3, "every chosen file landed");
     assert_eq!(sender.files_done, 3, "the sender heard what landed");
     assert_eq!(
-        std::fs::read(pair.host.root().join("a.txt"))?,
+        std::fs::read(pair.host.folder().join("a.txt"))?,
         payload(700, 501),
         "a chosen file lands at its own name"
     );
     assert_eq!(
-        tree(&pair.host.root().join("Photos")),
+        tree(&pair.host.folder().join("Photos")),
         tree(&pick.join("Photos")),
         "a chosen folder lands whole"
     );
     assert!(
-        !pair.host.root().join("still-left.txt").exists(),
+        !pair.host.folder().join("still-left.txt").exists(),
         "a sibling not chosen stays behind"
     );
 
-    std::fs::create_dir_all(pair.controller.root().join("back"))?;
+    std::fs::create_dir_all(pair.controller.folder().join("back"))?;
     let down = controller.files_service_download(
         owner.id,
         owner.generation,
-        host_root,
-        "",
+        theirs.root,
+        &theirs.path(""),
         &names,
-        controller_root,
-        "back",
+        mine.root,
+        &mine.path("back"),
     )?;
     let host_job = wait_for("the host's sending job", DEFAULT_WAIT, || {
         host.job_list()
@@ -534,12 +535,12 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
     );
     assert_eq!(got.files_done, 3, "every chosen file came back");
     assert_eq!(
-        std::fs::read(pair.controller.root().join("back/a.txt"))?,
+        std::fs::read(pair.controller.folder().join("back/a.txt"))?,
         payload(700, 501),
         "a chosen file comes back at its own name"
     );
     assert_eq!(
-        tree(&pair.controller.root().join("back/Photos")),
+        tree(&pair.controller.folder().join("back/Photos")),
         tree(&pick.join("Photos")),
         "a chosen folder comes back whole"
     );
@@ -577,7 +578,7 @@ fn diagnostics_count_a_finished_transfer() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
     let bytes = payload(200 * 1024, 1901);
-    std::fs::write(pair.controller.root().join("counted.bin"), &bytes)?;
+    std::fs::write(pair.controller.folder().join("counted.bin"), &bytes)?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "counted.bin", "arrived")?;
     let receiver = received(&pair.host.core);
@@ -644,7 +645,7 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
     let many: Vec<(String, usize)> = (0..20)
         .map(|n| (format!("many/f{n:02}.bin"), 3000))
         .collect();
-    write_named(&pair.controller.root(), &many, 2000);
+    write_named(&pair.controller.folder(), &many, 2000);
     controller.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "many", "")?;
     let receiver = files::only_job(host)?;
@@ -668,8 +669,8 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
         "the folder completes on both sides"
     );
     assert_eq!(
-        tree(&pair.host.root().join("many")),
-        tree(&pair.controller.root().join("many")),
+        tree(&pair.host.folder().join("many")),
+        tree(&pair.controller.folder().join("many")),
         "the small files land exactly"
     );
     assert_eq!(
@@ -682,7 +683,7 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
     let again: Vec<(String, usize)> = (0..10)
         .map(|n| (format!("again/g{n:02}.bin"), 3000))
         .collect();
-    write_named(&pair.controller.root(), &again, 2100);
+    write_named(&pair.controller.folder(), &again, 2100);
     files::upload(&pair, "again", "")?;
     let receiver = host
         .job_list()?

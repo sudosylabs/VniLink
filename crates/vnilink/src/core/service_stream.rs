@@ -1249,7 +1249,7 @@ pub(super) async fn serve(
             },
         };
         // The existing handler checks current peer, generation, Transfer grant
-        // and approved roots at each operation, under the mutation locks.
+        // and shared roots at each operation, under the mutation locks.
         tokio::select! {
             biased;
             _ = parent_stop.changed() => break,
@@ -1402,7 +1402,7 @@ mod tests {
     fn a_slow_listing_times_out_without_ending_the_files_service() {
         let (host, controller, host_scratch, _controller_scratch) = transfer_pair("slowlist");
         std::fs::write(host_scratch.join("root/a.txt"), b"a").unwrap();
-        let files = FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.join("root"));
+        let files = FilesystemLocation::on(&host, &host_scratch.join("root"));
         let (owner, pipe) = owned_files(&controller, &host);
         let key = std::str::FromStr::from_str(&controller.endpoint_id())
             .map(|key: iroh::PublicKey| *key.as_bytes())

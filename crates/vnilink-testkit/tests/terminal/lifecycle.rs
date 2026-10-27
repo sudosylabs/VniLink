@@ -27,7 +27,7 @@ fn a_terminal_ends_with_its_shell_and_leaves_its_connection_and_siblings() -> Te
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    host.set_terminal_factory(Some(shell(&pair.host.root())))?;
+    host.set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let connection = pair.connect_services();
     assert!(
         controller
@@ -122,7 +122,7 @@ fn revoking_terminal_or_disabling_its_backend_ends_only_the_terminal() -> TestRe
     let trace = traced();
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     let host = &pair.host.core;
-    host.set_terminal_factory(Some(shell(&pair.host.root())))?;
+    host.set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let connection = pair.connect_services();
     for disable in [false, true] {
         let terminal = open(&pair.controller, &connection)?;
@@ -282,7 +282,7 @@ fn closing_a_terminal_does_not_wait_for_unread_output() -> TestResult {
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     pair.host
         .core
-        .set_terminal_factory(Some(shell(&pair.host.root())))?;
+        .set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let connection = pair.connect_services();
     let terminal = open(&pair.controller, &connection)?;
     flood_unread(&terminal)?;
@@ -321,7 +321,7 @@ fn disconnecting_does_not_wait_for_unread_terminal_output() -> TestResult {
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     pair.host
         .core
-        .set_terminal_factory(Some(shell(&pair.host.root())))?;
+        .set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let connection = pair.connect_services();
     let terminal = open(&pair.controller, &connection)?;
     flood_unread(&terminal)?;
@@ -395,7 +395,7 @@ fn simultaneous_terminals_run_independent_shells() -> TestResult {
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     pair.host
         .core
-        .set_terminal_factory(Some(shell(&pair.host.root())))?;
+        .set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let connection = pair.connect_services();
     let first = open(&pair.controller, &connection)?;
     let second = open(&pair.controller, &connection)?;

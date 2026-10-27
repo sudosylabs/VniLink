@@ -28,6 +28,37 @@ use super::roots::RootSet;
 
 pub(crate) const STALE_ENTRY: &str = "the entry changed since it was listed";
 pub(crate) const RENAME_FAILED: &str = "the entry could not be renamed";
+/// How the volume `dir` is on names its entries. A volume that cannot say
+/// is treated as one naming them by position, so changes there need a
+/// fingerprint.
+#[cfg(any(unix, windows))]
+pub(crate) fn volume_ids(dir: &vnilink_rename::anchored::Dir) -> vnilink_rename::VolumeIds {
+    use vnilink_rename::anchored::AsDir;
+    vnilink_rename::anchored::volume_ids(dir.as_dir()).unwrap_or(vnilink_rename::VolumeIds::FAT)
+}
+
+/// Whether a change may act on the entry now tokened `current`, listed as
+/// `expected`, on a volume naming its entries as `ids` does. A strong
+/// listed token must name the same object, or match the same fingerprint.
+/// Where ids are positions, a change needs a listed fingerprint; elsewhere
+/// a change without a token proves nothing and is the caller's choice.
+pub(crate) fn still_listed(
+    expected: Option<EntryToken>,
+    current: EntryToken,
+    positional: bool,
+) -> Result<(), Error> {
+    match expected {
+        Some(expected) if expected.is_strong() => {
+            if current.is_strong() && expected.same_object(current) {
+                Ok(())
+            } else {
+                Err(Error::InvalidSetting(STALE_ENTRY))
+            }
+        }
+        _ if positional => Err(Error::UnprovenEntry),
+        _ => Ok(()),
+    }
+}
 
 pub(crate) fn rename_entry(
     roots: &RootSet,
@@ -46,23 +77,20 @@ pub(crate) fn rename_entry(
     {
         use vnilink_rename::anchored::AsDir;
         let dir = roots.open_dir_held(id, rel)?;
-        let before = stat_anchored(&dir, name)?;
+        let ids = volume_ids(&dir);
+        let (before, identity) = stat_anchored(&dir, name, ids)?;
         if before.kind == EntryKind::Other && before.token == EntryToken::NONE {
             return Err(Error::InvalidSetting(RENAME_FAILED));
         }
-        if let Some(expected) = expected {
-            if expected.is_strong()
-                && before.token.is_strong()
-                && !expected.same_object(before.token)
-            {
-                return Err(Error::InvalidSetting(STALE_ENTRY));
-            }
-            if expected.is_strong() && !before.token.is_strong() {
-                return Err(Error::InvalidSetting(STALE_ENTRY));
-            }
-        }
+        still_listed(
+            expected,
+            before.token,
+            ids != vnilink_rename::VolumeIds::Stable,
+        )?;
+        // The object's own id says whether both spellings name it, even
+        // where ids are positions: one entry has one position.
         if same_spelling_different_case(name, new_name)
-            && dest_exists_pointing_at_anchored(&dir, new_name, before.token)
+            && dest_exists_pointing_at_anchored(&dir, new_name, identity)
         {
             return rename_case_only_anchored(&dir, name, new_name);
         }
@@ -118,10 +146,13 @@ pub(crate) fn rename_entry(
 }
 
 #[cfg(any(unix, windows))]
+/// `name` in `dir` as a listing on a volume naming its entries as `ids`
+/// does states it, and its object identity.
 fn stat_anchored(
     dir: &vnilink_rename::anchored::Dir,
     name: &str,
-) -> Result<super::entry::FsEntry, Error> {
+    ids: vnilink_rename::VolumeIds,
+) -> Result<(super::entry::FsEntry, EntryToken), Error> {
     use vnilink_rename::anchored::AsDir;
     match vnilink_rename::anchored::stat_at(dir.as_dir(), name) {
         Ok(st) => {
@@ -138,17 +169,16 @@ fn stat_anchored(
             if kind == EntryKind::Symlink {
                 return Err(Error::InvalidSetting(RENAME_FAILED));
             }
-            Ok(super::entry::FsEntry {
-                name: String::new(),
-                kind,
-                size: if kind == EntryKind::File { st.size } else { 0 },
-                mtime_ms: st.mtime_ms,
-                token: EntryToken {
-                    dev: Some(st.dev),
-                    ino: Some(st.ino),
-                    born: st.born,
+            Ok((
+                super::entry::FsEntry {
+                    name: String::new(),
+                    kind,
+                    size: if kind == EntryKind::File { st.size } else { 0 },
+                    mtime_ms: st.mtime_ms,
+                    token: super::entry::token_of(name, &st, ids),
                 },
-            })
+                EntryToken::identity(st.dev, st.ino, st.born),
+            ))
         }
         Err(_) => Err(Error::InvalidSetting(RENAME_FAILED)),
     }
@@ -160,10 +190,10 @@ fn dest_exists_pointing_at_anchored(
     dest: &str,
     source: EntryToken,
 ) -> bool {
-    let Ok(after) = stat_anchored(dir, dest) else {
+    let Ok((_, after)) = stat_anchored(dir, dest, vnilink_rename::VolumeIds::Stable) else {
         return false;
     };
-    source.is_strong() && after.token.is_strong() && source.same_object(after.token)
+    source.same_object(after)
 }
 
 #[cfg(any(unix, windows))]
@@ -176,7 +206,7 @@ fn rename_case_only_anchored(
     for attempt in 0..8u32 {
         let temp = format!(".vnlcase.{attempt}.tmp");
         // Skip occupied temp names without touching them.
-        if stat_anchored(dir, &temp).is_ok() {
+        if stat_anchored(dir, &temp, vnilink_rename::VolumeIds::Stable).is_ok() {
             continue;
         }
         vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), source, &temp)

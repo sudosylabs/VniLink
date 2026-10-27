@@ -1,11 +1,11 @@
-//! Owner-approved file roots and filesystem operations.
+//! The shared disk and filesystem operations.
 //!
 //! The `Core` methods here execute against this installation's own disks
 //! (the local pane). The `fs_list`/`fs_mkdir`/`fs_rename`/`fs_delete` methods reach the
 //! controlled computer instead: each request opens its own short side
 //! stream on the live control connection, carrying the versioned wire codec
-//! with the session generation, and the host re-checks generation and the
-//! transfer grant per request before touching its disks.
+//! with the session generation, and the host re-checks generation and
+//! Files sharing per request before touching its disks.
 // trace: records every ignored failure
 
 use super::*;
@@ -40,9 +40,12 @@ pub enum FsOutcome {
 }
 
 impl Core {
-    /// Enables filesystem browsing within this process's OS permissions.
-    /// Files service authorization remains independent and is checked on each
-    /// operation. Existing folder-only access can still be explicitly selected.
+    /// Shares the whole disk, within this process's OS permissions: `/` on
+    /// Unix and every drive on Windows. Nothing is browsable until this
+    /// runs, and Files sharing with the peer (the `Transfer` grant) is still
+    /// checked on each operation.
+    /// Refused while a controlling session is active, like the transfer
+    /// directory.
     pub fn enable_filesystem_access(&self) -> Result<(), Error> {
         let _engine = self.engine();
         let state = self.alive_state()?;
@@ -56,37 +59,26 @@ impl Core {
         drop(state);
         lock(&self.shared.file_roots).set_filesystem()
     }
-    /// Replaces the owner-approved file roots. Nothing is browsable until
-    /// this runs: pairing and transfer grants never widen into filesystem
-    /// access on their own. Refused while a controlling session is active,
-    /// like the transfer directory.
-    pub fn set_file_roots(&self, paths: Vec<std::path::PathBuf>) -> Result<(), Error> {
+
+    /// Test probe: shares `paths` as this computer's drives in place of
+    /// the whole disk, as the drives are read again when one comes, goes or
+    /// another volume takes a letter. A test takes a folder standing in for
+    /// a drive out, or puts another at its path, and calls this again; a
+    /// transfer pinned to the drive it began on then fails or resumes as
+    /// it would on Windows. Unlike sharing the disk, it is not refused
+    /// during a session: drives change whenever they change.
+    #[cfg(feature = "test-probes")]
+    pub fn share_as_drives(&self, paths: Vec<std::path::PathBuf>) -> Result<(), Error> {
         let _engine = self.engine();
-        let state = self.alive_state()?;
-        if state
-            .incoming
-            .values()
-            .any(|session| !finished(&session.phase))
-        {
-            return Err(Error::Busy);
-        }
-        drop(state);
-        let mut roots = lock(&self.shared.file_roots);
-        roots.set(&paths)
+        self.ensure_alive()?;
+        lock(&self.shared.file_roots).share_as_drives(&paths)
     }
 
-    /// Snapshots the approved roots as `(id, path)` pairs.
+    /// Snapshots the shared roots as `(id, path)` pairs: `/`, or each drive.
     pub fn file_roots(&self) -> Result<Vec<(u64, std::path::PathBuf)>, Error> {
         let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.file_roots).snapshot())
-    }
-
-    /// Pins one approved root for a direct blob offer. Tests mint pins
-    /// through this so direct offers share the job legs' contract.
-    pub(crate) fn pin_file_root(&self, id: u64) -> Result<crate::fs::PinnedRoot, Error> {
-        self.ensure_alive()?;
-        lock(&self.shared.file_roots).pin(id)
     }
 
     /// This computer's roots, home folder and usual folders.
@@ -118,7 +110,7 @@ impl Core {
             .map(|(root, rel)| (root, rel, name.to_owned())))
     }
 
-    /// Lists one page of a directory under an approved root.
+    /// Lists one page of a directory under a shared root.
     pub fn list_dir(
         &self,
         root: u64,
@@ -133,7 +125,7 @@ impl Core {
         fs::list_page(&snapshot, root, path, offset, limit)
     }
 
-    /// Creates one directory level under an approved root.
+    /// Creates one directory level under a shared root.
     pub fn create_dir(&self, root: u64, path: &str, name: &str) -> Result<(), Error> {
         let _engine = self.engine();
         self.ensure_alive()?;
@@ -141,8 +133,8 @@ impl Core {
         fs::create_dir(&roots, root, path, name)
     }
 
-    /// Renames one entry inside its existing parent folder under an
-    /// approved root. `expected` carries the listing token; a strong token
+    /// Renames one entry inside its existing parent folder under a
+    /// shared root. `expected` carries the listing token; a strong token
     /// that no longer names the same object refuses the mutation instead of
     /// renaming a replacement. Never copies, moves across folders, or
     /// overwrites. Renaming an entry used by an active transfer is refused
@@ -166,8 +158,8 @@ impl Core {
         fs::rename_entry(&roots, root, path, name, expected, new_name)
     }
 
-    /// Deletes one entry inside its existing parent folder under an
-    /// approved root. `expected` carries the listing token; a strong token
+    /// Deletes one entry inside its existing parent folder under a
+    /// shared root. `expected` carries the listing token; a strong token
     /// that no longer names the same object refuses the mutation. A file is
     /// unlinked in place. A folder is renamed aside and then removed without
     /// following links, after this method drops the roots lock. Deleting an
@@ -233,7 +225,7 @@ impl Core {
 
     /// Lists a directory on the controlled computer over the filesystem
     /// side stream. The session must be active and the generation current;
-    /// the host re-checks both plus the transfer grant per request.
+    /// the host re-checks both plus Files sharing per request.
     pub fn fs_list(
         &self,
         session_id: u64,
@@ -451,7 +443,7 @@ impl Core {
 /// Serves the auxiliary side streams for one hosted session: filesystem
 /// requests and job-control requests share one accept loop, told apart by
 /// the frame tag. Each request arrives on its own short stream; every
-/// request re-checks the session generation and the transfer grant before
+/// request re-checks the session generation and Files sharing before
 /// touching the disk.
 pub(super) async fn serve_aux_host(
     shared: Arc<Shared>,
@@ -884,7 +876,7 @@ pub(super) async fn handle_fs_request(
 }
 
 /// Admission gate for one remote listing: stale when the session is
-/// missing, finished, reborn or foreign; denied when the transfer grant
+/// missing, finished, reborn or foreign; denied when Files sharing
 /// is missing. `None` permits the listing.
 fn list_gate(
     state: &super::State,
@@ -924,7 +916,7 @@ async fn serve_list_page(
     if let Some(status) = list_gate(&lock(&shared.state), session_id, peer, generation) {
         return (fs::Response::coded(id, status), None);
     }
-    // Snapshot the approved roots under a short lock; enumeration runs
+    // Snapshot the shared roots under a short lock; enumeration runs
     // on a bounded worker with no locks held.
     let snapshot = lock(&shared.file_roots).clone();
     let page =
@@ -950,6 +942,7 @@ pub(super) fn status_error(status: u8, message: &str) -> Result<(), Error> {
         status if status == fs::STATUS_DENIED => Err(Error::TransferDenied),
         status if status == fs::STATUS_STALE => Err(Error::StaleSession),
         status if status == fs::STATUS_NO_TRASH => Err(Error::Unsupported(fs::NO_TRASH)),
+        status if status == fs::STATUS_UNPROVEN => Err(Error::UnprovenEntry),
         _ => Err(Error::InvalidSetting(fs::failure_message(message))),
     }
 }
@@ -978,6 +971,7 @@ fn map_fs_error(id: u32, error: &Error) -> fs::Response {
             fs::Response::coded(id, fs::STATUS_NO_TRASH)
         }
         Error::FileExists => fs::Response::coded(id, fs::STATUS_EXISTS),
+        Error::UnprovenEntry => fs::Response::coded(id, fs::STATUS_UNPROVEN),
         Error::TransferDenied => fs::Response::coded(id, fs::STATUS_DENIED),
         Error::StaleSession => fs::Response::coded(id, fs::STATUS_STALE),
         Error::InvalidSetting(message)
@@ -1075,7 +1069,7 @@ mod listing_tests {
         )
         .expect("loopback core");
         host.enable_filesystem_access().unwrap();
-        let files = crate::test_support::FilesystemLocation::new(host.file_roots().unwrap(), &root);
+        let files = crate::test_support::FilesystemLocation::on(&host, &root);
         forge_transfer_session(&host, 41, 7);
 
         let parked_rt = tokio::runtime::Builder::new_current_thread()
@@ -1144,7 +1138,7 @@ mod listing_tests {
             let page =
                 fs::decode_list_body(&sibling_body.expect("sibling body")).expect("sibling decode");
             assert_eq!(page.total, 2, "sibling list changed while parked");
-            // Revoke the transfer grant while parked, then release: the
+            // Revoke Files sharing while parked, then release: the
             // stale completion must not publish its page.
             host.set_desktop_sharing(crate::session::Grants::default())
                 .unwrap();

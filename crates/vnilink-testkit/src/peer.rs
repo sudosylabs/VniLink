@@ -590,7 +590,7 @@ fn active(engine: &Engine, id: u64, within: Duration) -> Result<u64, PeerError> 
 mod tests {
     use super::agent::{Agent, Allowance};
     use super::*;
-    use crate::{traced, TestResult};
+    use crate::{traced, wait_for, TestResult, DEFAULT_WAIT};
     use serde_json::json;
 
     /// The agent and a suite in one process pair by the agent's file and
@@ -661,7 +661,7 @@ mod tests {
     ) -> TestResult {
         let mut agent = Agent::open(Reach::Loopback)?;
         for allowance in allowed {
-            agent.allow(*allowance);
+            agent.allow(*allowance)?;
         }
         let file = agent.export(Duration::from_secs(60))?;
         let suite = Engine::start("controller");
@@ -856,6 +856,180 @@ mod tests {
         })
     }
 
+    /// The files scenario shares the agent's whole disk, so it runs only
+    /// when the agent's owner allowed exactly that, and without the
+    /// allowance the agent's disk is never readied to share. Allowed, the
+    /// paired computer reaches the disk only while the scenario runs, at
+    /// the inbox the agent names, and once it stops is refused again and
+    /// the inbox is gone.
+    #[test]
+    fn the_files_scenario_shares_the_disk_only_while_its_owner_allows_it() -> TestResult {
+        let _trace = traced();
+        with_agent_allowing(
+            &[Allowance::Screen, Allowance::Terminal],
+            |agent, _suite, host| {
+                assert!(
+                    matches!(
+                        host.start("files", Value::Null),
+                        Err(PeerError::Refused(reason)) if reason.contains("--allow files")
+                    ),
+                    "the files scenario needs --allow files"
+                );
+                assert!(
+                    agent.core.file_roots()?.is_empty(),
+                    "an agent not allowed files never readies its disk"
+                );
+                Ok(())
+            },
+        )?;
+        with_agent_allowing(&[Allowance::Files], |agent, suite, host| {
+            assert!(
+                suite.core.connect_files(host.endpoint()).is_err(),
+                "before the scenario the paired computer cannot reach the disk"
+            );
+            let facts = host.start("files", Value::Null)?;
+            let (Some(root), Some(inbox)) = (facts["root"].as_u64(), facts["inbox"].as_str())
+            else {
+                panic!("the files scenario says where uploads land: {facts}");
+            };
+            let session = suite.core.connect_files(host.endpoint())?;
+            let listed = suite
+                .core
+                .fs_list(session.id, session.generation, root, inbox, 0, 10)?;
+            assert_eq!(listed.total, 0, "the inbox starts empty");
+            let folder = agent
+                .core
+                .file_roots()?
+                .into_iter()
+                .find_map(|(id, path)| {
+                    (id == root).then(|| inbox.split('/').fold(path, |path, step| path.join(step)))
+                })
+                .ok_or("the inbox's root is shared")?;
+            assert!(folder.is_dir(), "the inbox is a folder of the agent's");
+            assert!(
+                !folder.starts_with(agent.folder()),
+                "the inbox is the scenario's own, not the engine's folder"
+            );
+            host.stop()?;
+            assert!(
+                matches!(
+                    suite
+                        .core
+                        .fs_list(session.id, session.generation, root, inbox, 0, 10),
+                    Err(vnilink::Error::TransferDenied | vnilink::Error::StaleSession)
+                ),
+                "once the scenario stopped the disk is out of reach"
+            );
+            assert_eq!(
+                agent.core.sharing_policy()?,
+                vnilink::SharingPolicy::default(),
+                "the agent shares nothing again"
+            );
+            assert!(!folder.exists(), "the inbox is removed");
+            suite.core.disconnect_session(session.id)?;
+            Ok(())
+        })
+    }
+
+    /// The serve the next test parks: the sending engine
+    /// ([`vnilink::Core::engine_key`]) and its job.
+    static PARK_TARGET: std::sync::Mutex<Option<(usize, u64)>> = std::sync::Mutex::new(None);
+    /// Whether the parked serve arrived, and whether it may go on.
+    static PARK_STATE: std::sync::Mutex<(bool, bool)> = std::sync::Mutex::new((false, false));
+    static PARK_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
+
+    /// Parks the targeted serve with its source open until released; any
+    /// other serve goes on at once.
+    fn park_serve(engine: usize, job: u64) {
+        if *PARK_TARGET.lock().expect("the park target") != Some((engine, job)) {
+            return;
+        }
+        let mut state = PARK_STATE.lock().expect("the park state");
+        state.0 = true;
+        PARK_CHANGED.notify_all();
+        while !state.1 {
+            state = PARK_CHANGED.wait(state).expect("the park state");
+        }
+    }
+
+    /// An upload to the agent still in flight when the files scenario stops
+    /// does not complete: stopping withdraws Files sharing, the agent's job
+    /// ends without the file, and nothing lands in the inbox, which is gone.
+    #[test]
+    fn an_upload_in_flight_when_the_files_scenario_stops_lands_nothing() -> TestResult {
+        let _trace = traced();
+        with_agent_allowing(&[Allowance::Files], |agent, suite, host| {
+            let facts = host.start("files", Value::Null)?;
+            let (Some(root), Some(inbox)) = (facts["root"].as_u64(), facts["inbox"].as_str())
+            else {
+                panic!("the files scenario says where uploads land: {facts}");
+            };
+            let inbox_folder = agent
+                .core
+                .file_roots()?
+                .into_iter()
+                .find_map(|(id, path)| {
+                    (id == root).then(|| inbox.split('/').fold(path, |path, step| path.join(step)))
+                })
+                .ok_or("the inbox's root is shared")?;
+            std::fs::write(
+                suite.folder().join("in-flight.bin"),
+                crate::files::payload(256 * 1024, 1901),
+            )?;
+            // The agent fetches what it receives, so the suite shares Files
+            // with it for the upload.
+            suite.core.set_desktop_sharing(vnilink::Grants {
+                transfer: true,
+                ..vnilink::Grants::default()
+            })?;
+            let session = suite.core.connect_files(host.endpoint())?;
+            let here = suite.location();
+            let job = suite.core.job_submit_upload(
+                host.endpoint(),
+                here.root,
+                &here.path("in-flight.bin"),
+                root,
+                inbox,
+            )?;
+            *PARK_STATE.lock().expect("the park state") = (false, false);
+            *PARK_TARGET.lock().expect("the park target") = Some((suite.core.engine_key(), job));
+            vnilink::Core::set_serve_source_probe(Some(park_serve));
+            let parked = {
+                let state = PARK_STATE.lock().expect("the park state");
+                let (state, timeout) = PARK_CHANGED
+                    .wait_timeout_while(state, DEFAULT_WAIT, |state| !state.0)
+                    .expect("the park state");
+                !timeout.timed_out() && state.0
+            };
+            let stopped = host.stop();
+            {
+                let mut state = PARK_STATE.lock().expect("the park state");
+                state.1 = true;
+                PARK_CHANGED.notify_all();
+            }
+            vnilink::Core::set_serve_source_probe(None);
+            *PARK_TARGET.lock().expect("the park target") = None;
+            assert!(parked, "the agent's fetch reached the suite's serve");
+            stopped?;
+            let ended = wait_for("the agent's job to end", DEFAULT_WAIT, || {
+                let jobs = agent.core.job_list().ok()?;
+                let job = jobs.into_iter().find(|job| !job.sender)?;
+                (job.state != vnilink::JobState::Transferring).then_some(job)
+            });
+            assert_ne!(
+                ended.state,
+                vnilink::JobState::Complete,
+                "an upload in flight at the stop does not complete: {ended:?}"
+            );
+            assert_eq!(ended.files_done, 0, "no file landed: {ended:?}");
+            crate::holds("the inbox staying gone", Duration::from_millis(500), || {
+                !inbox_folder.exists()
+            });
+            suite.core.disconnect_session(session.id)?;
+            Ok(())
+        })
+    }
+
     /// While the terminal scenario runs the agent shares its shell and
     /// nothing else, keeps none past its connection, and runs it in the
     /// scenario's own folder; stopping it ends the shell and everything it
@@ -950,8 +1124,8 @@ mod tests {
                 folder.display()
             );
             assert!(
-                !folder.starts_with(agent.root()),
-                "never in the agent's own root"
+                !folder.starts_with(agent.folder()),
+                "never in the agent engine's own folder"
             );
 
             let records = host.stop()?;

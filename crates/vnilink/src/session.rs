@@ -55,8 +55,8 @@ pub(crate) enum Grant {
 }
 
 /// Host admission of a files-only session. Iroh has already authenticated
-/// the peer key. The Transfer grant admits it; file roots, listings and
-/// transfers enforce that grant per operation.
+/// the peer key. Files sharing admits it; listings, changes and
+/// transfers on the shared disk enforce that grant per operation.
 pub(crate) fn admit(
     hosting: bool,
     session_open: bool,

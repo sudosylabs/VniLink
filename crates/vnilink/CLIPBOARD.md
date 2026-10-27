@@ -14,7 +14,7 @@ Clipboard text is a separate grant from control. A `.vnl` file and the control c
 ## File selections
 
 The same stream and the same clipboard grant carry file selections in either
-direction. A selection is metadata only: relative jailed paths, size estimates
+direction. A selection is metadata only: safe relative paths, size estimates
 and directory markers, at most 256 entries and 64 KiB encoded. No payload byte
 rides this path, so offering a selection never downloads anything.
 
@@ -35,7 +35,7 @@ rides this path, so offering a selection never downloads anything.
    stored selections on this core. Unlike inert text, a selection stays a live
    paste capability after the grant is gone. The far side keeps inert metadata
    it already received; any paste against it revalidates with this side.
-5. Bounds and jailed paths are validated before anything is sent, and decode
+5. Bounds and relative paths are validated before anything is sent, and decode
    revalidates: truncation, trailing bytes, bad flags, non-UTF-8 names,
    duplicates and oversized selections fail closed.
 

@@ -1,6 +1,6 @@
 //! What the files suites share: deterministic file contents, exact tree
-//! comparison, jobs driven as the application drives them, a computer
-//! sharing its whole disk, and the folders an engine watches.
+//! comparison, jobs driven as the application drives them, paths inside a
+//! test's own folders on a shared disk, and the folders an engine watches.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -154,26 +154,29 @@ pub fn drive_to_end(
     })
 }
 
-/// The controller sends `from`, a path in its root, to `to` in the host's.
+/// The controller sends `from`, a path in its folder, to `to` in the
+/// host's.
 pub fn upload(pair: &Pair, from: &str, to: &str) -> Result<u64, vnilink::Error> {
+    let (source, target) = (pair.controller.location(), pair.host.location());
     pair.controller.core.job_submit_upload(
         &pair.host.endpoint(),
-        pair.controller.root_id(),
-        from,
-        pair.host.root_id(),
-        to,
+        source.root,
+        &source.path(from),
+        target.root,
+        &target.path(to),
     )
 }
 
-/// The controller fetches `from`, a path in the host's root, to `to` in its
-/// own.
+/// The controller fetches `from`, a path in the host's folder, to `to` in
+/// its own.
 pub fn download(pair: &Pair, from: &str, to: &str) -> Result<u64, vnilink::Error> {
+    let (source, target) = (pair.host.location(), pair.controller.location());
     pair.controller.core.job_submit_download(
         &pair.host.endpoint(),
-        pair.host.root_id(),
-        from,
-        pair.controller.root_id(),
-        to,
+        source.root,
+        &source.path(from),
+        target.root,
+        &target.path(to),
     )
 }
 
@@ -234,65 +237,129 @@ pub fn files_with_bytes(folder: &Path, bytes: &[u8]) -> Vec<std::path::PathBuf> 
     found
 }
 
-/// Where `path` is among `core`'s file roots: the first root holding it,
-/// and the path below that root with `/`.
-pub fn locate(core: &Core, path: &Path) -> Option<(u64, String)> {
-    core.file_roots()
-        .expect("file roots")
-        .into_iter()
-        .find_map(|(id, root)| {
-            let below = path.strip_prefix(root).ok()?;
-            let below = below
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            Some((id, below))
-        })
-}
-
-/// Shares `engine`'s whole disk rather than its one folder, as the
-/// application does, and names `inside` (a path in its folder, the folder
-/// itself for `""`) from the disk's root: the root's id and the path within
-/// it.
-pub fn whole_disk(
-    engine: &Engine,
-    inside: &str,
-) -> Result<(u64, String), Box<dyn std::error::Error>> {
-    engine.core.enable_filesystem_access()?;
-    let folder = std::fs::canonicalize(engine.root())?.join(inside);
-    Ok(locate(&engine.core, &folder).ok_or("a disk root holds the engine's folder")?)
-}
-
-/// A folder of the test's own, addressed as an engine with its whole file
-/// system shared names it: a root and the path below it. Fixtures are
-/// ordinary folders; only paths below the fixture are written.
-#[derive(Clone)]
+/// A folder of the test's own as an engine sharing its whole disk names it:
+/// the disk's root (`/`, or the drive) and the path below it. The one way
+/// the kit names a path to an engine: a test builds every root and path it
+/// hands an engine from one, so even with the whole disk shared it writes
+/// only inside its own folders. [`crate::Engine::location`] is the engine's own
+/// folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Location {
     pub root: u64,
     pub relative: String,
 }
 
 impl Location {
-    /// Where `fixture` is among `core`'s roots.
-    pub fn of(core: &Core, fixture: &Path) -> Self {
-        let fixture = std::fs::canonicalize(fixture).expect("the fixture exists");
-        let (root, relative) =
-            locate(core, &fixture).expect("the fixture is under one of the engine's roots");
-        assert!(
-            !relative.is_empty(),
-            "writes stay inside a temporary fixture"
-        );
+    /// Where `folder`, an existing folder of the test's own, is on `core`'s
+    /// shared disk, as the engine names it ([`Core::locate`]): never a
+    /// disk's root itself.
+    pub fn of(core: &Core, folder: &Path) -> Self {
+        let (root, parent, name) = core
+            .locate(folder)
+            .expect("the engine is running")
+            .expect("the test's folder is below a root of the engine's shared disk");
+        let relative = if parent.is_empty() {
+            name
+        } else {
+            format!("{parent}/{name}")
+        };
         Self { root, relative }
     }
 
-    /// `child` below the fixture, or the fixture itself for `""`.
+    /// `child`, a path with `/` below the folder, or the folder itself for
+    /// `""`.
     pub fn path(&self, child: &str) -> String {
         if child.is_empty() {
             self.relative.clone()
         } else {
             format!("{}/{child}", self.relative)
         }
+    }
+}
+
+/// A folder standing in for one of an engine's drives, which a test takes
+/// out or replaces under a transfer, as a stick is on Windows: another
+/// volume at the drive's letter is another folder at its path. While it is
+/// shared the engine shares this drive alone, in place of its whole disk
+/// ([`Core::share_as_drives`]); a test names paths in it through
+/// [`Self::location`].
+pub struct StandInDrive {
+    path: std::path::PathBuf,
+}
+
+impl StandInDrive {
+    /// A drive named `name` beside `engine`'s folder, holding a folder
+    /// `files`, shared as the engine's only drive.
+    pub fn share(engine: &Engine, name: &str) -> Self {
+        let path = engine
+            .folder()
+            .parent()
+            .expect("the engine's folder inside its scratch folder")
+            .join(name);
+        std::fs::create_dir_all(path.join("files")).expect("the drive's folder");
+        let drive = Self { path };
+        drive.read_again(engine);
+        drive
+    }
+
+    /// The folder `files` on the drive, where the test's files live.
+    pub fn files(&self) -> std::path::PathBuf {
+        self.path.join("files")
+    }
+
+    /// [`Self::files`] as the engine names it.
+    pub fn location(&self, engine: &Engine) -> Location {
+        Location::of(&engine.core, &self.files())
+    }
+
+    /// Takes the drive out and puts another volume at its letter: the
+    /// drive's folder moves aside, an empty one with an empty `files` takes
+    /// its path, and the engine reads its drives again. Returns where the
+    /// original went.
+    pub fn replace(&self, engine: &Engine) -> std::path::PathBuf {
+        let original = self.swap();
+        self.read_again(engine);
+        original
+    }
+
+    /// As [`Self::replace`], without the engine reading its drives: while it
+    /// is not running.
+    pub fn swap(&self) -> std::path::PathBuf {
+        let original = self.path.with_extension("taken-out");
+        std::fs::rename(&self.path, &original).expect("the drive taken out");
+        std::fs::create_dir_all(self.path.join("files")).expect("another volume");
+        original
+    }
+
+    /// Puts the original drive, moved aside by [`Self::replace`] to
+    /// `original`, back at its letter, and the engine reads its drives
+    /// again. The other volume moves aside; returns where it went.
+    pub fn put_back(&self, engine: &Engine, original: &Path) -> std::path::PathBuf {
+        let other = self.path.with_extension("other-volume");
+        std::fs::rename(&self.path, &other).expect("the other volume taken out");
+        std::fs::rename(original, &self.path).expect("the drive put back");
+        self.read_again(engine);
+        other
+    }
+
+    /// Puts another volume at the drive's letter while the drive's own
+    /// folder stays where it is, as when a file on it is held open and
+    /// Windows will not move it: the engine reads its drives again and
+    /// finds `other`, a folder holding `files`, at the letter.
+    pub fn share_other(&self, engine: &Engine, other: &Path) {
+        engine
+            .core
+            .share_as_drives(vec![other.to_path_buf()])
+            .expect("the other volume shared");
+    }
+
+    /// The engine reads its drives again and finds this one, as after a
+    /// restart.
+    pub fn read_again(&self, engine: &Engine) {
+        engine
+            .core
+            .share_as_drives(vec![self.path.clone()])
+            .expect("the drive shared");
     }
 }
 
@@ -354,7 +421,7 @@ pub fn identity(_path: &Path) -> Option<u64> {
 }
 
 /// Plants a link to the folder `target` at `link`, as something trying to
-/// lead an operation out of a root would: a symbolic link on Unix, and on
+/// lead an operation somewhere else would: a symbolic link on Unix, and on
 /// Windows a junction, which any account can make (a symbolic link needs
 /// Developer Mode or elevation) and which Windows follows as it follows a
 /// symbolic link to a folder.

@@ -390,11 +390,8 @@ fn run_matrix(matrix: &Matrix) -> Value {
         host.start_job_driver();
         controller.start_job_driver();
     }
-    let from = FilesystemLocation::new(
-        controller.file_roots().unwrap(),
-        &controller_scratch.0.join("root"),
-    );
-    let to = FilesystemLocation::new(host.file_roots().unwrap(), &host_scratch.0.join("root"));
+    let from = FilesystemLocation::on(&controller, &controller_scratch.0.join("root"));
+    let to = FilesystemLocation::on(&host, &host_scratch.0.join("root"));
     let results: Vec<Value> = cases
         .iter()
         .map(|name| {

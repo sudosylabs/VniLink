@@ -107,7 +107,7 @@ impl TerminalSession {
         let pair = Pair::for_services(&[ServiceKind::Terminal]);
         pair.host
             .core
-            .set_terminal_factory(Some(shell(&pair.host.root())))
+            .set_terminal_factory(Some(shell(&pair.host.folder())))
             .expect("a terminal backend");
         let connection = pair.connect_services();
         let owner = pair.attach(&connection, ServiceKind::Terminal);

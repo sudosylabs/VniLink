@@ -2498,6 +2498,7 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
         FfiError::ClipboardDenied => "ClipboardDenied",
         FfiError::TransferDenied => "TransferDenied",
         FfiError::FileExists => "FileExists",
+        FfiError::UnprovenEntry => "UnprovenEntry",
         FfiError::NoSession => "NoSession",
         FfiError::StaleSession => "StaleSession",
         FfiError::Unsupported { .. } => "Unsupported",

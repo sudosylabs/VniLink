@@ -4,10 +4,10 @@
 
 use expect_test::expect;
 
-use super::{files_sharing, paired, publish_once_open, Copied};
+use super::{files_sharing, paired, publish_once_open, Copied, NOTHING};
 use vnilink::{CoreEvent, Error, SessionPhase, MAX_CLIPBOARD_TEXT};
 use vnilink_testkit::desktop::{InputLog, RecordingClipboard};
-use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 /// Without the clipboard grant a paste is refused and the session carries
 /// on; the adapter cannot be swapped under the session, and
@@ -16,10 +16,9 @@ use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
 #[test]
 fn a_paste_needs_the_grant_and_the_session_lives_without_it() -> TestResult {
     let trace = traced();
-    let pair = paired(false);
+    // The host shares no disk, so only the clipboard could offer files.
+    let pair = Pair::host_keeping_its_disk(files_sharing(false), NOTHING);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    // The host shares no folders, so only the clipboard could offer files.
-    host.set_file_roots(Vec::new())?;
     let copied = Copied::install(&pair.host)?;
     InputLog::install(&pair.host, (1920, 1080))?;
     assert!(

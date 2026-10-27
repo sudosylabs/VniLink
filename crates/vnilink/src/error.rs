@@ -33,6 +33,12 @@ pub enum Error {
     TransferDenied,
     #[error("the file already exists")]
     FileExists,
+    /// A change on a drive whose file ids are entry positions (FAT,
+    /// exFAT) that the drive cannot prove acts on the listed entry: deleting
+    /// or trashing a folder, or any change made without the fingerprint its
+    /// listing gave.
+    #[error("the drive cannot prove the entry is the one listed")]
+    UnprovenEntry,
     #[error("there is no active session")]
     NoSession,
     #[error("the input belongs to an old session")]
@@ -94,6 +100,7 @@ impl Error {
             Self::ClipboardDenied => "clipboard denied",
             Self::TransferDenied => "transfer denied",
             Self::FileExists => "file exists",
+            Self::UnprovenEntry => "unproven entry",
             Self::NoSession => "no session",
             Self::StaleSession => "stale session",
             Self::Unsupported(_) => "unsupported",

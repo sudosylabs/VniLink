@@ -27,12 +27,8 @@ struct AgentProcess {
 }
 
 impl AgentProcess {
-    fn start(file: &std::path::Path) -> Self {
-        Self::start_with(file, &[], &[])
-    }
-
-    /// As [`Self::start`], with `args` added to its command line and `env`
-    /// to its environment.
+    /// The agent writing its pairing file to `file`, with `args` added to
+    /// its command line and `env` to its environment.
     fn start_with(file: &std::path::Path, args: &[&str], env: &[(&str, &std::path::Path)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_vnilink-testkit"))
             .args(["agent", "--loopback", "--ttl", "60", "--idle"])
@@ -108,13 +104,15 @@ impl Drop for AgentProcess {
 /// The agent writes its file and digits; a suite that confirms them and
 /// whose digits the agent's owner types is served; a second computer
 /// opening the same file is refused; and the agent stops once nothing is
-/// asked of it for its idle limit.
+/// asked of it for its idle limit. Its owner allowed the files scenario,
+/// and the agent says when that scenario shares this computer's disk and
+/// when it no longer does.
 #[test]
 fn the_agent_serves_the_one_computer_its_owner_approved_and_stops_when_idle() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("agent");
     let file = scratch.join("agent.vnl");
-    let mut agent = AgentProcess::start(&file);
+    let mut agent = AgentProcess::start_with(&file, &["--allow", "files"], &[]);
     let check = agent.line("check digits: ")["check digits: ".len()..][..3].to_owned();
     let bytes = std::fs::read(&file)?;
 
@@ -131,6 +129,7 @@ fn the_agent_serves_the_one_computer_its_owner_approved_and_stops_when_idle() ->
         facts["root"].is_u64() && facts["inbox"].is_string(),
         "the files scenario says where uploads land: {facts}"
     );
+    agent.line("the paired computer may now read and change this computer's whole disk");
     let intruder = Engine::start("intruder");
     assert!(
         matches!(
@@ -141,6 +140,7 @@ fn the_agent_serves_the_one_computer_its_owner_approved_and_stops_when_idle() ->
     );
 
     let records = host.stop()?;
+    agent.line("the paired computer no longer has this computer's disk");
     assert!(
         records.iter().all(|record| {
             serde_json::from_str::<Value>(record).is_ok_and(|event| event["engine"] == "agent")

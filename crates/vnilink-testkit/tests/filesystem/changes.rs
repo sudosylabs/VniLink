@@ -9,11 +9,9 @@ use vnilink_testkit::files::{identity, link_folder, set_aside, token_of, Locatio
 
 use super::{is_message, is_stale, names_in, past_the_tick_of, read, DELETE_FAILED};
 
-/// An engine with its whole file system shared, and `folder` addressed in
-/// it.
+/// An engine sharing its whole disk, and `folder` addressed in it.
 fn sharing_the_disk(folder: &std::path::Path) -> Result<(Engine, Location), Error> {
     let engine = Engine::start("engine");
-    engine.core.enable_filesystem_access()?;
     let location = Location::of(&engine.core, folder);
     Ok((engine, location))
 }

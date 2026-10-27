@@ -393,8 +393,8 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
     let controller = Engine::start("controller");
     let a = Engine::start("host-a");
     let b = Engine::start("host-b");
-    std::fs::write(a.root().join("a.txt"), b"A's bytes")?;
-    std::fs::write(b.root().join("b.txt"), b"B's bytes")?;
+    std::fs::write(a.folder().join("a.txt"), b"A's bytes")?;
+    std::fs::write(b.folder().join("b.txt"), b"B's bytes")?;
     let transfer = Grants {
         transfer: true,
         ..Grants::default()
@@ -408,10 +408,10 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
     let download = |host: &Engine, name: &str| {
         controller.core.job_submit_download(
             &host.endpoint(),
-            host.root_id(),
-            name,
-            controller.root_id(),
-            "",
+            host.location().root,
+            &host.location().path(name),
+            controller.location().root,
+            &controller.location().path(""),
         )
     };
     let ja = download(&a, "a.txt")?;
@@ -458,18 +458,18 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
         },
     );
     assert_eq!(
-        std::fs::read(controller.root().join("a.txt"))?,
+        std::fs::read(controller.folder().join("a.txt"))?,
         b"A's bytes",
         "host a's file arrives from host a"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("b.txt"))?,
+        std::fs::read(controller.folder().join("b.txt"))?,
         b"B's bytes",
         "host b's file arrives from host b"
     );
 
-    std::fs::write(a.root().join("closed.txt"), b"must stay paused")?;
-    std::fs::write(b.root().join("still-open.txt"), b"still transfers")?;
+    std::fs::write(a.folder().join("closed.txt"), b"must stay paused")?;
+    std::fs::write(b.folder().join("still-open.txt"), b"still transfers")?;
     let closed_job = download(&a, "closed.txt")?;
     let open_job = download(&b, "still-open.txt")?;
     let a_session = controller
@@ -494,11 +494,11 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
             .then_some(())
     });
     assert!(
-        !controller.root().join("closed.txt").exists(),
+        !controller.folder().join("closed.txt").exists(),
         "the closed session's job lands nothing"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("still-open.txt"))?,
+        std::fs::read(controller.folder().join("still-open.txt"))?,
         b"still transfers",
         "the other host's job completes"
     );

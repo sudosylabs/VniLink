@@ -10,12 +10,14 @@ use std::time::{Duration, Instant};
 
 use vnilink::{
     AdaptationReason, Condition, DesktopControlState, DesktopEnd, DisplayInfo, EncodedFrame,
-    EncoderImplementation, Error, InputEvent, ServiceInfo, ServiceKind, StreamEnd, StreamFailure,
-    VideoCodecCaps,
+    EncoderImplementation, Error, Grants, InputEvent, ServiceInfo, ServiceKind, StreamEnd,
+    StreamFailure, VideoCodecCaps,
 };
 use vnilink_testkit::desktop::{input_failed, keyframe, next_picture, InputLog, MonitorCapture};
 use vnilink_testkit::drops::{DropPoint, SeededDrops};
-use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{
+    holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED,
+};
 
 /// The size of the host's screens.
 pub(super) const SCREEN: (u16, u16) = (1920, 1080);
@@ -701,10 +703,17 @@ fn a_picture_the_viewer_closed_has_no_host_end() -> TestResult {
 #[test]
 fn encoded_frames_reach_the_controller_in_order() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_desktop();
+    // The kit's engines share their disk; this host offers only its screen.
+    let pair = Pair::host_keeping_its_disk(
+        SEEN_AND_CONTROLLED,
+        Grants {
+            view: false,
+            control: false,
+            clipboard: false,
+            transfer: false,
+        },
+    );
     let host = &pair.host.core;
-    // The kit's engines share a folder; this host offers only its screen.
-    host.set_file_roots(Vec::new())?;
     host.set_capture(Box::new(MonitorCapture::new((1280, 720))))?;
     host.set_video_codecs(VideoCodecCaps::encode_only(4096, 4096, "testkit"))?;
     let capture_only = host.capabilities();

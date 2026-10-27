@@ -599,21 +599,18 @@ fn write_file(path: &Path, bytes: u64) {
     file.flush().expect("fixture flush");
 }
 
-/// `path` as one of `core`'s file roots and a path relative to it.
+/// `path` on `core`'s shared disk, as the engine names it: its root and
+/// the path below it, never a disk's root itself.
 fn file_location(core: &Core, path: &Path) -> (u64, String) {
-    let path = std::fs::canonicalize(path).expect("fixture exists");
-    core.file_roots()
-        .unwrap()
-        .into_iter()
-        .find_map(|(id, root)| {
-            let relative = path.strip_prefix(root).ok()?;
-            let parts: Vec<_> = relative
-                .components()
-                .map(|part| part.as_os_str().to_str().expect("UTF-8 fixture path"))
-                .collect();
-            Some((id, parts.join("/")))
-        })
-        .expect("fixture belongs to an advertised filesystem root")
+    let (root, parent, name) = core
+        .locate(path)
+        .expect("the engine is running")
+        .expect("the fixture is below a root of the shared disk");
+    if parent.is_empty() {
+        (root, name)
+    } else {
+        (root, format!("{parent}/{name}"))
+    }
 }
 
 /// The transfer the viewer runs beside the stream.

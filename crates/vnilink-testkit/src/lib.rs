@@ -3,7 +3,10 @@
 //! suite (`benches/<service>.rs`) that run alone.
 //!
 //! An [`Engine`] is a real `vnilink::Core` on loopback, with its own
-//! identity, store and folders, that never reaches a relay. A [`Pair`] is a
+//! identity, store and folders, that never reaches a relay. It shares its
+//! whole disk for Files, as the application does, and a test names every
+//! path it hands an engine inside its own folders ([`files::Location`]),
+//! so it writes nowhere else. A [`Pair`] is a
 //! host and a controller paired as the application pairs them. Each service
 //! module adds what its suites share: [`files`] its trees and transfers,
 //! [`audio`] stand-in sound sources, [`camera`] a stand-in camera,
@@ -50,7 +53,7 @@ mod wait;
 pub use engine::{
     pair_cores, pair_cores_for_control, Engine, Pair, Reach, FILES, SEEN_AND_CONTROLLED,
 };
-pub use scratch::Scratch;
+pub use scratch::{PositionalFs, Scratch, ScratchVolume};
 pub use trace::{traced, Story, Traced};
 pub use wait::{holds, wait_for, DEFAULT_WAIT};
 

@@ -23,7 +23,6 @@ fn a_watched_folder_says_when_it_changes() -> TestResult {
     std::fs::create_dir(&folder)?;
     let engine = vnilink_testkit::Engine::start("engine");
     let core = &engine.core;
-    core.enable_filesystem_access()?;
     let location = Location::of(core, &folder);
     let events = core.subscribe()?;
     let watch = core.watch_folder(location.root, &location.path(""))?;
@@ -71,7 +70,6 @@ fn temporary_entries_are_never_listed_or_watched() -> TestResult {
     std::fs::write(folder.join("pairing.vnl"), b"mine")?;
     let engine = vnilink_testkit::Engine::start("engine");
     let core = &engine.core;
-    core.enable_filesystem_access()?;
     let location = Location::of(core, &folder);
     let page = core.list_dir(location.root, &location.path(""), 0, 50)?;
     let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();

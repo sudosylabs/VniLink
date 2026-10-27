@@ -24,11 +24,45 @@ transfer stream were removed; all movement goes through jobs.
    Windows) and names a transfer directory with
    `Core::set_transfer_directory`, created the first time a job needs it:
    it holds the job journals and the partial files of arriving jobs. `Capabilities::file_transfer` is true
-   once the filesystem is shared. `Core::set_file_roots` confines browsing
-   to chosen folders; only tests use it.
+   once the filesystem is shared. There is no other mode: Files shares
+   the whole disk or nothing, and each peer operation needs Files
+   sharing with that peer (the `Transfer` grant, shown as Files in the
+   app's sharing settings).
 3. The peer browses with `fs_list`/`fs_mkdir`/`fs_rename` against a live
-   session. Every request re-checks the Transfer grant; a revoked grant
-   answers `TransferDenied` without ending the session.
+   session. Every request re-checks Files sharing; withdrawn sharing
+   answers `TransferDenied` without ending the session. Each listed entry
+   carries a token that a rename, delete or move to the Trash hands back,
+   so a change made from a stale listing is refused rather than applied to
+   whatever took the entry's place. The token guards against a stale
+   listing, not against the peer: it is no authorization boundary, and
+   Files sharing alone decides what a peer may change. On most volumes the
+   token is the object's identity (device, inode, creation time). On a
+   volume whose ids are entry positions it is a fingerprint: the entry's
+   name, kind, size, times at the volume's granularity (FAT: 2 s
+   modification, 10 ms creation, though macOS's msdos reports creation to
+   the even second; exFAT: 10 ms) and attributes, on that volume. A file
+   renamed, deleted or trashed there, or a folder renamed, goes ahead while
+   its fingerprint still matches, read through the folder's handle at that
+   moment; deleting a file checks it again on the object removed (the
+   deleting handle on Windows; on Unix the entry moved aside under a
+   private name, which FAT keeps the times of). Deleting or trashing a
+   folder there, or any change without a listed fingerprint, is refused as
+   `UnprovenEntry`, since no fingerprint covers what a folder holds.
+   Positional volumes are recognised:
+   - on Windows by name (`FAT`, `FAT12`, `FAT16`, `FAT32`, `exFAT`), and
+     any volume reporting no usable `FileIdInfo`, such as some SMB shares,
+     takes the same path: listed by fingerprint, folders not deleted;
+   - on macOS by `f_fstypename`: `msdos`, `exfat`, or a third-party driver
+     whose name holds `fat` or `msdos`. A macFUSE mount names only
+     `macfuse`/`osxfuse`, so a FAT volume served through it cannot be
+     recognised and is treated as having stable ids;
+   - on Linux by `f_type` (`MSDOS_SUPER_MAGIC`, `EXFAT_SUPER_MAGIC`), and
+     for a FUSE mount by the subtype `/proc/self/mountinfo` gives it
+     (`fuseblk.exfat`, `fuse.fusefat`). A FUSE driver that sets no subtype
+     cannot be recognised.
+   On macOS, FSKit's msdos and exfat refuse an exclusive rename; on those
+   volumes alone a rename checks the new name is free and then takes it,
+   so a file made under that name in the same instant is replaced.
 4. Bulk movement uses jobs. A Files tab submits one job per selection:
    `files_service_upload` / `files_service_download` name a folder and
    the entries of it to copy, and one manifest holds them all
@@ -73,7 +107,7 @@ control or the desktop behind it.
 1. A request names the sender's job, the file's place among the
    manifest's files and the offset to start from. The sender serves only
    its own sending job for that peer, while the job is active, its owner
-   is live and the peer holds the Transfer grant. Anything else is
+   is live and Files is shared with the peer. Anything else is
    refused before a byte is read.
 2. The sender opens the file through the leg's pinned root by handles,
    never a retained absolute path, refusing links. It must still be the

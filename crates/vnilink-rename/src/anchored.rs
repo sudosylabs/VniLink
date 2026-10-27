@@ -1,11 +1,13 @@
-//! Directory-handle confinement for owner-approved roots.
+//! Handle-relative operations under a shared root.
 //!
 //! The shared `vnilink` library forbids unsafe code, so every `openat`,
 //! `mkdirat`, `renameat` and `fdopendir` dance lives here. Callers in
 //! `vnilink` hold directory handles (`File` opened `O_NOFOLLOW|O_DIRECTORY`)
-//! from the approved root down, never bare path strings, so a parent
-//! replaced by a symlink between listing and mutation is refused instead of
-//! escaping the approved folder.
+//! from the root down, never bare path strings: once a caller has resolved
+//! a path, a folder on it replaced by a symlink before or during the walk
+//! is refused instead of redirecting the operation, and an entry acted on
+//! through a handle is acted on as itself, never followed. Which links a
+//! path may follow before the walk is the caller's choice.
 
 use std::ffi::{CString, OsString};
 use std::io;
@@ -44,8 +46,8 @@ fn cstr_name(name: &str) -> io::Result<CString> {
     CString::new(name).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "name holds NUL"))
 }
 
-/// Opens an approved root itself: `O_NOFOLLOW|O_DIRECTORY|O_CLOEXEC`, so a
-/// root replaced by a symlink fails here instead of escaping.
+/// Opens a root itself: `O_NOFOLLOW|O_DIRECTORY|O_CLOEXEC`, so a root
+/// replaced by a symlink fails here instead of being followed.
 pub fn open_root(path: &Path) -> io::Result<OwnedFd> {
     let c = cstr(path)?;
     // SAFETY: `open` takes a borrowed NUL-terminated path plus flags/mode;
@@ -94,9 +96,172 @@ pub fn open_child_held(parent: BorrowedFd, name: &str) -> io::Result<OwnedFd> {
     open_child(parent, name)
 }
 
-/// Unix file systems keep stable inode numbers, so every root qualifies.
-pub fn require_stable_ids(_dir: BorrowedFd) -> io::Result<()> {
-    Ok(())
+/// How the volume `dir` is on names its entries. Most Unix file systems
+/// keep stable inode numbers; FAT and exFAT derive them from an entry's
+/// position. macOS names the file system in `f_fstypename`: `msdos` and
+/// `exfat` for its own drivers, and a third-party FAT driver's name holds
+/// `fat` or `msdos` (`ufsd_ExFAT`). A macFUSE mount names only `macfuse`
+/// or `osxfuse`, whatever it serves, and is taken as stable. Linux reports
+/// `MSDOS_SUPER_MAGIC` (vfat and msdos) and `EXFAT_SUPER_MAGIC` in `f_type`;
+/// a FUSE mount reports FUSE's magic, and its subtype (`fuseblk.exfat`,
+/// `fuse.fusefat`) is read from `/proc/self/mountinfo` by the descriptor's
+/// mount id.
+pub fn volume_ids(dir: BorrowedFd) -> io::Result<crate::VolumeIds> {
+    let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `fstatfs` writes the struct it is given for a live fd.
+    if unsafe { libc::fstatfs(dir.as_raw_fd(), &mut st) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(volume_ids_of(&st, dir))
+}
+
+/// A file system named `name` (any case) that is FAT or exFAT: exFAT when
+/// the name says so, FAT when it holds `fat` or `msdos`.
+#[cfg_attr(
+    not(any(test, target_os = "macos", target_os = "linux")),
+    allow(dead_code)
+)]
+fn positional_by_name(name: &str) -> Option<crate::VolumeIds> {
+    let name = name.to_ascii_lowercase();
+    if name.contains("exfat") {
+        Some(crate::VolumeIds::EXFAT)
+    } else if name.contains("fat") || name.contains("msdos") {
+        Some(crate::VolumeIds::FAT)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn volume_ids_of(st: &libc::statfs, _dir: BorrowedFd) -> crate::VolumeIds {
+    let name: Vec<u8> = st
+        .f_fstypename
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    positional_by_name(&String::from_utf8_lossy(&name)).unwrap_or(crate::VolumeIds::Stable)
+}
+
+#[cfg(target_os = "linux")]
+fn volume_ids_of(st: &libc::statfs, dir: BorrowedFd) -> crate::VolumeIds {
+    const MSDOS_SUPER_MAGIC: u64 = 0x4d44;
+    const EXFAT_SUPER_MAGIC: u64 = 0x2011_bab0;
+    const FUSE_SUPER_MAGIC: u64 = 0x6573_5546;
+    #[allow(clippy::unnecessary_cast)]
+    match st.f_type as u64 {
+        MSDOS_SUPER_MAGIC => crate::VolumeIds::FAT,
+        EXFAT_SUPER_MAGIC => crate::VolumeIds::EXFAT,
+        FUSE_SUPER_MAGIC => fuse_type(dir)
+            .as_deref()
+            .and_then(fuse_positional)
+            .unwrap_or(crate::VolumeIds::Stable),
+        _ => crate::VolumeIds::Stable,
+    }
+}
+
+/// The file system type `/proc/self/mountinfo` gives the mount `dir` is
+/// on, found by the mount id `/proc/self/fdinfo` gives its descriptor.
+#[cfg(target_os = "linux")]
+fn fuse_type(dir: BorrowedFd) -> Option<String> {
+    let fdinfo = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", dir.as_raw_fd())).ok()?;
+    let mount = fdinfo
+        .lines()
+        .find_map(|line| line.strip_prefix("mnt_id:"))?
+        .trim()
+        .to_owned();
+    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    mountinfo_type(&mountinfo, &mount).map(str::to_owned)
+}
+
+/// The file system type of mount `mount` in a mountinfo text: the field
+/// after the ` - ` separator.
+#[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
+fn mountinfo_type<'a>(mountinfo: &'a str, mount: &str) -> Option<&'a str> {
+    mountinfo.lines().find_map(|line| {
+        (line.split(' ').next()? == mount)
+            .then(|| line.split(" - ").nth(1)?.split(' ').next())
+            .flatten()
+    })
+}
+
+/// A FUSE type whose subtype is FAT or exFAT (`fuseblk.exfat`,
+/// `fuse.fusefat`).
+#[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
+fn fuse_positional(fs_type: &str) -> Option<crate::VolumeIds> {
+    let (_, subtype) = fs_type.split_once('.')?;
+    positional_by_name(subtype)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn volume_ids_of(_st: &libc::statfs, _dir: BorrowedFd) -> crate::VolumeIds {
+    crate::VolumeIds::Stable
+}
+
+/// Whether a RENAME_EXCL the volume refused may be done as check, then
+/// rename: only `ENOTSUP` on a volume whose ids are positions (FSKit's
+/// msdos and exfat). Elsewhere (smbfs, nfs, webdav, macFUSE) no-replace
+/// stays refused rather than weakened.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+fn excl_fallback(errno: Option<i32>, ids: io::Result<crate::VolumeIds>) -> bool {
+    errno == Some(libc::ENOTSUP) && matches!(ids, Ok(crate::VolumeIds::Positional { .. }))
+}
+
+/// A name is free only when stating it finds nothing; any other failure
+/// is no answer and refuses.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+fn name_free(stated: io::Result<EntryStat>) -> io::Result<()> {
+    match stated {
+        Ok(_) => Err(io::Error::from(io::ErrorKind::AlreadyExists)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Deletes the file `name` from `dir` when `check`, shown the file as it
+/// is once moved aside, holds. It is renamed to a private name in the same
+/// folder first, which on FAT and exFAT keeps its size and times, so what
+/// is checked is the object then removed, not whatever took its name; if
+/// the check fails it goes back. Nothing is compared by id afterwards, so
+/// it suits a volume whose ids are entry positions, where a moved entry
+/// takes another id. A folder is refused.
+pub fn delete_file_checked(
+    dir: BorrowedFd,
+    name: &str,
+    check: impl FnOnce(&EntryStat) -> bool,
+) -> io::Result<()> {
+    use std::io::Read;
+    let mut random = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    let aside = format!(
+        ".vnldelete.{}",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    rename_at_noreplace(dir, name, &aside)?;
+    let stated = stat_at(dir, &aside);
+    let holds = stated
+        .as_ref()
+        .is_ok_and(|stated| stated.is_file && !stated.is_symlink && check(stated));
+    if !holds {
+        // A name made meanwhile keeps it; the entry stays aside, to be swept.
+        rename_at_noreplace(dir, &aside, name)?;
+        stated?;
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "delete source changed",
+        ));
+    }
+    let c = cstr_name(&aside)?;
+    // SAFETY: `unlinkat` takes a borrowed dir fd plus a borrowed name; no
+    // AT_REMOVEDIR, so a folder is refused.
+    if unsafe { libc::unlinkat(dir.as_raw_fd(), c.as_ptr(), 0) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 /// Creates one directory level under `parent`. `AlreadyExists` maps to
@@ -245,6 +410,8 @@ pub struct EntryStat {
     pub dev: u64,
     pub ino: u64,
     pub born: Option<u64>,
+    /// Permission bits (`st_mode & 0o7777`).
+    pub attributes: u32,
 }
 
 impl EntryStat {
@@ -286,6 +453,7 @@ pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
         dev: st.st_dev as u64,
         ino: st.st_ino as u64,
         born: born(&st),
+        attributes: u32::from(mode) & 0o7777,
     })
 }
 
@@ -334,6 +502,7 @@ fn statx_at(parent: BorrowedFd, name: &CString) -> Option<io::Result<EntryStat>>
         } else {
             None
         },
+        attributes: u32::from(mode) & 0o7777,
     }))
 }
 
@@ -416,6 +585,26 @@ pub fn rename_at_noreplace(dir: BorrowedFd, old: &str, new: &str) -> io::Result<
             )
         };
         if r == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if !excl_fallback(error.raw_os_error(), volume_ids(dir)) {
+            return Err(error);
+        }
+        // FSKit's msdos and exfat refuse RENAME_EXCL. There the name is
+        // checked free and then taken: a file made under it in between is
+        // replaced. Nothing narrower exists on those volumes.
+        name_free(stat_at(dir, new))?;
+        // SAFETY: `renameat` takes borrowed dir fds plus borrowed names.
+        let r = unsafe {
+            libc::renameat(
+                dir.as_raw_fd(),
+                old_c.as_ptr(),
+                dir.as_raw_fd(),
+                new_c.as_ptr(),
+            )
+        };
+        if r == 0 {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
@@ -467,7 +656,7 @@ pub fn rename_from_staged(
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            // Fallback: staged is outside the jail; dest anchoring still
+            // Fallback: staged is outside the anchored walk; dest anchoring still
             // applies to the new name's parent via dir fd is unavailable,
             // so refuse rather than pathname-rename.
             let _ = (old_c, new_fd, new_c);
@@ -1173,5 +1362,113 @@ pub fn browsable_volume(path: &Path) -> bool {
     {
         let _ = path;
         true
+    }
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+    use crate::VolumeIds;
+
+    #[test]
+    fn fat_and_exfat_are_named_so_by_any_driver() {
+        for (name, ids) in [
+            ("msdos", Some(VolumeIds::FAT)),
+            ("exfat", Some(VolumeIds::EXFAT)),
+            ("ufsd_ExFAT", Some(VolumeIds::EXFAT)),
+            ("ufsd_FAT32", Some(VolumeIds::FAT)),
+            ("vfat", Some(VolumeIds::FAT)),
+            ("apfs", None),
+            ("smbfs", None),
+            ("macfuse", None),
+        ] {
+            assert_eq!(positional_by_name(name), ids, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_fuse_mount_is_named_by_its_subtype() {
+        let mountinfo = "\
+36 35 98:0 / /mnt rw,noatime master:1 - ext4 /dev/root rw
+41 36 8:17 / /media/stick rw,nosuid shared:2 - fuseblk.exfat /dev/sdb1 rw,user_id=0
+42 36 0:40 / /media/fat rw shared:3 - fuse.fusefat /dev/sdc1 rw
+43 36 8:33 / /media/ntfs rw shared:4 - fuseblk /dev/sdd1 rw";
+        assert_eq!(mountinfo_type(mountinfo, "41"), Some("fuseblk.exfat"));
+        assert_eq!(mountinfo_type(mountinfo, "99"), None);
+        assert_eq!(fuse_positional("fuseblk.exfat"), Some(VolumeIds::EXFAT));
+        assert_eq!(
+            fuse_positional(mountinfo_type(mountinfo, "42").unwrap()),
+            Some(VolumeIds::FAT)
+        );
+        assert_eq!(fuse_positional("fuseblk"), None, "ntfs-3g names no subtype");
+        assert_eq!(fuse_positional("fuse.sshfs"), None);
+    }
+
+    #[test]
+    fn no_replace_is_weakened_only_on_a_positional_volume_that_refuses_it() {
+        assert!(excl_fallback(Some(libc::ENOTSUP), Ok(VolumeIds::EXFAT)));
+        assert!(!excl_fallback(Some(libc::ENOTSUP), Ok(VolumeIds::Stable)));
+        assert!(!excl_fallback(
+            Some(libc::ENOTSUP),
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        ));
+        assert!(!excl_fallback(Some(libc::EEXIST), Ok(VolumeIds::FAT)));
+    }
+
+    #[test]
+    fn a_name_is_free_only_when_nothing_is_found() {
+        assert!(name_free(Err(io::Error::from(io::ErrorKind::NotFound))).is_ok());
+        assert_eq!(
+            name_free(Err(io::Error::from(io::ErrorKind::PermissionDenied)))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let stated = EntryStat {
+            is_symlink: false,
+            is_dir: false,
+            is_file: true,
+            size: 0,
+            mtime_ms: 0,
+            dev: 0,
+            ino: 0,
+            born: None,
+            attributes: 0,
+        };
+        assert_eq!(
+            name_free(Ok(stated)).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+    }
+
+    #[test]
+    fn a_checked_delete_removes_what_it_checked_and_restores_what_fails() {
+        use std::os::fd::AsFd;
+        let folder = std::env::temp_dir().join(format!(
+            "vnilink-checked-delete-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("kept.txt"), b"kept").unwrap();
+        std::fs::write(folder.join("gone.txt"), b"gone").unwrap();
+        std::fs::create_dir(folder.join("folder")).unwrap();
+        let dir = open_root(&folder).unwrap();
+        let refused = delete_file_checked(dir.as_fd(), "kept.txt", |_| false);
+        assert_eq!(refused.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read(folder.join("kept.txt")).unwrap(), b"kept");
+        assert!(delete_file_checked(dir.as_fd(), "folder", |_| true).is_err());
+        assert!(folder.join("folder").is_dir(), "a folder is refused");
+        delete_file_checked(dir.as_fd(), "gone.txt", |stated| stated.size == 4).unwrap();
+        let mut left: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["folder", "kept.txt"], "nothing is left aside");
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

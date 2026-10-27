@@ -99,7 +99,7 @@ test('a refusal from the other computer is an error naming its reason, and the c
 	const { service, asked } = fixture({ answer: operation => operation.type === 'rename' ? { error: 'FileExists: the name is taken' } : undefined });
 	const { session } = await service.open('peer');
 	const folder = { root: '0', path: 'Users/someone' };
-	const entry = { name: 'a.txt', kind: 'file', size: '1', mtimeMs: '0', token: { dev: '1', ino: '2', born: '7' } };
+	const entry = { name: 'a.txt', kind: 'file', size: '1', mtimeMs: '0', token: { kind: 'identity', dev: '1', ino: '2', born: '7', fingerprint: null } };
 	const error = await session.remote.rename(folder, entry, 'b.txt').catch(failure => failure);
 	assert.equal(engineErrorCategory(error), 'FileExists');
 	assert(!session.ended);
@@ -117,8 +117,8 @@ test('a refusal from the other computer is an error naming its reason, and the c
 
 test('a folder listing reads every page', async () => {
 	const pages = {
-		'0': { entries: [{ name: 'a', kind: 'dir', size: '0', mtimeMs: '0', token: { dev: null, ino: null, born: null } }], total: '2', nextOffset: '1', truncated: false, skipped: '0' },
-		'1': { entries: [{ name: 'b', kind: 'file', size: '9', mtimeMs: '0', token: { dev: null, ino: null, born: null } }], total: '2', nextOffset: null, truncated: false, skipped: '1' },
+		'0': { entries: [{ name: 'a', kind: 'dir', size: '0', mtimeMs: '0', token: { kind: 'identity', dev: null, ino: null, born: null, fingerprint: null } }], total: '2', nextOffset: '1', truncated: false, skipped: '0' },
+		'1': { entries: [{ name: 'b', kind: 'file', size: '9', mtimeMs: '0', token: { kind: 'identity', dev: null, ino: null, born: null, fingerprint: null } }], total: '2', nextOffset: null, truncated: false, skipped: '1' },
 	};
 	const { service } = fixture({ answer: operation => operation.type === 'list' ? { ok: pages[operation.offset] } : undefined });
 	const { session } = await service.open('peer');

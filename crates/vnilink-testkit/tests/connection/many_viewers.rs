@@ -100,12 +100,12 @@ fn concurrent_peers_operate_independently() -> TestResult {
     worker.core.fs_mkdir(
         files_session.id,
         files_session.generation,
-        host.root_id(),
-        "",
+        host.location().root,
+        &host.location().path(""),
         "from-worker",
     )?;
     assert!(
-        host.root().join("from-worker").is_dir(),
+        host.folder().join("from-worker").is_dir(),
         "the files peer works alongside the viewers"
     );
 
@@ -248,7 +248,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     ))?;
     host.core
         .set_terminal_factory(Some(shell(&std::env::temp_dir())))?;
-    std::fs::write(files.root().join("note.txt"), b"combined-scenario")?;
+    std::fs::write(files.folder().join("note.txt"), b"combined-scenario")?;
 
     // The viewers open Desktops under the view grant; every peer but the
     // files one connects neutrally and is authorized per feature.
@@ -314,10 +314,10 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     // The upload, driven to completion within 200 polls while video floods.
     let job = files.core.job_submit_upload(
         &host.endpoint(),
-        files.root_id(),
-        "",
-        host.root_id(),
-        "arrived",
+        files.location().root,
+        &files.location().path("note.txt"),
+        host.location().root,
+        &host.location().path("arrived"),
     )?;
     let host_jobs = host.core.job_list()?;
     assert_eq!(host_jobs.len(), 1, "the host has the upload");
@@ -341,7 +341,7 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
         "the upload completes within 200 polls"
     );
     assert_eq!(
-        std::fs::read(host.root().join("arrived/note.txt"))?,
+        std::fs::read(host.folder().join("arrived/note.txt"))?,
         b"combined-scenario",
         "the uploaded file lands whole on the host"
     );

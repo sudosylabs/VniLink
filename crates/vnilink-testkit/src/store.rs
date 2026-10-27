@@ -1,7 +1,7 @@
 //! Installations a test holds: an engine opened on a store the test keeps,
 //! a store whose failures the test chooses, and an engine with no store at
-//! all. A kit [`crate::Engine`] keeps its store to itself and has a file
-//! root; these have neither.
+//! all. A kit [`crate::Engine`] keeps its store to itself and shares its
+//! disk; these do neither.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +14,7 @@ use crate::relay::LocalRelay;
 /// An engine whose installation store the test holds, to make its next save
 /// fail or to reopen it with another relay: in a [`MemoryStore`] unless the
 /// test brings a [`TestStore`]. It is set up as [`open_in`] sets one up,
-/// with no file root.
+/// sharing no disk.
 pub struct Installed<S: InstallationStore + Clone + 'static = MemoryStore> {
     pub core: Core,
     pub store: S,

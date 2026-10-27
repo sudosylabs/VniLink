@@ -54,16 +54,20 @@ pub enum Allowance {
     Screen,
     /// Give the paired computer a shell here: the terminal scenario.
     Terminal,
+    /// Share this computer's whole disk with the paired computer: the
+    /// files scenario. Files shares a whole disk or nothing.
+    Files,
 }
 
 impl Allowance {
-    pub const ALL: [Self; 2] = [Self::Screen, Self::Terminal];
+    pub const ALL: [Self; 3] = [Self::Screen, Self::Terminal, Self::Files];
 
     /// Its name on the command line.
     pub fn name(self) -> &'static str {
         match self {
             Self::Screen => "screen",
             Self::Terminal => "terminal",
+            Self::Files => "files",
         }
     }
 
@@ -72,6 +76,7 @@ impl Allowance {
         match self {
             Self::Screen => "shows and reads this computer's screen",
             Self::Terminal => "gives the paired computer a shell on this computer",
+            Self::Files => "shares this computer's whole disk with the paired computer",
         }
     }
 
@@ -101,7 +106,9 @@ impl Agent {
     pub fn open(reach: Reach) -> Result<Self, PeerError> {
         // The clock the agent answers with starts no later than its engine.
         clock::now_us();
-        let engine = Engine::reachable("agent", reach);
+        // Its disk stays its own: only the files scenario shares it, with
+        // its owner's allowance.
+        let engine = Engine::keeping_its_disk("agent", reach);
         engine.core.start_hosting()?;
         // Jobs a scenario's peer starts are driven as the application drives them.
         engine.core.start_job_driver();
@@ -114,11 +121,18 @@ impl Agent {
     }
 
     /// Lets the scenarios that need `allowance` run. Its owner says so on
-    /// its command line.
-    pub fn allow(&mut self, allowance: Allowance) {
+    /// its command line, before any computer connects. Allowing files
+    /// readies the engine's disk for sharing now, since an engine shares
+    /// its disk only while no one controls it; the paired computer reaches
+    /// it only while the files scenario grants it Files.
+    pub fn allow(&mut self, allowance: Allowance) -> Result<(), PeerError> {
+        if allowance == Allowance::Files {
+            self.engine.core.enable_filesystem_access()?;
+        }
         if !self.allowed.contains(&allowance) {
             self.allowed.push(allowance);
         }
+        Ok(())
     }
 
     pub fn engine(&self) -> &Engine {
@@ -447,13 +461,17 @@ mod tests {
     fn allow_takes_one_allowance_or_a_comma_list() {
         assert_eq!(Allowance::parse("screen"), Ok(vec![Allowance::Screen]));
         assert_eq!(
-            Allowance::parse("screen, terminal"),
-            Ok(vec![Allowance::Screen, Allowance::Terminal])
+            Allowance::parse("screen, terminal,files"),
+            Ok(vec![
+                Allowance::Screen,
+                Allowance::Terminal,
+                Allowance::Files
+            ])
         );
-        for unknown in ["", "input", "screen,", "terminal,files"] {
+        for unknown in ["", "input", "screen,", "terminal,disk"] {
             assert!(
                 Allowance::parse(unknown)
-                    .is_err_and(|reason| reason.contains("screen or terminal")),
+                    .is_err_and(|reason| reason.contains("screen or terminal or files")),
                 "{unknown:?} is refused, naming what --allow takes"
             );
         }

@@ -39,7 +39,7 @@ fn a_persistent_shell_resumes_with_its_identity_history_and_environment() -> Tes
     let controller = &pair.controller.core;
     pair.host
         .core
-        .set_terminal_factory(Some(shell(&pair.host.root())))?;
+        .set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let connection = pair.connect_services();
     let terminal = pair
         .controller
@@ -134,7 +134,8 @@ fn a_kept_shell_is_its_peers_alone_and_revoking_terminal_ends_it() -> TestResult
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     let other = pair.add_viewer("other");
     let (host, owner) = (&pair.host, &pair.controller);
-    host.core.set_terminal_factory(Some(shell(&host.root())))?;
+    host.core
+        .set_terminal_factory(Some(shell(&host.folder())))?;
     let connection = owner.connect_services(host)?;
     let terminal = owner.open_terminal(&connection, options(true, None))?;
     let retained = terminal.session();
@@ -198,7 +199,7 @@ fn closing_a_persistent_terminal_bypasses_stalled_input() -> TestResult {
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     pair.host
         .core
-        .set_terminal_factory(Some(shell(&pair.host.root())))?;
+        .set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let connection = pair.connect_services();
     let terminal = pair
         .controller

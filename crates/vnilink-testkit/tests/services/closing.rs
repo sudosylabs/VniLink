@@ -17,7 +17,6 @@ use vnilink::{
 use vnilink_testkit::camera::{config, CAMERA};
 use vnilink_testkit::desktop::{keyframe, InputLog};
 use vnilink_testkit::events::wait_hosted_close;
-use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
@@ -114,7 +113,6 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
     let trace = traced();
     let pair = Pair::for_services(&[ServiceKind::Files]);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    whole_disk(&pair.host, "")?;
     InputLog::install(&pair.host, (1920, 1080))?;
     let parent = pair.connect_services();
     let (_, _pipe) = pair.controller.open_files(&parent)?;
@@ -188,7 +186,7 @@ fn removing_a_backend_closes_its_hosted_services_as_device_loss() -> TestResult 
     let trace = traced();
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     let host = &pair.host.core;
-    host.set_terminal_factory(Some(vnilink_testkit::terminal::shell(&pair.host.root())))?;
+    host.set_terminal_factory(Some(vnilink_testkit::terminal::shell(&pair.host.folder())))?;
     let parent = pair.connect_services();
     let owner = pair.attach(&parent, ServiceKind::Terminal);
     let _terminal = pair.controller.core.open_terminal_service(
@@ -361,7 +359,8 @@ fn close_desktop_beside_files(close: DesktopClose) -> TestResult {
     let _trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host, "")?;
+    let here = pair.host.location();
+    let (root, folder) = (here.root, here.path(""));
     InputLog::install(&pair.host, (1920, 1080))?;
     host.set_service_sharing(ServiceKind::Files, true)?;
     let session = pair.connect_services();

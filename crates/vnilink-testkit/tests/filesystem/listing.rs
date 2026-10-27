@@ -22,7 +22,6 @@ fn listings_are_exact_sorted_and_paged() -> TestResult {
 
     let engine = Engine::start("engine");
     let core = &engine.core;
-    core.enable_filesystem_access()?;
     let files = Location::of(core, &root);
 
     let page = core.list_dir(files.root, &files.path(""), 0, 50)?;
@@ -126,16 +125,15 @@ fn listings_skip_non_utf8_names_and_count_them() -> TestResult {
 
     let engine = Engine::start("engine");
     let core = &engine.core;
-    core.set_file_roots(vec![root.clone()])?;
-    let shared = super::only_root(core);
+    let files = Location::of(core, &root);
     // APFS refuses non-UTF8 names at creation; the listing path is still
     // exercised where the platform allows the fixture.
     if std::fs::write(root.join(&raw), b"raw").is_err() {
-        let page = core.list_dir(shared, "", 0, 50)?;
+        let page = core.list_dir(files.root, &files.path(""), 0, 50)?;
         assert_eq!(page.entries.len(), 1, "the UTF-8 name is listed");
         return Ok(());
     }
-    let page = core.list_dir(shared, "", 0, 50)?;
+    let page = core.list_dir(files.root, &files.path(""), 0, 50)?;
     assert_eq!(page.entries.len(), 1, "only the UTF-8 name is listed");
     assert_eq!(
         page.non_utf8_skipped, 1,
@@ -162,7 +160,6 @@ fn large_directory_reports_truncated_honestly() -> TestResult {
     }
     let engine = Engine::start("engine");
     let core = &engine.core;
-    core.enable_filesystem_access()?;
     let files = Location::of(core, scratch.path());
     let root = files.root;
     let total = u64::try_from(MAX_LISTED)?;

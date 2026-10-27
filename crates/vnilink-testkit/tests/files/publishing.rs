@@ -159,20 +159,20 @@ fn unhooked() -> PrestageHooks {
     }
 }
 
-/// The controller's upload of its whole folder to `arrived` on the host,
-/// and the host's job receiving it.
-fn upload_root(pair: &Pair) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+/// The controller's upload of `big.bin` to `arrived` on the host, and the
+/// host's job receiving it.
+fn upload_big(pair: &Pair) -> Result<(u64, u64), Box<dyn std::error::Error>> {
     std::fs::write(
-        pair.controller.root().join("big.bin"),
+        pair.controller.folder().join("big.bin"),
         payload(200 * 1024, 7),
     )?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = pair.controller.core.job_submit_upload(
         &pair.host.endpoint(),
-        pair.controller.root_id(),
-        "",
-        pair.host.root_id(),
-        "arrived",
+        pair.controller.location().root,
+        &pair.controller.location().path("big.bin"),
+        pair.host.location().root,
+        &pair.host.location().path("arrived"),
     )?;
     Ok((job, files::only_job(&pair.host.core)?))
 }
@@ -245,7 +245,7 @@ fn files_named(folder: &Path, prefix: &str) -> Vec<PathBuf> {
 /// `arrived`, whose parent chain may be made eagerly, and no sibling copy
 /// anywhere in its folders.
 fn assert_nothing_landed(pair: &Pair) -> TestResult {
-    let arrived = pair.host.root().join("arrived");
+    let arrived = pair.host.folder().join("arrived");
     assert!(
         !arrived.join("big.bin").exists(),
         "a revoked publication never lands"
@@ -256,9 +256,9 @@ fn assert_nothing_landed(pair: &Pair) -> TestResult {
     );
     let folders = pair
         .host
-        .root()
+        .folder()
         .parent()
-        .ok_or("a root inside the engine's folder")?
+        .ok_or("the engine's folder inside its scratch folder")?
         .to_path_buf();
     let leftovers = files_named(&folders, ".vnlpub.");
     assert!(
@@ -275,7 +275,7 @@ fn assert_nothing_landed(pair: &Pair) -> TestResult {
 fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let (job, receiver) = upload_root(&pair)?;
+    let (job, receiver) = upload_big(&pair)?;
     let parked = Parked::in_copy(&pair.host.core, receiver);
     let driver = drive_receiver(&pair, job, receiver);
     COPY.wait_reached("the publication's copy to park");
@@ -317,7 +317,7 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() -> TestResult 
 fn parked_mkdir_and_stage_sync_leave_locks_free() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let (job, receiver) = upload_root(&pair)?;
+    let (job, receiver) = upload_big(&pair)?;
     let parked = Parked::in_parents_and_sync(&pair.host.core, receiver);
     let driver = drive_receiver(&pair, job, receiver);
 
@@ -329,8 +329,8 @@ fn parked_mkdir_and_stage_sync_leave_locks_free() -> TestResult {
     unblocked("a job snapshot while making parents", host, move |core| {
         core.job_snapshot(receiver).expect("a job snapshot");
     });
-    unblocked("the file roots while making parents", host, |core| {
-        core.file_roots().expect("the file roots");
+    unblocked("the shared roots while making parents", host, |core| {
+        core.file_roots().expect("the shared roots");
     });
     PARENTS.release();
 

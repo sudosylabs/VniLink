@@ -576,9 +576,10 @@ fn check_sources(folder: &str, names: &[String]) -> Result<(), Error> {
 }
 
 /// Verify a job leg's pin against locked roots, adopting the current
-/// root for legacy records. A rebound entry fails the leg: callers must
+/// root for legacy records. A replaced drive fails the leg: callers must
 /// serve nothing on error. Runs under the roots lock together with the
-/// resolution it guards, so a rebind between check and use is impossible.
+/// resolution it guards, so the drives cannot be read again between check
+/// and use.
 fn verify_leg_pin(
     roots: &fs::RootSet,
     id: u64,
@@ -645,7 +646,7 @@ impl Core {
         // Snapshot under a short lock; the recursive walk runs off every lock.
         let snapshot = lock(&self.shared.file_roots).clone();
         // Pin the leg to the scanned generation: each part re-verifies it,
-        // so a rebind during admission fails the whole offer instead of
+        // so a drive replaced during admission fails the whole offer instead of
         // mixing generations.
         let mut pin = Some(snapshot.pin(src_root)?);
         let mut manifest = Manifest {
@@ -737,7 +738,7 @@ impl Core {
             let state = lock(&self.shared.state);
             super::service_jobs::check_owner(&state, owner)?;
             let mut record = record;
-            // Re-verify before announcing: a rebind between the last file
+            // Re-verify before announcing: a drive replaced between the last file
             // and the insert fails here instead of offering moved bytes.
             verify_leg_pin(
                 &lock(&self.shared.file_roots),
@@ -820,7 +821,7 @@ impl Core {
         }
         fs::check_rel(dst_rel)?;
         // Pin the destination leg at admission: every receive below
-        // re-verifies it, so a target rebind reroutes no bytes.
+        // re-verifies it, so a replaced target drive reroutes no bytes.
         let pin = {
             let roots = lock(&self.shared.file_roots);
             if roots.snapshot().iter().all(|(id, _)| *id != dst_root) {
@@ -1496,10 +1497,10 @@ impl Core {
                 return self.mark_interrupted(id, PERMISSION_OFF);
             }
             if let Err(error) = self.ensure_receiver_dirs(id) {
-                return self.interrupt_on_rebind(id, error);
+                return self.interrupt_on_drive_change(id, error);
             }
             match self.finalize_receiver(id) {
-                Err(error) => return self.interrupt_on_rebind(id, error),
+                Err(error) => return self.interrupt_on_drive_change(id, error),
                 Ok(snapshot) => return Ok(snapshot),
             }
         }
@@ -1511,7 +1512,7 @@ impl Core {
                 return self.mark_interrupted(id, PERMISSION_OFF);
             }
             if let Err(error) = self.ensure_receiver_dirs(id) {
-                return self.interrupt_on_rebind(id, error);
+                return self.interrupt_on_drive_change(id, error);
             }
         }
         let entry = {
@@ -1523,7 +1524,7 @@ impl Core {
         // Conflict check before any fetch: the destination wins ties until
         // the owner decides.
         let choice = match self.conflict_choice(id, file_index, &entry) {
-            Err(error) => return self.interrupt_on_rebind(id, error),
+            Err(error) => return self.interrupt_on_drive_change(id, error),
             Ok(choice) => choice,
         };
         let Some(choice) = choice else {
@@ -1565,8 +1566,8 @@ impl Core {
         // with a durable, payload-free explanation.
         let available = match self.receiver_available_storage(id, &entry.path) {
             Ok(available) => available,
-            Err(Error::InvalidSetting(msg)) if msg == fs::ROOTS_REBOUND => {
-                return self.mark_interrupted(id, fs::ROOTS_REBOUND);
+            Err(Error::InvalidSetting(msg)) if msg == fs::DRIVE_CHANGED => {
+                return self.mark_interrupted(id, fs::DRIVE_CHANGED);
             }
             // The destination folder is gone or unreadable: say so on the
             // job rather than failing every poll.
@@ -1695,7 +1696,7 @@ impl Core {
             return self.mark_failed(id, VERIFY_FAILED);
         }
         let landed = match self.publish_staged(id, &entry, &staged, choice) {
-            Err(error) => return self.interrupt_on_rebind(id, error),
+            Err(error) => return self.interrupt_on_drive_change(id, error),
             Ok(Some(landed)) => landed,
             Ok(None) => return self.job_snapshot(id),
         };
@@ -1849,14 +1850,14 @@ impl Core {
         let adopted = pin.is_none();
         let dest = {
             let roots = lock(&self.shared.file_roots);
-            // A rebound destination fails the leg instead of writing
+            // A replaced destination drive fails the leg instead of writing
             // staged bytes into whatever the path resolves to now.
             verify_leg_pin(&roots, root, &mut pin)?;
             let (parent_rel, name) = match path.rfind('/') {
                 Some(slash) => (&path[..slash], &path[slash + 1..]),
                 None => ("", path),
             };
-            // The manifest jail already validated every component; resolve the
+            // The manifest's path rules already validated every component; resolve the
             // parent through it (creating missing levels idempotently) and
             // append the single validated file name.
             let full_parent = if rel.is_empty() {
@@ -1882,8 +1883,8 @@ impl Core {
     /// The entry `name` (by default the manifest path's own name) in the
     /// receiver's folder for `path`, stated without following a link: its
     /// size when it is a plain file, `u64::MAX` for anything else there, and
-    /// `None` when nothing is. Rooted receivers state it through anchored
-    /// handles, so a folder swapped for a link is never read through.
+    /// `None` when nothing is. It is stated through anchored handles, so a
+    /// folder swapped for a link is never read through.
     fn receiver_entry(
         &self,
         id: u64,
@@ -2067,13 +2068,13 @@ impl Core {
         ))
     }
 
-    /// A rebound destination leg interrupts the job instead of wedging
-    /// the poll: the error is retryable, so restoring the original roots
+    /// A destination leg on a replaced drive interrupts the job instead of
+    /// wedging the poll: the error is retryable, so putting the drive back
     /// and resuming continues. Any other error keeps its meaning.
-    fn interrupt_on_rebind(&self, id: u64, error: Error) -> Result<JobSnapshot, Error> {
+    fn interrupt_on_drive_change(&self, id: u64, error: Error) -> Result<JobSnapshot, Error> {
         match error {
-            Error::InvalidSetting(msg) if msg == fs::ROOTS_REBOUND => {
-                self.mark_interrupted(id, fs::ROOTS_REBOUND)
+            Error::InvalidSetting(msg) if msg == fs::DRIVE_CHANGED => {
+                self.mark_interrupted(id, fs::DRIVE_CHANGED)
             }
             error => Err(error),
         }
@@ -2091,7 +2092,7 @@ impl Core {
             let mut pin = record.local_pin.clone();
             let adopted = pin.is_none();
             // Verify and clone under one roots hold: the snapshot is
-            // exactly the verified epoch, so a rebind cannot slip
+            // exactly the verified epoch, so a replaced drive cannot slip
             // skeleton mkdirs into the new directory.
             let roots_snapshot = {
                 let roots = lock(&self.shared.file_roots);
@@ -2472,7 +2473,7 @@ impl Core {
         }
         let roots = lock(&self.shared.file_roots);
         // The dir handle below pins whatever the live roots resolve NOW:
-        // re-verify the leg first so a rebound destination fails instead
+        // re-verify the leg first so a replaced destination drive fails instead
         // of binding the new directory.
         verify_leg_pin(&roots, local_root, &mut pin)?;
         let dir_fd = roots.open_dir_held(local_root, &full_parent)?;
@@ -2913,8 +2914,8 @@ impl Core {
         // job instead of moving new bytes.
         // Adopt the leg's pin first (jobs->roots order); the pin is
         // leg-wide, so an upfront mismatch is definitive and fails with
-        // the rebound cause instead of erroring the resume call.
-        let rebound = {
+        // the drive's cause instead of erroring the resume call.
+        let drive_changed = {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             verify_leg_pin(
@@ -2924,8 +2925,8 @@ impl Core {
             )
             .is_err()
         };
-        if rebound {
-            return self.mark_failed(id, fs::ROOTS_REBOUND);
+        if drive_changed {
+            return self.mark_failed(id, fs::DRIVE_CHANGED);
         }
         let (local_root, local_rel, local_pin, manifest, source_ids) = {
             let jobs = lock(&self.shared.jobs);
@@ -3115,7 +3116,7 @@ fn allocate_job_id(shared: &Shared) -> Result<u64, Error> {
 }
 
 /// Re-checks a sending leg's files against its manifest through the
-/// approved root's handles, never retained absolute paths: each must still
+/// shared root's handles, never retained absolute paths: each must still
 /// be the regular file scanned, with the manifest's size and modification
 /// time.
 /// Returns the reason to fail the job with.
@@ -3138,7 +3139,7 @@ fn check_sending_sources(
         // roots->jobs would invert the publication order.
         let identity = {
             let roots = lock(&shared.file_roots);
-            roots.verify_pin(pin).map_err(|_| fs::ROOTS_REBOUND)?;
+            roots.verify_pin(pin).map_err(|_| fs::DRIVE_CHANGED)?;
             source_identity(&roots, local_root, parent_rel, name)
         };
         if !identity.is_some_and(|identity| entry_matches(entry, scanned_id, identity)) {
@@ -3373,7 +3374,7 @@ pub(super) fn sending_at(
     jobs_changed(shared);
 }
 
-/// Test probe parked by the rebind regression: called with the serving
+/// Test probe parked by the serving tests: called with the serving
 /// engine ([`Core::engine_key`]) and job after the source opens, before it
 /// is authorized. Production leaves it unset. The probe must return
 /// promptly for jobs it does not recognize: suites run in parallel.
@@ -3384,7 +3385,7 @@ pub static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn(usize, u64)>> =
 /// which status refuses it. The source is reached through the leg's pinned
 /// root by handles, never a retained absolute path, and must still be the
 /// regular file scanned for the manifest: a file renamed over it, even
-/// with the same size and time, is another file. A rebound root refuses the request
+/// with the same size and time, is another file. A replaced drive refuses the request
 /// instead of serving moved bytes, while a file already open completes.
 pub(super) fn open_served_file(
     shared: &Shared,
@@ -4423,8 +4424,8 @@ async fn handle_resume(
         // Re-verify each source through handles: a changed source fails
         // instead of moving new bytes.
         let manifest = manifest.ok_or(())?;
-        // Adopt the leg's pin up front (jobs->roots order); a rebound
-        // source fails here with its own cause instead of re-authorizing
+        // Adopt the leg's pin up front (jobs->roots order); a source on a
+        // replaced drive fails here with its own cause instead of re-authorizing
         // the new directory below. Decided under the guards, acted on
         // after: no mutex is held across the reply await.
         enum PinDecision {
@@ -4445,7 +4446,7 @@ async fn handle_resume(
                     .is_err()
                     {
                         record.enter(JobState::Failed);
-                        record.error = Some(fs::ROOTS_REBOUND.to_owned());
+                        record.error = Some(fs::DRIVE_CHANGED.to_owned());
                         PinDecision::Rebound
                     } else {
                         PinDecision::Go(record.local_pin.clone().expect("leg pin just verified"))
@@ -4573,7 +4574,7 @@ pub(super) async fn handle_upload_offer(
             return Err(job::STATUS_ERROR);
         }
         // Pin the destination leg before insertion (sequential roots
-        // hold, never nested): a rebind between here and first use then
+        // hold, never nested): a drive replaced between here and first use then
         // fails the leg instead of landing bytes in the new directory.
         let local_pin = lock(&shared.file_roots).pin(offer.dst_root).ok();
         let mut jobs = lock(&shared.jobs);
@@ -4715,7 +4716,7 @@ pub(super) async fn handle_download_request(
     // Preparing, can cancel it, and loses it with its owner. Same order as
     // publication/rename: jobs -> state, so activation and permission
     // changes cannot interleave between the check and the insert. The
-    // source leg is pinned now: a rebind before the first serve fails the
+    // source leg is pinned now: a drive replaced before the first serve fails the
     // leg instead of serving moved bytes.
     let local_pin = lock(&shared.file_roots).pin(request.src_root).ok();
     let (stop, stopped) = tokio::sync::watch::channel(false);
@@ -5004,7 +5005,7 @@ async fn prepare_source(
     src_rel: &str,
     scan_hooks: manifest::ScanHooks,
 ) -> Result<(Manifest, u64, HashMap<String, u64>), u8> {
-    // Snapshot the approved roots under a short lock; the recursive walk
+    // Snapshot the shared roots under a short lock; the recursive walk
     // runs on a bounded worker with no locks held.
     let snapshot = lock(&shared.file_roots).clone();
     let scan = manifest::scan_roots_async(snapshot, src_root, src_rel.to_owned(), scan_hooks)
@@ -5187,7 +5188,11 @@ mod lifecycle_tests {
         // the canonical form.
         let scratch = std::fs::canonicalize(&scratch).unwrap();
         core.set_transfer_directory(scratch.join("blobs")).unwrap();
-        core.set_file_roots(vec![scratch.join("root")]).unwrap();
+        // The kit's drives: the folder stands for a drive, so replacing it
+        // below is a drive taken out and another put in at its letter.
+        lock(&core.shared.file_roots)
+            .share_as_drives(&[scratch.join("root")])
+            .unwrap();
         // Legacy record: persisted before pinning, so the pin is None.
         let mut legacy = record(7, 10, 0, JobState::Transferring);
         legacy.local_rel = "got".to_owned();
@@ -5198,13 +5203,15 @@ mod lifecycle_tests {
         assert_eq!(dest, scratch.join("root/got/file-7"));
         let adopted = lock(&core.shared.jobs).get(&7).unwrap().local_pin.clone();
         assert!(adopted.is_some());
-        // The adopted pin is strict: a rebound entry fails the leg.
-        core.set_file_roots(vec![scratch.join("elsewhere")])
+        // The adopted pin is strict: another drive at the letter fails the
+        // leg.
+        lock(&core.shared.file_roots)
+            .share_as_drives(&[scratch.join("elsewhere")])
             .unwrap();
         let err = core.receiver_dest(7, 0, "got", "file-7").unwrap_err();
         assert!(matches!(
             err,
-            Error::InvalidSetting(msg) if msg == crate::fs::ROOTS_REBOUND
+            Error::InvalidSetting(msg) if msg == crate::fs::DRIVE_CHANGED
         ));
         let _ = std::fs::remove_dir_all(&scratch);
         core.shutdown();

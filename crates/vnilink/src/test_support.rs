@@ -48,10 +48,9 @@ impl Drop for Scratch {
     }
 }
 
-/// Addresses a temporary fixture inside the whole-filesystem namespace.
-///
-/// Fixtures are ordinary folders, never substitute advertised roots. Only
-/// paths below the fixture are used for writes.
+/// Addresses a temporary fixture on the shared disk as the engine names
+/// it ([`crate::core::Core::locate`], [`crate::fs::RootSet::locate`]), never
+/// a disk's root itself, so tests write only below their fixtures.
 #[derive(Clone)]
 pub(crate) struct FilesystemLocation {
     pub(crate) root: u64,
@@ -59,21 +58,25 @@ pub(crate) struct FilesystemLocation {
 }
 
 impl FilesystemLocation {
-    pub(crate) fn new(roots: Vec<(u64, PathBuf)>, fixture: &Path) -> Self {
-        let fixture = std::fs::canonicalize(fixture).expect("fixture exists");
+    /// `fixture` on `core`'s shared disk.
+    pub(crate) fn on(core: &crate::core::Core, fixture: &Path) -> Self {
+        let (root, parent, name) = core
+            .locate(fixture)
+            .expect("the engine is running")
+            .expect("the fixture is below a root of the shared disk");
+        let relative = if parent.is_empty() {
+            name
+        } else {
+            format!("{parent}/{name}")
+        };
+        Self { root, relative }
+    }
+
+    /// `fixture` among `roots`, for tests without an engine.
+    pub(crate) fn in_roots(roots: &crate::fs::RootSet, fixture: &Path) -> Self {
         let (root, relative) = roots
-            .into_iter()
-            .find_map(|(id, path)| {
-                fixture.strip_prefix(path).ok().map(|relative| {
-                    let relative = relative
-                        .components()
-                        .map(|part| part.as_os_str().to_str().expect("UTF-8 fixture path"))
-                        .collect::<Vec<_>>()
-                        .join("/");
-                    (id, relative)
-                })
-            })
-            .expect("fixture belongs to an advertised filesystem root");
+            .locate(fixture)
+            .expect("the fixture is on the shared disk");
         assert!(
             !relative.is_empty(),
             "writes must stay inside a temporary fixture"

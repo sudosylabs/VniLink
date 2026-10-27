@@ -11,7 +11,7 @@ pub const MAX_CLIPBOARD_FILES: usize = 256;
 pub const MAX_CLIPBOARD_FILES_BYTES: usize = 64 * 1024;
 
 /// One selected file or directory. `path` is relative to the selection root
-/// and jailed like transfer names; `size` is an estimate the receiver must
+/// and follows the transfer names' path rules; `size` is an estimate the receiver must
 /// not trust for allocation; directories always report size zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipboardFileEntry {
@@ -220,7 +220,7 @@ mod tests {
         let name_at = utf8.len() - "ok.txt".len() - 8;
         utf8[name_at] = 0xFF;
         assert!(decode(&utf8[4..]).is_err());
-        // A hostile peer cannot smuggle a jailed path or a duplicate past decode.
+        // A hostile peer cannot smuggle an unsafe path or a duplicate past decode.
         let evil = selection(vec![entry("../evil", 1)]);
         assert!(encode(&Frame::Files {
             revision: 1,

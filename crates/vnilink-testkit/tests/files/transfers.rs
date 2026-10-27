@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use vnilink::{ConflictChoice, JobState};
-use vnilink_testkit::files::{self, drive_to_end, received, tree, whole_disk, write_files, Entry};
+use vnilink_testkit::files::{self, drive_to_end, received, tree, write_files, Entry};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(60);
@@ -30,7 +30,7 @@ fn write_tree(folder: &Path) -> std::io::Result<()> {
 fn an_upload_lands_exactly_and_keeps_its_source() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let source = pair.controller.root().join("tree");
+    let source = pair.controller.folder().join("tree");
     write_tree(&source)?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "tree", "arrived")?;
@@ -79,7 +79,7 @@ fn an_upload_lands_exactly_and_keeps_its_source() -> TestResult {
         "the receiver's job keeps no internal destination path: {got:?}"
     );
     assert_eq!(
-        tree(&pair.host.root().join("arrived/tree")),
+        tree(&pair.host.folder().join("arrived/tree")),
         tree(&source),
         "the tree lands exactly"
     );
@@ -110,12 +110,14 @@ fn an_upload_lands_exactly_and_keeps_its_source() -> TestResult {
 fn a_download_lands_exactly_as_the_host_sender_mirrors_it() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let source = pair.host.root().join("tree");
+    let source = pair.host.folder().join("tree");
     write_tree(&source)?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
-    pair.controller
-        .core
-        .create_dir(pair.controller.root_id(), "", "got")?;
+    pair.controller.core.create_dir(
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
+        "got",
+    )?;
     let job = files::download(&pair, "tree", "got")?;
     let host_job = files::only_job(&pair.host.core)?;
     let (sent, got) = drive_to_end(
@@ -136,7 +138,7 @@ fn a_download_lands_exactly_as_the_host_sender_mirrors_it() -> TestResult {
         "the host's sender mirrors completion: {sent:?}"
     );
     assert_eq!(
-        tree(&pair.controller.root().join("got/tree")),
+        tree(&pair.controller.folder().join("got/tree")),
         tree(&source),
         "the tree lands exactly"
     );
@@ -165,9 +167,9 @@ fn a_download_lands_exactly_as_the_host_sender_mirrors_it() -> TestResult {
 fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let source = pair.controller.root().join("set");
+    let source = pair.controller.folder().join("set");
     write_files(&source, &[("a.txt", 100), ("b.txt", 100), ("c.txt", 100)]);
-    let destination = pair.host.root().join("dest/set");
+    let destination = pair.host.folder().join("dest/set");
     std::fs::create_dir_all(&destination)?;
     std::fs::write(destination.join("a.txt"), b"old-a")?;
     std::fs::write(destination.join("b.txt"), b"old-b")?;
@@ -278,15 +280,17 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
 fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
     let trace = traced();
     let mut pair = Pair::for_files();
-    let source = pair.host.root().join("set");
+    let source = pair.host.folder().join("set");
     write_files(
         &source,
         &[("one.txt", 1024), ("two.txt", 1024), ("three.txt", 1024)],
     );
     pair.controller.core.connect_files(&pair.host.endpoint())?;
-    pair.controller
-        .core
-        .create_dir(pair.controller.root_id(), "", "got")?;
+    pair.controller.core.create_dir(
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
+        "got",
+    )?;
     let job = files::download(&pair, "set", "got")?;
 
     // Two files land and the third waits: the receiver quits here.
@@ -340,7 +344,7 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
     );
     assert_eq!(got.files_done, 3, "every file counts as done: {got:?}");
     assert_eq!(
-        tree(&pair.controller.root().join("got/set")),
+        tree(&pair.controller.folder().join("got/set")),
         tree(&source),
         "the tree lands exactly"
     );
@@ -372,12 +376,14 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
 fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let source = pair.host.root().join("set");
+    let source = pair.host.folder().join("set");
     write_files(&source, &[("one.txt", 2048), ("two.txt", 12 * 1024 * 1024)]);
     pair.controller.core.connect_files(&pair.host.endpoint())?;
-    pair.controller
-        .core
-        .create_dir(pair.controller.root_id(), "", "got")?;
+    pair.controller.core.create_dir(
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
+        "got",
+    )?;
     let job = files::download(&pair, "set", "got")?;
     let controller = &pair.controller.core;
     controller.job_poll(job)?;
@@ -401,7 +407,7 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
         JobState::Cancelled,
         "a cancelled job stays cancelled: {after:?}"
     );
-    let landed = pair.controller.root().join("got/set");
+    let landed = pair.controller.folder().join("got/set");
     assert_eq!(
         std::fs::read(landed.join("one.txt"))?,
         std::fs::read(source.join("one.txt"))?,
@@ -474,9 +480,9 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
 fn a_refused_publication_keeps_the_original_and_resumes() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let source = pair.host.root().join("set");
+    let source = pair.host.folder().join("set");
     write_files(&source, &[("new.txt", 512)]);
-    let destination = pair.controller.root().join("got/set");
+    let destination = pair.controller.folder().join("got/set");
     std::fs::create_dir_all(&destination)?;
     std::fs::write(destination.join("new.txt"), b"original")?;
 
@@ -612,8 +618,8 @@ fn submitting_needs_a_session_an_existing_source_and_a_known_root() -> TestResul
         matches!(
             pair.controller.core.job_submit_download(
                 &pair.host.endpoint(),
-                pair.host.root_id(),
-                "",
+                pair.host.location().root,
+                &pair.host.location().path(""),
                 u64::MAX,
                 "x",
             ),
@@ -630,8 +636,8 @@ fn submitting_needs_a_session_an_existing_source_and_a_known_root() -> TestResul
 fn an_empty_folder_tree_lands_whole() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    std::fs::create_dir_all(pair.controller.root().join("empty/nested"))?;
-    write_files(&pair.controller.root().join("keep"), &[("a.txt", 1)]);
+    std::fs::create_dir_all(pair.controller.folder().join("empty/nested"))?;
+    write_files(&pair.controller.folder().join("keep"), &[("a.txt", 1)]);
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "empty", "arrived")?;
     let receiver = received(&pair.host.core);
@@ -653,7 +659,7 @@ fn an_empty_folder_tree_lands_whole() -> TestResult {
         "the sender completes: {sent:?}"
     );
     assert_eq!(
-        tree(&pair.host.root().join("arrived")),
+        tree(&pair.host.folder().join("arrived")),
         [
             ("empty".to_owned(), Entry::Folder),
             ("empty/nested".to_owned(), Entry::Folder),
@@ -678,7 +684,7 @@ fn an_empty_folder_tree_lands_whole() -> TestResult {
 fn a_job_its_sender_cancels_before_delivery_lands_nothing() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    write_files(&pair.controller.root(), &[("a.txt", 1024)]);
+    write_files(&pair.controller.folder(), &[("a.txt", 1024)]);
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "a.txt", "got")?;
     let receiver = received(&pair.host.core);
@@ -691,7 +697,7 @@ fn a_job_its_sender_cancels_before_delivery_lands_nothing() -> TestResult {
         "the receiver follows its sender's cancel: {after:?}"
     );
     assert!(
-        !pair.host.root().join("got/a.txt").exists(),
+        !pair.host.folder().join("got/a.txt").exists(),
         "a cancelled file never lands"
     );
     let sent = pair.controller.core.job_snapshot(job)?;
@@ -717,7 +723,7 @@ fn a_job_its_sender_cancels_before_delivery_lands_nothing() -> TestResult {
 fn driving_every_job_finishes_one_without_window_polls() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    write_files(&pair.controller.root(), &[("a.txt", 1024)]);
+    write_files(&pair.controller.folder(), &[("a.txt", 1024)]);
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "a.txt", "got")?;
     let receiver = received(&pair.host.core);
@@ -739,8 +745,8 @@ fn driving_every_job_finishes_one_without_window_polls() -> TestResult {
         "the receiver completes: {got:?}"
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("got/a.txt"))?,
-        std::fs::read(pair.controller.root().join("a.txt"))?,
+        std::fs::read(pair.host.folder().join("got/a.txt"))?,
+        std::fs::read(pair.controller.folder().join("a.txt"))?,
         "the file lands exactly"
     );
     trace.wait_for_records("job state", 2);
@@ -762,8 +768,8 @@ fn driving_every_job_finishes_one_without_window_polls() -> TestResult {
 fn an_upload_conflict_reaches_its_sender_who_answers_it() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    write_files(&pair.controller.root(), &[("a.txt", 100)]);
-    let destination = pair.host.root().join("dest");
+    write_files(&pair.controller.folder(), &[("a.txt", 100)]);
+    let destination = pair.host.folder().join("dest");
     std::fs::create_dir_all(&destination)?;
     std::fs::write(destination.join("a.txt"), b"old")?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
@@ -808,7 +814,7 @@ fn an_upload_conflict_reaches_its_sender_who_answers_it() -> TestResult {
     );
     assert_eq!(
         std::fs::read(destination.join("a.txt"))?,
-        std::fs::read(pair.controller.root().join("a.txt"))?,
+        std::fs::read(pair.controller.folder().join("a.txt"))?,
         "Replace lands the new file"
     );
     trace.wait_for_records("job state", 2);
@@ -835,7 +841,7 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     write_files(
-        &pair.controller.root().join("set"),
+        &pair.controller.folder().join("set"),
         &[("a.txt", 512), ("b.txt", 512)],
     );
     pair.controller.core.connect_files(&pair.host.endpoint())?;
@@ -876,8 +882,8 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
         "the resumed sender completes: {sent:?}"
     );
     assert_eq!(
-        tree(&pair.host.root().join("got/set")),
-        tree(&pair.controller.root().join("set")),
+        tree(&pair.host.folder().join("got/set")),
+        tree(&pair.controller.folder().join("set")),
         "the tree lands exactly"
     );
     trace.wait_for_records("job state", 2);
@@ -900,13 +906,13 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
 }
 
 /// A sender restarted after one file of a nested source resumes the files
-/// under that source, not under the root.
+/// under that source, found again by its full path from the disk's root.
 #[test]
 fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
     let trace = traced();
     let mut pair = Pair::for_files();
     write_files(
-        &pair.controller.root().join("docs/pack"),
+        &pair.controller.folder().join("docs/pack"),
         &[("sub/a.txt", 512), ("b.txt", 512)],
     );
     pair.controller.core.connect_files(&pair.host.endpoint())?;
@@ -935,8 +941,8 @@ fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
         "the restarted sender completes: {sent:?}"
     );
     assert_eq!(
-        tree(&pair.host.root().join("got/pack")),
-        tree(&pair.controller.root().join("docs/pack")),
+        tree(&pair.host.folder().join("got/pack")),
+        tree(&pair.controller.folder().join("docs/pack")),
         "the source's own folder lands, with its nested files"
     );
     trace.wait_for_records("job state", 2);
@@ -975,10 +981,10 @@ fn publication_across_filesystems_lands_the_file() -> TestResult {
     }
     let _staging = shm_usable.then(|| Remove(shm.clone()));
     if shm_usable {
-        // The host receives, so its staging crosses to its root.
+        // The host receives, so its staging crosses to its folder.
         pair.host.core.set_transfer_directory(&shm)?;
     }
-    write_files(&pair.controller.root(), &[("a.txt", 2048)]);
+    write_files(&pair.controller.folder(), &[("a.txt", 2048)]);
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "a.txt", "got")?;
     let receiver = received(&pair.host.core);
@@ -1000,8 +1006,8 @@ fn publication_across_filesystems_lands_the_file() -> TestResult {
         "the sender completes: {sent:?}"
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("got/a.txt"))?,
-        std::fs::read(pair.controller.root().join("a.txt"))?,
+        std::fs::read(pair.host.folder().join("got/a.txt"))?,
+        std::fs::read(pair.controller.folder().join("a.txt"))?,
         "the file lands exactly"
     );
     trace.wait_for_records("job state", 2);
@@ -1023,9 +1029,9 @@ fn publication_across_filesystems_lands_the_file() -> TestResult {
 fn a_receivers_keep_both_unblocks_a_sender_mirroring_the_conflict() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    std::fs::write(pair.controller.root().join("file.txt"), b"incoming")?;
-    std::fs::create_dir_all(pair.host.root().join("dest"))?;
-    std::fs::write(pair.host.root().join("dest/file.txt"), b"original")?;
+    std::fs::write(pair.controller.folder().join("file.txt"), b"incoming")?;
+    std::fs::create_dir_all(pair.host.folder().join("dest"))?;
+    std::fs::write(pair.host.folder().join("dest/file.txt"), b"original")?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let job = files::upload(&pair, "file.txt", "dest")?;
     let receiver = received(&pair.host.core);
@@ -1062,12 +1068,12 @@ fn a_receivers_keep_both_unblocks_a_sender_mirroring_the_conflict() -> TestResul
         "the sender leaves the mirrored question and completes: {sent:?}"
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("dest/file.txt"))?,
+        std::fs::read(pair.host.folder().join("dest/file.txt"))?,
         b"original",
         "Keep both keeps the original under its name"
     );
     assert_eq!(
-        std::fs::read(pair.host.root().join("dest/file (2).txt"))?,
+        std::fs::read(pair.host.folder().join("dest/file (2).txt"))?,
         b"incoming",
         "Keep both lands the new file under the next free name"
     );
@@ -1093,10 +1099,10 @@ fn a_receivers_keep_both_unblocks_a_sender_mirroring_the_conflict() -> TestResul
 fn two_files_one_at_a_time(pair: &Pair) -> std::io::Result<()> {
     pair.controller.core.fetch_one_file_at_a_time();
     write_files(
-        &pair.host.root().join("set"),
+        &pair.host.folder().join("set"),
         &[("one.txt", 512), ("two.txt", 512)],
     );
-    std::fs::create_dir_all(pair.controller.root().join("got"))
+    std::fs::create_dir_all(pair.controller.folder().join("got"))
 }
 
 /// A host that stops sharing files after the first of two files lands
@@ -1125,7 +1131,7 @@ fn a_download_the_host_stops_sharing_resumes_once_shared_again() -> TestResult {
         "the job says why it stopped"
     );
     assert!(
-        !pair.controller.root().join("got/set/two.txt").exists(),
+        !pair.controller.folder().join("got/set/two.txt").exists(),
         "nothing fetched after the withdrawal lands"
     );
 
@@ -1143,8 +1149,8 @@ fn a_download_the_host_stops_sharing_resumes_once_shared_again() -> TestResult {
         "the download resumes: {got:?}"
     );
     assert_eq!(
-        tree(&pair.controller.root().join("got/set")),
-        tree(&pair.host.root().join("set")),
+        tree(&pair.controller.folder().join("got/set")),
+        tree(&pair.host.folder().join("set")),
         "the resumed download lands the exact tree"
     );
     expect![[r#"
@@ -1194,7 +1200,7 @@ fn a_download_whose_host_forgets_the_controller_lands_nothing_more() -> TestResu
         "no file after the first counts as landed"
     );
     assert!(
-        !pair.controller.root().join("got/set/two.txt").exists(),
+        !pair.controller.folder().join("got/set/two.txt").exists(),
         "the second file is refused at publication"
     );
     expect![[r#"
@@ -1207,70 +1213,5 @@ fn a_download_whose_host_forgets_the_controller_lands_nothing_more() -> TestResu
           files: job state from=serving job=1 sender=true to=interrupted
     "#]]
     .assert_eq(&trace.story(&["files"]));
-    Ok(())
-}
-
-/// As [`a_restarted_sender_resumes_a_nested_source`], with each computer
-/// sharing its whole disk: the restarted sender finds its nested source
-/// again from the disk's root, by its full path.
-#[test]
-fn a_restarted_sender_sharing_its_whole_disk_resumes_a_nested_source() -> TestResult {
-    let trace = traced();
-    let mut pair = Pair::for_files();
-    write_files(
-        &pair.controller.root().join("docs/pack"),
-        &[("sub/a.txt", 512), ("b.txt", 512)],
-    );
-    let (source_root, source) = whole_disk(&pair.controller, "docs/pack")?;
-    std::fs::create_dir_all(pair.host.root().join("got"))?;
-    let (destination_root, destination) = whole_disk(&pair.host, "got")?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let job = pair.controller.core.job_submit_upload(
-        &pair.host.endpoint(),
-        source_root,
-        &source,
-        destination_root,
-        &destination,
-    )?;
-    let receiver = received(&pair.host.core);
-    // One file lands; then the sender quits, and the receiver keeps its job.
-    pair.host.core.job_poll(receiver)?;
-    pair.controller.restart();
-    pair.controller.core.enable_filesystem_access()?;
-    pair.controller.core.connect_files(&pair.host.endpoint())?;
-    pair.controller.core.job_resume(job)?;
-    let (sent, got) = drive_to_end(
-        &pair.controller.core,
-        job,
-        &pair.host.core,
-        receiver,
-        TRANSFER,
-    );
-    assert_eq!(
-        (sent.state, got.state),
-        (JobState::Complete, JobState::Complete),
-        "the restarted sender and its receiver complete"
-    );
-    assert_eq!(
-        tree(&pair.host.root().join("got/pack")),
-        tree(&pair.controller.root().join("docs/pack")),
-        "the source's own folder lands, with its nested files"
-    );
-    trace.wait_for_records("job state", 2);
-    expect![[r#"
-        controller:
-          files: job state from=preparing job=1 sender=true to=serving
-          files: file served ended=sent from=0 sent=512 size=512
-          files: file served ended=sent from=0 sent=512 size=512
-          files: job state from=serving job=1 sender=true to=interrupted
-          files: job state from=interrupted job=1 sender=true to=serving
-          files: file served ended=sent from=512 sent=0 size=512
-          files: job state done_bytes=1024 files_done=2 from=serving job=1 sender=true to=complete
-        host:
-          files: file received outcome=received resumed_at=0 size=512 took=512
-          files: file received outcome=received resumed_at=0 size=512 took=512
-          files: file received outcome=received resumed_at=512 size=512 took=0
-          files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
     Ok(())
 }

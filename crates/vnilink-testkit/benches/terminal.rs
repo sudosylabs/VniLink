@@ -199,7 +199,7 @@ fn main() {
             if shell.windows {
                 // The shell works in the host's folder.
                 std::fs::write(
-                    session.pair.host.root().join(OUTPUT_FILE),
+                    session.pair.host.folder().join(OUTPUT_FILE),
                     output_text(shell.output_bytes()),
                 )
                 .unwrap();

@@ -41,18 +41,18 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
     vnilink_testkit::desktop::install_screen(&host.core)?;
     let upload = payload(8192, 113);
     let download = payload(16384, 117);
-    std::fs::write(controller.root().join("up.bin"), &upload)?;
-    std::fs::write(host.root().join("down.bin"), &download)?;
+    std::fs::write(controller.folder().join("up.bin"), &upload)?;
+    std::fs::write(host.folder().join("down.bin"), &download)?;
     let connection = pair.connect_services();
     let (files, _pipe) = pair.controller.open_files(&connection)?;
     let up = controller.core.files_service_upload(
         files.id,
         files.generation,
-        controller.root_id(),
-        "",
+        controller.location().root,
+        &controller.location().path(""),
         &["up.bin".to_owned()],
-        host.root_id(),
-        "uploads",
+        host.location().root,
+        &host.location().path("uploads"),
     )?;
     let desktop = pair.attach(&connection, ServiceKind::Desktop);
     controller
@@ -69,11 +69,11 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
     let down = controller.core.files_service_download(
         files.id,
         files.generation,
-        host.root_id(),
-        "",
+        host.location().root,
+        &host.location().path(""),
         &["down.bin".to_owned()],
-        controller.root_id(),
-        "downloads",
+        controller.location().root,
+        &controller.location().path("downloads"),
     )?;
     let sender = job_on(&host.core, true)?;
     let (got, sent) = drive_to_end(&controller.core, down, &host.core, sender, TRANSFER);
@@ -83,22 +83,22 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
         "a download on the Files service completes on both sides"
     );
     assert_eq!(
-        std::fs::read(host.root().join("uploads/up.bin"))?,
+        std::fs::read(host.folder().join("uploads/up.bin"))?,
         upload,
         "the upload lands exactly"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("downloads/down.bin"))?,
+        std::fs::read(controller.folder().join("downloads/down.bin"))?,
         download,
         "the download lands exactly"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("up.bin"))?,
+        std::fs::read(controller.folder().join("up.bin"))?,
         upload,
         "an upload keeps its source"
     );
     assert_eq!(
-        std::fs::read(host.root().join("down.bin"))?,
+        std::fs::read(host.folder().join("down.bin"))?,
         download,
         "a download keeps its source"
     );
@@ -142,18 +142,18 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
         .set_video_codecs(vnilink::VideoCodecCaps::default())?;
     let upload = payload(8192, 113);
     let download = payload(16384, 117);
-    std::fs::write(controller.root().join("up.bin"), &upload)?;
-    std::fs::write(host.root().join("down.bin"), &download)?;
+    std::fs::write(controller.folder().join("up.bin"), &upload)?;
+    std::fs::write(host.folder().join("down.bin"), &download)?;
     let connection = pair.connect_services();
     let (files, _pipe) = pair.controller.open_files(&connection)?;
     let up = controller.core.files_service_upload(
         files.id,
         files.generation,
-        controller.root_id(),
-        "",
+        controller.location().root,
+        &controller.location().path(""),
         &["up.bin".to_owned()],
-        host.root_id(),
-        "uploads",
+        host.location().root,
+        &host.location().path("uploads"),
     )?;
     let receiver = job_on(&host.core, false)?;
     let (sent, got) = drive_to_end(&controller.core, up, &host.core, receiver, TRANSFER);
@@ -165,11 +165,11 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
     let down = controller.core.files_service_download(
         files.id,
         files.generation,
-        host.root_id(),
-        "",
+        host.location().root,
+        &host.location().path(""),
         &["down.bin".to_owned()],
-        controller.root_id(),
-        "downloads",
+        controller.location().root,
+        &controller.location().path("downloads"),
     )?;
     let sender = job_on(&host.core, true)?;
     let (got, sent) = drive_to_end(&controller.core, down, &host.core, sender, TRANSFER);
@@ -179,22 +179,22 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
         "a download without a desktop completes on both sides"
     );
     assert_eq!(
-        std::fs::read(host.root().join("uploads/up.bin"))?,
+        std::fs::read(host.folder().join("uploads/up.bin"))?,
         upload,
         "the upload lands exactly"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("downloads/down.bin"))?,
+        std::fs::read(controller.folder().join("downloads/down.bin"))?,
         download,
         "the download lands exactly"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("up.bin"))?,
+        std::fs::read(controller.folder().join("up.bin"))?,
         upload,
         "an upload keeps its source"
     );
     assert_eq!(
-        std::fs::read(host.root().join("down.bin"))?,
+        std::fs::read(host.folder().join("down.bin"))?,
         download,
         "a download keeps its source"
     );
@@ -234,7 +234,7 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
     let bytes = payload(32768, 123);
-    std::fs::write(controller.root().join("same.bin"), &bytes)?;
+    std::fs::write(controller.folder().join("same.bin"), &bytes)?;
     let connection = pair.connect_services();
     let (files, pipe) = pair.controller.open_files(&connection)?;
     let desktop = pair.attach(&connection, ServiceKind::Desktop);
@@ -243,19 +243,19 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
     let scoped = controller.core.files_service_upload(
         files.id,
         files.generation,
-        controller.root_id(),
-        "",
+        controller.location().root,
+        &controller.location().path(""),
         &["same.bin".to_owned()],
-        host.root_id(),
-        "cancelled",
+        host.location().root,
+        &host.location().path("cancelled"),
     )?;
     let scoped_receiver = job_on(&host.core, false)?;
     let session_job = controller.core.job_submit_upload(
         &host.endpoint(),
-        controller.root_id(),
-        "same.bin",
-        host.root_id(),
-        "kept",
+        controller.location().root,
+        &controller.location().path("same.bin"),
+        host.location().root,
+        &host.location().path("kept"),
     )?;
     let session_receiver = host
         .core
@@ -300,12 +300,12 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_a_session_job_of_the_sam
         "the session job of the same file completes"
     );
     assert_eq!(
-        std::fs::read(host.root().join("kept/same.bin"))?,
+        std::fs::read(host.folder().join("kept/same.bin"))?,
         bytes,
         "the session job lands exactly"
     );
     assert!(
-        !host.root().join("cancelled").exists(),
+        !host.folder().join("cancelled").exists(),
         "the closed service's job left nothing"
     );
     assert!(
@@ -342,17 +342,17 @@ fn a_host_closing_the_files_service_interrupts_a_download_and_refuses_new_work()
     let trace = traced();
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
-    std::fs::write(host.root().join("a.bin"), payload(8192, 137))?;
+    std::fs::write(host.folder().join("a.bin"), payload(8192, 137))?;
     let connection = pair.connect_services();
     let (files, pipe) = pair.controller.open_files(&connection)?;
     let job = controller.core.files_service_download(
         files.id,
         files.generation,
-        host.root_id(),
-        "",
+        host.location().root,
+        &host.location().path(""),
         &["a.bin".to_owned()],
-        controller.root_id(),
-        "cancelled",
+        controller.location().root,
+        &controller.location().path("cancelled"),
     )?;
     let sender = job_on(&host.core, true)?;
     let hosted = host.core.hosted_services()?[0].clone();
@@ -376,18 +376,18 @@ fn a_host_closing_the_files_service_interrupts_a_download_and_refuses_new_work()
             controller.core.files_service_download(
                 files.id,
                 files.generation,
-                host.root_id(),
-                "",
+                host.location().root,
+                &host.location().path(""),
                 &["a.bin".to_owned()],
-                controller.root_id(),
-                "later",
+                controller.location().root,
+                &controller.location().path("later"),
             ),
             Err(Error::NoSession)
         ),
         "a closed service takes no new work"
     );
     assert!(
-        !controller.root().join("cancelled").exists(),
+        !controller.folder().join("cancelled").exists(),
         "the interrupted download left nothing"
     );
     assert_eq!(
@@ -414,8 +414,8 @@ fn a_host_closing_the_files_service_interrupts_a_download_and_refuses_new_work()
 fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart() -> TestResult {
     let trace = traced();
     let mut pair = Pair::for_files();
-    std::fs::write(pair.controller.root().join("a.bin"), payload(4096, 139))?;
-    let (host_root, controller_root) = (pair.host.root_id(), pair.controller.root_id());
+    std::fs::write(pair.controller.folder().join("a.bin"), payload(4096, 139))?;
+    let (theirs, mine) = (pair.host.location(), pair.controller.location());
     let controller = &pair.controller.core;
     let session = controller.connect_files(&pair.host.endpoint())?;
     let unopened = pair.attach(&session, ServiceKind::Files);
@@ -424,11 +424,11 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
             .files_service_upload(
                 unopened.id,
                 unopened.generation,
-                controller_root,
-                "",
+                mine.root,
+                &mine.path(""),
                 &["a.bin".to_owned()],
-                host_root,
-                "refused",
+                theirs.root,
+                &theirs.path("refused"),
             )
             .is_err(),
         "a service the host has not admitted takes no job"
@@ -450,11 +450,11 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
     let job = controller.files_service_upload(
         files.id,
         files.generation,
-        controller_root,
-        "",
+        mine.root,
+        &mine.path(""),
         &["a.bin".to_owned()],
-        host_root,
-        "cancelled",
+        theirs.root,
+        &theirs.path("cancelled"),
     )?;
     pipe.close();
     wait_for("the job to be interrupted", DEFAULT_WAIT, || {
@@ -498,7 +498,7 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
     second.pair_with(controller)?;
     second.core.set_desktop_sharing(sharing)?;
     let bytes = payload(65536, 149);
-    std::fs::write(controller.root().join("shared.bin"), &bytes)?;
+    std::fs::write(controller.folder().join("shared.bin"), &bytes)?;
     let one = pair.connect_services();
     let (one, _one_pipe) = pair.controller.open_files(&one)?;
     let two = controller.connect_services(&second)?;
@@ -506,20 +506,20 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
     let cancelled = controller.core.files_service_upload(
         one.id,
         one.generation,
-        controller.root_id(),
-        "",
+        controller.location().root,
+        &controller.location().path(""),
         &["shared.bin".to_owned()],
-        first.root_id(),
-        "cancelled",
+        first.location().root,
+        &first.location().path("cancelled"),
     )?;
     let kept = controller.core.files_service_upload(
         two.id,
         two.generation,
-        controller.root_id(),
-        "",
+        controller.location().root,
+        &controller.location().path(""),
         &["shared.bin".to_owned()],
-        second.root_id(),
-        "kept",
+        second.location().root,
+        &second.location().path("kept"),
     )?;
     // A service cannot use another service's job, though both live in the
     // same engine and send the same file.
@@ -620,12 +620,12 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
         "the other computer's transfer completes"
     );
     assert_eq!(
-        std::fs::read(second.root().join("kept/shared.bin"))?,
+        std::fs::read(second.folder().join("kept/shared.bin"))?,
         bytes,
         "the other computer's transfer lands exactly"
     );
     assert!(
-        !first.root().join("cancelled").exists(),
+        !first.folder().join("cancelled").exists(),
         "the closed service's job left nothing"
     );
     assert!(
@@ -659,17 +659,17 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
     let bytes = payload(1024 * 1024, 903);
-    std::fs::write(controller.root().join("adopt.bin"), &bytes)?;
+    std::fs::write(controller.folder().join("adopt.bin"), &bytes)?;
     let session = controller.core.connect_files(&host.endpoint())?;
     let (old, pipe) = pair.controller.open_files(&session)?;
     let job = controller.core.files_service_upload(
         old.id,
         old.generation,
-        controller.root_id(),
-        "",
+        controller.location().root,
+        &controller.location().path(""),
         &["adopt.bin".to_owned()],
-        host.root_id(),
-        "adopted",
+        host.location().root,
+        &host.location().path("adopted"),
     )?;
     let receiver = job_on(&host.core, false)?;
     controller
@@ -712,7 +712,7 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
         "the adopted job completes on both sides"
     );
     assert_eq!(
-        std::fs::read(host.root().join("adopted/adopt.bin"))?,
+        std::fs::read(host.folder().join("adopted/adopt.bin"))?,
         bytes,
         "the adopted job lands exactly"
     );
@@ -741,20 +741,20 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
     let (host, controller) = (&pair.host, &pair.controller);
     let first = payload(65536, 912);
     let second = payload(131072, 913);
-    std::fs::create_dir_all(host.root().join("source"))?;
-    std::fs::write(host.root().join("source/a.bin"), &first)?;
-    std::fs::write(host.root().join("source/b.bin"), &second)?;
+    std::fs::create_dir_all(host.folder().join("source"))?;
+    std::fs::write(host.folder().join("source/a.bin"), &first)?;
+    std::fs::write(host.folder().join("source/b.bin"), &second)?;
     let session = pair.connect_services();
     let (old, pipe) = pair.controller.open_files(&session)?;
     let core = &controller.core;
     let job = core.files_service_download(
         old.id,
         old.generation,
-        host.root_id(),
-        "",
+        host.location().root,
+        &host.location().path(""),
         &["source".to_owned()],
-        controller.root_id(),
-        "received",
+        controller.location().root,
+        &controller.location().path("received"),
     )?;
     let sender = job_on(&host.core, true)?;
     let progress = core.files_service_job_poll(old.id, old.generation, job)?;
@@ -765,7 +765,7 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
     );
     assert_ne!(progress.state, JobState::Complete, "and only the first");
     assert_eq!(
-        std::fs::read(controller.root().join("received/source/a.bin"))?,
+        std::fs::read(controller.folder().join("received/source/a.bin"))?,
         first,
         "the first file lands exactly"
     );
@@ -804,12 +804,12 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
         "the adopted download completes on both sides"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("received/source/a.bin"))?,
+        std::fs::read(controller.folder().join("received/source/a.bin"))?,
         first,
         "the first file is kept"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("received/source/b.bin"))?,
+        std::fs::read(controller.folder().join("received/source/b.bin"))?,
         second,
         "the second file lands exactly"
     );
@@ -845,19 +845,19 @@ fn a_download_adopted_after_both_computers_restart_keeps_its_verified_files() ->
     let mut pair = Pair::for_files();
     let first = payload(32768, 940);
     let second = payload(65536, 941);
-    std::fs::create_dir(pair.host.root().join("pack"))?;
-    std::fs::write(pair.host.root().join("pack/a.bin"), &first)?;
-    std::fs::write(pair.host.root().join("pack/b.bin"), &second)?;
+    std::fs::create_dir(pair.host.folder().join("pack"))?;
+    std::fs::write(pair.host.folder().join("pack/a.bin"), &first)?;
+    std::fs::write(pair.host.folder().join("pack/b.bin"), &second)?;
     let session = pair.connect_services();
     let (old, pipe) = pair.controller.open_files(&session)?;
     let job = pair.controller.core.files_service_download(
         old.id,
         old.generation,
-        pair.host.root_id(),
-        "",
+        pair.host.location().root,
+        &pair.host.location().path(""),
         &["pack".to_owned()],
-        pair.controller.root_id(),
-        "received",
+        pair.controller.location().root,
+        &pair.controller.location().path("received"),
     )?;
     let peer_job = job_on(&pair.host.core, true)?;
     assert_eq!(
@@ -895,12 +895,12 @@ fn a_download_adopted_after_both_computers_restart_keeps_its_verified_files() ->
         "the adopted download completes on both sides"
     );
     assert_eq!(
-        std::fs::read(pair.controller.root().join("received/pack/a.bin"))?,
+        std::fs::read(pair.controller.folder().join("received/pack/a.bin"))?,
         first,
         "the first file is kept"
     );
     assert_eq!(
-        std::fs::read(pair.controller.root().join("received/pack/b.bin"))?,
+        std::fs::read(pair.controller.folder().join("received/pack/b.bin"))?,
         second,
         "the second file lands exactly"
     );
@@ -936,18 +936,18 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
     let expected = payload(65536, 942);
-    std::fs::write(controller.root().join("source.bin"), &expected)?;
+    std::fs::write(controller.folder().join("source.bin"), &expected)?;
     let session = pair.connect_services();
     let (old, pipe) = pair.controller.open_files(&session)?;
     let core = &controller.core;
     let job = core.files_service_upload(
         old.id,
         old.generation,
-        controller.root_id(),
-        "",
+        controller.location().root,
+        &controller.location().path(""),
         &["source.bin".to_owned()],
-        host.root_id(),
-        "received",
+        host.location().root,
+        &host.location().path("received"),
     )?;
     let peer_job = job_on(&host.core, false)?;
     core.close_controller_service(old.id, old.generation)?;
@@ -991,7 +991,7 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
         "the adopted upload completes on both sides"
     );
     assert_eq!(
-        std::fs::read(host.root().join("received/source.bin"))?,
+        std::fs::read(host.folder().join("received/source.bin"))?,
         expected,
         "the adopted upload lands exactly"
     );
@@ -1021,8 +1021,8 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
     let pair = Pair::for_files();
     let (host, controller) = (&pair.host, &pair.controller);
     let bytes = payload(64 * 1024, 314);
-    std::fs::create_dir_all(controller.root().join("set"))?;
-    std::fs::write(controller.root().join("set/send.bin"), &bytes)?;
+    std::fs::create_dir_all(controller.folder().join("set"))?;
+    std::fs::write(controller.folder().join("set/send.bin"), &bytes)?;
     host.core
         .set_file_resource_policy(vnilink::job::FileResourcePolicy {
             max_concurrent_receivers: 1,
@@ -1048,11 +1048,11 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
         "nothing was staged"
     );
     assert!(
-        !host.root().join("arrived/set/send.bin").exists(),
+        !host.folder().join("arrived/set/send.bin").exists(),
         "nothing landed"
     );
     assert_eq!(
-        std::fs::read(controller.root().join("set/send.bin"))?,
+        std::fs::read(controller.folder().join("set/send.bin"))?,
         bytes,
         "the source is kept"
     );
@@ -1080,7 +1080,7 @@ fn a_restart_removes_orphaned_staging_and_keeps_an_interrupted_jobs() -> TestRes
     let trace = traced();
     let mut pair = Pair::for_files();
     std::fs::write(
-        pair.controller.root().join("source.bin"),
+        pair.controller.folder().join("source.bin"),
         b"source survives crash",
     )?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
@@ -1111,7 +1111,7 @@ fn a_restart_removes_orphaned_staging_and_keeps_an_interrupted_jobs() -> TestRes
     assert!(!orphan.exists(), "staging no job owns is removed");
     assert!(!torn.exists(), "a torn record rewrite is removed");
     assert_eq!(
-        std::fs::read(pair.controller.root().join("source.bin"))?,
+        std::fs::read(pair.controller.folder().join("source.bin"))?,
         b"source survives crash",
         "the source is untouched"
     );

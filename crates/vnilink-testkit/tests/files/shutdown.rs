@@ -36,11 +36,15 @@ fn poll_until_stopped(receiver: &Core, job: u64) -> (JobSnapshot, Duration) {
 fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    std::fs::write(pair.host.root().join("one.txt"), payload(512, 1801))?;
-    std::fs::write(pair.host.root().join("two.txt"), payload(512, 1802))?;
+    std::fs::write(pair.host.folder().join("one.txt"), payload(512, 1801))?;
+    std::fs::write(pair.host.folder().join("two.txt"), payload(512, 1802))?;
     let controller = &pair.controller.core;
     let session = controller.connect_files(&pair.host.endpoint())?;
-    controller.create_dir(pair.controller.root_id(), "", "got")?;
+    controller.create_dir(
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
+        "got",
+    )?;
     let job = files::download(&pair, "", "got")?;
     files::poll_within(controller, job, 20, "the first file to land", |s| {
         s.files_done == 1
@@ -91,7 +95,7 @@ fn a_controller_that_shuts_down_mid_upload_leaves_the_receiver_retrying_and_says
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     // The host receives one file at a time, to stop between the two.
     host.fetch_one_file_at_a_time();
-    let source = pair.controller.root().join("set");
+    let source = pair.controller.folder().join("set");
     std::fs::create_dir_all(&source)?;
     std::fs::write(source.join("one.txt"), payload(512, 1803))?;
     std::fs::write(source.join("two.txt"), payload(512, 1804))?;

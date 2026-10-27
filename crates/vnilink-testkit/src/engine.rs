@@ -20,15 +20,31 @@ pub enum Reach {
 }
 
 /// A real engine on loopback, as the application runs one, with its own
-/// identity in memory and its own folders: `root`, the one folder it may
-/// read and write for files, and `transfers`, where incoming bytes stage.
-/// It never reaches a relay, so nothing leaves this computer.
+/// identity in memory and its own folders: [`Self::folder`], the folder its
+/// files live in, and `transfers`, where incoming bytes stage. It never
+/// reaches a relay, so nothing leaves this computer.
+///
+/// It shares its whole disk for Files, as the application does: the disk
+/// is the only thing Files shares. A test names paths only inside its own
+/// folders, through [`Self::location`] or [`crate::files::Location`], so
+/// nothing it writes lands outside them.
 pub struct Engine {
     pub core: Arc<Core>,
     scratch: Scratch,
     name: String,
     /// Its installation: identity and records, kept for [`Self::restart`].
     store: MemoryStore,
+    /// Whether it shares its whole disk from the start.
+    disk: Disk,
+}
+
+/// Whether an engine shares its whole disk from the start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Disk {
+    Shared,
+    /// Shared only once something enables it, as the test agent does when
+    /// its owner allows files.
+    Kept,
 }
 
 impl Engine {
@@ -40,7 +56,7 @@ impl Engine {
         vnilink::trace::name_next_engine(name);
         let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
             .expect("a loopback engine");
-        Self::prepare(name, core, store)
+        Self::prepare(name, core, store, Disk::Shared)
     }
 
     /// Shuts this engine down and opens its installation again, as quitting
@@ -51,7 +67,7 @@ impl Engine {
         vnilink::trace::name_next_engine(&self.name);
         let core = Core::open_direct(Arc::new(self.store.clone()), RelaySettings::public_n0())
             .expect("a loopback engine");
-        configure(&self.name, &core, &self.scratch);
+        configure(&self.name, &core, &self.scratch, self.disk);
         self.core = Arc::new(core);
     }
 
@@ -74,7 +90,7 @@ impl Engine {
             },
         )
         .expect("a relayed engine");
-        Self::prepare(name, core, store)
+        Self::prepare(name, core, store, Disk::Shared)
     }
 
     /// An engine another computer can reach, as the application opens one,
@@ -82,51 +98,62 @@ impl Engine {
     /// the suite's engines when they pair by file. Its identity lives in
     /// memory and ends with the process.
     pub fn reachable(name: &str, reach: Reach) -> Self {
+        Self::open_reachable(name, reach, Disk::Shared)
+    }
+
+    /// As [`Self::reachable`], sharing no disk until something enables it:
+    /// the test agent's engine, whose disk is readied only when its owner
+    /// allows files and reached only while the files scenario runs.
+    pub(crate) fn keeping_its_disk(name: &str, reach: Reach) -> Self {
+        Self::open_reachable(name, reach, Disk::Kept)
+    }
+
+    fn open_reachable(name: &str, reach: Reach, disk: Disk) -> Self {
         if reach == Reach::Loopback {
-            return Self::start(name);
+            crate::peer::refuse_peer();
         }
         let store = MemoryStore::empty();
         vnilink::trace::name_next_engine(name);
-        let core = Core::open(Arc::new(store.clone()), vnilink::OpenConfig::default())
-            .expect("an engine on this computer's network");
-        Self::prepare(name, core, store)
+        let core = match reach {
+            Reach::Loopback => {
+                Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
+                    .expect("a loopback engine")
+            }
+            Reach::Network => Core::open(Arc::new(store.clone()), vnilink::OpenConfig::default())
+                .expect("an engine on this computer's network"),
+        };
+        Self::prepare(name, core, store, disk)
     }
 
-    fn prepare(name: &str, core: Core, store: MemoryStore) -> Self {
+    fn prepare(name: &str, core: Core, store: MemoryStore, disk: Disk) -> Self {
         let scratch = Scratch::new(name);
-        std::fs::create_dir_all(scratch.join("root")).expect("a file root");
-        configure(name, &core, &scratch);
+        std::fs::create_dir_all(scratch.join("files")).expect("the engine's folder");
+        configure(name, &core, &scratch, disk);
         Self {
             core: Arc::new(core),
             scratch,
             name: name.to_owned(),
             store,
+            disk,
         }
     }
 
-    /// The folder its files live in.
-    pub fn root(&self) -> PathBuf {
-        self.scratch.join("root")
+    /// The folder its files live in, inside its scratch folder.
+    pub fn folder(&self) -> PathBuf {
+        self.scratch.join("files")
+    }
+
+    /// [`Self::folder`] as the engine names it on its shared disk: every
+    /// path a test hands the engine is made from this, so it stays inside
+    /// the engine's own folder.
+    pub fn location(&self) -> crate::files::Location {
+        crate::files::Location::of(&self.core, &self.folder())
     }
 
     /// Its transfer folder: where incoming bytes stage and job records are
     /// kept.
     pub fn transfers(&self) -> PathBuf {
         self.scratch.join("transfers")
-    }
-
-    /// The id of [`Self::root`] among its file roots.
-    pub fn root_id(&self) -> u64 {
-        // Roots are kept resolved, which on Windows is the `\\?\` form.
-        let root = std::fs::canonicalize(self.root()).expect("the engine's root exists");
-        self.core
-            .file_roots()
-            .expect("file roots")
-            .into_iter()
-            .find_map(|(id, path)| {
-                (std::fs::canonicalize(&path).is_ok_and(|path| path == root)).then_some(id)
-            })
-            .expect("the engine's root is one of its file roots")
     }
 
     pub fn endpoint(&self) -> String {
@@ -261,8 +288,9 @@ impl Drop for Engine {
 }
 
 /// Settles an engine as the suites run one: named `name`, with codecs, its
-/// transfer folder and its one file root under `scratch`.
-fn configure(name: &str, core: &Core, scratch: &Scratch) {
+/// transfer folder under `scratch`, and its whole disk shared unless
+/// `disk` keeps it.
+fn configure(name: &str, core: &Core, scratch: &Scratch, disk: Disk) {
     // Every event this engine records says it is `name`, and other
     // engines know its computer by that name, wherever the suite runs.
     core.set_trace_name(name);
@@ -272,8 +300,10 @@ fn configure(name: &str, core: &Core, scratch: &Scratch) {
         .expect("codecs");
     core.set_transfer_directory(scratch.join("transfers"))
         .expect("a transfer folder");
-    core.set_file_roots(vec![scratch.join("root")])
-        .expect("a file root");
+    if disk == Disk::Shared {
+        core.enable_filesystem_access()
+            .expect("the whole disk shared");
+    }
     // A suite's files are small next to the free space the product keeps
     // in reserve; admission has its own tests in `vnilink`.
     core.set_file_resource_policy(vnilink::job::FileResourcePolicy {
@@ -369,6 +399,17 @@ impl Pair {
         Self::paired(
             Engine::relayed("host", relay),
             Engine::relayed("controller", relay),
+            host,
+            controller,
+        )
+    }
+
+    /// As [`Self::new`], the host sharing no disk, as an engine is before
+    /// its owner enables filesystem access: a host that offers no Files.
+    pub fn host_keeping_its_disk(host: Grants, controller: Grants) -> Self {
+        Self::paired(
+            Engine::keeping_its_disk("host", Reach::Loopback),
+            Engine::start("controller"),
             host,
             controller,
         )

@@ -18,8 +18,6 @@ use vnilink_testkit::camera::{config, StandInCameras};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::service_changes;
 #[cfg(unix)]
-use vnilink_testkit::files::whole_disk;
-#[cfg(unix)]
 use vnilink_testkit::terminal::{shell, SIZE};
 use vnilink_testkit::{traced, Pair, TestResult};
 #[cfg(unix)]
@@ -240,10 +238,9 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
         ServiceKind::Camera,
     ]);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    whole_disk(&pair.host, "")?;
     InputLog::install(&pair.host, (1920, 1080))?;
     host.set_capture(Box::new(MonitorCapture::new((1920, 1080))))?;
-    host.set_terminal_factory(Some(shell(&pair.host.root())))?;
+    host.set_terminal_factory(Some(shell(&pair.host.folder())))?;
     let cameras = Arc::new(StandInCameras::default());
     host.set_camera_factory(Some(cameras))?;
     let parent = pair.connect_services();
@@ -400,8 +397,9 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
         ServiceKind::Camera,
     ]);
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host, "")?;
-    host.set_terminal_factory(Some(shell(&pair.host.root())))?;
+    let here = pair.host.location();
+    let (root, folder) = (here.root, here.path(""));
+    host.set_terminal_factory(Some(shell(&pair.host.folder())))?;
     // No capture, no desktop adapter, no H.264 encoder on the host.
     host.set_video_codecs(vnilink::VideoCodecCaps::default())?;
     host.set_camera_factory(Some(Arc::new(StandInCameras::default())))?;
@@ -412,7 +410,7 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
     let files = controller.open_files_service(files_owner.id, files_owner.generation)?;
     files.mkdir(root, &folder, "no-capture")?;
     assert!(
-        pair.host.root().join("no-capture").is_dir(),
+        pair.host.folder().join("no-capture").is_dir(),
         "Files changes the host's disk without capture"
     );
     let terminal_owner = pair.attach(&parent, ServiceKind::Terminal);
@@ -467,7 +465,7 @@ fn files_only_and_terminal_only_connections_never_request_capture() -> TestResul
     host.set_capture(Box::new(MonitorCapture::new((1920, 1080))))?;
     let cameras = Arc::new(StandInCameras::default());
     host.set_camera_factory(Some(Arc::clone(&cameras) as _))?;
-    host.set_terminal_factory(Some(shell(&pair.host.root())))?;
+    host.set_terminal_factory(Some(shell(&pair.host.folder())))?;
     host.set_desktop_sharing(Grants {
         transfer: true,
         ..Grants::default()

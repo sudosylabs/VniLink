@@ -9,7 +9,7 @@
 
 use crate::{error::map_error, FfiError, VnilinkCore};
 
-/// One owner-approved root: the id from `file_roots` plus its path.
+/// One shared root, `/` or a drive: the id from `file_roots` plus its path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiFileRoot {
     pub id: u64,
@@ -57,14 +57,27 @@ pub enum FfiEntryKind {
     Other,
 }
 
-/// Listing identity for rename fencing. Absent device or inode means the
-/// platform could not report an identity; the core treats the token as
-/// weak. `born` is the creation time in nanoseconds, where kept.
+/// What a listed entry is proven by when it is changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiTokenKind {
+    /// Device, inode and creation time.
+    Identity,
+    /// On a volume whose ids are entry positions (FAT, exFAT): the volume
+    /// in `dev` and a digest of what the listing saw in `fingerprint`.
+    Fingerprint,
+}
+
+/// The token a listing gives an entry, handed back with a rename or
+/// delete so the core refuses a replacement. An identity with no device or
+/// inode means the platform could not report one; the core treats the
+/// token as weak. `born` is the creation time in nanoseconds, where kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiEntryToken {
+    pub kind: FfiTokenKind,
     pub dev: Option<u64>,
     pub ino: Option<u64>,
     pub born: Option<u64>,
+    pub fingerprint: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -199,18 +212,40 @@ pub(crate) fn entry_kind(kind: vnilink::EntryKind) -> FfiEntryKind {
 
 pub(crate) fn entry_token(token: vnilink::EntryToken) -> FfiEntryToken {
     FfiEntryToken {
+        kind: match token.kind {
+            vnilink::TokenKind::Identity => FfiTokenKind::Identity,
+            vnilink::TokenKind::Fingerprint => FfiTokenKind::Fingerprint,
+        },
         dev: token.dev,
         ino: token.ino,
         born: token.born,
+        fingerprint: token.fingerprint,
     }
 }
 
-pub(crate) fn to_entry_token(token: FfiEntryToken) -> vnilink::EntryToken {
-    vnilink::EntryToken {
+/// A token handed back from the application, refused unless its fields
+/// are those of its kind: an identity carries no fingerprint, and a
+/// fingerprint no inode or creation time.
+pub(crate) fn to_entry_token(token: FfiEntryToken) -> Result<vnilink::EntryToken, FfiError> {
+    let (kind, valid) = match token.kind {
+        FfiTokenKind::Identity => (vnilink::TokenKind::Identity, token.fingerprint.is_none()),
+        FfiTokenKind::Fingerprint => (
+            vnilink::TokenKind::Fingerprint,
+            token.ino.is_none() && token.born.is_none(),
+        ),
+    };
+    if !valid {
+        return Err(FfiError::InvalidSetting {
+            message: "the entry token is not valid".to_owned(),
+        });
+    }
+    Ok(vnilink::EntryToken {
+        kind,
         dev: token.dev,
         ino: token.ino,
         born: token.born,
-    }
+        fingerprint: token.fingerprint,
+    })
 }
 
 pub(crate) fn fs_entry(entry: vnilink::FsEntry) -> FfiFsEntry {
@@ -338,15 +373,6 @@ impl VnilinkCore {
         self.inner.set_transfer_directory(path).map_err(map_error)
     }
 
-    /// Confines browsing to `paths`. The application always shares the
-    /// whole filesystem; tests use this to stay inside their scratch folders.
-    #[cfg(feature = "test-support")]
-    pub fn set_file_roots(&self, paths: Vec<String>) -> Result<(), FfiError> {
-        self.inner
-            .set_file_roots(paths.into_iter().map(std::path::PathBuf::from).collect())
-            .map_err(map_error)
-    }
-
     pub fn file_roots(&self) -> Result<Vec<FfiFileRoot>, FfiError> {
         self.inner
             .file_roots()
@@ -386,7 +412,7 @@ impl VnilinkCore {
         self.inner.places().map(places).map_err(map_error)
     }
 
-    /// Lists one page of a local directory under an approved root.
+    /// Lists one page of a local directory under a shared root.
     pub fn list_dir(
         &self,
         root: u64,
@@ -400,7 +426,7 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    /// Creates one directory level under an approved root.
+    /// Creates one directory level under a shared root.
     pub fn create_dir(&self, root: u64, path: String, name: String) -> Result<(), FfiError> {
         self.inner.create_dir(root, &path, &name).map_err(map_error)
     }
@@ -417,7 +443,13 @@ impl VnilinkCore {
         new_name: String,
     ) -> Result<(), FfiError> {
         self.inner
-            .rename_entry(root, &path, &name, expected.map(to_entry_token), &new_name)
+            .rename_entry(
+                root,
+                &path,
+                &name,
+                expected.map(to_entry_token).transpose()?,
+                &new_name,
+            )
             .map_err(map_error)
     }
 
@@ -432,7 +464,7 @@ impl VnilinkCore {
         expected: Option<FfiEntryToken>,
         trash: bool,
     ) -> Result<(), FfiError> {
-        let expected = expected.map(to_entry_token);
+        let expected = expected.map(to_entry_token).transpose()?;
         if trash {
             self.inner.trash_entry(root, &path, &name, expected)
         } else {
@@ -490,7 +522,7 @@ impl VnilinkCore {
                 root,
                 &path,
                 &name,
-                expected.map(to_entry_token),
+                expected.map(to_entry_token).transpose()?,
                 &new_name,
             )
             .map_err(map_error)
@@ -513,7 +545,7 @@ impl VnilinkCore {
                 root,
                 &path,
                 &name,
-                expected.map(to_entry_token),
+                expected.map(to_entry_token).transpose()?,
             )
             .map_err(map_error)
     }
@@ -652,13 +684,46 @@ mod tests {
             vnilink::ConflictChoice::KeepBoth
         );
         let token = to_entry_token(FfiEntryToken {
+            kind: FfiTokenKind::Identity,
             dev: Some(3),
             ino: Some(9),
             born: Some(11),
-        });
+            fingerprint: None,
+        })
+        .unwrap();
         assert!(token.is_strong());
         assert_eq!(entry_token(token).dev, Some(3));
         assert_eq!(entry_token(token).born, Some(11));
+        let fingerprint = vnilink::EntryToken::fingerprinted(3, 42);
+        assert_eq!(
+            to_entry_token(entry_token(fingerprint)).unwrap(),
+            fingerprint
+        );
+        for malformed in [
+            FfiEntryToken {
+                kind: FfiTokenKind::Identity,
+                dev: Some(3),
+                ino: Some(9),
+                born: None,
+                fingerprint: Some(1),
+            },
+            FfiEntryToken {
+                kind: FfiTokenKind::Fingerprint,
+                dev: Some(3),
+                ino: Some(9),
+                born: None,
+                fingerprint: Some(1),
+            },
+            FfiEntryToken {
+                kind: FfiTokenKind::Fingerprint,
+                dev: Some(3),
+                ino: None,
+                born: Some(5),
+                fingerprint: Some(1),
+            },
+        ] {
+            assert!(to_entry_token(malformed).is_err(), "{malformed:?}");
+        }
     }
 }
 

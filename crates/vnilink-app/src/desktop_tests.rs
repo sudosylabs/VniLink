@@ -123,7 +123,7 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
         )));
     std::fs::create_dir(&scratch.0).unwrap();
     host.inner.enable_filesystem_access().unwrap();
-    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &scratch.0);
+    let host_files = FilesystemLocation::on(&host.inner, &scratch.0);
     let session = services_connection(&host, &controller);
     let events = controller.subscribe_events().unwrap();
     let desktop = controller
@@ -241,10 +241,9 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         .set_transfer_directory(root.join("controller-blobs"))
         .unwrap();
     host.inner.enable_filesystem_access().unwrap();
-    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_dir);
+    let host_files = FilesystemLocation::on(&host.inner, &host_dir);
     controller.inner.enable_filesystem_access().unwrap();
-    let controller_files =
-        FilesystemLocation::new(controller.inner.file_roots().unwrap(), &controller_dir);
+    let controller_files = FilesystemLocation::on(&controller.inner, &controller_dir);
     pair(&host, &controller, true, true);
     controller
         .set_desktop_sharing(false, false, false, true)
@@ -420,10 +419,9 @@ fn service_jobs_cross_the_ffi_boundary() {
         .set_transfer_directory(scratch.0.join("controller-blobs"))
         .unwrap();
     host.inner.enable_filesystem_access().unwrap();
-    let host_files = FilesystemLocation::new(host.inner.file_roots().unwrap(), &host_root);
+    let host_files = FilesystemLocation::on(&host.inner, &host_root);
     controller.inner.enable_filesystem_access().unwrap();
-    let controller_files =
-        FilesystemLocation::new(controller.inner.file_roots().unwrap(), &controller_root);
+    let controller_files = FilesystemLocation::on(&controller.inner, &controller_root);
     pair(&host, &controller, false, true);
     controller
         .set_desktop_sharing(false, false, false, true)
@@ -1004,12 +1002,9 @@ fn files_handle_owns_submission_queue_and_cleanup() {
             .set_transfer_directory(directory.join(name).join("blobs"))
             .unwrap();
     }
-    let host_files = FilesystemLocation::new(
-        host.inner.file_roots().unwrap(),
-        &directory.join("host").join("root"),
-    );
-    let controller_files = FilesystemLocation::new(
-        controller.inner.file_roots().unwrap(),
+    let host_files = FilesystemLocation::on(&host.inner, &directory.join("host").join("root"));
+    let controller_files = FilesystemLocation::on(
+        &controller.inner,
         &directory.join("controller").join("root"),
     );
     std::fs::write(

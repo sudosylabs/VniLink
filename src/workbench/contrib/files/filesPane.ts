@@ -885,7 +885,7 @@ export class FilesPaneView extends Disposable {
 			(names.has(arrival.name) ? decorating : arriving).set(arrival.name, arrival);
 		}
 		// Not there yet: placed as an entry of its size, modified now, would be.
-		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes ?? 0), mtimeMs: String(Date.now()), token: { dev: null, ino: null, born: null } }));
+		const placeholders = [...arriving.values()].map((arrival): FileEntry => ({ name: arrival.name, kind: arrival.folder ? 'dir' : 'file', size: String(arrival.bytes ?? 0), mtimeMs: String(Date.now()), token: { kind: 'identity', dev: null, ino: null, born: null, fingerprint: null } }));
 		const placed = new Set(placeholders);
 		this.rows = sortEntries([...this.shown, ...placeholders], this.sort, this.descending).flatMap((entry): PaneRow[] => {
 			const arrival = placed.has(entry) ? arriving.get(entry.name) : decorating.get(entry.name);
@@ -934,6 +934,32 @@ export class FilesPaneView extends Disposable {
 			case 'Timeout': return nls.localize('files.timeout', '{0} didn’t answer in time.', this.computer);
 			default: return nls.localize('files.cantOpen', 'This folder can’t be opened.');
 		}
+	}
+
+	/**
+	 * What to say when a rename or delete was refused because the item is no
+	 * longer the one listed, or because its drive (FAT, exFAT) can't confirm
+	 * that it is; `undefined` for any other refusal.
+	 */
+	private refusalText(error: unknown, entry: FileEntry, deleting: boolean): string | undefined {
+		const category = engineErrorCategory(error);
+		if (category === 'UnprovenEntry') {
+			if (deleting && entry.kind === 'dir') {
+				return this.side === 'remote'
+					? nls.localize('files.unprovenFolderRemote', '“{0}” can’t be deleted from here: this drive can’t confirm what the folder holds. Someone at {1} can delete it there.', entry.name, this.computer)
+					: this.os === 'macos'
+						? nls.localize('files.unprovenFolderFinder', '“{0}” can’t be deleted here: this drive can’t confirm what the folder holds. Delete it in Finder instead.', entry.name)
+						: this.os === 'windows'
+							? nls.localize('files.unprovenFolderExplorer', '“{0}” can’t be deleted here: this drive can’t confirm what the folder holds. Delete it in File Explorer instead.', entry.name)
+							: nls.localize('files.unprovenFolderLocal', '“{0}” can’t be deleted here: this drive can’t confirm what the folder holds. Delete it in your file manager instead.', entry.name);
+			}
+			return nls.localize('files.unproven', 'This drive can’t confirm “{0}” is still the item listed. Look again and retry.', entry.name);
+		}
+		// The engine names a replaced entry an invalid setting, told apart by its reason.
+		if (category === 'InvalidSetting' && String(error).includes('changed since it was listed')) {
+			return nls.localize('files.changed', '“{0}” changed since it was listed. Look again and retry.', entry.name);
+		}
+		return undefined;
 	}
 
 	private showFailure(error: unknown): void {
@@ -1183,7 +1209,7 @@ export class FilesPaneView extends Disposable {
 			await this.disk.rename(folder, entry, name);
 		} catch (error) {
 			renamed = entry.name;
-			this.say(engineErrorCategory(error) === 'InvalidSetting' && /stale|replaced/i.test(String(error)) ? nls.localize('files.changed', '“{0}” changed since it was listed. Look again and retry.', entry.name) : this.failureText(error));
+			this.say(this.refusalText(error, entry, false) ?? this.failureText(error));
 		}
 		await this.refresh();
 		// The item keeps the selection under whichever name it now has.
@@ -1264,7 +1290,7 @@ export class FilesPaneView extends Disposable {
 						error = again;
 					}
 				}
-				this.say(engineErrorCategory(error) === 'InvalidSetting' ? nls.localize('files.deleteFailed', '“{0}” couldn’t be deleted.', entry.name) : this.failureText(error));
+				this.say(this.refusalText(error, entry, true) ?? (engineErrorCategory(error) === 'InvalidSetting' ? nls.localize('files.deleteFailed', '“{0}” couldn’t be deleted.', entry.name) : this.failureText(error)));
 				break;
 			}
 		}

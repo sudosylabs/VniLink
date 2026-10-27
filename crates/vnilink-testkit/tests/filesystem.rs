@@ -1,5 +1,5 @@
-//! The file system of one engine, as its own windows reach it: the folders
-//! it shares or the whole disk, listings, and changes made in place —
+//! The file system of one engine, as its own windows reach it: the whole
+//! disk it shares, listings, and changes made in place —
 //! folders made, entries renamed, deleted or moved to the Trash, and
 //! folders watched. Every case asserts what is on disk after it: bytes,
 //! identities, exact listings and originals kept.
@@ -8,6 +8,8 @@
 mod changes;
 #[path = "filesystem/listing.rs"]
 mod listing;
+#[path = "filesystem/positional.rs"]
+mod positional;
 #[path = "filesystem/roots.rs"]
 mod roots;
 #[path = "filesystem/watching.rs"]
@@ -15,7 +17,7 @@ mod watching;
 
 use std::path::{Path, PathBuf};
 
-use vnilink::{Core, Error};
+use vnilink::Error;
 use vnilink_testkit::{wait_for, DEFAULT_WAIT};
 
 /// What a rename or delete says of an entry replaced since it was listed.
@@ -24,13 +26,6 @@ const STALE_ENTRY: &str = "the entry changed since it was listed";
 const DELETE_FAILED: &str = "the entry could not be deleted";
 /// What a path the engine will not walk is refused as.
 const UNSAFE_PATH: &str = "the path is not a safe relative path";
-
-/// The id of `core`'s one file root.
-fn only_root(core: &Core) -> u64 {
-    let roots = core.file_roots().expect("file roots");
-    assert_eq!(roots.len(), 1, "the engine shares one folder");
-    roots[0].0
-}
 
 fn is_message(error: &Error, expected: &str) -> bool {
     matches!(error, Error::InvalidSetting(message) if *message == expected)

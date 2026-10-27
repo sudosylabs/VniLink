@@ -1,6 +1,6 @@
-//! Relative paths and single names under an approved root.
+//! Relative paths and single names under a shared root.
 //!
-//! The rules mirror the transfer jail: no absolute paths, no drive
+//! The rules mirror a transfer manifest's: no absolute paths, no drive
 //! prefixes, no backslashes or colons (so a controller library never
 //! interprets a Windows path from a Windows host), no NUL, no `.`/`..`
 //! components. An empty relative path names the root itself.

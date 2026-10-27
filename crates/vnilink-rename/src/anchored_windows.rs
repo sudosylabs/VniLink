@@ -1,7 +1,7 @@
-//! Directory-handle confinement for owner-approved roots on Windows.
+//! Handle-relative operations under a shared root on Windows.
 //!
 //! The Windows side of [`anchored`](self): the same functions, meaning the
-//! same things, so callers in `vnilink` walk an approved root identically on
+//! same things, so callers in `vnilink` walk a shared drive identically on
 //! every platform. Each child is opened relative to its parent's directory
 //! handle (`NtCreateFile` with `OBJECT_ATTRIBUTES.RootDirectory`) and with
 //! `FILE_OPEN_REPARSE_POINT`, so a symbolic link, junction or mount point is
@@ -305,7 +305,13 @@ fn info(handle: BorrowedHandle<'_>) -> io::Result<Info> {
     } else {
         0
     };
-    let (volume, index) = crate::windows::object_identity(handle)?;
+    // A volume reporting no usable `FileIdInfo` (some SMB servers) still
+    // gives the older index. Its ids prove nothing, so its entries are
+    // listed and changed by fingerprint (`windows::volume_ids`).
+    let (volume, index) = crate::windows::object_identity(handle).unwrap_or((
+        u64::from(by_handle.dwVolumeSerialNumber),
+        (u64::from(by_handle.nFileIndexHigh) << 32) | u64::from(by_handle.nFileIndexLow),
+    ));
     Ok(Info {
         attributes: by_handle.dwFileAttributes,
         tag,
@@ -356,7 +362,7 @@ impl Info {
     }
 }
 
-/// Opens an approved root itself. A root that is a link (a symbolic link,
+/// Opens a root itself. A root that is a link (a symbolic link,
 /// junction or mount point) or not a directory is refused.
 pub fn open_root(path: &Path) -> io::Result<Dir> {
     open_root_shared(path, SHARE_ALL)
@@ -380,10 +386,12 @@ fn open_root_shared(path: &Path, share: u32) -> io::Result<Dir> {
     Ok(file.into())
 }
 
-/// Refuses a root on a volume whose file ids are not stable identities
-/// (FAT, exFAT) or that reports none.
-pub fn require_stable_ids(dir: DirRef<'_>) -> io::Result<()> {
-    crate::windows::require_stable_ids(dir)
+/// How the volume `dir` is on names its entries: FAT and exFAT by
+/// position (named by `GetVolumeInformationByHandleW`), as is a volume
+/// whose `FileIdInfo` reports no usable id; every other volume by stable
+/// id.
+pub fn volume_ids(dir: DirRef<'_>) -> io::Result<crate::VolumeIds> {
+    crate::windows::volume_ids(dir)
 }
 
 /// Opens one child directory under `parent`, refusing a link and any other
@@ -576,6 +584,8 @@ pub struct EntryStat {
     pub dev: u64,
     pub ino: u64,
     pub born: Option<u64>,
+    /// The attributes a person sets: read-only, hidden, system, archive.
+    pub attributes: u32,
 }
 
 impl EntryStat {
@@ -592,7 +602,12 @@ impl EntryStat {
 /// access, which needs no read permission and passes any sharing mode.
 pub fn stat_at(parent: DirRef<'_>, name: &str) -> io::Result<EntryStat> {
     let handle = open_existing(parent, name, ATTRIBUTES_ACCESS, SHARE_ALL, 0)?;
-    let opened = info(handle.as_handle())?;
+    stat_handle(handle.as_handle())
+}
+
+/// The object `handle` is open on, as [`stat_at`] states an entry.
+fn stat_handle(handle: BorrowedHandle<'_>) -> io::Result<EntryStat> {
+    let opened = info(handle)?;
     Ok(EntryStat {
         is_symlink: opened.is_link(),
         is_dir: opened.is_dir(),
@@ -602,7 +617,35 @@ pub fn stat_at(parent: DirRef<'_>, name: &str) -> io::Result<EntryStat> {
         dev: opened.volume,
         ino: opened.index,
         born: opened.born(),
+        attributes: opened.attributes & 0x27,
     })
+}
+
+/// Deletes the file `name` from `dir` when `check`, shown the file as the
+/// deleting handle states it, holds: the object deleted is the one checked.
+/// No one may write it while it is checked. Nothing is moved aside first,
+/// so it suits a volume whose ids are entry positions (FAT, exFAT), where
+/// a moved entry takes another id. A folder is refused.
+pub fn delete_file_checked(
+    dir: DirRef<'_>,
+    name: &str,
+    check: impl FnOnce(&EntryStat) -> bool,
+) -> io::Result<()> {
+    let node = open_existing(
+        dir,
+        name,
+        DELETE_ACCESS,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
+        FILE_NON_DIRECTORY_FILE,
+    )?;
+    let stated = stat_handle(node.as_handle())?;
+    if stated.is_symlink || !check(&stated) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "delete source changed",
+        ));
+    }
+    delete_by_handle(node.as_handle())
 }
 
 /// Renames the object `object` is open on to `name` in `dir`.
@@ -1543,7 +1586,7 @@ mod tests {
         let scratch = Scratch::new();
         let root = open_root(&scratch.root()).unwrap();
         assert!(available_space(root.as_dir()).unwrap() > 0);
-        require_stable_ids(root.as_dir()).unwrap();
+        assert_eq!(volume_ids(root.as_dir()).unwrap(), crate::VolumeIds::Stable);
         let identity = fstat_identity(root.as_dir()).unwrap();
         assert!(identity.born.is_some());
         assert_eq!(

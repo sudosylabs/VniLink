@@ -169,7 +169,7 @@ async fn serve_stream(
         transfer::refuse(&mut send, transfer::STATUS_BUSY).await;
         return;
     };
-    // Opening walks the approved root's handles: slow storage parks a
+    // Opening walks the shared root's handles: slow storage parks a
     // blocking thread, never a runtime worker.
     let opened = {
         let shared = shared.clone();

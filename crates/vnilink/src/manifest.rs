@@ -1,7 +1,7 @@
 //! Transfer manifests: bounded file/folder descriptions for jobs.
 //!
 //! A manifest maps relative paths to sizes, modification times and
-//! directory entries. It is built by scanning the sender's approved roots, validated
+//! directory entries. It is built by scanning the sender's shared disk, validated
 //! before anything is written on the receiver, and published path by path
 //! so folder merges preserve unrelated destination entries.
 //!
@@ -122,7 +122,8 @@ impl Drop for ScanGuard {
 /// holds just it, so selections of individual files transfer too).
 /// Symlinks are skipped and counted, never followed. Non-UTF-8 names are
 /// skipped. Directory handles anchor every listing and stat so a parent
-/// replaced by a symlink cannot escape the approved root.
+/// replaced by a symlink during the walk refuses it instead of redirecting
+/// it.
 /// Sync; only for callers outside the runtime (sync offer APIs). Async
 /// callers use [`scan_roots_async`] so recursive traversal never occupies
 /// a Tokio worker.
@@ -274,8 +275,9 @@ fn scan_anchored(
                 continue;
             }
             if st.is_dir {
-                // Re-resolve through the jail: a parent swapped by a symlink
-                // after listing refuses here (handle-verified).
+                // Still a folder on the shared disk. The resolution follows
+                // a link, so what refuses a folder swapped for one after it
+                // was listed is `open_child`, which never follows one.
                 let _ = roots.resolve_dir(id, &child_rel)?;
                 let child_fd = vnilink_rename::anchored::open_child(dir_fd.as_dir(), &name)
                     .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
@@ -379,8 +381,9 @@ fn scan_pathname(
                 continue;
             }
             if meta.is_dir() {
-                // Re-resolve through the jail: a parent swapped by a
-                // symlink after listing refuses here.
+                // Still a folder on the shared disk. This path-based walk
+                // follows a folder swapped for a link after listing; only
+                // the handle-based walk above refuses one.
                 let _ = roots.resolve_dir(id, &child_rel)?;
                 dirs.push(manifest_rel.clone());
                 stack.push((full, child_rel));
@@ -749,7 +752,7 @@ pub(crate) fn ensure_manifest_dirs(
             format!("{rel}/{}", entry.path)
         };
         let dir = roots.resolve_dir(id, &full_rel).or_else(|_| {
-            // Missing: create level by level through the jail.
+            // Missing: create level by level through handles.
             create_levels(roots, id, rel, &entry.path)
         })?;
         let _ = dir;
@@ -988,7 +991,7 @@ mod tests {
         std::fs::write(root.join("sub/only.txt"), b"solo-bytes").unwrap();
         let mut roots = crate::fs::RootSet::default();
         roots.set_filesystem().unwrap();
-        let files = FilesystemLocation::new(roots.snapshot(), &root);
+        let files = FilesystemLocation::in_roots(&roots, &root);
 
         // A whole tree still scans.
         let tree = crate::manifest::scan(&roots, files.root, &files.path("")).unwrap();
@@ -1033,7 +1036,7 @@ mod tests {
         }
         let mut roots = crate::fs::RootSet::default();
         roots.set_filesystem().unwrap();
-        let files = FilesystemLocation::new(roots.snapshot(), &root);
+        let files = FilesystemLocation::in_roots(&roots, &root);
         assert!(crate::manifest::scan(&roots, files.root, &files.path("big")).is_err());
         let fit = crate::manifest::scan(&roots, files.root, &files.path("exact")).unwrap();
         assert_eq!(fit.files.len(), 5000);
@@ -1074,7 +1077,7 @@ mod tests {
         std::fs::write(root.join("sub/a.txt"), b"parked-bytes").unwrap();
         let mut roots = crate::fs::RootSet::default();
         roots.set_filesystem().unwrap();
-        let files = FilesystemLocation::new(roots.snapshot(), &root);
+        let files = FilesystemLocation::in_roots(&roots, &root);
         // Stand-in for the shared file-roots lock: the parked scan must hold
         // no lock across its worker await, so the sibling locks, snapshots
         // and completes while the first scan stays parked.

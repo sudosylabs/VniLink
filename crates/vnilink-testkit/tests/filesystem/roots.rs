@@ -1,6 +1,6 @@
-//! What an engine shares of its file system: nothing at first, then chosen
-//! folders or the whole disk. Paths stay inside what is shared, however
-//! they are spelled and whatever replaces a folder after it was approved.
+//! What an engine shares of its file system: nothing at first, then the
+//! whole disk. Paths are named by a root and a relative path that keeps to
+//! the path rules, however they are spelled.
 
 use vnilink::{Error, FolderKind};
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
@@ -8,10 +8,13 @@ use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 use vnilink_testkit::files::{link_folder, Location};
 use vnilink_testkit::store::Installed;
 
-use super::{deep_folder, is_message, only_root, read, UNSAFE_PATH};
+use super::{deep_folder, is_message, UNSAFE_PATH};
 
+/// An engine shares nothing until its disk is shared; then any folder on
+/// it lists and takes a new folder, and a path that leaves the path rules
+/// or an unknown root is refused.
 #[test]
-fn whole_filesystem_browses_siblings_without_folder_configuration() -> TestResult {
+fn the_whole_disk_is_shared_on_request_and_paths_keep_the_rules() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
     let left = scratch.join("left");
@@ -21,9 +24,10 @@ fn whole_filesystem_browses_siblings_without_folder_configuration() -> TestResul
     std::fs::write(right.join("note.txt"), b"sibling bytes")?;
     let engine = Installed::start("engine");
     let core = &engine.core;
+    assert!(core.file_roots()?.is_empty(), "a new engine shares nothing");
     assert!(
-        core.file_roots()?.is_empty(),
-        "a new engine shares no folder"
+        matches!(core.list_dir(0, "", 0, 10), Err(Error::Unsupported(_))),
+        "an engine sharing nothing lists nothing"
     );
     core.enable_filesystem_access()?;
     let left = Location::of(core, &left);
@@ -45,45 +49,11 @@ fn whole_filesystem_browses_siblings_without_folder_configuration() -> TestResul
         scratch.join("right/created").is_dir(),
         "a folder made on the whole disk is on disk"
     );
-    // Malformed wire paths and unknown roots are still rejected. Whole
-    // filesystem access removes folder configuration, not input validation.
-    for bad in ["..", "a/../b", "/absolute", "a//b"] {
-        assert!(
-            core.list_dir(right.root, bad, 0, 20).is_err(),
-            "listing {bad:?} is refused"
-        );
-    }
-    assert!(
-        core.list_dir(u64::MAX, "", 0, 20).is_err(),
-        "an unknown root is refused"
-    );
-    Ok(())
-}
-
-#[test]
-fn roots_start_empty_and_jail_traversal() -> TestResult {
-    let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let engine = Installed::start("engine");
-    let core = &engine.core;
-    assert!(
-        core.file_roots()?.is_empty(),
-        "a new engine shares no folder"
-    );
-    assert!(
-        matches!(core.list_dir(0, "", 0, 10), Err(Error::Unsupported(_))),
-        "an engine sharing nothing lists nothing"
-    );
-
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
-    core.set_file_roots(vec![root.clone()])?;
-    let shared = only_root(core);
-
+    // Malformed wire paths and unknown roots are rejected.
     for bad in [
         "..",
-        "a/../../x",
-        "/abs",
+        "a/../b",
+        "/absolute",
         "C:foo",
         "a\\b",
         "a/",
@@ -91,126 +61,13 @@ fn roots_start_empty_and_jail_traversal() -> TestResult {
         "a/./b",
     ] {
         assert!(
-            core.list_dir(shared, bad, 0, 10).is_err(),
-            "listing {bad:?} must be refused"
+            core.list_dir(right.root, &right.path(bad), 0, 20).is_err(),
+            "listing {bad:?} is refused"
         );
     }
     assert!(
-        matches!(core.list_dir(7, "", 0, 10), Err(Error::InvalidSetting(_))),
+        core.list_dir(u64::MAX, "", 0, 20).is_err(),
         "an unknown root is refused"
-    );
-    assert!(!scratch.join("x").exists(), "nothing escaped the root");
-
-    // A link (a junction on Windows) is not an acceptable root.
-    let link = scratch.join("linked-root");
-    link_folder(&root, &link)?;
-    assert!(
-        core.set_file_roots(vec![link]).is_err(),
-        "a link is refused as a root"
-    );
-    assert_eq!(
-        core.file_roots()?.len(),
-        1,
-        "the good roots survive the failed call"
-    );
-    assert!(
-        core.set_file_roots(vec![root.clone(), root]).is_err(),
-        "the same root twice is refused"
-    );
-    Ok(())
-}
-
-#[test]
-fn symlink_parent_replacement_is_refused() -> TestResult {
-    let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir_all(root.join("real/sub"))?;
-    std::fs::write(root.join("real/sub/kept.txt"), b"kept")?;
-    let outside = scratch.join("outside");
-    std::fs::create_dir(&outside)?;
-    std::fs::write(outside.join("evil.txt"), b"evil")?;
-
-    let engine = Engine::start("engine");
-    let core = &engine.core;
-    core.set_file_roots(vec![root.clone()])?;
-    let shared = only_root(core);
-    assert_eq!(
-        core.list_dir(shared, "real/sub", 0, 10)?.total,
-        1,
-        "the folder lists before it is replaced"
-    );
-
-    // Swap the parent for a link (a junction on Windows) after listing.
-    std::fs::remove_dir_all(root.join("real"))?;
-    link_folder(&outside, &root.join("real"))?;
-    assert!(
-        core.list_dir(shared, "real/sub", 0, 10).is_err(),
-        "a listing through a link is refused"
-    );
-    assert!(
-        core.create_dir(shared, "real", "nope").is_err(),
-        "a folder made through a link is refused"
-    );
-    assert!(
-        core.rename_entry(shared, "real", "evil.txt", None, "moved.txt")
-            .is_err(),
-        "a rename through a link is refused"
-    );
-    assert!(
-        core.delete_entry(shared, "real", "evil.txt", None).is_err(),
-        "a delete through a link is refused"
-    );
-    assert!(!root.join("moved.txt").exists(), "nothing moved");
-    assert_eq!(
-        read(&outside.join("evil.txt")),
-        b"evil",
-        "what is outside is untouched"
-    );
-    Ok(())
-}
-
-#[test]
-fn approved_root_replaced_by_symlink_cannot_escape() -> TestResult {
-    let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let approved = scratch.join("approved");
-    std::fs::create_dir(&approved)?;
-    let outside = scratch.join("outside");
-    std::fs::create_dir(&outside)?;
-
-    let engine = Engine::start("engine");
-    let core = &engine.core;
-    core.set_file_roots(vec![approved.clone()])?;
-    let shared = only_root(core);
-    assert!(
-        core.list_dir(shared, "", 0, 10).is_ok(),
-        "the approved folder lists"
-    );
-
-    // Replace the approved folder itself with a link (a junction on
-    // Windows) to outside.
-    std::fs::remove_dir(&approved)?;
-    link_folder(&outside, &approved)?;
-
-    // Every anchored operation must refuse instead of writing outside.
-    assert!(
-        core.list_dir(shared, "", 0, 10).is_err(),
-        "a replaced root does not list"
-    );
-    assert!(
-        core.create_dir(shared, "", "escape").is_err(),
-        "a replaced root takes no folder"
-    );
-    assert!(!outside.join("escape").exists(), "nothing was made outside");
-    assert!(
-        core.rename_entry(shared, "", "anything", None, "else")
-            .is_err(),
-        "a replaced root renames nothing"
-    );
-    assert!(
-        core.delete_entry(shared, "", "anything", None).is_err(),
-        "a replaced root deletes nothing"
     );
     Ok(())
 }
@@ -257,8 +114,8 @@ fn places_name_home_and_its_folders_by_root() -> TestResult {
     Ok(())
 }
 
-/// A whole disk is deeper than a shared folder: 40 levels below a scratch
-/// folder still list, and paths stop at 64 levels.
+/// A whole disk is deep: 40 levels below a scratch folder still list, and
+/// paths stop at 64 levels.
 #[test]
 fn deep_folders_list_and_the_depth_limit_holds() -> TestResult {
     let _trace = traced();
@@ -267,7 +124,6 @@ fn deep_folders_list_and_the_depth_limit_holds() -> TestResult {
     std::fs::write(deep.join("bottom.txt"), b"deep")?;
     let engine = Engine::start("engine");
     let core = &engine.core;
-    core.enable_filesystem_access()?;
     let location = Location::of(core, &deep);
     let page = core.list_dir(location.root, &location.path(""), 0, 10)?;
     assert_eq!(
@@ -293,8 +149,8 @@ fn deep_folders_list_and_the_depth_limit_holds() -> TestResult {
 
 /// A path from the system's file manager is named as the panes name an
 /// item: its folder's root and path, and its own name. A link keeps its
-/// own name rather than its target's, and a path outside what is shared
-/// is not named at all.
+/// own name rather than its target's, and an engine sharing nothing names
+/// nothing.
 #[test]
 fn a_dropped_path_is_named_by_its_folder_and_its_own_name() -> TestResult {
     let _trace = traced();
@@ -304,7 +160,6 @@ fn a_dropped_path_is_named_by_its_folder_and_its_own_name() -> TestResult {
     std::fs::write(folder.join("note.txt"), b"note")?;
     let engine = Engine::start("engine");
     let core = &engine.core;
-    core.enable_filesystem_access()?;
     let location = Location::of(core, &folder);
     assert_eq!(
         core.locate(&folder.join("note.txt"))?,
@@ -318,13 +173,11 @@ fn a_dropped_path_is_named_by_its_folder_and_its_own_name() -> TestResult {
         Some((location.root, location.path(""), "shortcut".into())),
         "a dropped link keeps its own name"
     );
-    let shared = scratch.join("shared");
-    std::fs::create_dir(&shared)?;
-    core.set_file_roots(vec![shared])?;
+    let unshared = Installed::start("unshared");
     assert_eq!(
-        core.locate(&folder.join("note.txt"))?,
+        unshared.core.locate(&folder.join("note.txt"))?,
         None,
-        "a path outside what is shared is not named"
+        "an engine sharing nothing names nothing"
     );
     Ok(())
 }

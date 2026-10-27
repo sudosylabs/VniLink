@@ -41,8 +41,11 @@ fn main() {
     );
 
     drive(&pair);
-    write_files(&pair.controller.root().join("set"), &[("large.bin", BYTES)]);
-    std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
+    write_files(
+        &pair.controller.folder().join("set"),
+        &[("large.bin", BYTES)],
+    );
+    std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
     pair.controller
         .core
         .connect_files(&pair.host.endpoint())
@@ -52,10 +55,10 @@ fn main() {
         .core
         .job_submit_upload(
             &pair.host.endpoint(),
-            pair.controller.root_id(),
-            "set",
-            pair.host.root_id(),
-            "inbox",
+            pair.controller.location().root,
+            &pair.controller.location().path("set"),
+            pair.host.location().root,
+            &pair.host.location().path("inbox"),
         )
         .unwrap();
     let job = received(&pair.host.core);

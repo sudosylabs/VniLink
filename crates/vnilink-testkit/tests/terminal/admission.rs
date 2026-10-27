@@ -60,7 +60,7 @@ fn revoking_terminal_cancels_a_shell_still_starting() -> TestResult {
         release: Mutex::new(released),
         opened: AtomicBool::new(false),
         finished,
-        shell: shell(&pair.host.root()),
+        shell: shell(&pair.host.folder()),
     });
     host.set_terminal_factory(Some(factory.clone()))?;
     let connection = pair.connect_services();
@@ -157,7 +157,7 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
         calls: AtomicUsize::new(0),
         entered,
         release: Mutex::new(released),
-        shell: shell(&host.root()),
+        shell: shell(&host.folder()),
     });
     host.core.set_terminal_factory(Some(factory.clone()))?;
     let to_a = a.connect_services(host)?;

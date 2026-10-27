@@ -380,7 +380,7 @@ fn whole_filesystem_and_local_operations_cross_the_ffi() {
     assert!(core.file_roots().unwrap().is_empty());
     assert!(core.list_dir(0, "".into(), 0, 50).is_err());
     core.enable_filesystem_access().unwrap();
-    let files = FilesystemLocation::new(core.inner.file_roots().unwrap(), &dir.join("root"));
+    let files = FilesystemLocation::on(&core.inner, &dir.join("root"));
     let roots = core.file_roots().unwrap();
     assert!(!roots.is_empty());
     assert!(roots.iter().any(|root| root.id == files.root));

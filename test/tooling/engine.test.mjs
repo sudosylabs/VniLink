@@ -145,8 +145,15 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: '3' }), true);
 	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: 'three' }), false);
 	assert.equal(isEngineCommand({ type: 'createLocalDir', root: '0', path: '', name: 'New Folder' }), true);
-	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: '1', ino: '2', born: '7' }, newName: 'b' }), true);
+	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { kind: 'identity', dev: '1', ino: '2', born: '7', fingerprint: null }, newName: 'b' }), true);
 	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: 1, ino: 2, born: 2 }, newName: 'b' }), false, 'token parts are decimal strings');
+	const rename = token => isEngineCommand({ type: 'renameLocal', root: '0', path: 'Volumes/STICK', name: 'a', token, newName: 'b' });
+	assert.equal(rename({ kind: 'fingerprint', dev: '4', ino: null, born: null, fingerprint: '18446744073709551615' }), true, 'a FAT listing names an entry by fingerprint');
+	assert.equal(rename({ kind: 'fingerprint', dev: '4', ino: '2', born: null, fingerprint: '9' }), false, 'a fingerprint carries no inode');
+	assert.equal(rename({ kind: 'fingerprint', dev: '4', ino: null, born: '7', fingerprint: '9' }), false, 'a fingerprint carries no creation time of its own');
+	assert.equal(rename({ kind: 'identity', dev: '1', ino: '2', born: null, fingerprint: '9' }), false, 'an identity carries no fingerprint');
+	assert.equal(rename({ kind: 'inode', dev: '1', ino: '2', born: null, fingerprint: null }), false, 'a token kind is identity or fingerprint');
+	assert.equal(rename({ dev: '1', ino: '2', born: null, fingerprint: null }), false, 'a token says its kind');
 	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null, trash: true }), true);
 	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null }), false, 'a delete says whether it goes to the Trash');
 	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a' }), false);
@@ -161,7 +168,7 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineReply({ type: 'watching', watch: '3' }), true);
 	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: '/Users', name: 'a.txt' } }), false);
 	assert.equal(isEngineReply({ type: 'places', places: { ...places, folders: [{ kind: 'home', root: '2', path: '/Users' }] } }), false);
-	const entry = { name: 'a.txt', kind: 'file', size: '3', mtimeMs: '1700000000000', token: { dev: '1', ino: '9', born: '7' } };
+	const entry = { name: 'a.txt', kind: 'file', size: '3', mtimeMs: '1700000000000', token: { kind: 'identity', dev: '1', ino: '9', born: '7', fingerprint: null } };
 	const page = { entries: [entry], total: '1', nextOffset: null, truncated: false, skipped: '0' };
 	assert.equal(isEngineReply({ type: 'dirPage', page }), true);
 	assert.equal(isEngineReply({ type: 'dirPage', page: { ...page, entries: [{ ...entry, name: '..' }] } }), false);

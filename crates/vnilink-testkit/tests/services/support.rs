@@ -1,7 +1,7 @@
 //! What the services scenarios share: a service's phase on the controller.
-//! Waits on sessions, the closes an engine published and a host's whole
-//! disk are the kit's ([`vnilink_testkit::session`],
-//! [`vnilink_testkit::events`], [`vnilink_testkit::files::whole_disk`]).
+//! Waits on sessions, the closes an engine published and paths inside a
+//! host's folder are the kit's ([`vnilink_testkit::session`],
+//! [`vnilink_testkit::events`], [`vnilink_testkit::files::Location`]).
 
 use vnilink::{ServiceInfo, ServicePhase};
 use vnilink_testkit::Engine;

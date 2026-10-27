@@ -7,7 +7,8 @@
 //! operating-system clipboard. Call [`Core::enable_os_input`] on the host so
 //! authorized sessions inject keys and pointer events. Call
 //! [`Core::set_clipboard`] so a granted controller can paste text. Call
-//! [`Core::set_file_roots`] so a granted peer can browse and receive files.
+//! [`Core::enable_filesystem_access`] so a granted peer can browse and
+//! receive files.
 //! A desktop is a Desktop service ([`Core::open_desktop_service`]) on a
 //! services connection: the host calls [`Core::publish_desktop_video`] with
 //! encoded frames, the viewer receives them from
@@ -66,8 +67,8 @@
 //! # File transfer
 //!
 //! File transfer is a separate grant from control and from clipboard. The
-//! owner approves roots with [`Core::set_file_roots`]; the peer browses
-//! them with `fs_*` calls and moves bytes with resumable transfer jobs
+//! owner shares the whole disk with [`Core::enable_filesystem_access`]; the
+//! peer browses it with `fs_*` calls and moves bytes with resumable transfer jobs
 //! (`job_submit_*`/`job_poll`). The steps are in `crates/vnilink/TRANSFER.md`.
 //!
 //! # Threading
@@ -160,7 +161,7 @@ pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
 pub use fs::{
     DirPage, EntryKind, EntryToken, FolderKind, FsEntry, Place, PlaceRoot, Places, RevisionGate,
-    MAX_LISTED, MAX_PAGE, MAX_ROOTS,
+    TokenKind, MAX_LISTED, MAX_PAGE, MAX_ROOTS,
 };
 pub use hostname::{clean_hostname, local_hostname};
 pub use input::{

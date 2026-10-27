@@ -1840,6 +1840,22 @@ mod tests {
         host.shutdown();
     }
 
+    /// `folder` as `core` names it on its shared disk: its root and the
+    /// path below, as the channel takes them.
+    #[cfg(unix)]
+    fn place(core: &VnilinkCore, folder: &std::path::Path) -> (String, String) {
+        let found = core
+            .locate(folder.to_string_lossy().into_owned())
+            .unwrap()
+            .expect("the test's folder is on the shared disk");
+        let path = if found.path.is_empty() {
+            found.name
+        } else {
+            format!("{}/{}", found.path, found.name)
+        };
+        (found.root.to_string(), path)
+    }
+
     #[cfg(unix)]
     #[test]
     fn terminal_bytes_use_owned_channel_and_stop_after_close() {
@@ -1858,11 +1874,12 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         std::fs::create_dir_all(&destination).unwrap();
         std::fs::write(source.join("test.bin"), [0, 255, 17, 42]).unwrap();
-        controller
-            .set_file_roots(vec![source.to_string_lossy().into()])
-            .unwrap();
-        host.set_file_roots(vec![destination.to_string_lossy().into()])
-            .unwrap();
+        // Both share their whole disk, as the application does; the test
+        // names only folders inside its own.
+        controller.enable_filesystem_access().unwrap();
+        host.enable_filesystem_access().unwrap();
+        let (source_root, source_path) = place(&controller, &source);
+        let (host_root, destination_path) = place(&host, &destination);
         host.set_service_sharing(vnilink_app::FfiServiceKind::Files, true)
             .unwrap();
         std::fs::create_dir_all(root.join("controller-blobs")).unwrap();
@@ -1976,11 +1993,11 @@ mod tests {
             closed: files.closed.clone(),
             operation: FileOperation::Submit {
                 direction: "upload".into(),
-                src_root: controller.file_roots().unwrap()[0].id.to_string(),
-                src_path: String::new(),
+                src_root: source_root.clone(),
+                src_path: source_path.clone(),
                 names: vec!["test.bin".into()],
-                dst_root: host.file_roots().unwrap()[0].id.to_string(),
-                dst_path: "received.bin".into(),
+                dst_root: host_root.clone(),
+                dst_path: format!("{destination_path}/received.bin"),
             },
         };
         let answer = |task: &mut FileTask| -> serde_json::Value {
@@ -2000,21 +2017,20 @@ mod tests {
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
         // The other computer's folders are listed, made, renamed and deleted
         // through the channel; a refusal is an answer, and the channel lives.
-        let host_root = host.file_roots().unwrap()[0].id.to_string();
         file_task.operation = FileOperation::Places;
         let places = answer(&mut file_task)["ok"].clone();
         assert_eq!(places["roots"][0]["id"], host_root);
         for name in ["made", "taken"] {
             file_task.operation = FileOperation::Mkdir {
                 root: host_root.clone(),
-                path: "".into(),
+                path: destination_path.clone(),
                 name: name.into(),
             };
             assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
         }
         file_task.operation = FileOperation::List {
             root: host_root.clone(),
-            path: "".into(),
+            path: destination_path.clone(),
             offset: "0".into(),
         };
         let page = answer(&mut file_task)["ok"].clone();
@@ -2030,7 +2046,7 @@ mod tests {
             serde_json::from_value(made["token"].clone()).unwrap();
         file_task.operation = FileOperation::Rename {
             root: host_root.clone(),
-            path: "".into(),
+            path: destination_path.clone(),
             name: "made".into(),
             token: Some(token.clone()),
             new_name: "taken".into(),
@@ -2042,7 +2058,7 @@ mod tests {
         );
         file_task.operation = FileOperation::Rename {
             root: host_root.clone(),
-            path: "".into(),
+            path: destination_path.clone(),
             name: "made".into(),
             token: Some(token),
             new_name: "renamed".into(),
@@ -2051,7 +2067,7 @@ mod tests {
         assert!(destination.join("renamed").is_dir());
         file_task.operation = FileOperation::Delete {
             root: host_root.clone(),
-            path: "".into(),
+            path: destination_path.clone(),
             name: "renamed".into(),
             token: None,
             trash: false,
@@ -2063,7 +2079,7 @@ mod tests {
         file_task.operation = FileOperation::Watch {
             folder: Some(WatchFolder {
                 root: host_root.clone(),
-                path: "".into(),
+                path: destination_path.clone(),
             }),
         };
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
@@ -2092,11 +2108,11 @@ mod tests {
         host.start_file_job_driver();
         file_task.operation = FileOperation::Submit {
             direction: "upload".into(),
-            src_root: controller.file_roots().unwrap()[0].id.to_string(),
-            src_path: String::new(),
+            src_root: source_root,
+            src_path: source_path,
             names: vec!["test.bin".into()],
             dst_root: host_root.clone(),
-            dst_path: "completed.bin".into(),
+            dst_path: format!("{destination_path}/completed.bin"),
         };
         let submitted = answer(&mut file_task)["ok"].clone();
         let end = Instant::now() + Duration::from_secs(15);

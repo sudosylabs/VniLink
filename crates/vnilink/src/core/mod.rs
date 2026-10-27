@@ -596,8 +596,8 @@ struct Shared {
     /// Managed transfer directory: job journals and the partial files of
     /// arriving jobs. Empty until set.
     transfer_dir: Mutex<Option<PathBuf>>,
-    /// Owner-approved filesystem roots for the file manager. Empty until
-    /// the owner sets them; pairing and grants never populate this.
+    /// The shared disk's roots for the file manager. Empty until the owner
+    /// enables filesystem access; pairing and grants never populate this.
     file_roots: Mutex<crate::fs::RootSet>,
     /// Incoming files connections by peer, closed on revoke and unpair so
     /// a file being served stops mid-way.

@@ -47,10 +47,10 @@ fn files_cross_the_relay_exactly() {
     let pair = Pair::relayed(relay.url(), host, controller);
     drive(&pair);
     write_files(
-        &pair.controller.root().join("set"),
+        &pair.controller.folder().join("set"),
         &[("a.txt", 1024), ("b/c.bin", 3 * 1024 * 1024 + 11)],
     );
-    std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
+    std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
     pair.controller
         .core
         .connect_files(&pair.host.endpoint())
@@ -59,17 +59,17 @@ fn files_cross_the_relay_exactly() {
         .core
         .job_submit_upload(
             &pair.host.endpoint(),
-            pair.controller.root_id(),
-            "set",
-            pair.host.root_id(),
-            "inbox",
+            pair.controller.location().root,
+            &pair.controller.location().path("set"),
+            pair.host.location().root,
+            &pair.host.location().path("inbox"),
         )
         .unwrap();
     let job = received(&pair.host.core);
     let done = finished(&pair.host.core, job, Duration::from_secs(120));
     assert_eq!(done.state, JobState::Complete, "{done:?}");
     assert_eq!(
-        tree(&pair.host.root().join("inbox/set")),
-        tree(&pair.controller.root().join("set"))
+        tree(&pair.host.folder().join("inbox/set")),
+        tree(&pair.controller.folder().join("set"))
     );
 }

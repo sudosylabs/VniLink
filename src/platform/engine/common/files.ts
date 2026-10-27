@@ -13,11 +13,17 @@ export interface FilePlaces {
 	readonly folders: readonly { readonly kind: FileFolderKind; readonly root: string; readonly path: string }[];
 }
 
-/** An entry's identity; the engine refuses to rename or delete a replaced item. `born` is its creation time in nanoseconds, where the filesystem keeps one. */
+/**
+ * What a listed entry is proven by; the engine refuses to rename or delete a replaced item.
+ * An `identity` is the object's device, inode and creation time (`born`, in nanoseconds, where kept).
+ * A `fingerprint`, on a drive whose ids are entry positions (FAT, exFAT), is the drive in `dev` and a digest of what the listing saw.
+ */
 export interface FileToken {
+	readonly kind: 'identity' | 'fingerprint';
 	readonly dev: string | null;
 	readonly ino: string | null;
 	readonly born: string | null;
+	readonly fingerprint: string | null;
 }
 
 export interface FileEntry {
@@ -142,7 +148,14 @@ export function isFilePlaces(value: unknown): value is FilePlaces {
 }
 
 export function isFileToken(value: unknown): value is FileToken {
-	return record(value) && keys(value, ['dev', 'ino', 'born']) && (value.dev === null || decimal(value.dev)) && (value.ino === null || decimal(value.ino)) && (value.born === null || decimal(value.born));
+	if (!record(value) || !keys(value, ['kind', 'dev', 'ino', 'born', 'fingerprint'])) {
+		return false;
+	}
+	const part = (field: unknown) => field === null || decimal(field);
+	if (!part(value.dev) || !part(value.ino) || !part(value.born) || !part(value.fingerprint)) {
+		return false;
+	}
+	return value.kind === 'identity' ? value.fingerprint === null : value.kind === 'fingerprint' && value.ino === null && value.born === null;
 }
 
 function fileEntry(value: unknown): value is FileEntry {

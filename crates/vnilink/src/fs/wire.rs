@@ -38,6 +38,8 @@ pub(crate) const STATUS_STALE: u8 = 3;
 pub(crate) const STATUS_ERROR: u8 = 4;
 /// A delete to the Trash that the place has no Trash for.
 pub(crate) const STATUS_NO_TRASH: u8 = 5;
+/// The drive cannot prove the change acts on the listed entry.
+pub(crate) const STATUS_UNPROVEN: u8 = 6;
 
 /// A decoded request. Response payloads are rendered by the transport into
 /// [`Response`]; only the status line is decoded here.
@@ -411,11 +413,7 @@ pub(crate) fn encode_list_body(page: &DirPage) -> Result<Vec<u8>, Error> {
         });
         push_u64(&mut bytes, entry.size);
         push_u64(&mut bytes, entry.mtime_ms);
-        let token = entry.token;
-        bytes.push(u8::from(token.is_strong()));
-        push_u64(&mut bytes, token.dev.unwrap_or(0));
-        push_u64(&mut bytes, token.ino.unwrap_or(0));
-        push_born(&mut bytes, token.born);
+        push_token(&mut bytes, entry.token);
     }
     Ok(bytes)
 }
@@ -450,24 +448,13 @@ pub(crate) fn decode_list_body(bytes: &[u8]) -> Result<DirPage, WireError> {
         };
         let size = take_u64(&mut cursor).ok_or(error("the listing body is malformed"))?;
         let mtime_ms = take_u64(&mut cursor).ok_or(error("the listing body is malformed"))?;
-        let strong = take_byte(&mut cursor).ok_or(error("the listing body is malformed"))?;
-        let dev = take_u64(&mut cursor).ok_or(error("the listing body is malformed"))?;
-        let ino = take_u64(&mut cursor).ok_or(error("the listing body is malformed"))?;
-        let born = take_born(&mut cursor).ok_or(error("the listing body is malformed"))?;
-        if strong != 0 && strong != 1 {
-            return Err(error("the listing body is malformed"));
-        }
+        let token = take_token(&mut cursor).ok_or(error("the listing body is malformed"))?;
         entries.push(FsEntry {
             name,
             kind,
             size,
             mtime_ms,
-            // Strong is both halves, as `encode_list_body` writes it.
-            token: EntryToken {
-                dev: (strong == 1).then_some(dev),
-                ino: (strong == 1).then_some(ino),
-                born,
-            },
+            token,
         });
     }
     if !cursor.is_empty() {
@@ -569,12 +556,60 @@ fn push_expected(bytes: &mut Vec<u8>, expected: Option<EntryToken>) {
     match expected {
         Some(token) => {
             bytes.push(1);
-            push_u64(bytes, token.dev.unwrap_or(0));
-            push_u64(bytes, token.ino.unwrap_or(0));
-            bytes.push(u8::from(token.is_strong()));
-            push_born(bytes, token.born);
+            push_token(bytes, token);
         }
         None => bytes.push(0),
+    }
+}
+
+/// A token: its kind (0 weak, 1 identity, 2 fingerprint), then device,
+/// inode, creation time and fingerprint, zero where the kind has none.
+fn push_token(bytes: &mut Vec<u8>, token: EntryToken) {
+    use super::entry::TokenKind;
+    bytes.push(match (token.kind, token.is_strong()) {
+        (_, false) => 0,
+        (TokenKind::Identity, true) => 1,
+        (TokenKind::Fingerprint, true) => 2,
+    });
+    let strong = token.is_strong();
+    push_u64(bytes, token.dev.filter(|_| strong).unwrap_or(0));
+    push_u64(
+        bytes,
+        token
+            .ino
+            .filter(|_| strong && token.kind == TokenKind::Identity)
+            .unwrap_or(0),
+    );
+    push_born(
+        bytes,
+        token.born.filter(|_| token.kind == TokenKind::Identity),
+    );
+    push_u64(
+        bytes,
+        token
+            .fingerprint
+            .filter(|_| strong && token.kind == TokenKind::Fingerprint)
+            .unwrap_or(0),
+    );
+}
+
+/// A token as [`push_token`] writes it; `None` when malformed, including
+/// a value written where its kind has none, so a decoded token encodes to
+/// the same bytes.
+fn take_token(cursor: &mut &[u8]) -> Option<EntryToken> {
+    let kind = take_byte(cursor)?;
+    let dev = take_u64(cursor)?;
+    let ino = take_u64(cursor)?;
+    let born = take_born(cursor)?;
+    let fingerprint = take_u64(cursor)?;
+    match kind {
+        0 if dev == 0 && ino == 0 && fingerprint == 0 => Some(EntryToken {
+            born,
+            ..EntryToken::NONE
+        }),
+        1 if fingerprint == 0 => Some(EntryToken::identity(dev, ino, born)),
+        2 if ino == 0 && born.is_none() => Some(EntryToken::fingerprinted(dev, fingerprint)),
+        _ => None,
     }
 }
 
@@ -600,20 +635,7 @@ fn take_expected(cursor: &mut &[u8]) -> Result<Option<EntryToken>, WireError> {
     let error = || WireError("the filesystem frame is malformed");
     match take_byte(cursor).ok_or_else(error)? {
         0 => Ok(None),
-        1 => {
-            let dev = take_u64(cursor).ok_or_else(error)?;
-            let ino = take_u64(cursor).ok_or_else(error)?;
-            let strong = take_byte(cursor).ok_or_else(error)?;
-            let born = take_born(cursor).ok_or_else(error)?;
-            if strong != 0 && strong != 1 {
-                return Err(error());
-            }
-            Ok(Some(EntryToken {
-                dev: (dev != 0).then_some(dev),
-                ino: (ino != 0).then_some(ino),
-                born,
-            }))
-        }
+        1 => take_token(cursor).map(Some).ok_or_else(error),
         _ => Err(error()),
     }
 }
@@ -690,7 +712,7 @@ mod tests {
         std::fs::create_dir(root.join("sub")).unwrap();
         let core = loopback_core();
         core.enable_filesystem_access().unwrap();
-        let files = FilesystemLocation::new(core.file_roots().unwrap(), &root);
+        let files = FilesystemLocation::on(&core, &root);
         let page = core.list_dir(files.root, &files.path(""), 0, 50).unwrap();
         let bytes = encode_list_body(&page).unwrap();
         let back = decode_list_body(&bytes).unwrap();
@@ -738,17 +760,44 @@ mod tests {
         body.extend_from_slice(&5u64.to_be_bytes());
         body.push(1);
         body.extend_from_slice(&7u64.to_be_bytes());
+        body.extend_from_slice(&0u64.to_be_bytes());
         let page = crate::fs::decode_list_body(&body).unwrap();
-        assert_eq!(
-            page.entries[0].token,
-            EntryToken {
-                dev: Some(0),
-                ino: Some(5),
-                born: Some(7),
-            }
-        );
+        assert_eq!(page.entries[0].token, EntryToken::identity(0, 5, Some(7)));
         let encoded = crate::fs::encode_list_body(&page).unwrap();
         assert_eq!(encoded, body);
+    }
+
+    /// A listing carries each token's kind: a fingerprint comes back a
+    /// fingerprint, and a token holding a value its kind has none of is
+    /// malformed.
+    #[test]
+    fn a_listing_keeps_each_token_s_kind() {
+        use crate::fs::{DirPage, EntryKind, FsEntry};
+        let entry = |name: &str, token| FsEntry {
+            name: name.to_owned(),
+            kind: EntryKind::File,
+            size: 1,
+            mtime_ms: 2,
+            token,
+        };
+        let page = DirPage {
+            entries: vec![
+                entry("a", EntryToken::identity(1, 2, Some(3))),
+                entry("b", EntryToken::fingerprinted(1, 0xabc)),
+                entry("c", EntryToken::NONE),
+            ],
+            total: 3,
+            next_offset: None,
+            truncated: false,
+            non_utf8_skipped: 0,
+        };
+        let body = crate::fs::encode_list_body(&page).unwrap();
+        assert_eq!(crate::fs::decode_list_body(&body).unwrap(), page);
+        // The weak token is last: give it a device.
+        let mut weak_with_dev = body.clone();
+        let at = body.len() - 8 - 9 - 8 - 8;
+        weak_with_dev[at + 7] = 1;
+        assert!(crate::fs::decode_list_body(&weak_with_dev).is_err());
     }
 
     #[test]
@@ -777,11 +826,7 @@ mod tests {
                 root: 0,
                 path: "docs".to_string(),
                 name: "a.txt".to_string(),
-                expected: Some(EntryToken {
-                    dev: Some(3),
-                    ino: Some(9),
-                    born: Some(1_792_781_822_915_157_352),
-                }),
+                expected: Some(EntryToken::identity(3, 9, Some(1_792_781_822_915_157_352))),
                 new_name: "b.txt".to_string(),
             },
             WireRequest::Rename {
@@ -799,11 +844,7 @@ mod tests {
                 root: 0,
                 path: "docs".to_string(),
                 name: "a.txt".to_string(),
-                expected: Some(EntryToken {
-                    dev: Some(3),
-                    ino: Some(9),
-                    born: None,
-                }),
+                expected: Some(EntryToken::fingerprinted(3, 0xfeed_beef)),
                 trash: false,
             },
             WireRequest::Delete {
@@ -910,13 +951,13 @@ mod tests {
         trailing.push(0);
         assert!(crate::fs::decode_places_body(&trailing).is_err());
         // A places request carries no root or path of its own.
-        let mut rooted = crate::fs::encode_request(&crate::fs::Request::Places {
+        let mut with_root = crate::fs::encode_request(&crate::fs::Request::Places {
             id: 1,
             generation: 1,
         })
         .unwrap();
-        rooted[21] = 1;
-        assert!(crate::fs::decode_request(&rooted).is_err());
+        with_root[21] = 1;
+        assert!(crate::fs::decode_request(&with_root).is_err());
     }
 
     #[test]

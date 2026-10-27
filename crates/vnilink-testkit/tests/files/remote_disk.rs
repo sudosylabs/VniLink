@@ -1,5 +1,6 @@
 //! The host's disk through the Files service: browsing, making, renaming and
-//! deleting, under the grant, the generation and the root's scope.
+//! deleting, under the grant, the generation and the path rules. Every
+//! request names a path inside the host engine's own folder.
 
 use expect_test::expect;
 use std::path::Path;
@@ -18,46 +19,46 @@ fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(aside, path)
 }
 
-/// A host's roots stay as they are while a session is active.
+/// A host shares its disk again only while no session is active.
 #[test]
-fn setting_roots_is_refused_during_an_active_session() -> TestResult {
+fn sharing_the_disk_is_refused_during_an_active_session() -> TestResult {
     let _trace = traced();
     let pair = Pair::for_files();
+    let before = pair.host.core.file_roots()?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
-    let other = pair.host.root().join("other");
-    std::fs::create_dir(&other)?;
-    let refused = pair.host.core.set_file_roots(vec![other]);
+    let refused = pair.host.core.enable_filesystem_access();
     assert!(
         matches!(refused, Err(Error::Busy)),
-        "roots change only without a session: {refused:?}"
+        "the disk is shared again only without a session: {refused:?}"
     );
-    let roots = pair.host.core.file_roots()?;
-    assert!(
-        roots.len() == 1 && roots[0].0 == pair.host.root_id(),
-        "the refused roots left the host's own: {roots:?}"
+    assert_eq!(
+        pair.host.core.file_roots()?,
+        before,
+        "the refusal left the shared roots as they were"
     );
     Ok(())
 }
 
-/// The controller browses the host's root, makes a folder there and
+/// The controller browses the host's folder, makes a folder there and
 /// renames a file, and the host's disk changes as it asked: a rename is the
 /// same object with the same bytes, and the next listing shows it.
 #[test]
 fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let root = pair.host.root();
+    let root = pair.host.folder();
     std::fs::write(root.join("report.txt"), b"report-bytes")?;
-    let files = pair.host.root_id();
+    let here = pair.host.location();
+    let (files, folder) = (here.root, here.path(""));
     let controller = &pair.controller.core;
     let session = controller.connect_files(&pair.host.endpoint())?;
 
-    let page = controller.fs_list(session.id, session.generation, files, "", 0, 50)?;
-    assert_eq!(page.total, 1, "the host's root holds one entry");
+    let page = controller.fs_list(session.id, session.generation, files, &folder, 0, 50)?;
+    assert_eq!(page.total, 1, "the host's folder holds one entry");
     assert_eq!(page.entries[0].name, "report.txt", "it is the host's file");
     let token = page.entries[0].token;
 
-    controller.fs_mkdir(session.id, session.generation, files, "", "archive")?;
+    controller.fs_mkdir(session.id, session.generation, files, &folder, "archive")?;
     assert!(
         root.join("archive").is_dir(),
         "a remote mkdir lands on the host's disk"
@@ -68,7 +69,7 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
         session.id,
         session.generation,
         files,
-        "",
+        &folder,
         "report.txt",
         Some(token),
         "final.txt",
@@ -88,7 +89,7 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
         "a remote rename is a true rename of the same object"
     );
 
-    let again = controller.fs_list(session.id, session.generation, files, "", 0, 50)?;
+    let again = controller.fs_list(session.id, session.generation, files, &folder, 0, 50)?;
     let names: Vec<&str> = again.entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(
         names,
@@ -98,40 +99,50 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
     trace.wait_for_records("file request answered", 4);
     expect![[r#"
         host:
-          files: file request answered body_bytes=82 operation=list status=0
+          files: file request answered body_bytes=90 operation=list status=0
           files: file request answered body_bytes=0 operation=create folder status=0
           files: file request answered body_bytes=0 operation=rename status=0
-          files: file request answered body_bytes=133 operation=list status=0
+          files: file request answered body_bytes=149 operation=list status=0
     "#]]
     .assert_eq(&trace.story(&["files"]));
     Ok(())
 }
 
-/// A request from a stale generation, one reaching past the root, and any
-/// after the host revoked the controller never touch the host's disk.
+/// A request from a stale generation, one whose path or name steps out of
+/// its folder, and any after the host revoked the controller never touch
+/// the host's disk.
 #[test]
 fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let root = pair.host.root();
+    let root = pair.host.folder();
     std::fs::write(root.join("kept.txt"), b"kept-bytes")?;
-    let files = pair.host.root_id();
+    let here = pair.host.location();
+    let (files, folder) = (here.root, here.path(""));
     let controller = &pair.controller.core;
     let session = controller.connect_files(&pair.host.endpoint())?;
     let kept = || std::fs::read(root.join("kept.txt")).ok();
 
     let stale = session.generation + 1;
-    let listed = controller.fs_list(session.id, stale, files, "", 0, 50);
+    let listed = controller.fs_list(session.id, stale, files, &folder, 0, 50);
     assert!(
         matches!(listed, Err(Error::StaleSession)),
         "a stale generation lists nothing: {listed:?}"
     );
-    let renamed = controller.fs_rename(session.id, stale, files, "", "kept.txt", None, "moved.txt");
+    let renamed = controller.fs_rename(
+        session.id,
+        stale,
+        files,
+        &folder,
+        "kept.txt",
+        None,
+        "moved.txt",
+    );
     assert!(
         matches!(renamed, Err(Error::StaleSession)),
         "a stale generation renames nothing: {renamed:?}"
     );
-    let deleted = controller.fs_delete(session.id, stale, files, "", "kept.txt", None);
+    let deleted = controller.fs_delete(session.id, stale, files, &folder, "kept.txt", None);
     assert!(
         matches!(deleted, Err(Error::StaleSession)),
         "a stale generation deletes nothing: {deleted:?}"
@@ -146,9 +157,9 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
     let current = session.generation;
     assert!(
         controller
-            .fs_list(session.id, current, files, "..", 0, 50)
+            .fs_list(session.id, current, files, &format!("{folder}/.."), 0, 50)
             .is_err(),
-        "a listing past the root is refused"
+        "a listing that steps out of its folder is refused"
     );
     assert!(
         controller
@@ -156,23 +167,23 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
                 session.id,
                 current,
                 files,
-                "",
+                &folder,
                 "kept.txt",
                 None,
                 "../out.txt"
             )
             .is_err(),
-        "a rename past the root is refused"
+        "a rename out of its folder is refused"
     );
     assert!(
         controller
-            .fs_delete(session.id, current, files, "", "../kept.txt", None)
+            .fs_delete(session.id, current, files, &folder, "../kept.txt", None)
             .is_err(),
-        "a delete past the root is refused"
+        "a delete out of its folder is refused"
     );
     assert!(
         !root.with_file_name("out.txt").exists(),
-        "nothing landed past the root"
+        "nothing landed outside the folder"
     );
     assert_eq!(
         kept().as_deref(),
@@ -184,7 +195,7 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
     pair.host.core.revoke(&pair.controller.endpoint())?;
     assert!(
         controller
-            .fs_list(session.id, current, files, "", 0, 50)
+            .fs_list(session.id, current, files, &folder, 0, 50)
             .is_err(),
         "a revoked controller lists nothing"
     );
@@ -210,17 +221,26 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
 fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let root = pair.host.root();
+    let root = pair.host.folder();
     std::fs::write(root.join("a.txt"), b"a-bytes")?;
-    let files = pair.host.root_id();
+    let here = pair.host.location();
+    let (files, folder) = (here.root, here.path(""));
     let controller = &pair.controller.core;
     let session = controller.connect_files(&pair.host.endpoint())?;
     let (id, generation) = (session.id, session.generation);
 
-    let page = controller.fs_list(id, generation, files, "", 0, 50)?;
+    let page = controller.fs_list(id, generation, files, &folder, 0, 50)?;
     let stale = page.entries[0].token;
     replace(&root.join("a.txt"), b"replacement-bytes")?;
-    let refused = controller.fs_rename(id, generation, files, "", "a.txt", Some(stale), "b.txt");
+    let refused = controller.fs_rename(
+        id,
+        generation,
+        files,
+        &folder,
+        "a.txt",
+        Some(stale),
+        "b.txt",
+    );
     assert!(
         refused.is_err(),
         "a stale token renames no replacement: {refused:?}"
@@ -233,14 +253,22 @@ fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
     );
 
     std::fs::write(root.join("b.txt"), b"b-bytes")?;
-    let fresh = controller.fs_list(id, generation, files, "", 0, 50)?;
+    let fresh = controller.fs_list(id, generation, files, &folder, 0, 50)?;
     let current = fresh
         .entries
         .iter()
         .find(|entry| entry.name == "a.txt")
         .ok_or("a.txt is listed")?
         .token;
-    let conflict = controller.fs_rename(id, generation, files, "", "a.txt", Some(current), "b.txt");
+    let conflict = controller.fs_rename(
+        id,
+        generation,
+        files,
+        &folder,
+        "a.txt",
+        Some(current),
+        "b.txt",
+    );
     assert!(
         matches!(conflict, Err(Error::FileExists)),
         "a rename never overwrites: {conflict:?}"
@@ -258,9 +286,9 @@ fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
     trace.wait_for_records("file request answered", 4);
     expect![[r#"
         host:
-          files: file request answered body_bytes=77 operation=list status=0
+          files: file request answered body_bytes=85 operation=list status=0
           files: file request answered body_bytes=0 operation=rename status=4
-          files: file request answered body_bytes=127 operation=list status=0
+          files: file request answered body_bytes=143 operation=list status=0
           files: file request answered body_bytes=0 operation=rename status=1
     "#]]
     .assert_eq(&trace.story(&["files"]));
@@ -285,7 +313,7 @@ fn files_only_needs_transfer_not_control_or_decoder() -> TestResult {
         },
         none,
     );
-    std::fs::write(pair.host.root().join("shared.txt"), b"shared-bytes")?;
+    std::fs::write(pair.host.folder().join("shared.txt"), b"shared-bytes")?;
     // A files-only session needs no decoder.
     pair.controller
         .core
@@ -294,8 +322,8 @@ fn files_only_needs_transfer_not_control_or_decoder() -> TestResult {
     let page = pair.controller.core.fs_list(
         session.id,
         session.generation,
-        pair.host.root_id(),
-        "",
+        pair.host.location().root,
+        &pair.host.location().path(""),
         0,
         50,
     )?;
@@ -313,11 +341,12 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
     let host = &pair.host.core;
-    let root = pair.host.root();
+    let root = pair.host.folder();
+    let here = pair.host.location();
     std::fs::write(root.join("a.txt"), b"transfer-bytes")?;
     pair.controller.core.connect_files(&pair.host.endpoint())?;
     let token = host
-        .list_dir(pair.host.root_id(), "", 0, 50)?
+        .list_dir(here.root, &here.path(""), 0, 50)?
         .entries
         .into_iter()
         .find(|entry| entry.name == "a.txt")
@@ -333,7 +362,7 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
         serving[0].state
     );
 
-    let blocked = host.delete_entry(pair.host.root_id(), "", "a.txt", Some(token));
+    let blocked = host.delete_entry(here.root, &here.path(""), "a.txt", Some(token));
     assert!(
         matches!(
             blocked,
@@ -356,7 +385,7 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
         ended.is_terminal(),
         "a cancel ends the host's job too: {ended:?}"
     );
-    host.delete_entry(pair.host.root_id(), "", "a.txt", Some(token))?;
+    host.delete_entry(here.root, &here.path(""), "a.txt", Some(token))?;
     assert!(
         !root.join("a.txt").exists(),
         "a file no transfer serves is deleted"
@@ -378,11 +407,12 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
 fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let root = pair.host.root();
+    let root = pair.host.folder();
     std::fs::create_dir_all(root.join("pack"))?;
     std::fs::write(root.join("pack/child.txt"), b"child-bytes")?;
     std::fs::write(root.join("report.txt"), b"report-bytes")?;
-    let files = pair.host.root_id();
+    let here = pair.host.location();
+    let (files, folder) = (here.root, here.path(""));
     let controller = &pair.controller.core;
     let session = controller.connect_files(&pair.host.endpoint())?;
     let (id, generation) = (session.id, session.generation);
@@ -394,11 +424,11 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
             .ok_or(format!("{name} is listed"))
     };
 
-    let page = controller.fs_list(id, generation, files, "", 0, 50)?;
+    let page = controller.fs_list(id, generation, files, &folder, 0, 50)?;
     let report = token_of(&page, "report.txt")?;
     let pack = token_of(&page, "pack")?;
     replace(&root.join("report.txt"), b"replacement-bytes")?;
-    let refused = controller.fs_delete(id, generation, files, "", "report.txt", Some(report));
+    let refused = controller.fs_delete(id, generation, files, &folder, "report.txt", Some(report));
     assert!(
         refused.is_err(),
         "a stale token deletes no replacement: {refused:?}"
@@ -410,19 +440,19 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
     );
     assert!(set_aside(&root).is_empty(), "nothing was set aside");
 
-    let fresh = controller.fs_list(id, generation, files, "", 0, 50)?;
+    let fresh = controller.fs_list(id, generation, files, &folder, 0, 50)?;
     let current = token_of(&fresh, "report.txt")?;
-    controller.fs_delete(id, generation, files, "", "report.txt", Some(current))?;
-    controller.fs_delete(id, generation, files, "", "pack", Some(pack))?;
+    controller.fs_delete(id, generation, files, &folder, "report.txt", Some(current))?;
+    controller.fs_delete(id, generation, files, &folder, "pack", Some(pack))?;
     assert!(!root.join("report.txt").exists(), "the file was deleted");
     assert!(!root.join("pack").exists(), "the folder tree was deleted");
     assert!(set_aside(&root).is_empty(), "nothing was left aside");
     trace.wait_for_records("file request answered", 5);
     expect![[r#"
         host:
-          files: file request answered body_bytes=131 operation=list status=0
+          files: file request answered body_bytes=147 operation=list status=0
           files: file request answered body_bytes=0 operation=delete status=4
-          files: file request answered body_bytes=131 operation=list status=0
+          files: file request answered body_bytes=147 operation=list status=0
           files: file request answered body_bytes=0 operation=delete status=0
           files: file request answered body_bytes=0 operation=delete status=0
     "#]]

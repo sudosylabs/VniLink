@@ -122,9 +122,9 @@ impl Core {
         Ok(())
     }
 
-    /// Establishes a control session for file roots/listings/transfers
-    /// only. Admission on the host needs the Transfer grant; file
-    /// operations enforce Transfer per request. Waits for the host's answer
+    /// Establishes a control session for listings, changes and transfers
+    /// on the shared disk only. Admission on the host needs Files sharing,
+    /// and file operations check it again per request. Waits for the host's answer
     /// and fails `Busy` while another files-only session is live.
     pub fn connect_files(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
         let _engine = self.engine();

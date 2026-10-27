@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use vnilink::{CursorImage, CursorState, ServiceKind, SessionPhase};
 use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture};
-use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 use super::streams::SCREEN;
@@ -23,7 +22,8 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() -> TestRes
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     controller.set_cursor_receiver(true)?;
     host.set_capture(Box::new(MonitorCapture::new(SCREEN).separate_cursor(true)))?;
-    let (root, folder) = whole_disk(&pair.host, "")?;
+    let here = pair.host.location();
+    let (root, folder) = (here.root, here.path(""));
     host.set_service_sharing(ServiceKind::Files, true)?;
     let connection = pair.connect_services();
     let desktop = pair.controller.open_desktop(&connection)?;
@@ -70,7 +70,7 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() -> TestRes
     pair.host.wait_released(Some(ServiceKind::Desktop));
     files.mkdir(root, &folder, "still-connected")?;
     assert!(
-        pair.host.root().join("still-connected").is_dir(),
+        pair.host.folder().join("still-connected").is_dir(),
         "the Files service works after the desktop closed"
     );
     assert!(

@@ -96,7 +96,7 @@ fn without_the_grant_no_terminal_opens_and_the_connection_lives() {
     let pair = Pair::for_services(&[]);
     pair.host
         .core
-        .set_terminal_factory(Some(vnilink_testkit::terminal::shell(&pair.host.root())))
+        .set_terminal_factory(Some(vnilink_testkit::terminal::shell(&pair.host.folder())))
         .unwrap();
     let connection = pair.connect_services();
     let owner = pair.attach(&connection, ServiceKind::Terminal);

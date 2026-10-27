@@ -2,8 +2,8 @@
 //! built one level per call so each commit point stays explicit. Creation
 //! is anchored: the parent is opened as a directory handle without
 //! following links and the new level is created relative to it (`mkdirat`,
-//! or `NtCreateFile` on Windows), so a parent replaced by a link cannot
-//! redirect the write outside the approved root.
+//! or `NtCreateFile` on Windows), so a parent replaced by a link after it
+//! was resolved cannot redirect the write.
 
 use crate::error::Error;
 

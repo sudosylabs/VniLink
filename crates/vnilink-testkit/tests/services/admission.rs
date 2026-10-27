@@ -9,7 +9,6 @@ use vnilink::{
     CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase, SharingPolicy,
     VideoCodecCaps,
 };
-use vnilink_testkit::files::whole_disk;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 use super::support::phase;
@@ -147,7 +146,8 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (root, folder) = whole_disk(&pair.host, "")?;
+    let here = pair.host.location();
+    let (root, folder) = (here.root, here.path(""));
     host.set_desktop_sharing(Grants::default())?;
     host.set_video_codecs(VideoCodecCaps::default())?;
     controller.set_video_codecs(VideoCodecCaps::default())?;
@@ -195,7 +195,7 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
         "the connection's own file calls stay refused"
     );
     assert!(
-        !pair.host.root().join("legacy").exists(),
+        !pair.host.folder().join("legacy").exists(),
         "a refused call changes nothing"
     );
     let old_lease = controller.service_lease(owner.id, owner.generation)?;

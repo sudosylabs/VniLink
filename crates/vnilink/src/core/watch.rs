@@ -183,13 +183,14 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("kept.txt"), b"kept").unwrap();
         let mut roots = crate::fs::RootSet::default();
-        roots.set(std::slice::from_ref(&folder)).unwrap();
-        let before = fingerprint(&roots, 0, "").unwrap();
+        roots.set_filesystem().unwrap();
+        let (root, rel) = roots.locate(&folder).unwrap();
+        let before = fingerprint(&roots, root, &rel).unwrap();
         std::fs::write(folder.join(".vnlpub.0.tmp"), b"staging").unwrap();
         std::fs::write(folder.join(".vnlpart.3.1"), b"arriving").unwrap();
-        let during = fingerprint(&roots, 0, "").unwrap();
+        let during = fingerprint(&roots, root, &rel).unwrap();
         std::fs::rename(folder.join(".vnlpub.0.tmp"), folder.join("landed.txt")).unwrap();
-        let after = fingerprint(&roots, 0, "").unwrap();
+        let after = fingerprint(&roots, root, &rel).unwrap();
         let _ = std::fs::remove_dir_all(&folder);
         assert_eq!(during, before);
         assert_ne!(after, before);

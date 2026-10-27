@@ -24,14 +24,27 @@ pub(crate) struct TransferPlaces {
     folders: Vec<TransferPlace>,
 }
 
-/// An entry's identity, used to refuse acting on a replaced item.
+/// What a listed entry is proven by when it is changed.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TransferTokenKind {
+    Identity,
+    /// On a volume whose ids are entry positions: `dev` names the volume
+    /// and `fingerprint` digests what the listing saw.
+    Fingerprint,
+}
+
+/// The token a listing gives an entry, used to refuse acting on a
+/// replaced item.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TransferToken {
+    kind: TransferTokenKind,
     dev: Option<String>,
     ino: Option<String>,
     /// Creation time in nanoseconds since 1970, where the filesystem keeps one.
     born: Option<String>,
+    fingerprint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,9 +113,14 @@ pub(crate) fn transfer_page(page: vnilink_app::FfiDirPage) -> TransferDirPage {
                 size: entry.size.to_string(),
                 mtime_ms: entry.mtime_ms.to_string(),
                 token: TransferToken {
+                    kind: match entry.token.kind {
+                        vnilink_app::FfiTokenKind::Identity => TransferTokenKind::Identity,
+                        vnilink_app::FfiTokenKind::Fingerprint => TransferTokenKind::Fingerprint,
+                    },
                     dev: entry.token.dev.map(|dev| dev.to_string()),
                     ino: entry.token.ino.map(|ino| ino.to_string()),
                     born: entry.token.born.map(|born| born.to_string()),
+                    fingerprint: entry.token.fingerprint.map(|digest| digest.to_string()),
                 },
             })
             .collect(),
@@ -124,9 +142,24 @@ pub(crate) fn entry_token(token: &TransferToken) -> Result<vnilink_app::FfiEntry
             })
             .transpose()
     };
+    let (kind, valid) = match token.kind {
+        TransferTokenKind::Identity => (
+            vnilink_app::FfiTokenKind::Identity,
+            token.fingerprint.is_none(),
+        ),
+        TransferTokenKind::Fingerprint => (
+            vnilink_app::FfiTokenKind::Fingerprint,
+            token.ino.is_none() && token.born.is_none(),
+        ),
+    };
+    if !valid {
+        return Err(Error::from_reason("Invalid entry token"));
+    }
     Ok(vnilink_app::FfiEntryToken {
+        kind,
         dev: part(&token.dev)?,
         ino: part(&token.ino)?,
         born: part(&token.born)?,
+        fingerprint: part(&token.fingerprint)?,
     })
 }

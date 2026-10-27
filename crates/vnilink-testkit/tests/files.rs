@@ -1,15 +1,15 @@
 //! The Files service alone: two engines on this computer moving trees
-//! between their roots, with both job drivers running as in the
-//! application.
+//! between their own folders on their shared disks, with both job drivers
+//! running as in the application.
 
+#[path = "files/drives.rs"]
+mod drives;
 #[path = "files/owners.rs"]
 mod owners;
 #[path = "files/pacing.rs"]
 mod pacing;
 #[path = "files/publishing.rs"]
 mod publishing;
-#[path = "files/rebinding.rs"]
-mod rebinding;
 #[path = "files/remote_disk.rs"]
 mod remote_disk;
 #[path = "files/service_jobs.rs"]
@@ -52,8 +52,8 @@ fn an_upload_lands_exactly() {
     let trace = traced();
     let pair = Pair::for_files();
     drive(&pair);
-    source_tree(&pair.controller.root().join("set"));
-    std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
+    source_tree(&pair.controller.folder().join("set"));
+    std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
     pair.controller
         .core
         .connect_files(&pair.host.endpoint())
@@ -66,8 +66,8 @@ fn an_upload_lands_exactly() {
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     assert_eq!(got.files_done, TREE.len() as u64);
     assert_eq!(
-        tree(&pair.host.root().join("inbox/set")),
-        tree(&pair.controller.root().join("set"))
+        tree(&pair.host.folder().join("inbox/set")),
+        tree(&pair.controller.folder().join("set"))
     );
     // Each side records its own job, and every file crossed whole.
     expect![[r#"
@@ -95,8 +95,8 @@ fn a_download_lands_exactly() {
     let _trace = traced();
     let pair = Pair::for_files();
     drive(&pair);
-    source_tree(&pair.host.root().join("shared"));
-    std::fs::create_dir_all(pair.controller.root().join("downloads")).unwrap();
+    source_tree(&pair.host.folder().join("shared"));
+    std::fs::create_dir_all(pair.controller.folder().join("downloads")).unwrap();
     pair.controller
         .core
         .connect_files(&pair.host.endpoint())
@@ -105,8 +105,8 @@ fn a_download_lands_exactly() {
     let got = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     assert_eq!(
-        tree(&pair.controller.root().join("downloads/shared")),
-        tree(&pair.host.root().join("shared"))
+        tree(&pair.controller.folder().join("downloads/shared")),
+        tree(&pair.host.folder().join("shared"))
     );
 }
 
@@ -118,10 +118,10 @@ fn conflicts_wait_for_a_choice_and_follow_it() {
     let pair = Pair::for_files();
     drive(&pair);
     write_files(
-        &pair.controller.root().join("set"),
+        &pair.controller.folder().join("set"),
         &[("a.txt", 100), ("b.txt", 100), ("c.txt", 100)],
     );
-    let destination = pair.host.root().join("inbox/set");
+    let destination = pair.host.folder().join("inbox/set");
     std::fs::create_dir_all(&destination).unwrap();
     for name in ["a.txt", "b.txt", "c.txt"] {
         std::fs::write(destination.join(name), format!("old {name}")).unwrap();
@@ -153,7 +153,7 @@ fn conflicts_wait_for_a_choice_and_follow_it() {
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     let sent = finished(&pair.controller.core, job, TRANSFER);
     assert_eq!(sent.state, JobState::Complete, "{sent:?}");
-    let source = pair.controller.root().join("set");
+    let source = pair.controller.folder().join("set");
     assert_eq!(
         std::fs::read(destination.join("a.txt")).unwrap(),
         std::fs::read(source.join("a.txt")).unwrap()
@@ -189,8 +189,8 @@ fn a_cancelled_upload_resumes_to_the_same_tree() {
     let _trace = traced();
     let pair = Pair::for_files();
     drive(&pair);
-    source_tree(&pair.controller.root().join("set"));
-    std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
+    source_tree(&pair.controller.folder().join("set"));
+    std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
     pair.controller
         .core
         .connect_files(&pair.host.endpoint())
@@ -212,8 +212,8 @@ fn a_cancelled_upload_resumes_to_the_same_tree() {
     let got = finished(&pair.host.core, receiver, TRANSFER);
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     assert_eq!(
-        tree(&pair.host.root().join("inbox/set")),
-        tree(&pair.controller.root().join("set"))
+        tree(&pair.host.folder().join("inbox/set")),
+        tree(&pair.controller.folder().join("set"))
     );
 }
 
@@ -226,10 +226,10 @@ fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
     let pair = Pair::for_files();
     drive(&pair);
     write_files(
-        &pair.controller.root().join("set"),
+        &pair.controller.folder().join("set"),
         &[("large.bin", 128 * 1024 * 1024)],
     );
-    std::fs::create_dir_all(pair.host.root().join("inbox")).unwrap();
+    std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
     pair.controller
         .core
         .connect_files(&pair.host.endpoint())
@@ -261,7 +261,7 @@ fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
     let got = finished(&pair.host.core, receiver, TRANSFER);
     assert_eq!(got.state, JobState::Complete, "{got:?}");
     assert_eq!(
-        tree(&pair.host.root().join("inbox/set")),
-        tree(&pair.controller.root().join("set"))
+        tree(&pair.host.folder().join("inbox/set")),
+        tree(&pair.controller.folder().join("set"))
     );
 }

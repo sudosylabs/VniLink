@@ -40,7 +40,7 @@ fn files_sharing(clipboard: bool) -> Grants {
 }
 
 /// What a controller shares: nothing.
-const NOTHING: Grants = Grants {
+pub(crate) const NOTHING: Grants = Grants {
     view: false,
     control: false,
     clipboard: false,

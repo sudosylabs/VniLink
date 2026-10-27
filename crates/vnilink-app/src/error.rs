@@ -37,6 +37,10 @@ pub enum FfiError {
     TransferDenied,
     #[error("the file already exists")]
     FileExists,
+    /// The drive (FAT, exFAT) cannot prove the change acts on the listed
+    /// entry.
+    #[error("the drive cannot prove the entry is the one listed")]
+    UnprovenEntry,
     #[error("there is no active session")]
     NoSession,
     #[error("the input belongs to an old session")]
@@ -98,6 +102,7 @@ pub(crate) fn map_error(error: Error) -> FfiError {
         Error::ClipboardDenied => FfiError::ClipboardDenied,
         Error::TransferDenied => FfiError::TransferDenied,
         Error::FileExists => FfiError::FileExists,
+        Error::UnprovenEntry => FfiError::UnprovenEntry,
         Error::NoSession => FfiError::NoSession,
         Error::StaleSession => FfiError::StaleSession,
         Error::Unsupported(message) => FfiError::Unsupported {

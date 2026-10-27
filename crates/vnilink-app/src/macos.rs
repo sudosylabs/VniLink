@@ -1119,8 +1119,10 @@ mod viewer_tests {
             host.endpoint_id()
         ));
         std::fs::create_dir(&root_path).unwrap();
-        host.inner.set_file_roots(vec![root_path.clone()]).unwrap();
-        let root_id = host.inner.file_roots().unwrap()[0].0;
+        host.inner.enable_filesystem_access().unwrap();
+        let shared =
+            crate::tests::filesystem_location::FilesystemLocation::on(&host.inner, &root_path);
+        let root_id = shared.root;
         let mut pipes = Vec::new();
         let mut desktops = Vec::new();
         let mut files = Vec::new();
@@ -1152,7 +1154,7 @@ mod viewer_tests {
             let pipe = viewer
                 .open_files_service(owner.id, owner.generation)
                 .unwrap();
-            pipe.mkdir(root_id, "".into(), format!("before-{display_id}"))
+            pipe.mkdir(root_id, shared.path(""), format!("before-{display_id}"))
                 .unwrap();
             pipes.push((display_id, pipe));
             viewer.prepare_mac_video().unwrap();
@@ -1238,15 +1240,15 @@ mod viewer_tests {
         );
         for (display_id, pipe) in &pipes {
             assert!(!pipe.is_cancelled());
-            let page = pipe.list(root_id, "".into(), 0, 20).unwrap();
+            let page = pipe.list(root_id, shared.path(""), 0, 20).unwrap();
             assert_eq!(page.entries.len(), if *display_id == 1 { 2 } else { 3 });
-            pipe.mkdir(root_id, "".into(), format!("after-{display_id}"))
+            pipe.mkdir(root_id, shared.path(""), format!("after-{display_id}"))
                 .unwrap();
         }
         assert_eq!(
             pipes[0]
                 .1
-                .list(root_id, "".into(), 0, 20)
+                .list(root_id, shared.path(""), 0, 20)
                 .unwrap()
                 .entries
                 .len(),
@@ -1311,8 +1313,10 @@ mod viewer_tests {
             host.endpoint_id()
         ));
         std::fs::create_dir(&root_path).unwrap();
-        host.inner.set_file_roots(vec![root_path.clone()]).unwrap();
-        let root_id = host.inner.file_roots().unwrap()[0].0;
+        host.inner.enable_filesystem_access().unwrap();
+        let shared =
+            crate::tests::filesystem_location::FilesystemLocation::on(&host.inner, &root_path);
+        let root_id = shared.root;
         let mut pipes = Vec::new();
         let mut desktops = Vec::new();
         let mut files = Vec::new();
@@ -1344,7 +1348,7 @@ mod viewer_tests {
             let pipe = viewer
                 .open_files_service(owner.id, owner.generation)
                 .unwrap();
-            pipe.mkdir(root_id, "".into(), format!("before-{display_id}"))
+            pipe.mkdir(root_id, shared.path(""), format!("before-{display_id}"))
                 .unwrap();
             pipes.push((display_id, pipe));
             viewer.prepare_mac_video().unwrap();
@@ -1409,10 +1413,13 @@ mod viewer_tests {
         assert!(files.iter().all(|lease| !lease.is_cancelled()));
         for (display_id, pipe) in &pipes {
             assert!(!pipe.is_cancelled());
-            pipe.mkdir(root_id, "".into(), format!("after-{display_id}"))
+            pipe.mkdir(root_id, shared.path(""), format!("after-{display_id}"))
                 .unwrap();
             assert_eq!(
-                pipe.list(root_id, "".into(), 0, 20).unwrap().entries.len(),
+                pipe.list(root_id, shared.path(""), 0, 20)
+                    .unwrap()
+                    .entries
+                    .len(),
                 if *display_id == 1 { 3 } else { 4 }
             );
         }
