@@ -1,7 +1,10 @@
 name: ci
 
+# A pull request's commits run once, as the pull request; other branches run
+# when they reach main.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
