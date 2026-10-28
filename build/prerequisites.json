@@ -241,6 +241,19 @@
         }
       }
     },
+    "process-tools": {
+      "title": "ps",
+      "platforms": ["linux"],
+      "purpose": "The test suites list the processes a shell started to check that each one ends.",
+      "check": {
+        "commands": {
+          "ps": {
+            "debian": "procps",
+            "fedora": "procps-ng"
+          }
+        }
+      }
+    },
     "libclang": {
       "title": "libclang",
       "platforms": ["linux"],
@@ -676,21 +689,23 @@
     },
     "test:rust": {
       "description": "Run the Rust tests",
-      "same": "build"
+      "same": "build",
+      "requires": ["process-tools"]
     },
     "test:service": {
       "description": "Run one service's functional suite on this computer",
       "same": "build",
-      "requires": ["second-computer"]
+      "requires": ["process-tools", "second-computer"]
     },
     "bench:service": {
       "description": "Measure one service's performance on this computer",
       "same": "build",
-      "requires": ["second-computer"]
+      "requires": ["process-tools", "second-computer"]
     },
     "testkit:agent": {
       "description": "Serve suites and measurements run with --peer on another computer",
-      "same": "build"
+      "same": "build",
+      "requires": ["process-tools"]
     },
     "testkit:launch": {
       "description": "Start a measurement's side for the test agent",
