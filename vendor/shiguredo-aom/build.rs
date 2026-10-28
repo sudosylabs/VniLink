@@ -268,6 +268,7 @@ fn build_from_source(out_dir: &Path, output_bindings_path: &Path) -> PathBuf {
         .define("ENABLE_TOOLS", "OFF")
         .define("ENABLE_DOCS", "OFF")
         .define("CONFIG_AV1_HIGHBITDEPTH", "1")
+        .define("CMAKE_INSTALL_LIBDIR", "lib")
         .profile("Release")
         .build();
 
