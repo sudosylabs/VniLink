@@ -15,7 +15,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { access, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, join, win32 } from 'node:path';
+import { posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export type Platform = 'darwin' | 'win32' | 'linux';
@@ -228,11 +228,16 @@ export async function detectHost(root: string, manifest: Manifest, probe: Probe 
 	return { ...base, hardwareArchitecture: process.arch, osName: process.platform === 'win32' ? 'Windows' : process.platform };
 }
 
+/** Paths as `platform` writes them: a host is described, not necessarily the computer running the check. */
+function pathsOf(platform: NodeJS.Platform): typeof posix {
+	return platform === 'win32' ? win32 : posix;
+}
+
 /** Finds `name` on PATH without starting a process. */
 async function findCommand(host: Host, probe: Probe, name: string): Promise<string | undefined> {
+	const paths = pathsOf(host.platform);
 	const pathKey = Object.keys(host.env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
-	const separator = host.platform === 'win32' ? ';' : delimiter;
-	const directories = (host.env[pathKey] ?? '').split(separator).filter(Boolean);
+	const directories = (host.env[pathKey] ?? '').split(paths.delimiter).filter(Boolean);
 	// Administration tools live in sbin, which a user's PATH may leave out.
 	if (host.platform === 'linux') {
 		directories.push('/usr/sbin', '/sbin');
@@ -242,7 +247,7 @@ async function findCommand(host: Host, probe: Probe, name: string): Promise<stri
 		: [''];
 	for (const directory of directories) {
 		for (const extension of extensions) {
-			const path = host.platform === 'win32' ? win32.join(directory, name + extension) : join(directory, name + extension);
+			const path = paths.join(directory, name + extension);
 			if (await probe.exists(path)) {
 				return path;
 			}
@@ -351,7 +356,7 @@ export async function mingwBin(environment: NodeJS.ProcessEnv, exists: (path: st
 
 /** The macOS Liquid Glass prebuild of `architecture`, from the optional @vnilink/elg dependency. */
 export function glassPrebuild(root: string, architecture: string): string {
-	return join(root, 'node_modules/@vnilink/elg/prebuilds', `darwin-${architecture}`, 'node.napi.node');
+	return posix.join(root, 'node_modules/@vnilink/elg/prebuilds', `darwin-${architecture}`, 'node.napi.node');
 }
 
 /** The channel `rust-toolchain.toml` selects. */
@@ -365,8 +370,8 @@ export function linuxSandboxProfile(root: string): string {
 }
 
 async function linuxExecutable(root: string, probe: Probe): Promise<string> {
-	const product = JSON.parse(await probe.readFile(join(root, 'product.json')) ?? '{}') as { platforms?: { linux?: { executableName?: string } } };
-	return join(root, '.build/electron', product.platforms?.linux?.executableName ?? 'vnilink');
+	const product = JSON.parse(await probe.readFile(posix.join(root, 'product.json')) ?? '{}') as { platforms?: { linux?: { executableName?: string } } };
+	return posix.join(root, '.build/electron', product.platforms?.linux?.executableName ?? 'vnilink');
 }
 
 /**
@@ -386,7 +391,7 @@ export async function linuxSandbox(root: string, probe: Probe, env: NodeJS.Proce
 		return { status: 'ready', detail: 'user namespaces are not restricted' };
 	}
 	const executable = await linuxExecutable(root, probe);
-	const helper = await probe.stat(join(executable, '..', 'chrome-sandbox'));
+	const helper = await probe.stat(posix.join(executable, '..', 'chrome-sandbox'));
 	if (helper?.uid === 0 && (helper.mode & 0o4755) === 0o4755) {
 		return { status: 'ready', detail: 'chrome-sandbox is setuid root' };
 	}
@@ -468,7 +473,7 @@ function macPermissionOutcome(granted: boolean | undefined): Outcome {
 
 /** Files in which `measure:latency` keeps the desktop portal's answers, host's and reader's. */
 export function latencyPortalGrants(root: string): string[] {
-	return ['host-screen-grant', 'reader-screen-grant'].map(name => join(root, '.build/latency', name));
+	return ['host-screen-grant', 'reader-screen-grant'].map(name => posix.join(root, '.build/latency', name));
 }
 
 type CustomCheck = (requirement: Requirement, manifest: Manifest, host: Host, probe: Probe) => Promise<Outcome>;
@@ -500,7 +505,7 @@ const customChecks: Readonly<Record<string, CustomCheck>> = {
 		return Promise.resolve({ status: 'ready', detail: name, ...notes.length ? { note: notes.join(' ') } : {} });
 	},
 	node: async (_requirement, manifest, host, probe) => {
-		const required = (await probe.readFile(join(host.root, manifest.node.versionFile)))?.trim() ?? '';
+		const required = (await probe.readFile(pathsOf(host.platform).join(host.root, manifest.node.versionFile)))?.trim() ?? '';
 		if (!nodeVersionAccepted(host.nodeVersion, required)) {
 			const major = nodeRequirement(required)?.[0] ?? '?';
 			return { status: 'missing', detail: `Node ${host.nodeVersion}; needs ${required} or a later ${String(major)}.x (${manifest.node.versionFile})`, fix: [manifest.node.install] };
@@ -511,7 +516,7 @@ const customChecks: Readonly<Record<string, CustomCheck>> = {
 		return { status: 'ready', detail: `${host.nodeVersion} ${host.architecture}` };
 	},
 	rust: async (_requirement, manifest, host, probe) => {
-		const channel = rustChannel(await probe.readFile(join(host.root, manifest.rust.toolchainFile)) ?? '');
+		const channel = rustChannel(await probe.readFile(pathsOf(host.platform).join(host.root, manifest.rust.toolchainFile)) ?? '');
 		if (!await findCommand(host, probe, 'rustup')) {
 			return { status: 'missing', detail: 'rustup is not installed', fixKey: 'missing-rustup' };
 		}
@@ -523,7 +528,7 @@ const customChecks: Readonly<Record<string, CustomCheck>> = {
 	},
 	'rust-target': async (_requirement, manifest, host, probe) => {
 		const target = manifest.platforms.win32.rustTarget ?? '';
-		const channel = rustChannel(await probe.readFile(join(host.root, manifest.rust.toolchainFile)) ?? '') ?? 'stable';
+		const channel = rustChannel(await probe.readFile(pathsOf(host.platform).join(host.root, manifest.rust.toolchainFile)) ?? '') ?? 'stable';
 		const installed = await probe.run('rustup', ['target', 'list', '--installed', '--toolchain', channel]);
 		return installed.stdout.split('\n').map(line => line.trim()).includes(target)
 			? { status: 'ready', detail: target }
@@ -802,7 +807,8 @@ export async function firstBuildDownloads(
 ): Promise<Download[]> {
 	const downloads: Download[] = [];
 	for (const download of manifest.downloads) {
-		const present = download.cache ? join(home, download.cache) : join(root, download.into);
+		const paths = pathsOf(platform);
+		const present = download.cache ? paths.join(home, download.cache) : paths.join(root, download.into);
 		if (download.platforms.includes(platform as Platform) && !await probe.exists(present)) {
 			downloads.push(download);
 		}

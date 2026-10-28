@@ -155,7 +155,7 @@ test('--peer and --peer-check name the agent a suite runs against, and nothing e
 	assert.deepEqual(selectPeer(['files', 'desktop']), { services: ['files', 'desktop'], env: {} });
 	assert.deepEqual(selectPeer(['files', '--peer', 'agent.vnl', '--peer-check', '042'], '/work'), {
 		services: ['files'],
-		env: { VNILINK_PEER: join('/work', 'agent.vnl'), VNILINK_PEER_CHECK: '042' },
+		env: { VNILINK_PEER: resolve('/work', 'agent.vnl'), VNILINK_PEER_CHECK: '042' },
 	});
 	assert.deepEqual(selectPeer(['--peer-check', '042', '--peer', '/elsewhere/agent.vnl', 'files'], '/work').env.VNILINK_PEER, resolve('/elsewhere/agent.vnl'), 'an absolute file stays where it is');
 	assert.throws(() => selectPeer(['files', '--peer', 'agent.vnl']), /--peer and --peer-check go together/);

@@ -67,7 +67,9 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: fedora:43
-      options: --shm-size=512m
+      # An init reaps orphans, as in the Debian image: the job's own PID 1 keeps
+      # them as zombies, which still answer kill(pid, 0).
+      options: --shm-size=512m --init
     env:
       # Root in a container: Electron runs without its sandbox, as in the Debian image.
       VNILINK_TEST_CONTAINER: '1'
