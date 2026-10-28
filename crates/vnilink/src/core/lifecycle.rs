@@ -388,6 +388,9 @@ impl Core {
                 stop_owned_work(&mut state, &self.shared);
             }
         }
+        // Its jobs are interrupted before it says it has shut down, not when
+        // their streams next notice.
+        super::service_jobs::interrupt_orphaned(&self.shared);
         self.finish_endpoint_close();
     }
 
