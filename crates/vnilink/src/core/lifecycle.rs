@@ -388,10 +388,11 @@ impl Core {
                 stop_owned_work(&mut state, &self.shared);
             }
         }
-        // Its jobs are interrupted before it says it has shut down, not when
-        // their streams next notice.
-        super::service_jobs::interrupt_orphaned(&self.shared);
         self.finish_endpoint_close();
+        // Its jobs are interrupted before it says it has shut down, not when
+        // their streams next notice: after its links closed saying it shut
+        // down, so a stopped stream does not tell a peer it stopped sending.
+        super::service_jobs::interrupt_orphaned(&self.shared);
     }
 
     /// Closes the endpoint once. A storage fence may already have claimed the
