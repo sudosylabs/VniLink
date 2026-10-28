@@ -1116,7 +1116,19 @@ fn desktop_stream_delivers_clean_pictures_on_loopback() {
         report["frames_received"].as_u64().unwrap() >= 10,
         "{report}"
     );
-    assert_eq!(report["clean_ratio"], 1.0, "{report}");
+    // The run may end with the last picture still in the viewer's queue.
+    let queued = report["engine"]["viewer"]["pipelines"][0]["in_queued"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        report["frames_received"].as_u64().unwrap() + queued,
+        report["frames_produced"].as_u64().unwrap(),
+        "{report}"
+    );
+    assert_eq!(
+        report["clean_ratio"], report["delivery_ratio"],
+        "every picture arrives whole: {report}"
+    );
     assert!(report["transfer"].is_null());
     assert_eq!(report["keyframes_produced"]["open"], 1, "{report}");
     assert_eq!(report["reference_gaps"], 0, "{report}");
