@@ -177,7 +177,9 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 
 test('this computer\'s disk lists, makes, renames and deletes through its own engine', { timeout: 30000 }, async () => {
 	const engine = await addon.openTemporaryEngine();
-	const folder = realpathSync(mkdtempSync(join(tmpdir(), 'vnilink-local-')));
+	// The native form: on Windows it also spells out short (8.3) names, as the
+	// engine does.
+	const folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'vnilink-local-')));
 	try {
 		writeFileSync(join(folder, 'note.txt'), 'note');
 		assert.deepEqual((await execute(engine, { type: 'localPlaces' })).places.roots, [], 'a temporary engine shares nothing');
