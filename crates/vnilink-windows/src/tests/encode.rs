@@ -999,7 +999,11 @@ fn a_captured_picture_is_converted_on_the_cpu_when_the_gpu_cannot() {
             let quality = psnr(&reference, &decoded);
             assert!(quality > 25.0, "{}: {quality:.1} dB", candidate.name);
         }
-        // An encoder that has not been refused converts on the GPU.
+        // An encoder that has not been refused converts on the GPU, when the
+        // computer has one: a virtual machine without one converts on the CPU.
+        if adapter_devices().is_empty() {
+            continue;
+        }
         let mut encoder = WindowsEncoder::open_candidate(
             &candidate,
             640,
@@ -1150,8 +1154,9 @@ fn an_encoder_opened_on_the_capture_device_reads_its_textures() {
     use vnilink_media::measure::{psnr, text_page};
     use vnilink_media::{HostVideo, PumpOutput, Quality};
     let page = text_page(1280, 720, 0);
+    // Empty on a computer without a GPU; Microsoft's software renderer is
+    // covered by `a_picture_on_the_software_renderer_is_encoded`.
     let devices = adapter_devices();
-    assert!(!devices.is_empty());
     for (name, device, context) in devices {
         let gpu = crate::gpu::GpuDevice::new(device.clone());
         for (width, height) in [(1280u16, 720u16), (640, 360)] {
