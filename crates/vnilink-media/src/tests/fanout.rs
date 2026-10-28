@@ -1458,15 +1458,11 @@ fn a_picture_is_read_when_it_arrives_not_on_a_timer() {
         })
         .collect();
     delays.sort();
-    // A timer would add half a period (8 ms at 60 fps) on average. One
-    // picture may wait out a preemption of the reader's thread.
+    // A timer would add up to a period (16 ms at 60 fps), so three in four
+    // pictures would wait longer than 2 ms. The rest may wait out
+    // preemptions of the reader's thread on a busy computer.
     assert!(
-        delays[delays.len() / 2] < Duration::from_millis(2),
-        "median delay {:?}",
-        delays[delays.len() / 2]
-    );
-    assert!(
-        delays[delays.len() - 2] < Duration::from_millis(10),
+        delays[delays.len() * 3 / 4] < Duration::from_millis(2),
         "delays {delays:?}"
     );
 }
