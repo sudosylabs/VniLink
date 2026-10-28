@@ -464,7 +464,9 @@ mod native {
         })
     }
     /// Installed shells from `/etc/shells`, with the login shell first if it is
-    /// not listed there.
+    /// not listed there. A listed shell that is the login shell by another
+    /// name, as `/bin/sh` for `/bin/bash` where one links to the other, is
+    /// named as the login shell, so "automatic" is among them.
     pub fn available_shells() -> Vec<ShellChoice> {
         let text = std::fs::read_to_string("/etc/shells").unwrap_or_default();
         let mut programs = parse_shells(&text, |path| {
@@ -475,10 +477,12 @@ mod native {
         if let Ok(login) = account().map(|account| account.shell) {
             let login_real = std::fs::canonicalize(&login).ok();
             let listed = programs
-                .iter()
-                .any(|path| path == &login || std::fs::canonicalize(path).ok() == login_real);
-            if !listed && is_executable(&login) {
-                programs.insert(0, login);
+                .iter_mut()
+                .find(|path| **path == login || std::fs::canonicalize(&**path).ok() == login_real);
+            match listed {
+                Some(path) => *path = login,
+                None if is_executable(&login) => programs.insert(0, login),
+                None => {}
             }
         }
         label_shells(programs)
