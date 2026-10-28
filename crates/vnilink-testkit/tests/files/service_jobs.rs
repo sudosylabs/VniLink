@@ -573,6 +573,12 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
             .is_err(),
         "a closed service cannot resume its job"
     );
+    // The host learns of the close before the cancel below, which then
+    // cannot reach it: either may otherwise arrive first.
+    let received = job_on(&first.core, false)?;
+    wait_for("the host to interrupt the job", DEFAULT_WAIT, || {
+        (first.core.job_snapshot(received).ok()?.state == JobState::Interrupted).then_some(())
+    });
     // An interrupted transfer is unfinished: it is cancelled before it is
     // forgotten.
     core.files_service_job_cancel(one.id, one.generation, cancelled)?;

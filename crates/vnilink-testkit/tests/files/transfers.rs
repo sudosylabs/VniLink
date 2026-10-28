@@ -937,6 +937,8 @@ fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
     let receiver = received(&pair.host.core);
     // One file lands; then the sender quits, and the receiver keeps its job.
     pair.host.core.job_poll(receiver)?;
+    // The sender records each serve as it ends, after the receiver has it.
+    trace.wait_for_records("file served", 2);
     pair.controller.restart();
     drop(files);
     // The new Files adopts the job before it resumes.

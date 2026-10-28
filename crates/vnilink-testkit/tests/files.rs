@@ -30,6 +30,7 @@ use vnilink::{ConflictChoice, JobState};
 use vnilink_testkit::files::{
     download, drive, finished, received, settled, tree, upload, write_files,
 };
+use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Pair, DEFAULT_WAIT};
 
 /// A tree with what trips transfers up: nesting, an empty folder, a name
@@ -249,11 +250,29 @@ fn a_transfer_the_host_stops_sharing_is_interrupted_and_resumes() {
 
     pair.host.core.set_desktop_sharing(sharing).unwrap();
     pair.host.wait_released(Some(vnilink::ServiceKind::Files));
+    // A connection has one Files owner at a time: the old one learns of its
+    // end just after the host lets it go.
+    wait_for("the old Files owner to end", DEFAULT_WAIT, || {
+        let old = pair
+            .controller
+            .core
+            .controller_service(files.service.id)
+            .ok()?;
+        service_ended(&old.phase).then_some(())
+    });
     let (fresh, _pipe) = pair.controller.open_files(&files.connection).unwrap();
     let controller = &pair.controller.core;
-    controller
-        .files_service_adopt_job(fresh.id, fresh.generation, job)
-        .unwrap();
+    // The old service's last step on the job may still hold it: it is busy
+    // until that step ends.
+    wait_for(
+        "the job to be free to adopt",
+        DEFAULT_WAIT,
+        || match controller.files_service_adopt_job(fresh.id, fresh.generation, job) {
+            Ok(_) => Some(()),
+            Err(vnilink::Error::Busy) => None,
+            Err(error) => panic!("the fresh service cannot adopt the job: {error}"),
+        },
+    );
     controller
         .files_service_job_resume(fresh.id, fresh.generation, job)
         .unwrap();

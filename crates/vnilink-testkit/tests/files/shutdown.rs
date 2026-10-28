@@ -49,6 +49,9 @@ fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResul
     poll_within(controller, job, 20, "the first file to land", |s| {
         s.files_done == 1
     });
+    // The second file is fetched beside the first: the host shuts down
+    // once it has arrived too, and the job has more to do.
+    trace.wait_for_records("file received", 2);
     pair.host.core.shutdown();
     let (snapshot, took) = poll_until_stopped(controller, job);
     assert_eq!(

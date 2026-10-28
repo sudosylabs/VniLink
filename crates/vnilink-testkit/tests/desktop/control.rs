@@ -437,8 +437,9 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
         "a view-only viewer opens viewing"
     );
     desktop.acquire_control()?;
-    desktop.submit_input(InputEvent::key_down(usage::A))?;
+    // The request and the key travel apart; the story waits for one before the other.
     trace.wait_for_records("control refused: the peer may not control this computer", 1);
+    desktop.submit_input(InputEvent::key_down(usage::A))?;
     trace.wait_for_records("input refused", 1);
     host.take_desktop_keyframe_request(remote.id, remote.generation)?;
     desktop.request_keyframe()?;

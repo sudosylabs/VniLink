@@ -1344,7 +1344,8 @@ impl FrameSource for Pushing {
 
 /// Serves `source` to one viewer and runs `body` once its first picture has
 /// arrived, with the stop flag and the frame period. Returns the number of
-/// pictures encoded and how long the worker took to end after `stop`.
+/// pictures encoded while `body` ran and how long the worker took to end
+/// after `stop`.
 fn serve_pushing(
     source: &Arc<Pushing>,
     body: impl FnOnce(&AtomicBool, Duration),
@@ -1417,11 +1418,13 @@ fn serve_pushing(
         .recv_timeout(Duration::from_secs(5))
         .expect("first picture");
     let period = *period.lock().unwrap();
+    let before = encodes.load(Ordering::Relaxed);
     body(&stop, period);
+    let during = encodes.load(Ordering::Relaxed) - before;
     let asked = Instant::now();
     stop.store(true, Ordering::Release);
     worker.join().unwrap().unwrap();
-    (encodes.load(Ordering::Relaxed), asked.elapsed())
+    (during, asked.elapsed())
 }
 
 /// Arrival times that are not on the frame rate's grid.
@@ -1455,16 +1458,16 @@ fn a_picture_is_read_when_it_arrives_not_on_a_timer() {
         })
         .collect();
     delays.sort();
-    // A timer would add half a period (8 ms at 60 fps) on average.
+    // A timer would add half a period (8 ms at 60 fps) on average. One
+    // picture may wait out a preemption of the reader's thread.
     assert!(
         delays[delays.len() / 2] < Duration::from_millis(2),
         "median delay {:?}",
         delays[delays.len() / 2]
     );
     assert!(
-        *delays.last().unwrap() < Duration::from_millis(10),
-        "worst delay {:?}",
-        delays.last()
+        delays[delays.len() - 2] < Duration::from_millis(10),
+        "delays {delays:?}"
     );
 }
 
@@ -1525,16 +1528,25 @@ fn pictures_just_above_the_frame_rate_do_not_spin_the_reader() {
 #[test]
 fn a_still_screen_is_kept_alive_once_a_second_without_polling_at_the_frame_rate() {
     let source = Arc::new(Pushing::new());
+    let mut still = Duration::ZERO;
     let (encodes, _) = serve_pushing(&source, |_, _| {
         source.reads.lock().unwrap().clear();
+        let started = Instant::now();
         std::thread::sleep(Duration::from_millis(2_500));
+        still = started.elapsed();
     });
+    // Measured against the time the screen actually stayed still, which a
+    // busy computer stretches past the sleep asked for.
+    let seconds = still.as_secs_f64();
     assert!(
-        (2..=5).contains(&encodes),
-        "{encodes} pictures in 2.5 s of a still screen"
+        (2..=seconds as usize + 2).contains(&encodes),
+        "{encodes} pictures in {still:?} of a still screen"
     );
     let reads = source.reads.lock().unwrap().len();
-    assert!(reads <= 12, "{reads} reads of a still screen in 2.5 s");
+    assert!(
+        reads as f64 <= 5.0 * seconds,
+        "{reads} reads of a still screen in {still:?}"
+    );
 }
 
 #[test]

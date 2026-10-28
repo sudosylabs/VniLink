@@ -927,17 +927,17 @@ mod tests {
         })
     }
 
-    /// The serve the next test parks: the sending engine
-    /// ([`vnilink::Core::engine_key`]) and its job.
-    static PARK_TARGET: std::sync::Mutex<Option<(usize, u64)>> = std::sync::Mutex::new(None);
+    /// The engine ([`vnilink::Core::engine_key`]) whose serves the next test
+    /// parks: set before its job starts, which may serve at once.
+    static PARK_TARGET: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
     /// Whether the parked serve arrived, and whether it may go on.
     static PARK_STATE: std::sync::Mutex<(bool, bool)> = std::sync::Mutex::new((false, false));
     static PARK_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Parks the targeted serve with its source open until released; any
     /// other serve goes on at once.
-    fn park_serve(engine: usize, job: u64) {
-        if *PARK_TARGET.lock().expect("the park target") != Some((engine, job)) {
+    fn park_serve(engine: usize, _job: u64) {
+        if *PARK_TARGET.lock().expect("the park target") != Some(engine) {
             return;
         }
         let mut state = PARK_STATE.lock().expect("the park state");
@@ -981,7 +981,10 @@ mod tests {
             let files = suite.files_at(host.endpoint())?;
             let here = suite.location();
             let (folder, names) = crate::files::source(&here.path("in-flight.bin"));
-            let job = suite.core.files_service_upload(
+            *PARK_STATE.lock().expect("the park state") = (false, false);
+            *PARK_TARGET.lock().expect("the park target") = Some(suite.core.engine_key());
+            vnilink::Core::set_serve_source_probe(Some(park_serve));
+            suite.core.files_service_upload(
                 files.service.id,
                 files.service.generation,
                 here.root,
@@ -990,9 +993,6 @@ mod tests {
                 root,
                 inbox,
             )?;
-            *PARK_STATE.lock().expect("the park state") = (false, false);
-            *PARK_TARGET.lock().expect("the park target") = Some((suite.core.engine_key(), job));
-            vnilink::Core::set_serve_source_probe(Some(park_serve));
             let parked = {
                 let state = PARK_STATE.lock().expect("the park state");
                 let (state, timeout) = PARK_CHANGED

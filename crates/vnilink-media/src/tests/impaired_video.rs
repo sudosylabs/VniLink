@@ -858,12 +858,16 @@ fn run_stream(stream: &Stream) -> Value {
         let mut keyframes = 0u64;
         let mut requests = 0u64;
         let mut first_picture = None;
-        // Pictures sent before the run ends still count once they arrive: the
-        // run reads on until the queue is empty, for a second at most.
+        // Capture stops when the run ends, and pictures sent before then still
+        // count once they arrive: the run reads on until the queue is empty,
+        // for a second at most.
         let end = started + stream.duration;
         loop {
             let frame = frames.recv_timeout(Duration::from_millis(20));
             let now = Instant::now();
+            if now >= end {
+                stop.store(true, Ordering::Release);
+            }
             let Some(frame) = frame else {
                 if now >= end {
                     break;
@@ -1079,7 +1083,7 @@ fn desktop_stream_runs_beside_a_transfer_either_way_on_loopback() {
         });
         assert!(report["first_picture_ms"].as_f64().is_some(), "{report}");
         assert!(
-            report["frames_received"].as_u64().unwrap() >= 30,
+            report["frames_received"].as_u64().unwrap() >= 10,
             "{report}"
         );
         let transfer = &report["transfer"];
@@ -1106,10 +1110,13 @@ fn desktop_stream_delivers_clean_pictures_on_loopback() {
         transfer: None,
     });
     assert!(report["first_picture_ms"].as_f64().is_some(), "{report}");
+    // How many pictures a computer makes depends on how busy it is; on
+    // loopback every one of them arrives whole.
     assert!(
-        report["frames_received"].as_u64().unwrap() >= 30,
+        report["frames_received"].as_u64().unwrap() >= 10,
         "{report}"
     );
+    assert_eq!(report["clean_ratio"], 1.0, "{report}");
     assert!(report["transfer"].is_null());
     assert_eq!(report["keyframes_produced"]["open"], 1, "{report}");
     assert_eq!(report["reference_gaps"], 0, "{report}");
