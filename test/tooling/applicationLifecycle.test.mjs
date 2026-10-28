@@ -67,6 +67,10 @@ const services = {
 	ipcMain: `export const WORKBENCH_URL = 'vnilink://app/index.html'; export const validatedIpcMain = { on() { }, handle() { }, removeHandler() { } };`,
 	development: `export function registerDevelopmentWindow() { }`,
 	menubar: `export function installApplicationMenu() { } export function registerEditingShortcuts() { }`,
+	// The log file's native addon: the test writes no log.
+	spdlogAddon: `export const SPDLOG_DIRECTORY = 'native/spdlog';
+		const logger = { trace() { }, debug() { }, info() { }, warn() { }, error() { }, critical() { }, getLevel: () => 0, setLevel() { }, setPattern() { }, clearFormatters() { }, flush() { }, drop() { } };
+		export function loadSpdlog() { return { setFlushOn() { }, createAsyncRotatingLogger: async () => logger }; }`,
 };
 
 async function load(entry, exports, extra = '') {
@@ -74,7 +78,7 @@ async function load(entry, exports, extra = '') {
 		stdin: { contents: `export { ${exports} } from '${entry}'; export { app, state } from 'electron'; ${extra}`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 			name: 'main-process-fixtures', setup(builder) {
 				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|hostingMainService|screenHostingMainService|systemSettings|trayMainService|traySupport|systemActionNotice|stateService)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
+				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|encryptionMainService|ipc\.electron|ipcMain|development|menubar|spdlogAddon|hostingMainService|screenHostingMainService|systemSettings|trayMainService|traySupport|systemActionNotice|stateService)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'electron' ? electron : services[path], loader: 'js', resolveDir: root }));
 			}
 		}]

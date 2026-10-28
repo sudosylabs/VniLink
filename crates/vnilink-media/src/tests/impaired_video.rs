@@ -858,10 +858,21 @@ fn run_stream(stream: &Stream) -> Value {
         let mut keyframes = 0u64;
         let mut requests = 0u64;
         let mut first_picture = None;
-        while started.elapsed() < stream.duration {
-            let Some(frame) = frames.recv_timeout(Duration::from_millis(20)) else {
+        // Pictures sent before the run ends still count once they arrive: the
+        // run reads on until the queue is empty, for a second at most.
+        let end = started + stream.duration;
+        loop {
+            let frame = frames.recv_timeout(Duration::from_millis(20));
+            let now = Instant::now();
+            let Some(frame) = frame else {
+                if now >= end {
+                    break;
+                }
                 continue;
             };
+            if now >= end + Duration::from_secs(1) {
+                break;
+            }
             let Some(index) = picture_index(&frame.payload) else {
                 panic!("a received picture has no sequence marker");
             };

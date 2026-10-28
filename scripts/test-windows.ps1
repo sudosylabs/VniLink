@@ -9,6 +9,10 @@ if (-not $env:VNILINK_MSYS_ROOT) { $env:VNILINK_MSYS_ROOT = $MsysRoot }
 foreach ($Command in @('node', 'npm', 'rustup')) {
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) { throw "Install $Command first; CONTRIBUTING.md lists the Windows prerequisites." }
 }
+# npm's PowerShell shim (npm 10) rebuilds its arguments from the calling
+# line's text, so a splatted call reaches npm as the literal words; its
+# cmd shim takes arguments as given.
+$Npm = 'npm.cmd'
 function Invoke-Check([string]$Command, [string[]]$Arguments) {
     & $Command @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Command $($Arguments -join ' ') failed with exit code $LASTEXITCODE" }
@@ -17,19 +21,19 @@ Push-Location $Root
 try {
     # preinstall refuses an unsupported Node; postinstall installs the Rust
     # toolchain and its GNU target.
-    if (-not $SkipInstall) { Invoke-Check 'npm' @('ci') }
+    if (-not $SkipInstall) { Invoke-Check $Npm @('ci') }
     # Use the repository-selected toolchain directly; Windows rustup proxy
     # executables may be unavailable in an SSH session after self-update.
     $CargoPath = & rustup which cargo
     if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the repository Rust toolchain.' }
     $env:PATH = (Split-Path -Parent $CargoPath) + [IO.Path]::PathSeparator + $env:PATH
-    Invoke-Check 'npm' @('run', 'doctor', '--', '--require', 'build,test:rust,test:ui')
-    Invoke-Check 'npm' @('run', 'check')
+    Invoke-Check $Npm @('run', 'doctor', '--', '--require', 'build,test:rust,test:ui')
+    Invoke-Check $Npm @('run', 'check')
     Invoke-Check 'cargo' @('fmt', '--all', '--', '--check')
     $Failures = @()
     foreach ($Arguments in @(@('run', 'test:rust'), @('test'))) {
         try {
-            Invoke-Check 'npm' $Arguments
+            Invoke-Check $Npm $Arguments
         } catch {
             $Failures += $_.Exception.Message
             Write-Output $_.Exception.Message

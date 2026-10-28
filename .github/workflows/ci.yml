@@ -75,6 +75,10 @@ jobs:
       - name: Install checkout and Node prerequisites
         run: dnf install -y git tar xz
       - uses: actions/checkout@v4
+      # The job runs as root over a checkout the runner's user owns, which
+      # git refuses unless told the folder is trusted; hygiene reads its log.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc

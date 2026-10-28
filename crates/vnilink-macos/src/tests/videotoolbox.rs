@@ -925,6 +925,14 @@ fn chroma_quality() {
 }
 
 /// A picture in an IOSurface-backed buffer, as ScreenCaptureKit delivers one.
+/// Whether this Mac is a virtual machine, as CI's are.
+fn in_a_virtual_machine() -> bool {
+    std::process::Command::new("sysctl")
+        .args(["-n", "kern.hv_vmm_present"])
+        .output()
+        .is_ok_and(|output| output.stdout.trim_ascii() == b"1")
+}
+
 fn captured(frame: &vnilink_media::RawFrame) -> vnilink_media::RawFrame {
     let surface = apple_cf::iosurface::IOSurface::create(
         usize::from(frame.width()),
@@ -980,6 +988,12 @@ fn blocks(frame: &vnilink_media::RawFrame, block: u16) -> vnilink_media::RawFram
 #[test]
 fn a_captured_picture_is_encoded_in_its_surface_at_any_size() {
     use vnilink_media::measure::{edge_psnr, psnr, text_page};
+    // Its quality bounds are an Apple GPU's: a virtual machine's
+    // paravirtual GPU has no hardware scaler and encodes otherwise.
+    if in_a_virtual_machine() {
+        println!("skipped: a virtual machine has no Apple GPU to measure");
+        return;
+    }
     let page = text_page(1280, 720, 0);
     assert_eq!(captured(&page).pixels(), page.pixels());
     let encode = |frame: &vnilink_media::RawFrame, width: u16, height: u16| {
