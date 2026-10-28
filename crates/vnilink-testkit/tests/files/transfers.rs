@@ -437,7 +437,7 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
             "staging leaked into the destination: {name:?}"
         );
     }
-    // The host's stopped serve records its end after the job was cancelled.
+    // The host's stopped serve records its end.
     trace.wait_for_records("file served", 2);
 
     controller.job_resume(job)?;
@@ -462,6 +462,16 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
             && field(2, "resumed_at") + field(2, "took") == size,
         "the resumed fetch continues from what was kept: {fetches:?}"
     );
+    let story = |engine: &str, messages: &[&str]| {
+        trace
+            .tell(&["files"])
+            .of(engine)
+            .only(messages)
+            .masking(&["took", "sent", "resumed_at", "from"], move |e| {
+                e["size"] == size
+            })
+            .to_string()
+    };
     expect![[r#"
         controller:
           files: file received outcome=received resumed_at=0 size=2048 took=2048
@@ -470,20 +480,23 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
           files: job state from=cancelled job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=… size=12582912 took=…
           files: job state done_bytes=12584960 files_done=2 from=transferring job=1 sender=false to=complete
+    "#]].assert_eq(&story("controller", &["file received", "job state"]));
+    // The host learns of the cancel and of its receiver leaving on
+    // separate streams, in either order: each is told on its own.
+    expect![[r#"
         host:
           files: job state from=preparing job=1 sender=true to=serving
-          files: file served ended=sent from=0 sent=2048 size=2048
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=cancelled
-          files: file served ended=the receiver left from=… sent=… size=12582912
           files: job state from=cancelled job=1 sender=true to=serving
-          files: file served ended=sent from=… sent=… size=12582912
           files: job state done_bytes=12584960 files_done=2 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(
-        &trace
-            .tell(&["files"])
-            .masking(&["took", "sent", "resumed_at", "from"], move |e| e["size"] == size)
-            .to_string(),
-    );
+    "#]].assert_eq(&story("host", &["job state"]));
+    expect![[r#"
+        host:
+          files: file served ended=sent from=0 sent=2048 size=2048
+          files: file served ended=the receiver left from=… sent=… size=12582912
+          files: file served ended=sent from=… sent=… size=12582912
+    "#]]
+    .assert_eq(&story("host", &["file served"]));
     Ok(())
 }
 
