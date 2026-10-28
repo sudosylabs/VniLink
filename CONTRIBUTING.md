@@ -103,13 +103,13 @@ Architectures: x64 supported; arm64 unverified (it builds in the Linux container
 Ubuntu and Debian (Debian 13 (the Linux test container) and Ubuntu 26.04; CI runs Ubuntu 24.04):
 
 ```bash
-sudo apt-get install --no-install-recommends build-essential cmake curl dbus-daemon dbus-x11 git gnome-keyring libasound2-dev libasound2t64 libatspi2.0-0 libclang-dev libdbus-1-dev libdrm2 libegl-dev libgbm-dev libgtk-3-0 libnotify4 libnss3 libpipewire-0.3-dev libsecret-1-0 libspa-0.2-dev libva-dev libwayland-dev libxcb1 libxkbcommon0 libxss1 libxtst6 nasm openbox perl pkg-config x11-utils xauth xdg-utils xvfb
+sudo apt-get install --no-install-recommends build-essential cmake curl dbus-daemon dbus-x11 git gnome-keyring libasound2-dev libasound2t64 libatspi2.0-0 libclang-dev libdbus-1-dev libdrm2 libegl-dev libgbm-dev libgtk-3-0 libnotify4 libnss3 libpipewire-0.3-dev libsecret-1-0 libspa-0.2-dev libva-dev libwayland-dev libxcb1 libxkbcommon0 libxss1 libxtst6 nasm openbox perl pkg-config procps x11-utils xauth xdg-utils xvfb
 ```
 
 Fedora (CI runs Fedora 43):
 
 ```bash
-sudo dnf install alsa-lib alsa-lib-devel at-spi2-core clang-devel cmake curl dbus-daemon dbus-devel dbus-x11 gcc gcc-c++ git gnome-keyring gtk3 libXScrnSaver libXtst libdrm libglvnd-devel libnotify libsecret libva-devel libxcb libxkbcommon make mesa-libgbm-devel nasm nss openbox perl pipewire-devel pkgconf-pkg-config wayland-devel xdg-utils xorg-x11-server-Xvfb xorg-x11-xauth xprop
+sudo dnf install alsa-lib alsa-lib-devel at-spi2-core clang-devel cmake curl dbus-daemon dbus-devel dbus-x11 gcc gcc-c++ git gnome-keyring gtk3 libXScrnSaver libXtst libdrm libglvnd-devel libnotify libsecret libva-devel libxcb libxkbcommon make mesa-libgbm-devel nasm nss openbox perl pipewire-devel pkgconf-pkg-config procps-ng wayland-devel xdg-utils xorg-x11-server-Xvfb xorg-x11-xauth xprop
 ```
 
 - **Desktop session**: The application opens windows on an X11 or Wayland display. Run it from a graphical session (`DISPLAY` or `WAYLAND_DISPLAY` set).
