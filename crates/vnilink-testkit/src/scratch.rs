@@ -45,6 +45,25 @@ impl Scratch {
     pub fn close(self) -> std::io::Result<()> {
         self.folder.close()
     }
+
+    /// Removes the folder like [`Self::close`], trying again until
+    /// `deadline` while something still holds it: Windows releases an ended
+    /// process's working folder some time after the process has ended.
+    pub fn close_by(self, deadline: std::time::Instant) -> std::io::Result<()> {
+        let path = self.folder.keep();
+        loop {
+            match std::fs::remove_dir_all(&path) {
+                Err(error)
+                    if error.kind() != std::io::ErrorKind::NotFound
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                result => return result,
+            }
+        }
+    }
 }
 
 /// The file systems [`ScratchVolume`] makes: those whose ids are entry

@@ -154,7 +154,7 @@ impl Scenario for TerminalHost {
         }
         if let Some(folder) = self.folder.take() {
             let path = folder.path().to_path_buf();
-            if let Err(error) = folder.close() {
+            if let Err(error) = folder.close_by(Instant::now() + END_WAIT) {
                 left.push(format!("{} could not be removed ({error})", path.display()));
             }
             if std::mem::take(&mut self.announced) {
