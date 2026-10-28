@@ -350,7 +350,8 @@ impl Core {
                             target: crate::trace::TERMINAL,
                             service = id,
                             error = error.name(),
-                            closed_here = lease.is_cancelled(),
+                            closed_here = lease.is_cancelled()
+                                && super::services::closed_here(&shared, id, generation),
                             "terminal pipe ended"
                         );
                     }

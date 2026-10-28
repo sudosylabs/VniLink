@@ -198,7 +198,8 @@ impl Core {
                     let ended = lease.run(run).await;
                     // A viewer that closed the audio itself has no other reason
                     // to give; otherwise the host's word, or what failed.
-                    let closed_here = lease.is_cancelled();
+                    let closed_here =
+                        lease.is_cancelled() && super::services::closed_here(&shared, id, generation);
                     tracing::info!(
                         target: crate::trace::AUDIO,
                         service = id,

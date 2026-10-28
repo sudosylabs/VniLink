@@ -64,6 +64,24 @@ fn publish(events: &EventHub, info: &ServiceInfo) {
     });
 }
 
+/// Whether this computer ended the controller service `id`'s stream: its
+/// owner closed it (the record still active, or closed by its owner) or the
+/// engine shut down. A lost, suspended or replaced connection cancels the
+/// lease too, and that end is the host's to name.
+pub(super) fn closed_here(shared: &Shared, id: u64, generation: u64) -> bool {
+    lock(&shared.state)
+        .services
+        .get(&id)
+        .filter(|record| record.info.generation == generation)
+        .is_none_or(|record| {
+            matches!(
+                record.info.phase,
+                ServicePhase::Active
+                    | ServicePhase::Closed(CloseCause::OwnerClose | CloseCause::Shutdown)
+            )
+        })
+}
+
 /// Called under the parent state lock, so events cannot reorder close/reopen.
 pub(super) fn synchronize(state: &mut State, events: &EventHub) {
     for record in state.hosted_services.values_mut() {

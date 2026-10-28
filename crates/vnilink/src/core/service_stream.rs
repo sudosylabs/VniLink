@@ -832,8 +832,9 @@ pub(super) enum HostedEnd {
 
 impl HostedEnd {
     /// How a stream whose service was closed ended: by its viewer when the
-    /// peer closed the service, which also ends the stream; otherwise by
-    /// whatever closed it.
+    /// peer closed the service, which also ends the stream; by this engine's
+    /// shutdown, which the viewer learns as a lost connection, not a
+    /// withdrawal; otherwise by whatever closed it.
     pub(super) fn service_closed(shared: &Shared, id: u64) -> Self {
         let phase = lock(&shared.state)
             .hosted_services
@@ -841,6 +842,7 @@ impl HostedEnd {
             .map(|record| record.info.phase.clone());
         match phase {
             Some(ServicePhase::Closed(CloseCause::PeerClose)) => Self::ViewerClosed,
+            Some(ServicePhase::Closed(CloseCause::Shutdown)) => Self::ShutDown,
             _ => Self::ServiceClosed,
         }
     }
@@ -907,11 +909,15 @@ impl HostedEnding {
         if self.closed.swap(true, std::sync::atomic::Ordering::AcqRel) {
             return;
         }
-        // At shutdown, connections end and tasks drop in either order: both
-        // are the engine shutting down.
+        // At shutdown, connections end and tasks drop in either order, and a
+        // write fails on the closing link as if the viewer had left: each is
+        // the engine shutting down.
         let shutting_down = lock(&self.shared.state).shut_down;
         let end = match *lock(&self.end) {
-            None | Some(HostedEnd::ConnectionEnded | HostedEnd::Dropped) if shutting_down => {
+            None
+            | Some(HostedEnd::ConnectionEnded | HostedEnd::Dropped | HostedEnd::ViewerClosed)
+                if shutting_down =>
+            {
                 Some(HostedEnd::ShutDown)
             }
             end => end,

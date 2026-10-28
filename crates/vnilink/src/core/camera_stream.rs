@@ -343,7 +343,8 @@ impl Core {
                     }
                     // A viewer that closed the picture itself has no reason from
                     // the host to give.
-                    let closed_here = lease.is_cancelled();
+                    let closed_here = lease.is_cancelled()
+                        && super::services::closed_here(&shared, id, generation);
                     tracing::info!(
                         target: crate::trace::CAMERA,
                         service = id,
