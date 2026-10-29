@@ -24,6 +24,17 @@
 	--chrome-hover: color-mix(in srgb, var(--text) 5%, transparent);
 	--chrome-selected: var(--selected);
 
+	/* Scrollbars: only the thumb is drawn, a tint of the text so it reads on any surface. */
+	--scrollbar-thumb: color-mix(in srgb, var(--text) 20%, transparent);
+	--scrollbar-thumb-hover: color-mix(in srgb, var(--text) 30%, transparent);
+	--scrollbar-thumb-active: color-mix(in srgb, var(--text) 40%, transparent);
+	/* stylelint-disable custom-property-pattern -- the names scrollbars.css reads upstream */
+	--vscode-scrollbar-background: transparent;
+	--vscode-scrollbarSlider-background: var(--scrollbar-thumb);
+	--vscode-scrollbarSlider-hoverBackground: var(--scrollbar-thumb-hover);
+	--vscode-scrollbarSlider-activeBackground: var(--scrollbar-thumb-active);
+	/* stylelint-enable custom-property-pattern */
+
 	/* Camera: pictures sit on a dark stage in either theme, as photos and video do. */
 	--camera-stage: #1c1c1e;
 	--camera-on-stage: #ececef;
@@ -36,9 +47,9 @@
 	--terminal-cursor: var(--text);
 	--terminal-selection: color-mix(in srgb, var(--accent) 30%, transparent);
 	--terminal-selection-inactive: color-mix(in srgb, var(--text) 12%, transparent);
-	--terminal-scrollbar: color-mix(in srgb, var(--text) 20%, transparent);
-	--terminal-scrollbar-hover: color-mix(in srgb, var(--text) 30%, transparent);
-	--terminal-scrollbar-active: color-mix(in srgb, var(--text) 40%, transparent);
+	--terminal-scrollbar: var(--scrollbar-thumb);
+	--terminal-scrollbar-hover: var(--scrollbar-thumb-hover);
+	--terminal-scrollbar-active: var(--scrollbar-thumb-active);
 	--terminal-ansi-black: #000;
 	--terminal-ansi-red: #cd3131;
 	--terminal-ansi-green: #107c10;
@@ -118,9 +129,9 @@
 		--terminal-cursor: CanvasText;
 		--terminal-selection: Highlight;
 		--terminal-selection-inactive: Highlight;
-		--terminal-scrollbar: GrayText;
-		--terminal-scrollbar-hover: CanvasText;
-		--terminal-scrollbar-active: CanvasText;
+		--scrollbar-thumb: GrayText;
+		--scrollbar-thumb-hover: CanvasText;
+		--scrollbar-thumb-active: CanvasText;
 		--status-connected: CanvasText;
 		--status-pending: CanvasText;
 		--status-disconnected: CanvasText;
