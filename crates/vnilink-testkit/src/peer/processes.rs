@@ -22,7 +22,9 @@ struct Listed {
 }
 
 /// Every running process, or only `only`, as `ps` lists them. A process
-/// that ended and waits only to be reaped is not running.
+/// that ended and waits only to be reaped is not running. Without `ps`
+/// nothing can be said about any process, so that panics rather than
+/// answering that none runs (`node build/run.ts doctor` names its package).
 #[cfg(unix)]
 fn processes(only: Option<u32>) -> Vec<Listed> {
     let mut command = Command::new("ps");
@@ -30,13 +32,11 @@ fn processes(only: Option<u32>) -> Vec<Listed> {
         Some(pid) => command.args(["-p", &pid.to_string()]),
         None => command.arg("-A"),
     };
-    let Ok(listing) = command
+    let listing = command
         .args(["-o", "pid=", "-o", "ppid=", "-o", "stat=", "-o", "lstart="])
         .env("LC_ALL", "C")
         .output()
-    else {
-        return Vec::new();
-    };
+        .unwrap_or_else(|error| panic!("ps could not be run to list processes: {error}"));
     String::from_utf8_lossy(&listing.stdout)
         .lines()
         .filter_map(|line| {

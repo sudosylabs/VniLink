@@ -307,15 +307,11 @@ fn a_shared_shell_ends_when_the_agent_idles_or_its_suite_goes() -> TestResult {
 #[test]
 fn a_shared_shell_ends_when_the_agent_is_interrupted_or_its_terminal_closes() -> TestResult {
     let _trace = traced();
-    for signal in ["INT", "HUP"] {
-        let scratch = Scratch::new(&format!("terminal-{signal}"));
+    for (name, signal) in [("INT", libc::SIGINT), ("HUP", libc::SIGHUP)] {
+        let scratch = Scratch::new(&format!("terminal-{name}"));
         let (mut agent, suite, mut host) = paired(&scratch, &["--allow", "terminal"])?;
         let shell = SharedShell::open(&agent, &suite, &mut host)?;
-        let sent = Command::new("kill")
-            .arg(format!("-{signal}"))
-            .arg(agent.child.id().to_string())
-            .status()?;
-        assert!(sent.success(), "the agent was sent SIG{signal}");
+        send(&agent.child, signal)?;
         shell.assert_ended(&agent);
         agent.line("asked to stop");
         assert_eq!(
@@ -373,18 +369,12 @@ fn an_interrupted_agent_stops_its_scenario_first() -> TestResult {
     bridge.polled("viewer.json");
     let evidence = scratch.join("evidence");
     bridge.ask(serde_json::json!({ "op": "fetch", "into": evidence }));
-    let pid = std::fs::read_to_string(evidence.join("started.pid"))?;
-    let alive = || {
-        Command::new("kill")
-            .args(["-0", pid.trim()])
-            .status()
-            .is_ok_and(|status| status.success())
-    };
+    let pid: u32 = std::fs::read_to_string(evidence.join("started.pid"))?
+        .trim()
+        .parse()?;
+    let alive = || runs(pid);
     assert!(alive(), "the side's own process runs");
-    let interrupted = Command::new("kill")
-        .args(["-INT", &agent.child.id().to_string()])
-        .status()?;
-    assert!(interrupted.success(), "the agent was sent SIGINT");
+    send(&agent.child, libc::SIGINT)?;
     agent.line("asked to stop");
     assert_eq!(
         agent.exited(Duration::from_secs(60)).code(),
@@ -595,4 +585,16 @@ fn a_build_script_drives_a_launched_side_through_the_bridge() -> TestResult {
     assert!(status.success(), "the bridge ends cleanly");
     agent.line("the suite went away");
     Ok(())
+}
+
+/// Sends `signal` to the agent, as a person's terminal does.
+#[cfg(unix)]
+fn send(agent: &Child, signal: libc::c_int) -> std::io::Result<()> {
+    let pid = libc::pid_t::try_from(agent.id()).map_err(std::io::Error::other)?;
+    // SAFETY: signals a child this test started and has not reaped.
+    if unsafe { libc::kill(pid, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }

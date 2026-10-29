@@ -93,11 +93,7 @@ fn places_name_home_and_its_folders_by_root() -> TestResult {
         return Ok(());
     };
     assert_eq!(home.kind, FolderKind::Home, "home comes first");
-    let account = std::fs::canonicalize(
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .ok_or("an account folder")?,
-    )?;
+    let account = std::fs::canonicalize(account_folder().ok_or("an account folder")?)?;
     let location = Location::of(core, &account);
     assert_eq!(
         (home.root, home.path.as_str()),
@@ -180,4 +176,26 @@ fn a_dropped_path_is_named_by_its_folder_and_its_own_name() -> TestResult {
         "an engine sharing nothing names nothing"
     );
     Ok(())
+}
+
+/// The account's own folder as the system records it, which `HOME` need
+/// not name: a container's runner sets `HOME` to a folder of its own.
+#[cfg(unix)]
+fn account_folder() -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: getpwuid returns null or a record owned by libc, read before
+    // any other call that could replace it.
+    unsafe {
+        let record = libc::getpwuid(libc::geteuid());
+        if record.is_null() || (*record).pw_dir.is_null() {
+            return None;
+        }
+        let folder = std::ffi::CStr::from_ptr((*record).pw_dir);
+        Some(std::ffi::OsStr::from_bytes(folder.to_bytes()).into())
+    }
+}
+
+#[cfg(windows)]
+fn account_folder() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE").map(Into::into)
 }

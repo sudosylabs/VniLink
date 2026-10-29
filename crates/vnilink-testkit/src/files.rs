@@ -342,7 +342,7 @@ impl StandInDrive {
     /// is not running.
     pub fn swap(&self) -> std::path::PathBuf {
         let original = self.path.with_extension("taken-out");
-        std::fs::rename(&self.path, &original).expect("the drive taken out");
+        move_folder(&self.path, &original).expect("the drive taken out");
         std::fs::create_dir_all(self.path.join("files")).expect("another volume");
         original
     }
@@ -352,8 +352,8 @@ impl StandInDrive {
     /// again. The other volume moves aside; returns where it went.
     pub fn put_back(&self, engine: &Engine, original: &Path) -> std::path::PathBuf {
         let other = self.path.with_extension("other-volume");
-        std::fs::rename(&self.path, &other).expect("the other volume taken out");
-        std::fs::rename(original, &self.path).expect("the drive put back");
+        move_folder(&self.path, &other).expect("the other volume taken out");
+        move_folder(original, &self.path).expect("the drive put back");
         self.read_again(engine);
         other
     }
@@ -505,4 +505,11 @@ pub fn wait_for_change(events: &EventSubscription, watch: u64, what: &str, withi
 /// No change to `watch` arrives throughout `period`.
 pub fn no_change(events: &EventSubscription, watch: u64, what: &str, period: Duration) {
     holds(what, period, || !saw_change(events, watch));
+}
+
+/// Renames a folder an engine has just let go of
+/// ([`crate::scratch::until_released`]).
+fn move_folder(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    crate::scratch::until_released(deadline, || std::fs::rename(from, to))
 }

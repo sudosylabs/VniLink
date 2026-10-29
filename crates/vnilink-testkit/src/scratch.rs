@@ -46,22 +46,33 @@ impl Scratch {
         self.folder.close()
     }
 
-    /// Removes the folder like [`Self::close`], trying again until
-    /// `deadline` while something still holds it: Windows releases an ended
-    /// process's working folder some time after the process has ended.
+    /// Removes the folder like [`Self::close`], as soon as nothing holds it
+    /// ([`until_released`]).
     pub fn close_by(self, deadline: std::time::Instant) -> std::io::Result<()> {
         let path = self.folder.keep();
-        loop {
-            match std::fs::remove_dir_all(&path) {
-                Err(error)
-                    if error.kind() != std::io::ErrorKind::NotFound
-                        && std::time::Instant::now() < deadline =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                result => return result,
+        until_released(deadline, || match std::fs::remove_dir_all(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        })
+    }
+}
+
+/// Runs `change` on a folder a process has just let go of, again until
+/// `deadline` while it is refused: Windows releases an ended process's
+/// working folder, and the handles it closed, some time after.
+pub(crate) fn until_released(
+    deadline: std::time::Instant,
+    mut change: impl FnMut() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    loop {
+        match change() {
+            Err(error)
+                if error.kind() != std::io::ErrorKind::NotFound
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
             }
+            result => return result,
         }
     }
 }
