@@ -10,10 +10,13 @@ use screencapturekit::{
         output_type::SCStreamOutputType, SCStream,
     },
 };
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc::{sync_channel, Receiver, SyncSender},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{sync_channel, Receiver, SyncSender},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
 use vnilink::audio::{AudioDevice, AudioKind};
 use vnilink_audio::{AudioEncoder, AudioPacket, Format, FRAME_SAMPLES};
@@ -55,25 +58,20 @@ pub fn system_audio_devices() -> Result<Vec<AudioDevice>, vnilink::Error> {
 }
 struct Handler {
     sender: SyncSender<CMSampleBuffer>,
-    failed: Arc<AtomicBool>,
+    dropped: Arc<AtomicU64>,
 }
 impl SCStreamOutputTrait for Handler {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, kind: SCStreamOutputType) {
-        if kind != SCStreamOutputType::Audio || self.failed.load(Ordering::Acquire) {
+        if kind != SCStreamOutputType::Audio {
             return;
         }
         // Bound retained native memory before queueing. At most two 50 ms
         // stereo f32 samples remain retained. No PCM conversion or Opus here.
-        if sample.num_samples() <= 0 || sample.num_samples() > 2400 {
-            self.failed.store(true, Ordering::Release);
-            return;
-        }
-        let Some(format) = sample.format_description() else {
-            self.failed.store(true, Ordering::Release);
-            return;
-        };
-        if !valid_format(&format) || self.sender.try_send(sample).is_err() {
-            self.failed.store(true, Ordering::Release);
+        // A buffer that does not fit is lost, not fatal: the encoder thread
+        // was late, or the system handed over an empty or oversized buffer.
+        let fits = (1..=2400).contains(&sample.num_samples());
+        if !fits || self.sender.try_send(sample).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -87,10 +85,67 @@ fn valid_format(format: &apple_cf::cm::CMFormatDescription) -> bool {
         && matches!(format.audio_bytes_per_frame(), Some(4 | 8))
 }
 
-pub struct MacSystemAudio {
+/// Restarts allowed within [`RESTART_WINDOW`] after the system stops the stream.
+const MAX_RESTARTS: u32 = 3;
+const RESTART_WINDOW: Duration = Duration::from_secs(60);
+
+/// One running ScreenCaptureKit stream and where its buffers arrive.
+struct Running {
     stream: SCStream,
     receiver: Receiver<CMSampleBuffer>,
-    failed: Arc<AtomicBool>,
+    stopped: Arc<AtomicBool>,
+}
+impl Running {
+    fn start(
+        filter: &SCContentFilter,
+        config: &SCStreamConfiguration,
+        dropped: &Arc<AtomicU64>,
+    ) -> Result<Self, vnilink::Error> {
+        let (sender, receiver) = sync_channel(2);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let error = stopped.clone();
+        let delegate = StreamCallbacks::new().on_error(move |_| {
+            error.store(true, Ordering::Release);
+        });
+        let mut stream = SCStream::new_with_delegate(filter, config, delegate)
+            .map_err(|_| vnilink::Error::Unsupported("system audio stream"))?;
+        stream
+            .add_output_handler(
+                Handler {
+                    sender,
+                    dropped: dropped.clone(),
+                },
+                SCStreamOutputType::Audio,
+            )
+            .map_err(|_| vnilink::Error::Unsupported("system audio handler"))?;
+        stream
+            .start_capture()
+            .map_err(|_| vnilink::Error::Unsupported("system audio capture"))?;
+        Ok(Self {
+            stream,
+            receiver,
+            stopped,
+        })
+    }
+}
+impl Drop for Running {
+    fn drop(&mut self) {
+        vnilink::ignored!(
+            vnilink::trace::AUDIO,
+            "a stream that cannot stop ends with its capture",
+            self.stream.stop_capture()
+        );
+    }
+}
+
+/// The Mac's system sound, captured through ScreenCaptureKit. A stream the
+/// system stops is started again a few times before the capture ends.
+pub struct MacSystemAudio {
+    running: Option<Running>,
+    filter: SCContentFilter,
+    config: SCStreamConfiguration,
+    dropped: Arc<AtomicU64>,
+    restarts: Vec<Instant>,
     encoder: AudioEncoder,
     format: Format,
     pending: Vec<f32>,
@@ -119,60 +174,82 @@ impl MacSystemAudio {
             .with_excluding_windows(&[])
             .build()
             .map_err(|_| vnilink::Error::Unsupported("system audio filter"))?;
-        let config = configuration(format);
-        let (sender, receiver) = sync_channel(2);
-        let failed = Arc::new(AtomicBool::new(false));
-        let error = failed.clone();
-        let delegate = StreamCallbacks::new().on_error(move |_| {
-            error.store(true, Ordering::Release);
-        });
-        let mut stream = SCStream::new_with_delegate(&filter, &config, delegate)
-            .map_err(|_| vnilink::Error::Unsupported("system audio stream"))?;
-        stream
-            .add_output_handler(
-                Handler {
-                    sender,
-                    failed: failed.clone(),
-                },
-                SCStreamOutputType::Audio,
-            )
-            .map_err(|_| vnilink::Error::Unsupported("system audio handler"))?;
-        let capture = Self {
-            stream,
-            receiver,
-            failed,
+        let mut capture = Self {
+            running: None,
+            filter,
+            config: configuration(format),
+            dropped: Arc::new(AtomicU64::new(0)),
+            restarts: Vec::new(),
             encoder: AudioEncoder::new(format, false)
                 .map_err(|_| vnilink::Error::Unsupported("audio codec"))?,
             format,
             pending: Vec::with_capacity(6720),
         };
         startup.check()?;
-        capture
-            .stream
-            .start_capture()
-            .map_err(|_| vnilink::Error::Unsupported("system audio capture"))?;
+        capture.running = Some(Running::start(
+            &capture.filter,
+            &capture.config,
+            &capture.dropped,
+        )?);
         startup.check()?; // Drop owns stop even when OS startup finishes late.
         Ok(capture)
     }
-    pub fn next_packet(&mut self) -> Result<Option<AudioPacket>, vnilink::Error> {
-        if self.failed.load(Ordering::Acquire) {
+    /// Buffers lost so far because they did not fit the queue.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+    /// Starts the stream again after the system stopped it, unless it has
+    /// already been started again too often within the last minute.
+    fn restart(&mut self) -> Result<(), vnilink::Error> {
+        self.running = None;
+        self.pending.clear();
+        let now = Instant::now();
+        self.restarts
+            .retain(|at| now.duration_since(*at) < RESTART_WINDOW);
+        if self.restarts.len() >= MAX_RESTARTS as usize {
+            tracing::warn!(
+                target: vnilink::trace::AUDIO,
+                restarts = self.restarts.len(),
+                "system audio capture ended: the system kept stopping it"
+            );
             return Err(vnilink::Error::Unsupported("system audio capture ended"));
+        }
+        self.restarts.push(now);
+        tracing::warn!(
+            target: vnilink::trace::AUDIO,
+            restart = self.restarts.len(),
+            "the system stopped audio capture; starting it again"
+        );
+        self.running = Some(Running::start(&self.filter, &self.config, &self.dropped)?);
+        Ok(())
+    }
+    pub fn next_packet(&mut self) -> Result<Option<AudioPacket>, vnilink::Error> {
+        let stopped = self
+            .running
+            .as_ref()
+            .is_none_or(|running| running.stopped.load(Ordering::Acquire));
+        if stopped {
+            self.restart()?;
         }
         let required = FRAME_SAMPLES * self.format.channels();
         if self.pending.len() < required {
-            match self.receiver.try_recv() {
+            let Some(running) = &self.running else {
+                return Ok(None);
+            };
+            match running.receiver.try_recv() {
                 Ok(sample) => {
                     let description = sample
                         .format_description()
                         .ok_or(vnilink::Error::Malformed)?;
                     if !valid_format(&description) {
+                        tracing::warn!(
+                            target: vnilink::trace::AUDIO,
+                            "system audio capture ended: the system sent an unexpected format"
+                        );
                         return Err(vnilink::Error::Malformed);
                     }
                     let count = usize::try_from(sample.num_samples())
                         .map_err(|_| vnilink::Error::Malformed)?;
-                    if count == 0 || count > 2400 {
-                        return Err(vnilink::Error::Malformed);
-                    }
                     let channels = description
                         .audio_channel_count()
                         .ok_or(vnilink::Error::Malformed)?
@@ -184,16 +261,25 @@ impl MacSystemAudio {
                         .iter()
                         .map(|b| (b.number_channels as usize, b.data()))
                         .collect();
-                    append_pcm(
+                    if append_pcm(
                         &planes,
                         count,
                         channels,
                         self.format.channels(),
                         &mut self.pending,
-                    )?;
+                    )
+                    .is_err()
+                    {
+                        // One buffer in a layout this cannot read is lost, as
+                        // a late one is; the next can still be read.
+                        self.dropped.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(None),
-                Err(_) => return Err(vnilink::Error::Unsupported("system audio capture ended")),
+                Err(_) => {
+                    running.stopped.store(true, Ordering::Release);
+                    return Ok(None);
+                }
             }
         }
         if self.pending.len() < required {
@@ -209,12 +295,14 @@ impl MacSystemAudio {
 }
 impl Drop for MacSystemAudio {
     fn drop(&mut self) {
-        self.failed.store(true, Ordering::Release);
-        vnilink::ignored!(
-            vnilink::trace::AUDIO,
-            "a stream that cannot stop ends with its capture",
-            self.stream.stop_capture()
-        );
+        let dropped = self.dropped();
+        if dropped > 0 {
+            tracing::info!(
+                target: vnilink::trace::AUDIO,
+                dropped,
+                "system audio capture lost buffers"
+            );
+        }
     }
 }
 fn configuration(format: Format) -> SCStreamConfiguration {
