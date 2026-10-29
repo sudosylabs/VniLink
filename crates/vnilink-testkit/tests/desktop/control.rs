@@ -133,12 +133,15 @@ fn keyboard_modes_and_shortcuts_belong_to_each_desktop_and_release_lifts_held_ke
     );
     trace.assert_unrecorded("the text typed", &["@"]);
     trace.wait_for_records("service phase", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service", "input"]));
+    "#]],
+        || trace.story(&["service", "input"]),
+    );
     Ok(())
 }
 
@@ -211,14 +214,17 @@ fn pointer_settings_belong_to_one_desktop_and_a_swapped_drag_releases_the_button
     );
     fresh.close();
     trace.wait_for_records("service phase", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service", "input"]));
+    "#]],
+        || trace.story(&["service", "input"]),
+    );
     Ok(())
 }
 
@@ -347,7 +353,8 @@ fn handing_control_over_releases_held_keys_and_keeps_every_viewer() -> TestResul
     // The race below has a winner of its own each run: the story ends here.
     trace.wait_for_records("control yielded", 1);
     trace.wait_for_records("control changed", 3);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         first:
           input: control changed epoch=2 service=1 state=Viewing
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
@@ -358,7 +365,9 @@ fn handing_control_over_releases_held_keys_and_keeps_every_viewer() -> TestResul
         second:
           input: control changed epoch=1 service=1 state=Controlling
           input: control changed epoch=1 service=1 state=Viewing
-    "#]].assert_eq(&trace.story(&["service", "input"]));
+    "#]],
+        || trace.story(&["service", "input"]),
+    );
 
     // Both remaining viewers ask for the free control at once.
     std::thread::scope(|scope| {
@@ -480,7 +489,8 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
     // Withdrawing Desktop below may or may not overtake the viewer's last
     // word on control: the story ends here.
     trace.wait_for_records("control changed", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           input: control changed epoch=1 service=1 state=Controlling
           input: control changed epoch=2 service=1 state=Viewing
@@ -488,8 +498,9 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
           input: control refused: the peer may not control this computer service=1
           input: input refused kind=key down reason=the peer may not control this computer service=1
           input: control asked for epoch=0 service=1 state=Controlling
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
 
     let video = desktop.subscribe_video()?;
     host.publish_desktop_video(remote.id, remote.generation, keyframe(1, vec![7]))?;

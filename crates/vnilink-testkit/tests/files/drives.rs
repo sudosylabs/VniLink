@@ -129,7 +129,8 @@ fn a_receiving_drive_replaced_mid_download_interrupts_without_writing() -> TestR
     // The second file is fetched beside the first, so it has either
     // arrived or is cancelled when the drive is found replaced: what its
     // fetches record differs, the jobs' story does not.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
@@ -137,8 +138,9 @@ fn a_receiving_drive_replaced_mid_download_interrupts_without_writing() -> TestR
         host:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=1024 files_done=2 from=serving job=1 sender=true to=complete
-    "#]]
-    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
+    "#]],
+        || trace.tell(&["files"]).only(&["job state"]).to_string(),
+    );
     Ok(())
 }
 
@@ -212,7 +214,8 @@ fn a_replace_choice_applies_only_on_the_drive_it_was_made_for() -> TestResult {
         valuable,
         "the other volume's file is untouched"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
@@ -224,7 +227,9 @@ fn a_replace_choice_applies_only_on_the_drive_it_was_made_for() -> TestResult {
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
           files: job state done_bytes=512 files_done=1 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -281,7 +286,8 @@ fn a_saved_replace_choice_refuses_another_volume_at_its_drive() -> TestResult {
         b"original",
         "the original drive's file is untouched"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
@@ -292,8 +298,9 @@ fn a_saved_replace_choice_refuses_another_volume_at_its_drive() -> TestResult {
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state from=interrupted job=1 sender=true to=serving
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -377,7 +384,8 @@ fn a_sender_restarted_onto_another_volume_fails_the_resume_and_says_why() -> Tes
     // The second file is fetched beside the first, so whether it arrived
     // before the host shut down differs between runs; the jobs' story does
     // not.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
@@ -385,8 +393,9 @@ fn a_sender_restarted_onto_another_volume_fails_the_resume_and_says_why() -> Tes
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=true to=failed
-    "#]]
-    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
+    "#]],
+        || trace.tell(&["files"]).only(&["job state"]).to_string(),
+    );
     Ok(())
 }
 
@@ -454,7 +463,8 @@ fn a_sending_drive_replaced_mid_upload_interrupts_and_resumes_once_back() -> Tes
         two,
         "the second file lands with the original bytes"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
@@ -466,7 +476,9 @@ fn a_sending_drive_replaced_mid_upload_interrupts_and_resumes_once_back() -> Tes
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -527,7 +539,8 @@ fn a_source_opened_before_its_drive_changed_serves_its_own_bytes() -> TestResult
         "the job completes on both sides"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
@@ -537,6 +550,8 @@ fn a_source_opened_before_its_drive_changed_serves_its_own_bytes() -> TestResult
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

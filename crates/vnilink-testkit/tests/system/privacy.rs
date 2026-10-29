@@ -73,14 +73,17 @@ fn privacy_is_one_controller_s_until_its_service_closes() -> TestResult {
         (!fake.calls().display.restricted).then_some(())
     });
     trace.wait_for_records("privacy restored", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy refused connection=2 display_private=true input_blocked=false why=another viewer holds privacy
           system: privacy restored connection=1 display=true input=true
           system: privacy applied connection=2 display_ok=true display_private=true input_blocked=false input_ok=true
           system: privacy restored connection=2 display=true input=false
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -110,11 +113,14 @@ fn revoke_restores_privacy_and_fences_late_requests() -> TestResult {
         "a withdrawn service cannot lock"
     );
     trace.wait_for_records("privacy restored", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=false input_blocked=true input_ok=true
           system: privacy restored connection=1 display=false input=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -167,11 +173,14 @@ fn narrowing_the_policy_gives_privacy_back_at_once() -> TestResult {
         !fake.calls().display.restricted,
         "a narrowed policy keeps no screen hidden"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -262,12 +271,15 @@ fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() -> 
         SessionPhase::Active,
         "the sibling's connection survives the narrowing"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
           system: privacy refused connection=1 display_private=true input_blocked=false why=the host's policy does not allow privacy
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -307,12 +319,14 @@ fn local_privacy_release_is_observed_and_reenable_reapplies_native_restrictions(
         host.system_privacy()?.input_blocked,
         "enabling again blocks input again"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
-    "#]]
-    .assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     system.close();
     Ok(())
 }
@@ -355,10 +369,13 @@ fn input_only_enable_skips_unsupported_display_facility() -> TestResult {
         vec![true, false],
         "input is restored exactly once"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=false input_blocked=true input_ok=true
           system: privacy applied connection=1 display_ok=true display_private=false input_blocked=false input_ok=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }

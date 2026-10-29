@@ -76,7 +76,8 @@ fn a_paired_computer_is_connected_without_opening_anything() -> TestResult {
     let first = controller.begin_connect_services(&pair.host.endpoint())?;
     let again = controller.begin_connect_services(&pair.host.endpoint())?;
     assert_eq!(first.id, again.id, "asking again reuses the link");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           relay: endpoint bound listen=Loopback relay=false
           relay: presence presence=Connecting
@@ -84,8 +85,9 @@ fn a_paired_computer_is_connected_without_opening_anything() -> TestResult {
           relay: presence presence=Connected
         host:
           relay: endpoint bound listen=Loopback relay=false
-    "#]]
-    .assert_eq(&trace.story(&["relay"]));
+    "#]],
+        || trace.story(&["relay"]),
+    );
     Ok(())
 }
 
@@ -107,7 +109,8 @@ fn a_host_that_stops_accepting_shows_as_such_and_comes_back() -> TestResult {
     );
     host.start_hosting()?;
     wait_presence(controller, &pair.host, DevicePresence::Connected);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           relay: endpoint bound listen=Loopback relay=false
           relay: presence presence=Connecting
@@ -121,8 +124,9 @@ fn a_host_that_stops_accepting_shows_as_such_and_comes_back() -> TestResult {
           relay: presence presence=Connected
         host:
           relay: endpoint bound listen=Loopback relay=false
-    "#]]
-    .assert_eq(&trace.story(&["relay"]));
+    "#]],
+        || trace.story(&["relay"]),
+    );
     Ok(())
 }
 
@@ -205,7 +209,8 @@ fn unpairing_ends_the_link_for_good() -> TestResult {
         ),
         "a forgotten host has no report"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           relay: endpoint bound listen=Loopback relay=false
           relay: presence presence=Connecting
@@ -214,8 +219,9 @@ fn unpairing_ends_the_link_for_good() -> TestResult {
           relay: a link to a computer no longer paired ended
         host:
           relay: endpoint bound listen=Loopback relay=false
-    "#]]
-    .assert_eq(&trace.story(&["relay"]));
+    "#]],
+        || trace.story(&["relay"]),
+    );
     Ok(())
 }
 

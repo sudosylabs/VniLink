@@ -384,3 +384,21 @@ impl Drop for Traced {
         eprintln!("---");
     }
 }
+
+/// Asserts the story `tell` gives is `expected`, once it is whole: the
+/// engines record on threads of their own, so what a test waited for can
+/// be told before the records after it are. It asks again until the story
+/// has as many lines as `expected`, for at most [`crate::DEFAULT_WAIT`];
+/// a story that differs is then shown as it stands.
+#[track_caller]
+pub fn assert_story(expected: expect_test::Expect, mut tell: impl FnMut() -> String) {
+    let lines = |text: &str| text.lines().filter(|line| !line.trim().is_empty()).count();
+    let wanted = lines(expected.data());
+    let started = std::time::Instant::now();
+    let mut story = tell();
+    while lines(&story) < wanted && started.elapsed() < crate::DEFAULT_WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        story = tell();
+    }
+    expected.assert_eq(&story);
+}

@@ -251,7 +251,8 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
         SessionPhase::Active,
         "the connection outlives the closed owner"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=3 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=4 to=closed: OwnerClose
@@ -259,7 +260,9 @@ fn one_connection_streams_two_selected_monitors_independently() -> TestResult {
         host:
           warn input: input failed reason=the display is not in the current topology session=1
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service", "input"]));
+    "#]],
+        || trace.story(&["service", "input"]),
+    );
     Ok(())
 }
 
@@ -476,14 +479,16 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
         vec![2],
         "a refused selection leaves the second owner's own"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           warn input: input refused kind=pointer reason=the pointer uses an outdated display topology service=1
           warn input: input refused kind=pointer reason=the display is not in the current topology service=1
           warn input: input refused kind=pointer reason=no display is selected service=1
           input: input refused kind=pointer reason=another viewer controls this computer service=2
           warn input: input failed reason=the display is not in the current topology session=2
-    "#]]
-    .assert_eq(&trace.story(&["topology", "input"]));
+    "#]],
+        || trace.story(&["topology", "input"]),
+    );
     Ok(())
 }

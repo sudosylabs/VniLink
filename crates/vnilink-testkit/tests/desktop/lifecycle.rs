@@ -155,7 +155,8 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
     );
     trace.wait_for_records("service phase", 4);
     trace.wait_for_records("desktop ended", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
@@ -165,7 +166,9 @@ fn a_desktop_reopens_on_its_connection_and_releases_held_input_each_time() -> Te
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: Revoked
           session: desktop ended hosted=true reason=revoked service=2
-    "#]].assert_eq(&trace.story(&["service", "session"]));
+    "#]],
+        || trace.story(&["service", "session"]),
+    );
     Ok(())
 }
 
@@ -227,12 +230,15 @@ fn closing_one_computers_desktop_keeps_another_computer_streaming() -> TestResul
         );
     }
     trace.wait_for_records("service phase", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }
 
@@ -365,7 +371,8 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
     }
     host.wait_released(Some(ServiceKind::Desktop));
     trace.wait_for_records("service phase", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         first:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:
@@ -373,6 +380,8 @@ fn closing_a_desktop_by_its_address_ends_only_that_owner() -> TestResult {
           service: service phase from=active generation=2 kind=Desktop service=2 to=closed: PeerClose
         second:
           service: service phase from=active generation=2 kind=Desktop service=1 to=closed: OwnerClose
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }

@@ -81,14 +81,16 @@ fn a_used_invitation_cannot_be_replayed_after_restart() -> TestResult {
         ),
         "a used invitation stays used across a restart"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
         host:
           pairing: invitation accepted
           pairing: invitation accepted refused=invitation replayed
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 

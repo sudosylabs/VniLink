@@ -150,12 +150,15 @@ fn closing_a_service_ends_its_own_work_and_leaves_its_siblings() -> TestResult {
         files_work.is_cancelled(),
         "disconnect must cancel immediately, without polling"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=3 to=closed: ParentLoss
           service: service phase from=active generation=1 kind=Files service=2 to=closed: ParentLoss
-    "#]].assert_eq(&trace.concurrent_story(&["service"]));
+    "#]],
+        || trace.concurrent_story(&["service"]),
+    );
     Ok(())
 }
 
@@ -339,7 +342,8 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
     // The host releases each service it served; the Desktop's own record
     // is its phase.
     trace.wait_for_records("service released", 3);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Files service=2 to=closed: OwnerClose
@@ -357,7 +361,9 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
           hosting: service released service=3
           hosting: service closed kind=Camera phase=closed: PeerClose service=4
           hosting: service released service=4
-    "#]].assert_eq(&trace.story(&["service", "hosting"]));
+    "#]],
+        || trace.story(&["service", "hosting"]),
+    );
     Ok(())
 }
 
@@ -417,15 +423,17 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
         "the refused Desktop leaves the connection"
     );
     assert!(!files.is_cancelled(), "the refused Desktop leaves Files");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
         host:
           hosting: service opened connection=1 kind=Some(Files) service=1
           hosting: service opened connection=1 kind=Some(Terminal) service=2
           hosting: service opened connection=1 kind=Some(Camera) service=3
-    "#]]
-    .assert_eq(&trace.story(&["service", "hosting", "session"]));
+    "#]],
+        || trace.story(&["service", "hosting", "session"]),
+    );
     Ok(())
 }
 
@@ -502,7 +510,8 @@ fn files_and_terminal_services_never_request_capture() -> TestResult {
         "no camera was opened"
     );
     terminal.close();
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           service: service phase from=active generation=1 kind=Files service=1 to=closed: OwnerClose
@@ -516,8 +525,9 @@ fn files_and_terminal_services_never_request_capture() -> TestResult {
           session: the session's control stream ended error=network session=1
           session: session phase from=active generation=1 role=Host session=1 to=closed
           hosting: service opened connection=2 kind=Some(Terminal) service=2
-    "#]]
-    .assert_eq(&trace.story(&["service", "hosting", "session"]));
+    "#]],
+        || trace.story(&["service", "hosting", "session"]),
+    );
     Ok(())
 }
 
@@ -574,10 +584,12 @@ fn concurrent_services_connects_share_one_connection_and_keep_its_services() -> 
         1,
         "the host serves one connection"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
-    "#]]
-    .assert_eq(&trace.story(&["service", "hosting", "session"]));
+    "#]],
+        || trace.story(&["service", "hosting", "session"]),
+    );
     Ok(())
 }

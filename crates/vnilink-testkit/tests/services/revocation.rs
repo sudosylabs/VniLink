@@ -157,7 +157,8 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
         !screen_work.is_cancelled(),
         "withdrawing Files leaves the Desktop"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Files service=2 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Files service=3 to=closed: OwnerClose
@@ -174,8 +175,9 @@ fn a_files_pipe_carries_real_operations_and_closes_without_its_siblings() -> Tes
           hosting: service opened connection=1 kind=Some(Files) service=3
           service: service phase from=active generation=1 kind=Files service=3 to=closed: Revoked
           hosting: service released service=3
-    "#]]
-    .assert_eq(&trace.story(&["service", "hosting"]));
+    "#]],
+        || trace.story(&["service", "hosting"]),
+    );
     Ok(())
 }
 
@@ -255,7 +257,8 @@ fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothin
         );
     }
     // The two viewers' pipes end and open side by side.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Files service=2 to=closed: PeerClose
         host:
@@ -269,7 +272,8 @@ fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothin
           hosting: service opened connection=2 kind=Some(Files) service=6
         viewer:
           service: service phase from=active generation=2 kind=Files service=2 to=closed: PeerClose
-    "#]]
-    .assert_eq(&trace.concurrent_story(&["service", "hosting"]));
+    "#]],
+        || trace.concurrent_story(&["service", "hosting"]),
+    );
     Ok(())
 }

@@ -29,13 +29,15 @@ fn a_connection_without_a_direct_route_goes_through_the_relay() {
         "a direct path: {paths:?}"
     );
     assert!(relay.carried() > 0, "the relay carried nothing");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           relay: endpoint bound listen=RelayOnly relay=true
         host:
           relay: endpoint bound listen=RelayOnly relay=true
-    "#]]
-    .assert_eq(&trace.story(&["relay"]));
+    "#]],
+        || trace.story(&["relay"]),
+    );
 }
 
 /// Files cross the relay exactly.

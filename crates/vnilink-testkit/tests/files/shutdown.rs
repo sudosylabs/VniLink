@@ -75,7 +75,8 @@ fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResul
         SessionPhase::Closed,
         "a host that shut down ends the connection; it is not dialed again"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
@@ -85,8 +86,9 @@ fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResul
           files: file served ended=sent from=0 sent=512 size=512
           files: file served ended=sent from=0 sent=512 size=512
           files: job state from=serving job=1 sender=true to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -125,7 +127,8 @@ fn a_controller_that_shuts_down_mid_upload_interrupts_the_receiver_and_says_why(
         took < NOTICED_WITHIN,
         "the host learns at once that its controller shut down, not after {took:?}"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
@@ -133,7 +136,8 @@ fn a_controller_that_shuts_down_mid_upload_interrupts_the_receiver_and_says_why(
         host:
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state from=transferring job=1 sender=false to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

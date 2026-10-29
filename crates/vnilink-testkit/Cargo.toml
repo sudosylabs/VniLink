@@ -23,10 +23,8 @@ vnilink = { path = "../vnilink", features = ["test-probes"] }
 vnilink-audio = { path = "../vnilink-audio" }
 vnilink-log = { path = "../vnilink-log" }
 vnilink-media = { path = "../vnilink-media" }
-
-# Suites state the story a service recorded inline (`Traced::story`);
+# Suites state the story a service recorded inline ([`assert_story`]);
 # `UPDATE_EXPECT=1` rewrites a changed one for review.
-[dev-dependencies]
 expect-test = "=1.5.1"
 
 # The agent opens a scenario's files without following links and ends a

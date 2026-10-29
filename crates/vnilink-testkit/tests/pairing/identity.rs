@@ -223,10 +223,13 @@ fn an_installation_cannot_pair_with_itself() -> TestResult {
         engine.core.snapshot()?.devices.is_empty(),
         "and remembers nobody"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: invitation accepted reason=an installation cannot pair with itself refused=invalid invitation
-    "#]].assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }

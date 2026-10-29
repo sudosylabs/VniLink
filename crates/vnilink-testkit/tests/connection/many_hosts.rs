@@ -265,14 +265,16 @@ fn a_failed_connection_has_its_own_handle_and_can_be_forgotten() -> TestResult {
         sa,
         "the retry leaves the live session"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           session: session failed failure=not hosting session=2
           session: session phase from=connecting generation=0 role=Controller session=2 to=failed
           session: session phase from=connecting generation=2 role=Controller session=3 to=active
-    "#]]
-    .assert_eq(&trace.engine_story("controller", &["session"]));
+    "#]],
+        || trace.engine_story("controller", &["session"]),
+    );
     Ok(())
 }
 

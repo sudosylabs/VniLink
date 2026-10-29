@@ -101,7 +101,8 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
         Error::Unauthorized.to_string(),
         "a revoked controller is refused"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation accepted
           pairing: invitation accepted refused=invitation replayed
@@ -121,8 +122,9 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
           pairing: unpair requested
           session: session phase from=active generation=1 role=Controller session=2 to=stopping
           session: session phase from=stopping generation=1 role=Controller session=2 to=closed
-    "#]]
-    .assert_eq(&trace.story(&["session", "hosting", "pairing"]));
+    "#]],
+        || trace.story(&["session", "hosting", "pairing"]),
+    );
     Ok(())
 }
 
@@ -295,15 +297,17 @@ fn connect_requires_pairing_and_hosting() -> TestResult {
         session.id,
         "connecting again reuses the live connection"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session failed failure=not hosting session=1
           session: session phase from=connecting generation=0 role=Controller session=1 to=failed
           session: session failed failure=not hosting session=2
           session: session phase from=connecting generation=0 role=Controller session=2 to=failed
           session: session phase from=connecting generation=1 role=Controller session=3 to=active
-    "#]]
-    .assert_eq(&trace.story(&["session", "hosting"]));
+    "#]],
+        || trace.story(&["session", "hosting"]),
+    );
     Ok(())
 }
 
@@ -505,15 +509,17 @@ fn admission_publishes_the_session_lifecycle() -> TestResult {
     );
     host.wait_closed(SessionRole::Host);
     controller.wait_closed(SessionRole::Controller);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           session: session phase from=active generation=1 role=Controller session=1 to=closed
         host:
           session: session phase from=active generation=1 role=Host session=1 to=stopping
           session: session phase from=stopping generation=1 role=Host session=1 to=closed
-    "#]]
-    .assert_eq(&trace.story(&["session"]));
+    "#]],
+        || trace.story(&["session"]),
+    );
     Ok(())
 }
 

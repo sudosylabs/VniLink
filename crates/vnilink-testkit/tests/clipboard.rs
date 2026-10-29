@@ -107,7 +107,8 @@ fn text_crosses_both_ways_and_is_never_recorded() {
         Some("from the host")
     );
 
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           clipboard: clipboard sent bytes=28 service=1
           clipboard: clipboard received bytes=13 hosted=false service=1
@@ -115,8 +116,9 @@ fn text_crosses_both_ways_and_is_never_recorded() {
           clipboard: clipboard adapter installed
           clipboard: clipboard received bytes=28 hosted=true service=1
           clipboard: clipboard sent bytes=13 service=1
-    "#]]
-    .assert_eq(&trace.story(&["clipboard"]));
+    "#]],
+        || trace.story(&["clipboard"]),
+    );
     trace.assert_unrecorded("copied content", &["horse", "from the host"]);
 }
 
@@ -147,7 +149,8 @@ fn without_the_grant_nothing_crosses_and_the_desktop_lives() {
         texts.lock().unwrap().last().map(String::as_str),
         Some("granted")
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           clipboard: clipboard sent bytes=6 ended=clipboard denied service=1
           clipboard: clipboard sent bytes=7 service=1
@@ -155,8 +158,9 @@ fn without_the_grant_nothing_crosses_and_the_desktop_lives() {
           clipboard: clipboard adapter installed
           clipboard: clipboard received bytes=6 hosted=true refused=clipboard denied service=1
           clipboard: clipboard received bytes=7 hosted=true service=1
-    "#]]
-    .assert_eq(&trace.story(&["clipboard"]));
+    "#]],
+        || trace.story(&["clipboard"]),
+    );
 }
 
 /// The largest text crosses whole; one byte more is refused before it is

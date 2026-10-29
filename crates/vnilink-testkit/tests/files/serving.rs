@@ -47,13 +47,16 @@ fn a_source_in_transfer_cannot_be_renamed_until_its_job_ends() -> TestResult {
         "a cancelled job's source can be renamed again"
     );
     trace.wait_for_records("job state", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=cancelled
         host:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=cancelled
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -97,14 +100,16 @@ fn serving_refuses_a_parent_swapped_for_a_link() -> TestResult {
         files_with_bytes(&pair.host.folder(), b"secret").is_empty(),
         "the other folder's bytes reached the receiver"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=failed
         host:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=failed
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -140,14 +145,16 @@ fn serving_refuses_a_source_replaced_after_its_offer() -> TestResult {
         files_with_bytes(&pair.host.folder(), &decoy).is_empty(),
         "replacement bytes reached the receiver"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=failed
         host:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=failed
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -197,7 +204,8 @@ fn jobs_sharing_content_keep_serving_it_when_one_is_cancelled() -> TestResult {
         "the shared bytes land for the job still running"
     );
     trace.wait_for_records("job state", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=preparing job=2 sender=true to=serving
@@ -208,7 +216,9 @@ fn jobs_sharing_content_keep_serving_it_when_one_is_cancelled() -> TestResult {
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=cancelled
           files: file received outcome=received resumed_at=0 size=1024 took=1024
           files: job state done_bytes=1024 files_done=1 from=transferring job=2 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -278,7 +288,8 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
         "releasing a partial keeps what landed before"
     );
     trace.wait_for_records("job state", 3);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=65536 size=65536
@@ -289,7 +300,9 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
           files: file received outcome=received resumed_at=0 size=65536 took=65536
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
           files: job state done_bytes=0 files_done=0 from=transferring job=2 sender=false to=cancelled
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -380,7 +393,8 @@ fn senders_keep_no_copy_of_their_sources() -> TestResult {
         "the controller landed the downloaded bytes exactly once"
     );
     trace.wait_for_records("job state", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=2097152 size=2097152
@@ -393,7 +407,9 @@ fn senders_keep_no_copy_of_their_sources() -> TestResult {
           files: job state from=preparing job=2 sender=true to=serving
           files: file served ended=sent from=0 sent=2097152 size=2097152
           files: job state done_bytes=2097152 files_done=1 from=serving job=2 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -510,13 +526,16 @@ fn a_late_sender_is_retried_without_a_resume() -> TestResult {
         "the file lands exactly once"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=65536 size=65536
         host:
           files: file received outcome=received resumed_at=0 size=65536 took=65536
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

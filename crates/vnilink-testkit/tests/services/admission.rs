@@ -81,12 +81,15 @@ fn a_waiting_service_closes_without_withdrawing_the_request() -> TestResult {
             .is_cancelled(),
         "its lease is live"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=waiting generation=0 kind=Desktop service=1 to=closed: OwnerClose
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           service: service phase from=waiting generation=1 kind=Files service=2 to=active
-    "#]].assert_eq(&trace.story(&["service", "session"]));
+    "#]],
+        || trace.story(&["service", "session"]),
+    );
     Ok(())
 }
 
@@ -126,13 +129,15 @@ fn a_rejected_connection_fails_its_attached_services() -> TestResult {
         controller.controller_services()?.is_empty(),
         "the failed service is forgotten"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session failed failure=unauthorized session=1
           session: session phase from=connecting generation=0 role=Controller session=1 to=failed
           service: service phase from=waiting generation=0 kind=Desktop service=1 to=failed
-    "#]]
-    .assert_eq(&trace.story(&["service", "session"]));
+    "#]],
+        || trace.story(&["service", "session"]),
+    );
     Ok(())
 }
 
@@ -219,20 +224,22 @@ fn a_neutral_connection_grants_nothing_until_files_is_shared() -> TestResult {
     // The host names the lost parent on either of two paths, at a moment of
     // its own, and the redial suspends and resumes the controller's services
     // together, in no order.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=suspended
           service: service phase from=active generation=1 kind=Files service=2 to=suspended
           service: service phase from=active generation=3 kind=Files service=2 to=closed: PeerClose
           service: service phase from=suspended generation=3 kind=Desktop service=1 to=active
           service: service phase from=suspended generation=3 kind=Files service=2 to=active
-    "#]]
-    .assert_eq(
-        &trace
-            .tell(&["service"])
-            .of("controller")
-            .concurrent()
-            .to_string(),
+    "#]],
+        || {
+            trace
+                .tell(&["service"])
+                .of("controller")
+                .concurrent()
+                .to_string()
+        },
     );
     Ok(())
 }
@@ -272,7 +279,8 @@ fn a_neutral_connection_needs_the_hosts_consent_and_shares_nothing() -> TestResu
         events.try_recv().is_some(),
         "the host publishes what changed"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation accepted
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
@@ -280,7 +288,8 @@ fn a_neutral_connection_needs_the_hosts_consent_and_shares_nothing() -> TestResu
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
           pairing: control request answered
-    "#]]
-    .assert_eq(&trace.story(&["pairing", "session"]));
+    "#]],
+        || trace.story(&["pairing", "session"]),
+    );
     Ok(())
 }

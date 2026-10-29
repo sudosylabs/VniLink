@@ -99,7 +99,8 @@ fn stills_are_agreed_only_when_the_window_shows_them_and_the_host_sends_them() -
         opened.close();
     }
     trace.wait_for_records("service phase", 8);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
@@ -110,7 +111,9 @@ fn stills_are_agreed_only_when_the_window_shows_them_and_the_host_sends_them() -
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["still", "service"]));
+    "#]],
+        || trace.story(&["still", "service"]),
+    );
     Ok(())
 }
 
@@ -172,14 +175,17 @@ fn an_agreed_still_reaches_the_viewer_outside_the_streams_codec() -> TestResult 
         opened.close();
     }
     trace.wait_for_records("service phase", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["still", "service"]));
+    "#]],
+        || trace.story(&["still", "service"]),
+    );
     Ok(())
 }
 
@@ -197,11 +203,14 @@ fn a_still_is_refused_where_it_was_not_agreed() -> TestResult {
     );
     opened.close();
     trace.wait_for_records("service phase", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["still", "service"]));
+    "#]],
+        || trace.story(&["still", "service"]),
+    );
     Ok(())
 }

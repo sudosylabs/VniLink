@@ -59,15 +59,17 @@ fn the_controller_waits_while_the_host_owner_types_the_digits() -> TestResult {
                 .then_some(())
         },
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: invitation accepted
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=300
           pairing: control request answered
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -121,7 +123,8 @@ fn the_host_rejects_a_control_request_whose_digits_do_not_match() -> TestResult 
         SessionPhase::Active,
         "the right digits approve the controller"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: invitation accepted
@@ -129,8 +132,9 @@ fn the_host_rejects_a_control_request_whose_digits_do_not_match() -> TestResult 
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
           pairing: control request answered refused=pairing check mismatch
           pairing: control request answered
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -163,14 +167,16 @@ fn a_file_without_the_control_switch_does_not_ask_the_host() -> TestResult {
             .any(|event| matches!(event, CoreEvent::ControlRequested { .. })),
         "the host asked for digits with the switch off"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: invitation accepted
         host:
           pairing: pairing file exported allow_control=false direct=1 relays=0 ttl_s=60
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -218,7 +224,8 @@ fn rejecting_the_control_request_leaves_the_file_usable() -> TestResult {
         SessionPhase::Active,
         "the file still approves the controller"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: invitation accepted
@@ -226,8 +233,9 @@ fn rejecting_the_control_request_leaves_the_file_usable() -> TestResult {
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
           pairing: control request rejected
           pairing: control request answered
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -273,15 +281,17 @@ fn approving_control_after_the_window_expires_is_refused() -> TestResult {
         host.core.control_request()?.is_none(),
         "an expired request is gone"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: invitation accepted
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=2
           pairing: control request answered refused=invitation expired
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -306,15 +316,17 @@ fn accepting_a_second_invitation_keeps_authorized_grants() -> TestResult {
     assert!(!kept.grants.control, "no control was granted");
     assert!(kept.grants.clipboard, "the clipboard grant is kept");
     assert!(kept.grants.transfer, "the transfer grant is kept");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation accepted
           pairing: invitation accepted
         host:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: invitation issued direct=1 relays=0 ttl_s=60
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -364,7 +376,8 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
     let policy = host.core.sharing_policy()?;
     assert!(policy.clipboard, "the host still shares the clipboard");
     assert!(!policy.view, "the host still shares no view");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file exported allow_control=false direct=1 relays=0 ttl_s=60
           pairing: pairing file opened bytes=284
@@ -373,7 +386,8 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
           pairing: pairing file opened bytes=296
           pairing: invitation accepted
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }

@@ -49,15 +49,17 @@ fn peers_exchange_display_names_on_connect() -> TestResult {
     }
     controller.disconnect()?;
     wait_closed(controller, SessionRole::Controller, CLOSING);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation accepted
           pairing: invitation issued direct=1 relays=0 ttl_s=60
         host:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: invitation accepted
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -236,7 +238,8 @@ fn pairing_learns_names_before_connect_and_local_names_survive_refresh() -> Test
         ),
         "a forgotten computer takes no nickname"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation accepted
           pairing: invitation issued direct=1 relays=0 ttl_s=60
@@ -246,7 +249,8 @@ fn pairing_learns_names_before_connect_and_local_names_survive_refresh() -> Test
           pairing: invitation accepted
           pairing: invitation accepted
           pairing: unpair requested
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }

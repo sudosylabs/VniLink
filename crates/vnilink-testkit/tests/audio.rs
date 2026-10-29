@@ -49,15 +49,17 @@ fn each_source_arrives_as_sent_and_closes_alone() {
         .publish(sent.clone())
         .unwrap();
     assert_eq!(next(&system), sent);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           audio: audio ended closed_here=true dropped=0 kind=Microphone service=2
         host:
           audio: audio opened channels=2 kind=System service=1 voice=false
           audio: audio opened channels=2 kind=Microphone service=2 voice=false
           audio: audio stream ended ended=viewer closed kind=Microphone service=2
-    "#]]
-    .assert_eq(&trace.story(&["audio"]));
+    "#]],
+        || trace.story(&["audio"]),
+    );
 }
 
 /// The host offers both sounds before it shares either, lists the devices
@@ -147,11 +149,13 @@ fn an_audio_service_opens_its_own_kind_once() -> TestResult {
         "a service opens its sound once"
     );
     trace.wait_for_records("audio opened", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           audio: audio opened channels=2 kind=System service=1 voice=false
-    "#]]
-    .assert_eq(&trace.story(&["audio"]));
+    "#]],
+        || trace.story(&["audio"]),
+    );
     Ok(())
 }
 
@@ -216,7 +220,8 @@ fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
         "closing system sound keeps the connection"
     );
     trace.wait_for_records("audio ended", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           audio: audio ended closed_here=false dropped=0 ended=withdrawn kind=Microphone service=3
           audio: audio ended closed_here=true dropped=0 kind=System service=2
@@ -225,8 +230,9 @@ fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
           audio: audio opened channels=2 kind=Microphone service=2 voice=false
           audio: audio stream ended ended=service closed kind=Microphone service=2
           audio: audio stream ended ended=viewer closed kind=System service=1
-    "#]]
-    .assert_eq(&trace.story(&["audio"]));
+    "#]],
+        || trace.story(&["audio"]),
+    );
     Ok(())
 }
 

@@ -224,10 +224,12 @@ fn a_camera_that_opens_after_its_grant_is_withdrawn_is_closed_unused() -> TestRe
             .is_ok_and(|session| session.phase == vnilink::SessionPhase::Active),
         "a camera that opened late keeps the connection"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           camera: camera stream ended ended=service closed service=1
-    "#]]
-    .assert_eq(&trace.story(&["camera"]));
+    "#]],
+        || trace.story(&["camera"]),
+    );
     Ok(())
 }

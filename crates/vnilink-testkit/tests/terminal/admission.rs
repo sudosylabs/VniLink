@@ -103,13 +103,15 @@ fn revoking_terminal_cancels_a_shell_still_starting() -> TestResult {
         "a cancelled startup leaves its connection open"
     );
     trace.wait_for_records("service released", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           hosting: service opened connection=1 kind=Some(Terminal) service=1
           terminal: terminal stream ended ended=service closed explicit_close=false service=1
           hosting: service released service=1
-    "#]]
-    .assert_eq(&trace.story(&["terminal", "hosting"]));
+    "#]],
+        || trace.story(&["terminal", "hosting"]),
+    );
     Ok(())
 }
 
@@ -253,7 +255,8 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
     );
     trace.wait_for_records("terminal stream ended", 4);
     trace.wait_for_records("terminal pipe ended", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         b:
           terminal: terminal pipe ended closed_here=true error=no session service=1
         controller:
@@ -267,7 +270,8 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=3
           terminal: terminal not opened error=unauthorized resume=false service=4
           terminal: terminal stream ended ended=unauthorized explicit_close=false service=4
-    "#]]
-    .assert_eq(&trace.tell(&["terminal"]).to_string());
+    "#]],
+        || trace.tell(&["terminal"]).to_string(),
+    );
     Ok(())
 }

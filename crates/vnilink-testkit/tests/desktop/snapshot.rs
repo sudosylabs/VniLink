@@ -218,7 +218,7 @@ fn view_allows_a_screenshot_without_control_audio_or_a_desktop_session() -> Test
         matches!(again, Err(Error::Busy)),
         "a second request too soon is refused: {again:?}"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["snapshot"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
     Ok(())
 }
 
@@ -263,7 +263,7 @@ fn disabled_view_stale_identity_and_a_missing_factory_do_not_return_pixels() -> 
         ),
         "a host without a snapshot factory gives no screenshot"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["snapshot"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
     Ok(())
 }
 
@@ -296,7 +296,7 @@ fn a_revoked_view_and_a_bad_image_are_not_delivered() -> TestResult {
         connection.generation,
         "withdrawing the view does not reconnect"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["snapshot"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
     Ok(())
 }
 
@@ -311,7 +311,7 @@ fn an_unacceptable_image_is_reported_unavailable() -> TestResult {
         matches!(answer, Ok(ScreenSnapshot::Unavailable)),
         "an unacceptable image is reported unavailable: {answer:?}"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["snapshot"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
     Ok(())
 }
 
@@ -368,7 +368,7 @@ fn a_fresh_desktop_frame_is_reused_until_the_user_asks_for_a_new_capture() -> Te
         1,
         "the user's screenshot is exactly one capture"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["snapshot"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
     Ok(())
 }
 
@@ -398,7 +398,7 @@ fn a_view_probe_does_not_capture() -> TestResult {
         0,
         "asking whether a screenshot is allowed captures nothing"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["snapshot"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
     Ok(())
 }
 
@@ -427,6 +427,6 @@ fn cancelling_a_running_capture_is_not_a_missing_session() -> TestResult {
         matches!(captured, Ok(ScreenSnapshot::Cancelled)),
         "a cancelled capture answers cancelled: {captured:?}"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["snapshot"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
     Ok(())
 }

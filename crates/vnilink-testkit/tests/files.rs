@@ -70,7 +70,8 @@ fn an_upload_lands_exactly() {
         tree(&pair.controller.folder().join("set"))
     );
     // Each side records its own job, and every file crossed whole.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=0 size=0
@@ -86,7 +87,9 @@ fn an_upload_lands_exactly() {
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=9437191 took=9437191
           files: job state done_bytes=9442823 files_done=5 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.concurrent_story(&["files"]));
+    "#]],
+        || trace.concurrent_story(&["files"]),
+    );
     trace.assert_unrecorded("a file's name", &["read me"]);
 }
 

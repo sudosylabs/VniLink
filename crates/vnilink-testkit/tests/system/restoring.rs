@@ -47,11 +47,14 @@ fn backend_removal_restores_original_privacy_exactly_once() -> TestResult {
     );
     drop(calls);
     trace.wait_for_records("privacy restored", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -92,11 +95,14 @@ fn backend_replacement_restores_original_and_leaves_new_untouched() -> TestResul
     assert_eq!(fresh.input.done(), 0, "the replacement's input is touched");
     drop(fresh);
     trace.wait_for_records("privacy restored", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -161,12 +167,15 @@ fn failed_native_restore_keeps_lease_and_reports_held() -> TestResult {
     );
     drop(calls);
     trace.wait_for_records("privacy restored", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           warn system: privacy not restored: it stays held until a restore works connection=1 display_held=true failure=unsupported input_held=true
           system: privacy restored connection=1 display=true input=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -208,11 +217,14 @@ fn refused_enable_applies_nothing_and_reports_default() -> TestResult {
         state.display_private && state.input_blocked,
         "the next request starts clean"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=false
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -252,11 +264,14 @@ fn stuck_fresh_apply_retains_acknowledged_remainder() -> TestResult {
         !fake.calls().display.restricted,
         "the screen is shown again"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=false
           system: privacy applied connection=1 display_ok=true display_private=false input_blocked=false input_ok=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -292,11 +307,14 @@ fn input_only_owner_close_restores_without_touching_display() -> TestResult {
         "the host reports privacy given back"
     );
     trace.wait_for_records("privacy restored", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=false input_blocked=true input_ok=true
           system: privacy restored connection=1 display=false input=true
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -359,12 +377,15 @@ fn partial_restore_keeps_remainder_and_repeated_narrowing_retries() -> TestResul
         !fake.calls().display.restricted,
         "the screen is shown again"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           warn system: privacy not restored: it stays held until a restore works connection=1 display_held=true failure=unsupported input_held=false
           warn system: privacy not restored: it stays held until a restore works connection=1 display_held=true failure=unsupported input_held=false
           system: privacy restored connection=1 display=true input=false
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }

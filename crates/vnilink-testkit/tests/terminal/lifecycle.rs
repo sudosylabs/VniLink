@@ -98,7 +98,8 @@ fn a_terminal_ends_with_its_shell_and_leaves_its_connection_and_siblings() -> Te
         "an ended terminal takes no input"
     );
     trace.wait_for_records("service released", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           hosting: service refused connection=1 kind=Terminal status=not permitted
           hosting: service opened connection=1 kind=Some(Terminal) service=1
@@ -107,8 +108,9 @@ fn a_terminal_ends_with_its_shell_and_leaves_its_connection_and_siblings() -> Te
           terminal: terminal stream ended ended=shell exited explicit_close=true service=1
           hosting: service closed kind=Terminal phase=closed: OwnerClose service=1
           hosting: service released service=1
-    "#]]
-    .assert_eq(&trace.story(&["terminal", "hosting"]));
+    "#]],
+        || trace.story(&["terminal", "hosting"]),
+    );
     trace.assert_unrecorded("terminal content", &["VNI_READY", "stty", "39 117", "α"]);
     Ok(())
 }
@@ -151,7 +153,8 @@ fn revoking_terminal_or_disabling_its_backend_ends_only_the_terminal() -> TestRe
     );
     trace.wait_for_records("service released", 2);
     trace.wait_for_records("terminal pipe ended", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           terminal: terminal pipe ended closed_here=false error=network service=1
           terminal: terminal pipe ended closed_here=false error=network service=2
@@ -164,8 +167,9 @@ fn revoking_terminal_or_disabling_its_backend_ends_only_the_terminal() -> TestRe
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=2
           terminal: terminal stream ended ended=service closed explicit_close=false service=2
           hosting: service released service=2
-    "#]]
-    .assert_eq(&trace.story(&["terminal", "hosting"]));
+    "#]],
+        || trace.story(&["terminal", "hosting"]),
+    );
     Ok(())
 }
 
@@ -233,7 +237,8 @@ fn changing_the_offered_shell_waits_for_running_shells() -> TestResult {
         "the new shell's arguments arrive exactly: {text}"
     );
     trace.wait_for_records("terminal stream ended", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
           terminal: terminal shell exited code=0 service=1
@@ -241,8 +246,9 @@ fn changing_the_offered_shell_waits_for_running_shells() -> TestResult {
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=2
           terminal: terminal shell exited code=3 service=2
           terminal: terminal stream ended ended=shell exited explicit_close=true service=2
-    "#]]
-    .assert_eq(&trace.story(&["terminal"]));
+    "#]],
+        || trace.story(&["terminal"]),
+    );
     trace.assert_unrecorded("terminal content", &["VNI_ARGS"]);
     Ok(())
 }
@@ -297,14 +303,16 @@ fn closing_a_terminal_does_not_wait_for_unread_output() -> TestResult {
     );
     trace.wait_for_records("terminal stream ended", 1);
     trace.wait_for_records("terminal pipe ended", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           terminal: terminal pipe ended closed_here=true error=no session service=1
         host:
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
-    "#]]
-    .assert_eq(&trace.tell(&["terminal"]).to_string());
+    "#]],
+        || trace.tell(&["terminal"]).to_string(),
+    );
     trace.assert_unrecorded("terminal content", &["VNI_STREAM"]);
     Ok(())
 }
@@ -329,15 +337,17 @@ fn disconnecting_does_not_wait_for_unread_terminal_output() -> TestResult {
     wait_for("the terminal to end on both sides", DEFAULT_WAIT, || {
         (terminal.is_cancelled() && pair.host.hosted(None).is_empty()).then_some(())
     });
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
-    "#]]
-    .assert_eq(
-        &trace
-            .tell(&["terminal"])
-            .only(&["terminal opened"])
-            .to_string(),
+    "#]],
+        || {
+            trace
+                .tell(&["terminal"])
+                .only(&["terminal opened"])
+                .to_string()
+        },
     );
     trace.assert_unrecorded("terminal content", &["VNI_STREAM"]);
     Ok(())
@@ -376,14 +386,17 @@ fn a_shell_that_cannot_start_refuses_the_terminal_and_leaves_the_connection() ->
         "a refused terminal leaves its connection open"
     );
     trace.wait_for_records("service released", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           hosting: service opened connection=1 kind=Some(Terminal) service=1
           terminal: terminal not opened error=unsupported reason=terminal backend startup resume=false service=1
           terminal: terminal stream ended ended=unsupported explicit_close=false service=1
           hosting: service failed kind=Terminal reason=unsupported service=1
           hosting: service released service=1
-    "#]].assert_eq(&trace.story(&["terminal", "hosting"]));
+    "#]],
+        || trace.story(&["terminal", "hosting"]),
+    );
     Ok(())
 }
 
@@ -434,7 +447,8 @@ fn simultaneous_terminals_run_independent_shells() -> TestResult {
     );
     trace.wait_for_records("terminal stream ended", 2);
     trace.wait_for_records("terminal pipe ended", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           terminal: terminal pipe ended closed_here=true error=no session service=1
         host:
@@ -443,8 +457,9 @@ fn simultaneous_terminals_run_independent_shells() -> TestResult {
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
           terminal: terminal shell exited code=0 service=2
           terminal: terminal stream ended ended=shell exited explicit_close=true service=2
-    "#]]
-    .assert_eq(&trace.tell(&["terminal"]).to_string());
+    "#]],
+        || trace.tell(&["terminal"]).to_string(),
+    );
     trace.assert_unrecorded("terminal content", &["SECOND_ALIVE"]);
     Ok(())
 }

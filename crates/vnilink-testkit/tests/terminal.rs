@@ -38,13 +38,15 @@ fn a_shell_runs_what_is_typed_and_ends_with_its_exit_code() {
     let (_, exit) = session.read_until("the shell to exit", SHELL, |_| false);
     assert_eq!(exit, Some(7));
     session.pair.host.wait_released(None);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
           terminal: terminal shell exited code=7 service=1
           terminal: terminal stream ended ended=shell exited explicit_close=true service=1
-    "#]]
-    .assert_eq(&trace.story(&["terminal"]));
+    "#]],
+        || trace.story(&["terminal"]),
+    );
 }
 
 /// A resize reaches the shell's terminal.
@@ -119,13 +121,15 @@ fn without_the_grant_no_terminal_opens_and_the_connection_lives() {
         vnilink::SessionPhase::Active
     );
     trace.wait_for_records("service refused", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Terminal service=1 to=failed
         host:
           hosting: service refused connection=1 kind=Terminal status=not permitted
-    "#]]
-    .assert_eq(&trace.story(&["hosting", "service"]));
+    "#]],
+        || trace.story(&["hosting", "service"]),
+    );
 }
 
 /// Closing the terminal ends the shell on the host.

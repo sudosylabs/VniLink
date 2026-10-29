@@ -225,7 +225,8 @@ fn a_failed_save_keeps_the_previous_record() -> TestResult {
             (phase == SessionPhase::Closed).then_some(())
         },
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: invitation issued direct=1 relays=0 ttl_s=60
@@ -238,8 +239,9 @@ fn a_failed_save_keeps_the_previous_record() -> TestResult {
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: unpair requested refused=store locked
           pairing: unpair requested
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -362,13 +364,15 @@ fn an_uncertain_pairing_save_fences_without_remembering_the_peer() -> TestResult
         "no pairing is published"
     );
     assert_fenced(&host, &before, attempts + 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
         host:
           pairing: invitation accepted refused=store recovery required
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -401,14 +405,16 @@ fn an_uncertain_forget_save_fences_and_keeps_the_paired_record() -> TestResult {
         "no forgetting is published"
     );
     assert_fenced(&host, &before, attempts + 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation issued direct=1 relays=0 ttl_s=60
         host:
           pairing: invitation accepted
           pairing: unpair requested refused=store recovery required
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -475,15 +481,17 @@ fn an_uncertain_control_approval_fences_before_the_peer_is_saved() -> TestResult
         "no pairing is published"
     );
     assert_fenced(&host, &before, attempts + 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: invitation accepted
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
           pairing: control request answered refused=store recovery required
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 

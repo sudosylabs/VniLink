@@ -293,7 +293,8 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() -> TestResult 
         "a revocation during the copy interrupts the job"
     );
     assert_nothing_landed(&pair)?;
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=204800 size=204800
@@ -301,8 +302,9 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() -> TestResult 
         host:
           files: file received outcome=received resumed_at=0 size=204800 took=204800
           files: job state from=transferring job=1 sender=false to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -345,7 +347,8 @@ fn parked_mkdir_and_stage_sync_leave_locks_free() -> TestResult {
         "a revocation during the final sync interrupts the job"
     );
     assert_nothing_landed(&pair)?;
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=204800 size=204800
@@ -353,7 +356,8 @@ fn parked_mkdir_and_stage_sync_leave_locks_free() -> TestResult {
         host:
           files: file received outcome=received resumed_at=0 size=204800 took=204800
           files: job state from=transferring job=1 sender=false to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

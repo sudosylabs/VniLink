@@ -84,7 +84,7 @@ fn the_swap_waits_for_held_keys_like_the_mode_switch() -> TestResult {
         "the swap changes once no key is held"
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -117,7 +117,7 @@ fn a_swapped_command_is_the_key_the_host_releases() -> TestResult {
         "the host lifts the Control it pressed, last pressed first",
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -169,7 +169,7 @@ fn finished_text_is_typed_in_order_and_is_not_logged() -> TestResult {
     hides(&host_events, "café");
     assert!(desktop_active(&pair), "typing text leaves the desktop open");
     records_nothing_typed(&trace, &["café", "caf"]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -200,11 +200,13 @@ fn a_refused_text_leaves_the_keys_working() -> TestResult {
     );
     records_nothing_typed(&trace, &["nope"]);
     trace.wait_for_records("input refused", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           warn input: input refused kind=typed text reason=the operating system rejected the event service=1
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
     Ok(())
 }
 
@@ -239,11 +241,13 @@ fn text_the_host_cannot_type_is_refused_and_the_desktop_stays() -> TestResult {
     );
     records_nothing_typed(&trace, &["unseen"]);
     trace.wait_for_records("input refused", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           warn input: input refused kind=typed text reason=typed text is not available service=1
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
     Ok(())
 }
 
@@ -284,12 +288,12 @@ fn a_dropped_connection_does_not_replay_finished_text() -> TestResult {
     records_nothing_typed(&trace, &["first words", "second words", "replayed words"]);
     // How the host's side of the lost link ends is the link's story; this
     // one is that nothing typed was refused or lost.
-    expect![[r#""#]].assert_eq(
-        &trace
+    vnilink_testkit::assert_story(expect![[r#""#]], || {
+        trace
             .tell(&["input"])
             .only(&["input refused", "input dropped for a test"])
-            .to_string(),
-    );
+            .to_string()
+    });
     Ok(())
 }
 
@@ -331,7 +335,7 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
     hides(&events, "@");
     hides(&host_events, "@");
     records_nothing_typed(&trace, &["@"]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -375,7 +379,7 @@ fn map_and_translate_are_optional_and_a_held_key_blocks_the_change() -> TestResu
     let events = host.subscribe()?;
     hides(&events, "@");
     records_nothing_typed(&trace, &["@"]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -407,11 +411,13 @@ fn a_refused_chord_leaves_the_keys_working() -> TestResult {
     );
     records_nothing_typed(&trace, &["@"]);
     trace.wait_for_records("input refused", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           warn input: input refused kind=typed text reason=translated keys are not available service=1
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
     Ok(())
 }
 
@@ -504,6 +510,8 @@ fn input_defaults_cover_open_and_future_desktops_and_refuse_held_input_atomicall
     records_nothing_typed(&trace, &[]);
     // Whether the release found the held key still queued depends on when
     // the desktop's sender ran; nothing reached the host refused.
-    expect![[r#""#]].assert_eq(&trace.tell(&["input"]).only(&["input refused"]).to_string());
+    vnilink_testkit::assert_story(expect![[r#""#]], || {
+        trace.tell(&["input"]).only(&["input refused"]).to_string()
+    });
     Ok(())
 }

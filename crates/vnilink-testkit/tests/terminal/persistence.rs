@@ -110,16 +110,18 @@ fn a_persistent_shell_resumes_with_its_identity_history_and_environment() -> Tes
     });
     host_ended_shells(&pair.host);
     trace.wait_for_records("terminal opened", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           terminal: terminal opened columns=80 persistent=true resumed=false rows=24 service=1
           terminal: terminal opened columns=120 persistent=true resumed=true rows=40 service=2
-    "#]]
-    .assert_eq(
-        &trace
-            .tell(&["terminal"])
-            .only(ACROSS_A_DISCONNECT)
-            .to_string(),
+    "#]],
+        || {
+            trace
+                .tell(&["terminal"])
+                .only(ACROSS_A_DISCONNECT)
+                .to_string()
+        },
     );
     trace.assert_unrecorded("terminal content", &["VNI_KEEP", "BEFORE_", "AFTER:"]);
     Ok(())
@@ -177,16 +179,18 @@ fn a_kept_shell_is_its_peers_alone_and_revoking_terminal_ends_it() -> TestResult
         "revoking Terminal leaves the other peer's connection open"
     );
     trace.wait_for_records("terminal not opened", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           terminal: terminal opened columns=80 persistent=true resumed=false rows=24 service=1
           terminal: terminal not opened error=unauthorized resume=true service=2
-    "#]]
-    .assert_eq(
-        &trace
-            .tell(&["terminal"])
-            .only(ACROSS_A_DISCONNECT)
-            .to_string(),
+    "#]],
+        || {
+            trace
+                .tell(&["terminal"])
+                .only(ACROSS_A_DISCONNECT)
+                .to_string()
+        },
     );
     Ok(())
 }
@@ -227,14 +231,16 @@ fn closing_a_persistent_terminal_bypasses_stalled_input() -> TestResult {
     );
     trace.wait_for_records("terminal stream ended", 1);
     trace.wait_for_records("terminal pipe ended", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           terminal: terminal pipe ended closed_here=true error=no session service=1
         host:
           terminal: terminal opened columns=80 persistent=true resumed=false rows=24 service=1
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
-    "#]]
-    .assert_eq(&trace.tell(&["terminal"]).to_string());
+    "#]],
+        || trace.tell(&["terminal"]).to_string(),
+    );
     trace.assert_unrecorded("terminal content", &["SLEEP_"]);
     Ok(())
 }

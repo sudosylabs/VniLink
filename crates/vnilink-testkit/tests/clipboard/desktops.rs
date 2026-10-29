@@ -172,7 +172,8 @@ fn text_copied_on_both_computers_at_once_crosses_both_ways() -> TestResult {
     trace.wait_for_records("clipboard received", 5);
     trace.wait_for_records("clipboard sent", 5);
     // The two crossings at once are told in either order on each side.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           clipboard: clipboard received bytes=0 hosted=false service=1
           clipboard: clipboard received bytes=9 hosted=false service=1
@@ -186,8 +187,9 @@ fn text_copied_on_both_computers_at_once_crosses_both_ways() -> TestResult {
           clipboard: clipboard received bytes=15 hosted=true service=1
           clipboard: clipboard sent bytes=0 service=1
           clipboard: clipboard sent bytes=9 service=1
-    "#]]
-    .assert_eq(&super::unordered(&trace.story(&["clipboard"])));
+    "#]],
+        || super::unordered(&trace.story(&["clipboard"])),
+    );
     trace.assert_unrecorded(
         "copied content",
         &["secret-denied", "controller copy", "host copy"],
@@ -233,7 +235,8 @@ fn withdrawing_the_grant_refuses_text_and_the_desktop_lives() -> TestResult {
         "only granted pastes reach the host"
     );
     trace.wait_for_records("clipboard received", 3);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           clipboard: clipboard sent bytes=7 service=1
           clipboard: clipboard sent bytes=7 ended=clipboard denied service=1
@@ -243,8 +246,9 @@ fn withdrawing_the_grant_refuses_text_and_the_desktop_lives() -> TestResult {
           clipboard: clipboard received bytes=7 hosted=true service=1
           clipboard: clipboard received bytes=7 hosted=true refused=clipboard denied service=1
           clipboard: clipboard received bytes=8 hosted=true service=1
-    "#]]
-    .assert_eq(&trace.story(&["clipboard"]));
+    "#]],
+        || trace.story(&["clipboard"]),
+    );
     trace.assert_unrecorded("copied content", &["granted", "revoked", "restored"]);
     Ok(())
 }
@@ -318,7 +322,8 @@ fn a_reopened_desktop_starts_without_text_and_the_closed_one_is_fenced() -> Test
     );
     trace.wait_for_records("clipboard received", 2);
     trace.wait_for_records("clipboard sent", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           clipboard: clipboard received bytes=9 hosted=false service=1
           clipboard: clipboard sent bytes=5 service=2
@@ -326,8 +331,9 @@ fn a_reopened_desktop_starts_without_text_and_the_closed_one_is_fenced() -> Test
           clipboard: clipboard adapter installed
           clipboard: clipboard sent bytes=9 service=1
           clipboard: clipboard received bytes=5 hosted=true service=2
-    "#]]
-    .assert_eq(&trace.story(&["clipboard"]));
+    "#]],
+        || trace.story(&["clipboard"]),
+    );
     trace.assert_unrecorded(
         "copied content",
         &[
@@ -455,7 +461,8 @@ fn each_computers_desktop_has_its_own_clipboard() -> TestResult {
     );
     trace.wait_for_records("clipboard received", 4);
     trace.wait_for_records("clipboard sent", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           clipboard: clipboard sent bytes=10 ended=unsupported service=1
           clipboard: clipboard received bytes=3 hosted=false service=1
@@ -467,7 +474,9 @@ fn each_computers_desktop_has_its_own_clipboard() -> TestResult {
         other-host:
           clipboard: clipboard sent bytes=3 service=1
           clipboard: clipboard sent bytes=12 service=1
-    "#]].assert_eq(&trace.story(&["clipboard"]));
+    "#]],
+        || trace.story(&["clipboard"]),
+    );
     trace.assert_unrecorded("copied content", &["no adapter", "still active"]);
     Ok(())
 }

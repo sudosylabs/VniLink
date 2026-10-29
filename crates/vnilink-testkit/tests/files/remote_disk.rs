@@ -91,14 +91,16 @@ fn remote_browse_mkdir_and_rename_change_the_host_disk() -> TestResult {
         "the remote pane refreshes to the new state"
     );
     trace.wait_for_records("file request answered", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           files: file request answered body_bytes=90 operation=list status=0
           files: file request answered body_bytes=0 operation=create folder status=0
           files: file request answered body_bytes=0 operation=rename status=0
           files: file request answered body_bytes=149 operation=list status=0
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -185,13 +187,15 @@ fn remote_requests_enforce_generation_grant_and_scope() -> TestResult {
         Some(&b"kept-bytes"[..]),
         "the file stayed"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           files: file request answered body_bytes=0 operation=list status=4
           files: file request answered body_bytes=0 operation=rename status=4
           files: file request answered body_bytes=0 operation=delete status=4
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -251,14 +255,16 @@ fn remote_rename_conflict_and_stale_token_hold() -> TestResult {
         "the destination stayed"
     );
     trace.wait_for_records("file request answered", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           files: file request answered body_bytes=85 operation=list status=0
           files: file request answered body_bytes=0 operation=rename status=4
           files: file request answered body_bytes=143 operation=list status=0
           files: file request answered body_bytes=0 operation=rename status=1
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -355,13 +361,16 @@ fn delete_during_active_transfer_is_refused() -> TestResult {
         !root.join("a.txt").exists(),
         "a file no transfer serves is deleted"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=cancelled
         host:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=cancelled
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -417,14 +426,16 @@ fn remote_delete_removes_the_host_entry_and_keeps_a_replacement() -> TestResult 
     assert!(!root.join("pack").exists(), "the folder tree was deleted");
     assert!(set_aside(&root).is_empty(), "nothing was left aside");
     trace.wait_for_records("file request answered", 5);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           files: file request answered body_bytes=147 operation=list status=0
           files: file request answered body_bytes=0 operation=delete status=4
           files: file request answered body_bytes=147 operation=list status=0
           files: file request answered body_bytes=0 operation=delete status=0
           files: file request answered body_bytes=0 operation=delete status=0
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

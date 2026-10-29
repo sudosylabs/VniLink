@@ -111,11 +111,13 @@ fn pictures_start_at_a_keyframe_and_arrive_whole() -> TestResult {
         Some(large),
         "a large keyframe arrives whole"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
-    "#]]
-    .assert_eq(&trace.story(&["camera"]));
+    "#]],
+        || trace.story(&["camera"]),
+    );
     Ok(())
 }
 
@@ -154,7 +156,8 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
 
     // The host's side before it goes away; its last end follows below.
     trace.wait_for_records("camera stream ended", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
           camera: camera capture ended failed=true sent=1 service=1
@@ -166,25 +169,29 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
           camera: camera stream ended ended=service closed service=3
           camera: camera opened fps=30 height=480 service=4 width=640
           camera: camera stream ended ended=service closed service=4
-    "#]]
-    .assert_eq(&trace.tell(&["camera"]).of("host").to_string());
+    "#]],
+        || trace.tell(&["camera"]).of("host").to_string(),
+    );
 
     let (camera, _) = open()?;
     hosting.shutdown();
     assert_eq!(ended(controller, &camera), CameraEnd::Lost);
     trace.wait_for_records("camera picture ended", 5);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           camera: camera picture ended closed_here=false reason=Stopped service=1
           camera: camera picture ended closed_here=false reason=Stopped service=2
           camera: camera picture ended closed_here=false reason=Withdrawn service=3
           camera: camera picture ended closed_here=false reason=Withdrawn service=4
           camera: camera picture ended closed_here=false reason=Lost service=5
-    "#]]
-    .assert_eq(&trace.tell(&["camera"]).of("controller").to_string());
+    "#]],
+        || trace.tell(&["camera"]).of("controller").to_string(),
+    );
     // The host records the end of the camera it was serving as it shut down.
     trace.wait_for_records("camera stream ended", 5);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
           camera: camera capture ended failed=true sent=1 service=1
@@ -198,8 +205,9 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
           camera: camera stream ended ended=service closed service=4
           camera: camera opened fps=30 height=480 service=5 width=640
           camera: camera stream ended ended=shut down service=5
-    "#]]
-    .assert_eq(&trace.tell(&["camera"]).of("host").to_string());
+    "#]],
+        || trace.tell(&["camera"]).of("host").to_string(),
+    );
     Ok(())
 }
 
@@ -245,11 +253,13 @@ fn an_unknown_camera_or_an_invalid_size_is_refused_and_nothing_starts() -> TestR
         "a refused camera keeps the connection"
     );
     trace.wait_for_records("camera not opened", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           camera: camera not opened error=unsupported reason=camera device service=1
           camera: camera stream ended ended=unsupported service=1
-    "#]]
-    .assert_eq(&trace.story(&["camera"]));
+    "#]],
+        || trace.story(&["camera"]),
+    );
     Ok(())
 }

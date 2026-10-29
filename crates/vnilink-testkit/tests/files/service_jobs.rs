@@ -110,7 +110,8 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
         2,
         "the Files service lists both of its jobs"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=8192 size=8192
@@ -123,7 +124,9 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
           files: job state from=preparing job=2 sender=true to=serving
           files: file served ended=sent from=0 sent=16384 size=16384
           files: job state done_bytes=16384 files_done=1 from=serving job=2 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -206,7 +209,8 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
         2,
         "the Files service lists both of its jobs"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=8192 size=8192
@@ -219,7 +223,9 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
           files: job state from=preparing job=2 sender=true to=serving
           files: file served ended=sent from=0 sent=16384 size=16384
           files: job state done_bytes=16384 files_done=1 from=serving job=2 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -292,14 +298,16 @@ fn closing_a_files_service_interrupts_its_job_and_keeps_the_desktop_and_the_conn
         SessionPhase::Active,
         "the connection stays"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
         host:
           files: job state from=transferring job=1 sender=false to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -363,14 +371,16 @@ fn a_host_closing_the_files_service_interrupts_a_download_and_refuses_new_work()
         SessionPhase::Active,
         "the connection stays"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=interrupted
         host:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -440,7 +450,8 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
         matches!(restarted.job_resume(job), Err(Error::NoSession)),
         "a service's job resumes only through a service"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
@@ -448,8 +459,9 @@ fn files_service_jobs_need_an_admitted_service_and_one_to_resume_after_a_restart
           files: job state from=serving job=2 sender=true to=interrupted
         host:
           files: job state from=transferring job=1 sender=false to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -606,7 +618,8 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
         !core.service_lease(two.id, two.generation)?.is_cancelled(),
         "the other service stays open"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=preparing job=2 sender=true to=serving
@@ -620,7 +633,9 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
         second:
           files: file received outcome=received resumed_at=0 size=65536 took=65536
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -690,7 +705,8 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
         bytes,
         "the adopted job lands exactly"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
@@ -702,7 +718,9 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=1048576 took=1048576
           files: job state done_bytes=1048576 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -789,7 +807,8 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
     );
     // How far the second file was fetched ahead when the job stopped varies;
     // its resumed fetch takes exactly the rest.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
@@ -799,8 +818,9 @@ fn a_download_adopted_on_a_new_connection_keeps_its_verified_progress() -> TestR
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state from=interrupted job=1 sender=true to=serving
           files: job state done_bytes=196608 files_done=2 from=serving job=1 sender=true to=complete
-    "#]]
-    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
+    "#]],
+        || trace.tell(&["files"]).only(&["job state"]).to_string(),
+    );
     let resumed = last_received(&trace, "controller");
     assert_eq!(
         resumed["resumed_at"].as_u64().unwrap_or(u64::MAX) + resumed["took"].as_u64().unwrap_or(0),
@@ -880,7 +900,8 @@ fn a_download_adopted_after_both_computers_restart_keeps_its_verified_files() ->
     );
     // How far the second file was fetched ahead when the job stopped varies;
     // its resumed fetch takes exactly the rest.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
@@ -890,8 +911,9 @@ fn a_download_adopted_after_both_computers_restart_keeps_its_verified_files() ->
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state from=interrupted job=1 sender=true to=serving
           files: job state done_bytes=98304 files_done=2 from=serving job=1 sender=true to=complete
-    "#]]
-    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
+    "#]],
+        || trace.tell(&["files"]).only(&["job state"]).to_string(),
+    );
     let resumed = last_received(&trace, "controller");
     assert_eq!(
         resumed["resumed_at"].as_u64().unwrap_or(u64::MAX) + resumed["took"].as_u64().unwrap_or(0),
@@ -969,7 +991,8 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
         expected,
         "the adopted upload lands exactly"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
@@ -982,7 +1005,9 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=65536 took=65536
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -1035,14 +1060,16 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
         JobState::Failed,
         "the sender fails with its receiver"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=failed
         host:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=failed
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -1089,13 +1116,15 @@ fn a_restart_removes_orphaned_staging_and_keeps_an_interrupted_jobs() -> TestRes
         b"source survives crash",
         "the source is untouched"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
         host:
           files: job state from=transferring job=1 sender=false to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

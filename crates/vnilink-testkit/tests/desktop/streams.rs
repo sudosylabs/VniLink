@@ -147,12 +147,15 @@ fn capture_startup_serves_only_the_desktops_open_when_it_began() -> TestResult {
     drop(replacement);
     // The viewers learn of the shutdown at moments of their own: whether
     // the replacement suspends before it is dropped is theirs to race.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=2 kind=Desktop service=2 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=3 to=closed: Shutdown
-    "#]].assert_eq(&trace.engine_story("host", &["desktop", "capture", "service"]));
+    "#]],
+        || trace.engine_story("host", &["desktop", "capture", "service"]),
+    );
     Ok(())
 }
 
@@ -294,12 +297,15 @@ fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> 
         vec![77; 1000],
         "the sibling streams after the slow viewer closed"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["desktop", "service"]));
+    "#]],
+        || trace.story(&["desktop", "service"]),
+    );
     Ok(())
 }
 
@@ -443,12 +449,14 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
         vec![1],
         "the host captures only the display still shown"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           input: control asked for epoch=1 service=1 state=Controlling
           warn input: input refused kind=pointer reason=that display is not selected service=1
-    "#]]
-    .assert_eq(&trace.story(&["desktop", "topology", "input"]));
+    "#]],
+        || trace.story(&["desktop", "topology", "input"]),
+    );
     Ok(())
 }
 
@@ -538,10 +546,13 @@ fn host_and_decoder_reports_become_the_viewers_conditions() -> TestResult {
         "a restart count that goes back belongs to another decoder"
     );
     viewer.close();
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           stream: encoder opened encoder=EncoderImplementation { name: "test", hardware: Some(false), input: None } generation=1 service=1
-    "#]].assert_eq(&trace.story(&["stream"]));
+    "#]],
+        || trace.story(&["stream"]),
+    );
     Ok(())
 }
 
@@ -607,12 +618,15 @@ fn the_viewer_learns_the_host_stopped_its_picture() -> TestResult {
         Some(DesktopEnd::Host(StreamEnd::Stopped)),
         "a host's close reaches the viewer as stopped"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }
 
@@ -626,12 +640,15 @@ fn the_viewer_learns_the_hosts_encoder_failed() -> TestResult {
         Some(DesktopEnd::Host(StreamEnd::Failed(StreamFailure::Encoder))),
         "an encoder failure reaches the viewer as itself"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Failed(Encoder)
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }
 
@@ -647,12 +664,15 @@ fn the_viewer_learns_the_host_lacks_permission() -> TestResult {
         ))),
         "a permission failure reaches the viewer as itself"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Failed(Permission)
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }
 
@@ -666,12 +686,15 @@ fn the_viewer_learns_the_host_stopped_sharing() -> TestResult {
         Some(DesktopEnd::Host(StreamEnd::Revoked)),
         "a withdrawn share reaches the viewer as revoked"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Revoked
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }
 
@@ -685,13 +708,16 @@ fn a_picture_the_viewer_closed_has_no_host_end() -> TestResult {
         None,
         "the viewer's own close carries no reason from the host"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service", "session"]));
+    "#]],
+        || trace.story(&["service", "session"]),
+    );
     Ok(())
 }
 
@@ -822,13 +848,15 @@ fn encoded_frames_reach_the_controller_in_order() -> TestResult {
         publish(EncodedFrame::h264(true, 1, vec![1])?).is_err(),
         "a picture after the viewer left is refused"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]]
-    .assert_eq(&trace.story(&["service", "input"]));
+    "#]],
+        || trace.story(&["service", "input"]),
+    );
     Ok(())
 }
 

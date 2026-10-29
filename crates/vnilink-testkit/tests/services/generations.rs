@@ -89,14 +89,17 @@ fn a_redial_never_revives_old_leases_or_closed_services() -> TestResult {
     );
     // The hosts, and the sessions ending after the unpair, record at moments
     // of their own; the services' phases are the story.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Files service=3 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=suspended
           service: service phase from=suspended generation=3 kind=Desktop service=1 to=active
           service: service phase from=active generation=3 kind=Desktop service=1 to=closed: ParentLoss
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: Shutdown
-    "#]].assert_eq(&trace.engine_story("controller", &["service"]));
+    "#]],
+        || trace.engine_story("controller", &["service"]),
+    );
     Ok(())
 }
 
@@ -159,13 +162,15 @@ fn a_redial_keeps_the_files_owner_and_fences_its_old_pipe() -> TestResult {
     );
     // The host names that end on either of two paths, at a moment of its
     // own; the controller's side is the story.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Files service=1 to=suspended
           service: service phase from=suspended generation=3 kind=Files service=1 to=active
           service: service phase from=active generation=3 kind=Files service=1 to=closed: OwnerClose
-    "#]]
-    .assert_eq(&trace.engine_story("controller", &["service"]));
+    "#]],
+        || trace.engine_story("controller", &["service"]),
+    );
     Ok(())
 }
 
@@ -231,11 +236,14 @@ fn a_redial_fences_the_old_desktop_handle_without_retiring_its_replacement() -> 
     );
     // The host names that end on either of two paths, at a moment of its
     // own; the controller's side is the story.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=suspended
           service: service phase from=suspended generation=3 kind=Desktop service=1 to=active
           service: service phase from=active generation=3 kind=Desktop service=1 to=closed: OwnerClose
-    "#]].assert_eq(&trace.engine_story("controller", &["service"]));
+    "#]],
+        || trace.engine_story("controller", &["service"]),
+    );
     Ok(())
 }

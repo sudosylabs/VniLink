@@ -65,11 +65,13 @@ fn admission_clamps_quality_to_host_codec_caps() -> TestResult {
         EncodedFrame::h264(true, 1, vec![1]).is_ok(),
         "the wire still carries Baseline-capable frames"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
-    "#]]
-    .assert_eq(&trace.story(&["session", "service"]));
+    "#]],
+        || trace.story(&["session", "service"]),
+    );
     Ok(())
 }
 
@@ -115,12 +117,14 @@ fn saved_quality_defaults_start_new_desktops_and_leave_live_limits_alone() -> Te
         defaults,
         "its host starts at the defaults too"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           session: session phase from=connecting generation=1 role=Controller session=2 to=active
-    "#]]
-    .assert_eq(&trace.story(&["session", "service"]));
+    "#]],
+        || trace.story(&["session", "service"]),
+    );
     Ok(())
 }
 
@@ -214,7 +218,8 @@ fn auto_and_explicit_codec_survive_owned_desktop_transport_and_reject_mismatched
         }
     }
     trace.wait_for_records("service phase", 16);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
@@ -233,7 +238,9 @@ fn auto_and_explicit_codec_survive_owned_desktop_transport_and_reject_mismatched
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }
 
@@ -290,7 +297,8 @@ fn explicit_codec_controls_the_desktop_and_one_the_host_cannot_encode_refuses_it
         host.video_targets()?.is_empty(),
         "a refused Desktop leaves the host nothing to encode"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
@@ -303,7 +311,8 @@ fn explicit_codec_controls_the_desktop_and_one_the_host_cannot_encode_refuses_it
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]]
-    .assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }

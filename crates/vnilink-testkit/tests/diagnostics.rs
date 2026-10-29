@@ -271,7 +271,8 @@ fn live_snapshot_names_the_coders_and_the_last_end() -> TestResult {
     );
     trace.wait_for_records("desktop ended", 2);
     trace.wait_for_records("service phase", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           session: desktop ended hosted=false reason=hostEncoderFailed service=1
@@ -280,7 +281,9 @@ fn live_snapshot_names_the_coders_and_the_last_end() -> TestResult {
           stream: encoder opened encoder=EncoderImplementation { name: "videotoolbox", hardware: Some(true), input: Some(GpuTexture) } generation=1 service=1
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Failed(Encoder)
           session: desktop ended hosted=true reason=hostEncoderFailed service=1
-    "#]].assert_eq(&trace.story(&["session", "service", "stream"]));
+    "#]],
+        || trace.story(&["session", "service", "stream"]),
+    );
     Ok(())
 }
 

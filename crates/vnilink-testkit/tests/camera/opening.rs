@@ -158,7 +158,8 @@ fn a_camera_opens_for_one_viewer_at_a_time_and_frees_on_close() -> TestResult {
     trace.wait_for_records("camera stream ended", 4);
     // Each viewer records the pictures it closed; the refused open has none.
     trace.wait_for_records("camera picture ended", 3);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           camera: camera picture ended closed_here=true service=1
         host:
@@ -173,8 +174,9 @@ fn a_camera_opens_for_one_viewer_at_a_time_and_frees_on_close() -> TestResult {
         second:
           camera: camera picture ended closed_here=true service=2
           camera: camera picture ended closed_here=true service=3
-    "#]]
-    .assert_eq(&trace.tell(&["camera"]).concurrent().to_string());
+    "#]],
+        || trace.tell(&["camera"]).concurrent().to_string(),
+    );
     Ok(())
 }
 
@@ -233,7 +235,8 @@ fn a_camera_that_failed_to_open_reads_as_failed_until_one_opens() -> TestResult 
         "a camera that opened is available again: {recovered:?}"
     );
     trace.wait_for_records("camera picture ended", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           camera: camera picture ended closed_here=true service=2
         host:
@@ -241,8 +244,9 @@ fn a_camera_that_failed_to_open_reads_as_failed_until_one_opens() -> TestResult 
           camera: camera stream ended ended=unsupported service=1
           camera: camera opened fps=30 height=480 service=2 width=640
           camera: camera stream ended ended=viewer closed service=2
-    "#]]
-    .assert_eq(&trace.story(&["camera"]));
+    "#]],
+        || trace.story(&["camera"]),
+    );
     Ok(())
 }
 
@@ -293,10 +297,12 @@ fn recording_a_camera_follows_the_hosts_consent() -> TestResult {
         !camera.is_cancelled(),
         "withdrawing recording leaves the camera open"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           camera: camera opened fps=30 height=480 service=1 width=640
-    "#]]
-    .assert_eq(&trace.story(&["camera", "recording"]));
+    "#]],
+        || trace.story(&["camera", "recording"]),
+    );
     Ok(())
 }

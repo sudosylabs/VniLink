@@ -142,7 +142,8 @@ fn input_reaches_the_host_in_order() {
     assert_eq!(applied, pressed);
     // The host records each key it applied by kind, never which key.
     trace.wait_for_records("input applied", pressed.len());
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           input: input applied kind=key down service=1
           input: input applied kind=key up service=1
@@ -152,8 +153,9 @@ fn input_reaches_the_host_in_order() {
           input: input applied kind=key up service=1
           input: input applied kind=key down service=1
           input: input applied kind=key up service=1
-    "#]]
-    .assert_eq(&trace.detailed_story(&["input"]));
+    "#]],
+        || trace.detailed_story(&["input"]),
+    );
 }
 
 /// Once the host stops sharing control, a viewer's key still leaves the
@@ -186,13 +188,15 @@ fn a_key_after_control_is_withdrawn_is_discarded_and_says_why() {
         .submit_input(InputEvent::key_down(usage::A))
         .expect("the viewer sends the key; the host decides");
     trace.wait_for_records("input refused", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           input: control changed epoch=2 service=1 state=Viewing
         host:
           input: input refused kind=key down reason=the peer may not control this computer service=1
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
     assert!(
         session.applied().is_empty(),
         "a key was applied without control"

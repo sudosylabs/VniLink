@@ -94,7 +94,8 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
             .all(|phase| *phase == ServicePhase::Closed(CloseCause::Shutdown)),
         "shutting down names itself: {shut_down:?}"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Files service=1 to=suspended
           service: service phase from=suspended generation=3 kind=Files service=1 to=active
@@ -102,7 +103,9 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: ParentLoss
         live:
           service: service phase from=active generation=1 kind=Files service=1 to=closed: Shutdown
-    "#]].assert_eq(&trace.story(&["service"]));
+    "#]],
+        || trace.story(&["service"]),
+    );
     Ok(())
 }
 
@@ -165,7 +168,8 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
         ],
         1,
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Files service=1 to=closed: PeerClose
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: IdleExpired
@@ -174,7 +178,9 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
           service: service phase from=active generation=1 kind=Files service=1 to=closed: Revoked
           hosting: service released service=1
           service: service phase from=active generation=1 kind=Desktop service=2 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service", "hosting"]));
+    "#]],
+        || trace.story(&["service", "hosting"]),
+    );
     Ok(())
 }
 
@@ -207,12 +213,14 @@ fn removing_a_backend_closes_its_hosted_services_as_device_loss() -> TestResult 
     host.set_terminal_factory(None)?;
     wait_hosted_close(&host_events, ServiceKind::Terminal, CloseCause::DeviceLoss);
     trace.wait_for_records("service released", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           hosting: service opened connection=1 kind=Some(Terminal) service=1
           hosting: service released service=1
-    "#]]
-    .assert_eq(&trace.story(&["hosting"]));
+    "#]],
+        || trace.story(&["hosting"]),
+    );
     Ok(())
 }
 
@@ -314,7 +322,8 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
     );
     trace.wait_for_records("service released", 1);
     // The host learns its viewer closed the camera while it was opening.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Camera service=1 to=closed: OwnerClose
         host:
@@ -323,7 +332,9 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
           camera: camera stream ended ended=viewer closed service=1
           hosting: service closed kind=Camera phase=closed: PeerClose service=1
           hosting: service released service=1
-    "#]].assert_eq(&trace.story(&["camera", "service", "hosting"]));
+    "#]],
+        || trace.story(&["camera", "service", "hosting"]),
+    );
     Ok(())
 }
 

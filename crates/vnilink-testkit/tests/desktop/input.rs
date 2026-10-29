@@ -132,7 +132,7 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
         "ending the connection lifts the held button, then the held key"
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -169,7 +169,7 @@ fn key_up_and_each_button_are_applied_and_not_released_again() -> TestResult {
         "ending the connection releases nothing already released"
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -220,11 +220,13 @@ fn an_apply_failure_is_reported_and_the_desktop_stays_open() -> TestResult {
     desktop.submit_input(InputEvent::key_up(usage::A))?;
     records_nothing_typed(&trace, &[]);
     trace.wait_for_records("input refused", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           warn input: input refused kind=key down reason=the operating system rejected the event service=1
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
     Ok(())
 }
 
@@ -271,7 +273,7 @@ fn a_failed_release_is_reported_on_the_connection() -> TestResult {
         "each held key and button was released once"
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -306,11 +308,13 @@ fn a_key_the_backend_applies_as_control_is_withdrawn_is_released_at_once() -> Te
     );
     records_nothing_typed(&trace, &[]);
     trace.wait_for_records("control changed", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           input: control changed epoch=2 service=1 state=Viewing
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
     Ok(())
 }
 
@@ -354,7 +358,7 @@ fn a_slow_backend_keeps_the_order_and_what_it_holds() -> TestResult {
         "the key still held is lifted once"
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#""#]].assert_eq(&trace.story(&["input"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
     Ok(())
 }
 
@@ -395,7 +399,8 @@ fn a_fault_is_reported_once_until_an_input_applies() -> TestResult {
         "eight refusals are told once, and the one after an applied key once more"
     );
     records_nothing_typed(&trace, &[]);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           warn input: input refused kind=key down reason=this desktop cannot press keys service=1
           input: input refused kind=key up reason=this desktop cannot press keys service=1
@@ -406,8 +411,9 @@ fn a_fault_is_reported_once_until_an_input_applies() -> TestResult {
           input: input refused kind=key down reason=this desktop cannot press keys service=1
           input: input refused kind=key up reason=this desktop cannot press keys service=1
           warn input: input refused kind=key down reason=this desktop cannot press keys service=1
-    "#]]
-    .assert_eq(&trace.tell(&["input"]).only(&["input refused"]).to_string());
+    "#]],
+        || trace.tell(&["input"]).only(&["input refused"]).to_string(),
+    );
     Ok(())
 }
 
@@ -464,13 +470,15 @@ fn input_lost_on_the_way_leaves_nothing_held_once_released() -> TestResult {
     );
     records_nothing_typed(&trace, &[]);
     trace.wait_for_records("input dropped for a test", 3);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           input: input dropped for a test at=outbox kind=key up service=1
         host:
           input: input dropped for a test at=before admission kind=key down service=1
           input: input dropped for a test at=after admission kind=key down service=1
-    "#]]
-    .assert_eq(&trace.story(&["input"]));
+    "#]],
+        || trace.story(&["input"]),
+    );
     Ok(())
 }

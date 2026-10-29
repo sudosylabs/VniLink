@@ -83,12 +83,15 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() -> TestRes
         "closing the desktop leaves the connection as it was"
     );
     trace.wait_for_records("service phase", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-    "#]].assert_eq(&trace.story(&["service", "stream"]));
+    "#]],
+        || trace.story(&["service", "stream"]),
+    );
     Ok(())
 }
 
@@ -163,11 +166,13 @@ fn neutral_desktop_reconnect_replaces_runtime_and_fences_old_handle() -> TestRes
         ended.is_empty() || ended == ["linkLost"],
         "the viewer's old desktop ends at most once, its link lost: {ended:?}"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=suspended
           service: service phase from=suspended generation=3 kind=Desktop service=1 to=active
-    "#]]
-    .assert_eq(&trace.engine_story("controller", &["service"]));
+    "#]],
+        || trace.engine_story("controller", &["service"]),
+    );
     Ok(())
 }

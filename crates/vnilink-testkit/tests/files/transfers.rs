@@ -91,7 +91,8 @@ fn an_upload_lands_exactly_and_keeps_its_source() -> TestResult {
         "sending leaves every source file in place"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=1024 size=1024
@@ -105,7 +106,9 @@ fn an_upload_lands_exactly_and_keeps_its_source() -> TestResult {
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=9437184 took=9437184
           files: job state done_bytes=9442816 files_done=4 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.concurrent_story(&["files"]));
+    "#]],
+        || trace.concurrent_story(&["files"]),
+    );
     Ok(())
 }
 
@@ -146,7 +149,8 @@ fn a_download_lands_exactly_as_the_host_sender_mirrors_it() -> TestResult {
         "the tree lands exactly"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: file received outcome=received resumed_at=0 size=1024 took=1024
           files: file received outcome=received resumed_at=0 size=4096 took=4096
@@ -160,7 +164,9 @@ fn a_download_lands_exactly_as_the_host_sender_mirrors_it() -> TestResult {
           files: file served ended=sent from=0 sent=512 size=512
           files: file served ended=sent from=0 sent=9437184 size=9437184
           files: job state done_bytes=9442816 files_done=4 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(&trace.concurrent_story(&["files"]));
+    "#]],
+        || trace.concurrent_story(&["files"]),
+    );
     Ok(())
 }
 
@@ -255,7 +261,8 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
         "the renamed file holds the new contents"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=100 size=100
@@ -273,7 +280,9 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: job state done_bytes=300 files_done=2 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -360,7 +369,8 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
         "the tree lands exactly"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: file received outcome=received resumed_at=0 size=1024 took=1024
           files: file received outcome=received resumed_at=0 size=1024 took=1024
@@ -378,7 +388,9 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
           files: job state from=interrupted job=1 sender=true to=serving
           files: file served ended=sent from=1024 sent=0 size=1024
           files: job state done_bytes=3072 files_done=3 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -472,7 +484,8 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
             })
             .to_string()
     };
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: file received outcome=received resumed_at=0 size=2048 took=2048
           files: job state done_bytes=2048 files_done=1 from=transferring job=1 sender=false to=cancelled
@@ -480,23 +493,30 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
           files: job state from=cancelled job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=… size=12582912 took=…
           files: job state done_bytes=12584960 files_done=2 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&story("controller", &["file received", "job state"]));
+    "#]],
+        || story("controller", &["file received", "job state"]),
+    );
     // The host learns of the cancel and of its receiver leaving on
     // separate streams, in either order: each is told on its own.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=cancelled
           files: job state from=cancelled job=1 sender=true to=serving
           files: job state done_bytes=12584960 files_done=2 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(&story("host", &["job state"]));
-    expect![[r#"
+    "#]],
+        || story("host", &["job state"]),
+    );
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           files: file served ended=sent from=0 sent=2048 size=2048
           files: file served ended=the receiver left from=… sent=… size=12582912
           files: file served ended=sent from=… sent=… size=12582912
-    "#]]
-    .assert_eq(&story("host", &["file served"]));
+    "#]],
+        || story("host", &["file served"]),
+    );
     Ok(())
 }
 
@@ -603,7 +623,8 @@ fn a_refused_publication_keeps_the_original_and_resumes() -> TestResult {
         "the resumed job replaces the original"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
@@ -619,7 +640,9 @@ fn a_refused_publication_keeps_the_original_and_resumes() -> TestResult {
           files: job state from=failed job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
           files: job state done_bytes=512 files_done=1 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -660,7 +683,7 @@ fn submitting_needs_a_files_service_an_existing_source_and_a_known_root() -> Tes
         matches!(upload(&pair, &files, "", "x"), Err(Error::NoSession)),
         "no transfer without a Files service"
     );
-    expect![[r#""#]].assert_eq(&trace.story(&["files"]));
+    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["files"]));
     Ok(())
 }
 
@@ -701,13 +724,16 @@ fn an_empty_folder_tree_lands_whole() -> TestResult {
         "the empty hierarchy lands, and nothing beside it"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=complete
         host:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -740,13 +766,16 @@ fn a_job_its_sender_cancels_before_delivery_lands_nothing() -> TestResult {
         "the sender is cancelled: {sent:?}"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=cancelled
         host:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=cancelled
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -783,7 +812,8 @@ fn driving_every_job_finishes_one_without_window_polls() -> TestResult {
         "the file lands exactly"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=1024 size=1024
@@ -791,7 +821,9 @@ fn driving_every_job_finishes_one_without_window_polls() -> TestResult {
         host:
           files: file received outcome=received resumed_at=0 size=1024 took=1024
           files: job state done_bytes=1024 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -851,7 +883,8 @@ fn an_upload_conflict_reaches_its_sender_who_answers_it() -> TestResult {
         "Replace lands the new file"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=waiting-decision
@@ -863,7 +896,9 @@ fn an_upload_conflict_reaches_its_sender_who_answers_it() -> TestResult {
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=100 took=100
           files: job state done_bytes=100 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -920,7 +955,8 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
         "the tree lands exactly"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=0 files_done=0 from=serving job=1 sender=true to=cancelled
@@ -934,7 +970,9 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -986,7 +1024,8 @@ fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
         "the source's own folder lands, with its nested files"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
@@ -1002,7 +1041,9 @@ fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=512 size=512 took=0
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -1053,7 +1094,8 @@ fn publication_across_filesystems_lands_the_file() -> TestResult {
         "the file lands exactly"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=2048 size=2048
@@ -1061,7 +1103,9 @@ fn publication_across_filesystems_lands_the_file() -> TestResult {
         host:
           files: file received outcome=received resumed_at=0 size=2048 took=2048
           files: job state done_bytes=2048 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -1120,7 +1164,8 @@ fn a_receivers_keep_both_unblocks_a_sender_mirroring_the_conflict() -> TestResul
         "Keep both lands the new file under the next free name"
     );
     trace.wait_for_records("job state", 2);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=waiting-decision
@@ -1132,7 +1177,9 @@ fn a_receivers_keep_both_unblocks_a_sender_mirroring_the_conflict() -> TestResul
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=8 took=8
           files: job state done_bytes=8 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -1199,7 +1246,8 @@ fn a_download_the_host_stops_sharing_resumes_once_shared_again() -> TestResult {
         tree(&pair.host.folder().join("set")),
         "the resumed download lands the exact tree"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state from=transferring job=1 sender=false to=interrupted
@@ -1213,7 +1261,9 @@ fn a_download_the_host_stops_sharing_resumes_once_shared_again() -> TestResult {
           files: job state from=interrupted job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
           files: job state done_bytes=1024 files_done=2 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -1255,7 +1305,8 @@ fn a_download_whose_host_forgets_the_controller_lands_nothing_more() -> TestResu
         !pair.controller.folder().join("got/set/two.txt").exists(),
         "the second file is refused at publication"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state from=transferring job=1 sender=false to=interrupted
@@ -1263,7 +1314,8 @@ fn a_download_whose_host_forgets_the_controller_lands_nothing_more() -> TestResu
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=512 size=512
           files: job state from=serving job=1 sender=true to=interrupted
-    "#]]
-    .assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

@@ -199,7 +199,8 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
         "pairing changes no sharing on the controller"
     );
 
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: invitation accepted
@@ -207,8 +208,9 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
           pairing: control request answered
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     // Peers are recorded by fingerprint only.
     let accepted = &trace.named("invitation accepted")[0];
     assert_eq!(
@@ -244,14 +246,16 @@ fn mismatched_digits_save_nothing() -> TestResult {
         "wrong digits remember nobody"
     );
     assert!(events.try_recv().is_none(), "wrong digits publish nothing");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
           pairing: pairing digits did not match
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     controller.core.confirm_pairing(&preview, &file.check)?;
     assert_eq!(
         controller.core.snapshot()?.devices.len(),
@@ -283,7 +287,8 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
         controller.core.confirm_pairing(&preview, &file.check),
         Err(Error::InvitationReplayed)
     ));
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284 reason=signature does not match refused=invalid invitation
           pairing: pairing file opened bytes=284
@@ -291,7 +296,9 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
           pairing: invitation accepted refused=invitation replayed
         host:
           pairing: pairing file exported allow_control=false direct=1 relays=0 ttl_s=60
-    "#]].assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
 }
 
 /// What is not a pairing file, or only its start, is refused as such, and
@@ -331,14 +338,17 @@ fn a_file_that_is_not_one_or_is_ones_own_is_refused() -> TestResult {
         ),
         "a computer cannot open its own file"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: pairing file opened bytes=284 refused=invalid pairing file
           pairing: pairing file opened bytes=4 refused=invalid pairing file
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
           pairing: pairing file opened bytes=284 reason=an installation cannot pair with itself refused=invalid invitation
-    "#]].assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
     Ok(())
 }
 
@@ -360,7 +370,8 @@ fn a_forgotten_controller_is_disconnected_and_cannot_return() {
         (phase != SessionPhase::Active).then_some(())
     });
     assert!(pair.controller.connect_services(&pair.host).is_err());
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           pairing: invitation accepted
           pairing: invitation issued direct=1 relays=0 ttl_s=60
@@ -368,6 +379,7 @@ fn a_forgotten_controller_is_disconnected_and_cannot_return() {
           pairing: invitation issued direct=1 relays=0 ttl_s=60
           pairing: invitation accepted
           pairing: unpair requested
-    "#]]
-    .assert_eq(&trace.story(&["pairing"]));
+    "#]],
+        || trace.story(&["pairing"]),
+    );
 }

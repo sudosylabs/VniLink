@@ -82,10 +82,13 @@ fn a_service_opens_only_when_shared_and_without_a_backend_refuses_and_says_why()
         matches!(system.operation(refused.id + 100), Err(Error::NoSession)),
         "an operation never asked for is not found"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action refused action=Lock connection=1 detail=no system backend operation=1
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -160,7 +163,8 @@ fn a_lock_runs_and_a_restart_waits_for_the_host_s_policy() -> TestResult {
     });
     assert_eq!(system.asked().shutdowns, 1, "the host's OS shut down once");
     trace.wait_for_records("system action ended", 3);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action ended action=Lock operation=1 scheduled=false state=Executed
@@ -170,8 +174,9 @@ fn a_lock_runs_and_a_restart_waits_for_the_host_s_policy() -> TestResult {
           system: system action ended action=Restart operation=4 scheduled=true state=Executed
           system: system action admitted action=Shutdown connection=1 operation=5 scheduled=true
           system: system action ended action=Shutdown operation=5 scheduled=true state=Executed
-    "#]]
-    .assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -272,13 +277,15 @@ fn an_action_that_never_answers_does_not_hold_the_service() -> TestResult {
         "the request after a stalled lock is served"
     );
     trace.wait_for_records("system action ended", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action admitted action=Restart connection=1 operation=2 scheduled=true
           system: system action ended action=Restart operation=2 scheduled=true state=Executed
-    "#]]
-    .assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -358,12 +365,14 @@ fn a_restart_waits_out_its_notice_and_tells_the_host() -> TestResult {
         "the host's application hears the restart scheduled and then run"
     );
     trace.wait_for_records("system action ended", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action admitted action=Restart connection=1 operation=1 scheduled=true
           system: system action ended action=Restart operation=1 scheduled=true state=Executed
-    "#]]
-    .assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -446,12 +455,14 @@ fn another_connection_cannot_cancel_and_run_now_starts_at_once() -> TestResult {
         "a restart that ran does not run again"
     );
     trace.wait_for_records("system action ended", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action admitted action=Restart connection=1 operation=1 scheduled=true
           system: system action ended action=Restart operation=1 scheduled=true state=Executed
-    "#]]
-    .assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -497,7 +508,8 @@ fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() -> Tes
     assert_eq!(fake.calls().restarts, 0, "no restart reached the host's OS");
     let locked = system.execute(SystemAction::Lock)?;
     assert_eq!(locked.state, OperationState::Executed, "a lock still runs");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action admitted action=Restart connection=1 operation=1 scheduled=true
           system: system action cancelled action=Restart by_viewer=false detail=the computer that asked disconnected operation=1
@@ -505,7 +517,9 @@ fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() -> Tes
           system: system action ended action=Restart operation=2 scheduled=true state=Refused stood_down=disabled by host policy
           system: system action admitted action=Lock connection=2 operation=3 scheduled=false
           system: system action ended action=Lock operation=3 scheduled=false state=Executed
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -532,11 +546,14 @@ fn backend_failure_is_a_failed_operation_not_a_lost_request() -> TestResult {
         failed,
         "the failed lock is kept as it ended"
     );
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action ended action=Lock error=unsupported operation=1 scheduled=false state=Failed
-    "#]].assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 
@@ -573,14 +590,16 @@ fn operations_never_replay_across_reconnect() -> TestResult {
     let second = system.execute(SystemAction::Lock)?;
     assert_eq!(second.state, OperationState::Executed);
     assert_ne!(second.id, first.id, "a new lock is a new operation");
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action ended action=Lock operation=1 scheduled=false state=Executed
           system: system action admitted action=Lock connection=2 operation=2 scheduled=false
           system: system action ended action=Lock operation=2 scheduled=false state=Executed
-    "#]]
-    .assert_eq(&trace.story(&["system"]));
+    "#]],
+        || trace.story(&["system"]),
+    );
     Ok(())
 }
 

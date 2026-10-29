@@ -91,7 +91,8 @@ fn interrupted_transfers_leave_room_for_new_ones() -> TestResult {
     );
     // Each side records the eight interruptions, and the ninth job starts.
     trace.wait_for_records("job state", 2 * MAX_ACTIVE_JOBS + MAX_ACTIVE_JOBS + 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=preparing job=2 sender=true to=serving
@@ -119,8 +120,9 @@ fn interrupted_transfers_leave_room_for_new_ones() -> TestResult {
           files: job state from=transferring job=6 sender=false to=interrupted
           files: job state from=transferring job=7 sender=false to=interrupted
           files: job state from=transferring job=8 sender=false to=interrupted
-    "#]]
-    .assert_eq(&trace.concurrent_story(&["files"]));
+    "#]],
+        || trace.concurrent_story(&["files"]),
+    );
     Ok(())
 }
 
@@ -300,7 +302,8 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
         },
     );
     drop(parked);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=4096 took=4096
@@ -312,6 +315,8 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
           files: job state done_bytes=4096 files_done=1 from=serving job=1 sender=true to=complete
           files: job state done_bytes=0 files_done=0 from=preparing job=2 sender=true to=cancelled
           files: a download prepared after its answer failed job=2 status=4
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }

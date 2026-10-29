@@ -141,7 +141,8 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
         "it lands where it was going"
     );
     trace.wait_for_records("file received", 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=interrupted
@@ -153,7 +154,9 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=524288 took=524288
           files: job state done_bytes=524288 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -259,12 +262,15 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
     // The receiver's story: the sender mirrors it whenever it next asks,
     // through serving or straight to complete.
     trace.wait_for_records_with("job state", &[("engine", "host"), ("to", "complete")], 1);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         host:
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: job state done_bytes=1000 files_done=0 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.engine_story("host", &["files"]));
+    "#]],
+        || trace.engine_story("host", &["files"]),
+    );
     Ok(())
 }
 
@@ -330,7 +336,8 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
         "the answer replaced the file"
     );
     // Each side tells of the question once, and nothing until the answer.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state from=serving job=1 sender=true to=waiting-decision
@@ -342,7 +349,9 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=6 took=6
           files: job state done_bytes=6 files_done=1 from=transferring job=1 sender=false to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]],
+        || trace.story(&["files"]),
+    );
     Ok(())
 }
 
@@ -477,7 +486,8 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
     );
     trace.wait_for_records("file received", 6);
     // Each job fetches its small files side by side.
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: file served ended=sent from=0 sent=1100 size=1100
@@ -498,7 +508,9 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
           files: file served ended=sent from=0 sent=700 size=700
           files: file served ended=sent from=0 sent=900 size=900
           files: job state done_bytes=2700 files_done=3 from=serving job=2 sender=true to=complete
-    "#]].assert_eq(&trace.concurrent_story(&["files"]));
+    "#]],
+        || trace.concurrent_story(&["files"]),
+    );
     Ok(())
 }
 
@@ -634,7 +646,8 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
         "cancelling stops the files fetched ahead"
     );
     trace.wait_for_records("job state", 4);
-    expect![[r#"
+    vnilink_testkit::assert_story(
+        expect![[r#"
         controller:
           files: job state from=preparing job=1 sender=true to=serving
           files: job state done_bytes=60000 files_done=20 from=serving job=1 sender=true to=complete
@@ -643,7 +656,9 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
         host:
           files: job state done_bytes=60000 files_done=20 from=transferring job=1 sender=false to=complete
           files: job state done_bytes=3000 files_done=1 from=transferring job=2 sender=false to=cancelled
-    "#]].assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
+    "#]],
+        || trace.tell(&["files"]).only(&["job state"]).to_string(),
+    );
     Ok(())
 }
 
