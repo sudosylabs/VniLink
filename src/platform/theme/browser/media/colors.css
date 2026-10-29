@@ -41,6 +41,16 @@
 	--camera-scrim: rgb(0 0 0 / 45%);
 	--camera-record: #ff453a;
 
+	/* Remote desktop: controls over the other computer's picture, glass dark in either theme. */
+	--desktop-glass: rgb(20 20 22 / 28%);
+	--desktop-glass-solid: rgb(28 28 30 / 88%);
+	--desktop-on-glass: #fff;
+	--desktop-on-glass-muted: rgb(255 255 255 / 66%);
+	--desktop-glass-line: rgb(255 255 255 / 14%);
+	--desktop-glass-hover: rgb(255 255 255 / 12%);
+	--desktop-live: #4ac776;
+	--desktop-warning: #f2c55c;
+
 	/* Terminal: the page's own colours, with VS Code's default ANSI palette (terminalColorRegistry.ts). */
 	--terminal-background: var(--canvas);
 	--terminal-foreground: var(--text);
@@ -125,6 +135,14 @@
 		--camera-on-stage: CanvasText;
 		--camera-scrim: Canvas;
 		--camera-record: CanvasText;
+		--desktop-glass: Canvas;
+		--desktop-glass-solid: Canvas;
+		--desktop-on-glass: CanvasText;
+		--desktop-on-glass-muted: GrayText;
+		--desktop-glass-line: CanvasText;
+		--desktop-glass-hover: Canvas;
+		--desktop-live: CanvasText;
+		--desktop-warning: CanvasText;
 		--terminal-foreground: CanvasText;
 		--terminal-cursor: CanvasText;
 		--terminal-selection: Highlight;

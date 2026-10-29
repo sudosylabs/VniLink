@@ -40,9 +40,6 @@ class RestartAction extends Action2 {
 
 registerAction2(RestartAction);
 
-/** Tabs that show a paired computer's screen, where a picture's problems are seen. */
-const desktopTab = ContextKeyExpr.regex(ActiveTabContext.key, /^desktop:/);
-
 /**
  * Saves what explains a session in one JSON file: the engine's diagnostic
  * snapshot (stages, phases, counts, conditions and the last end), its flight
@@ -51,7 +48,7 @@ const desktopTab = ContextKeyExpr.regex(ActiveTabContext.key, /^desktop:/);
  * None holds screen, clipboard, terminal, typed text or identity payload;
  * the engine bounds what it exports, and the logs' home folder reads `~`.
  */
-class ExportDiagnosticsAction extends Action2 {
+export class ExportDiagnosticsAction extends Action2 {
 	public static readonly ID = 'workbench.action.exportDiagnostics';
 
 	constructor() {
@@ -60,12 +57,6 @@ class ExportDiagnosticsAction extends Action2 {
 			title: localize2('app.exportDiagnostics', 'Export Diagnostics…'),
 			icon: ThemeIcon.fromId(Icons.diagnostics),
 			precondition: EngineAvailableContext,
-			menu: {
-				id: ViewActionsMenu,
-				group: 'navigation',
-				order: 90,
-				when: desktopTab,
-			},
 		});
 	}
 
@@ -126,7 +117,7 @@ function engineLogTail(reply: EngineReply): { path: string; events: unknown[] } 
 }
 
 /** Shows this run's logs folder, as VS Code's Open Logs Folder does. */
-class OpenLogsFolderAction extends Action2 {
+export class OpenLogsFolderAction extends Action2 {
 	public static readonly ID = 'workbench.action.openLogsFolder';
 
 	constructor() {
@@ -134,12 +125,6 @@ class OpenLogsFolderAction extends Action2 {
 			id: OpenLogsFolderAction.ID,
 			title: localize2('app.openLogsFolder', 'Open Logs Folder'),
 			icon: ThemeIcon.fromId(Icons.files),
-			menu: {
-				id: ViewActionsMenu,
-				group: 'navigation',
-				order: 91,
-				when: desktopTab,
-			},
 		});
 	}
 

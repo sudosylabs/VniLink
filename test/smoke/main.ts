@@ -163,6 +163,23 @@ class SmokeSuite {
 		}
 	}
 
+	/** The remote desktop over a picture: its details collapsed, open and slowed, and its controls brought down. */
+	private async verifyDesktopLayouts(window: BrowserWindow, driver: WindowDriver): Promise<void> {
+		const size = window.getSize();
+		try {
+			window.setSize(1400, 900);
+			for (const state of ['collapsed', 'details', 'slow', 'bar'] as const) {
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDesktopFixture(${JSON.stringify(state)})`);
+				// The controls slide down; the picture is taken once they have arrived.
+				await window.webContents.executeJavaScript(`new Promise(resolve => setTimeout(resolve, 400))`);
+				await driver.screenshot(`desktop-${state}`);
+			}
+		} finally {
+			await window.webContents.executeJavaScript(`browserTests.browserScenarios.clearDesktopFixture()`);
+			window.setSize(size[0], size[1]);
+		}
+	}
+
 	private async verifyDeviceLayouts(window: BrowserWindow, driver: WindowDriver): Promise<void> {
 		const size = window.getSize();
 		const theme = nativeTheme.themeSource;
@@ -350,6 +367,9 @@ class SmokeSuite {
 				}
 				if (name === 'context-menu') {
 					await this.verifyContextMenuThemes(window, driver);
+				}
+				if (name === 'remote-desktop-session') {
+					await this.verifyDesktopLayouts(window, driver);
 				}
 			}
 		}

@@ -1,19 +1,27 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, DisposableResizeObserver, EventType, getWindow } from '../../../base/browser/dom.js';
-import { status as announce } from '../../../base/browser/ui/aria/aria.js';
-import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
+import { Separator, toAction, type IAction } from '../../../base/common/actions.js';
 import { Icons } from '../../../base/common/icons.js';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
-import type { DesktopCondition } from '../../../platform/engine/common/dataChannel.js';
-import type { DisplayInfo } from '../../../platform/engine/common/engine.js';
+import { IMenuService } from '../../../platform/actions/common/actions.js';
+import { IContextKeyService } from '../../../platform/contextkey/common/contextkey.js';
+import type { DesktopAudioStatus } from '../../../platform/engine/common/dataChannel.js';
+import type { DisplayInfo, RecordingStatus } from '../../../platform/engine/common/engine.js';
+import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
-import { latencyStages, type LatencyStage } from '../../services/remoteDesktop/desktopLatency.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopRegion, type DesktopStats, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
+import { INativeRuntimeService } from '../../services/nativeRuntime/nativeRuntimeService.js';
+import { formatElapsed, SessionRecording, type RecordingStartFailure } from '../../services/recording/sessionRecording.js';
+import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopRegion, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
+import { ISystemActionService } from '../../services/systemActions/systemActionService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
+import { IUIStateService } from '../../services/uiState/uiStateService.js';
+import { DesktopSessionBar, type DesktopBarDelegate } from './desktopSessionBar.js';
+import { DesktopStatsOverlay, type DesktopPhase } from './desktopStatsOverlay.js';
+import { RemoteDesktopMenu } from './remoteDesktopMenu.js';
 import { StillCompositor } from './stillCompositor.js';
 
 type DesktopProblem = DesktopFailure | DesktopEnd;
@@ -172,80 +180,6 @@ function pictureSizeLabel(size: PictureSize): string {
 	}
 }
 
-const codecNames: Readonly<Record<string, string>> = { h264: 'H.264', h265: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1' };
-
-/** Frame rate, codec, bitrate and round trip, then why the quality is lowered, or the bitrate held, when it is. */
-export function statsText(stats: DesktopStats, name: string): string {
-	const { status } = stats;
-	const rate = status.receivedKbps >= 1000
-		? nls.localize('desktop.megabits', '{0} Mb/s', (status.receivedKbps / 1000).toFixed(1))
-		: nls.localize('desktop.kilobits', '{0} kb/s', status.receivedKbps);
-	const parts = [
-		nls.localize('desktop.fps', '{0} fps', status.receivedFps),
-		codecNames[stats.codec] ?? stats.codec.toUpperCase(),
-		rate,
-		nls.localize('desktop.rtt', '{0} ms', status.rttMs),
-	];
-	switch (status.reason) {
-		case 'networkPressure': parts.push(nls.localize('desktop.lowNetwork', 'Lowered for the network')); break;
-		case 'receiverPressure': parts.push(nls.localize('desktop.lowHere', 'Lowered: this computer is behind')); break;
-		case 'encoderPressure': parts.push(nls.localize('desktop.lowThere', 'Lowered: {0} is behind', name)); break;
-		case 'recovering': parts.push(nls.localize('desktop.recovering', 'Improving')); break;
-		case 'warmingUp': case 'stable': case 'idle': break;
-	}
-	// A cut already says why; a bitrate that is merely held says what holds it.
-	if (status.reason !== 'networkPressure' && status.reason !== 'encoderPressure') {
-		switch (status.limit) {
-			case 'setting': parts.push(nls.localize('desktop.limitSetting', 'At your bandwidth limit')); break;
-			case 'relay': parts.push(nls.localize('desktop.limitRelay', 'Limited by the relay')); break;
-			case 'network': parts.push(nls.localize('desktop.limitNetwork', 'Limited by the network')); break;
-			case 'encoder': parts.push(nls.localize('desktop.limitEncoder', 'Limited by {0}', name)); break;
-			case 'receiver': parts.push(nls.localize('desktop.limitReceiver', 'Limited by this computer')); break;
-			case 'none': break;
-		}
-	}
-	return parts.join(' · ');
-}
-
-/** One short phrase for what is wrong with the picture, naming whose side it is. */
-export function conditionText(condition: DesktopCondition, name: string): string {
-	switch (condition) {
-		case 'link.blackout': return nls.localize('desktop.condition.blackout', 'No picture from {0}', name);
-		case 'relay.backlog': return nls.localize('desktop.condition.relayBacklog', 'Relayed connection is delayed');
-		case 'link.congestion': return nls.localize('desktop.condition.congestion', 'Slow network: lowered quality');
-		case 'link.loss': return nls.localize('desktop.condition.loss', 'Network is losing data');
-		case 'host.secureDesktop': return nls.localize('desktop.condition.secureDesktop', '{0} is on a sign-in or admin prompt', name);
-		case 'encoder.slow': return nls.localize('desktop.condition.encoderSlow', '{0} can’t encode fast enough', name);
-		case 'decoder.slow': return nls.localize('desktop.condition.decoderSlow', 'This computer can’t decode fast enough');
-		case 'decoder.recovering': return nls.localize('desktop.condition.recovering', 'Picture recovering from a decoding error');
-		case 'encoder.software': return nls.localize('desktop.condition.encoderSoftware', '{0} is encoding in software', name);
-		case 'decoder.software': return nls.localize('desktop.condition.decoderSoftware', 'This computer is decoding in software');
-		case 'relay.path': return nls.localize('desktop.condition.relay', 'Connected through a relay');
-	}
-}
-
-/** Conditions that need no attention while others are absent: a relay is not a problem. */
-const informational: ReadonlySet<DesktopCondition> = new Set(['relay.path']);
-
-/** Each measured stage's typical time, then the time nineteen pictures in twenty beat. */
-export function latencyText(stats: DesktopStats, name: string): string {
-	const labels: Readonly<Record<LatencyStage, string>> = {
-		host: nls.localize('desktop.latency.host', 'On {0}', name),
-		queue: nls.localize('desktop.latency.queue', 'Waiting here'),
-		bridge: nls.localize('desktop.latency.bridge', 'To the window'),
-		decode: nls.localize('desktop.latency.decode', 'Decoding'),
-		draw: nls.localize('desktop.latency.draw', 'Drawing'),
-	};
-	const lines = latencyStages.flatMap(stage => {
-		const latency = stats.latency[stage];
-		return latency ? [nls.localize('desktop.latency.stage', '{0}: {1} ms, {2} ms at most for 95%', labels[stage], latency.p50.toFixed(1), latency.p95.toFixed(1))] : [];
-	});
-	if (stats.skipped > 0) {
-		lines.push(nls.localize('desktop.latency.skipped', '{0} pictures replaced by newer ones before drawing', stats.skipped));
-	}
-	return lines.length ? [nls.localize('desktop.latency.network', 'Network: about {0} ms each way', Math.round(stats.status.rttMs / 2)), ...lines].join('\n') : '';
-}
-
 function problemMessage(name: string, problem: DesktopProblem): string {
 	switch (problem) {
 		case 'disconnected': return nls.localize('desktop.disconnected', 'Not connected to {0}.', name);
@@ -320,17 +254,22 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private readonly overlayTitle: HTMLElement;
 	private readonly overlayBody: HTMLElement;
 	private readonly overlayActions: HTMLElement;
-	private readonly statusRole: HTMLElement;
-	private readonly statusSize: HTMLElement;
-	private readonly sizePicker: HTMLSelectElement;
-	private readonly fullScreenButton: HTMLButtonElement;
+	/** How the picture is doing, over it. */
+	private readonly stats: DesktopStatsOverlay;
+	/** The session's controls, off the picture until wanted. */
+	private readonly bar: DesktopSessionBar;
+	private readonly recording: SessionRecording;
 	private pictureSize: PictureSize;
 	private fullScreen = false;
-	private readonly statusStats: HTMLElement;
-	/** What is wrong with the live picture, apart from why one ended. */
-	private readonly statusCondition: HTMLElement;
-	/** The condition last shown and announced. */
-	private shownCondition: DesktopCondition | undefined;
+	private phase: DesktopPhase = 'connecting';
+	/** The other computer's sound here, once its channel says. */
+	private sound: DesktopAudioStatus | undefined;
+	private readingSound = false;
+	/** Privacy mode on the other computer, as it last answered. */
+	private privacy = false;
+	private settingPrivacy = false;
+	/** Whether a still picture, in full colour, was drawn in this session. */
+	private stillShown = false;
 	private readonly statsTimer = this._register(new MutableDisposable());
 	private readonly session = this._register(new MutableDisposable<IDesktopSession>());
 	private readonly sessionListeners = this._register(new DisposableStore());
@@ -349,6 +288,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private shown: { readonly display: string; readonly revision: string } | undefined;
 	/** The shown display's bounds, once the other computer's topology names it at the picture's revision. */
 	private display: DisplayInfo | undefined;
+	/** Every display of the other computer at the shown picture's revision, to choose from. */
+	private displays: readonly DisplayInfo[] = [];
+	/** A display chosen here and not yet shown; pictures of the old one don't select it back meanwhile. */
+	private requestedDisplay: string | undefined;
 	private readingDisplays = false;
 	private lastRead = -Infinity;
 	/** The display this session's pointer is selected for, sent once per session before any pointer. */
@@ -373,6 +316,12 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		@ITabService private readonly tabService: ITabService,
 		@INativeHostService private readonly nativeHost: INativeHostService,
 		@IConfigurationService configurationService: IConfigurationService,
+		@IInstantiationService instantiationService: IInstantiationService,
+		@ISystemActionService private readonly systemActions: ISystemActionService,
+		@IMenuService private readonly menuService: IMenuService,
+		@IContextKeyService private readonly contextKeyService: IContextKeyService,
+		@IUIStateService private readonly uiState: IUIStateService,
+		@INativeRuntimeService nativeRuntime: INativeRuntimeService,
 	) {
 		super();
 		this.pictureSize = pictureSizeFrom(configurationService.getValue<unknown>('desktop.pictureSize'));
@@ -415,24 +364,16 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.overlayTitle = append(panel, $('p.desktop-overlay-title'));
 		this.overlayBody = append(panel, $('p.desktop-overlay-body'));
 		this.overlayActions = append(panel, $('.desktop-overlay-actions'));
-		const status = append(this.element, $('footer.desktop-status'));
-		this.statusRole = append(status, $('span.desktop-status-role'));
-		this.statusStats = append(status, $('span.desktop-status-stats'));
-		this.statusCondition = append(status, $('span.desktop-status-condition'));
-		this.statusCondition.hidden = true;
-		append(status, $('span.desktop-status-space'));
-		this.statusSize = append(status, $('span.desktop-status-size'));
-		const picker = append(status, $('span.desktop-size-picker'));
-		this.sizePicker = append(picker, $<HTMLSelectElement>('select'));
-		this.sizePicker.setAttribute('aria-label', nls.localize('desktop.pictureSize', 'Picture size'));
-		for (const size of ['fit', 'stretch', ...zooms] as const) {
-			append(this.sizePicker, $<HTMLOptionElement>('option', { value: String(size) })).textContent = pictureSizeLabel(size);
-		}
-		this.sizePicker.value = String(this.pictureSize);
-		picker.append(renderIcon(Icons.chevronDown));
-		this.fullScreenButton = append(status, $<HTMLButtonElement>('button.desktop-status-button', { type: 'button' }));
-		this.updateFullScreenButton();
+		this.stats = this._register(instantiationService.createInstance(DesktopStatsOverlay, device.id, device.name, control));
+		this.element.append(this.stats.element);
+		this.bar = this._register(instantiationService.createInstance(DesktopSessionBar, this.element, device.name, this.barDelegate()));
+		this.element.append(this.bar.element);
+		this.recording = this._register(new SessionRecording(() => this.remoteDesktop.startRecording(this.device.id), nativeRuntime));
+		void this.uiState.get('desktop.showStats').then(shown => {
+			this.stats.shown = shown !== false;
+		});
 		this.registerViewControls();
+		this.updateBar();
 		if (control) {
 			this.registerInput();
 		}
@@ -453,12 +394,14 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	}
 
 	private registerViewControls(): void {
-		this._register(addDisposableListener(this.sizePicker, EventType.CHANGE, () => {
-			this.pictureSize = pictureSizeFrom(this.sizePicker.value);
-			this.layout();
+		this._register(this.bar.onDidLeave(() => {
+			this.focusScreen();
 		}));
-		this._register(addDisposableListener(this.fullScreenButton, EventType.CLICK, () => {
-			void this.setFullScreen(!this.fullScreen);
+		this._register(this.recording.onDidChange(() => {
+			this.updateBar();
+		}));
+		this._register(this.recording.onDidEnd(status => {
+			this.stats.notice(recordingEndMessage(status));
 		}));
 		this._register(this.nativeHost.onDidChangeWindowState(state => {
 			// The window left full screen another way, such as its green button.
@@ -470,7 +413,192 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			if (this.fullScreen) {
 				void this.nativeHost.setFullScreen(false);
 			}
+			// Privacy mode is this tab's: closing it gives the other computer back its screen and input.
+			if (this.privacy) {
+				void this.systemActions.setPrivacy(this.device.id, false);
+			}
 		}));
+	}
+
+	/** What the session bar's controls do. */
+	private barDelegate(): DesktopBarDelegate {
+		return {
+			sizeActions: () => this.sizeActions(),
+			displayActions: () => this.displayActions(),
+			moreActions: () => this.moreActions(),
+			toggleSound: () => void this.toggleSound(),
+			togglePrivacy: () => void this.togglePrivacy(),
+			stopRecording: () => void this.toggleRecording(),
+			toggleFullScreen: () => void this.setFullScreen(!this.fullScreen),
+		};
+	}
+
+	private sizeActions(): IAction[] {
+		const size = (value: PictureSize): IAction => toAction({
+			id: `desktop.size.${String(value)}`,
+			label: pictureSizeLabel(value),
+			checked: this.pictureSize === value,
+			run: () => {
+				this.pictureSize = value;
+				this.layout();
+				this.updateBar();
+			},
+		});
+		return [
+			size('fit'),
+			size('stretch'),
+			new Separator(),
+			...zooms.map(size),
+			new Separator(),
+			toAction({
+				id: 'desktop.fullScreen',
+				label: this.fullScreen ? nls.localize('desktop.exitFullScreen', 'Exit Full Screen') : nls.localize('desktop.fullScreen', 'Full Screen'),
+				run: () => void this.setFullScreen(!this.fullScreen),
+			}),
+		];
+	}
+
+	private displayActions(): IAction[] {
+		return this.displays.map((display, index) => toAction({
+			id: `desktop.display.${display.id}`,
+			label: displayLabel(display, index),
+			checked: (this.requestedDisplay ?? this.shown?.display) === display.id,
+			run: () => {
+				this.selectDisplay(display.id);
+			},
+		}));
+	}
+
+	/** Asks the other computer for another of its displays; its pictures follow. */
+	private selectDisplay(id: string): void {
+		if (!this.control || id === (this.requestedDisplay ?? this.shown?.display)) {
+			return;
+		}
+		this.requestedDisplay = id;
+		this.selected = id;
+		this.session.value?.send({ type: 'selectDisplays', ids: [id] });
+		this.updateBar();
+	}
+
+	private moreActions(): IAction[] {
+		const own: IAction[] = [
+			toAction({
+				id: 'desktop.record',
+				label: this.recording.recording ? nls.localize('desktop.stopRecording', 'Stop Recording') : nls.localize('desktop.record', 'Record Screen'),
+				enabled: this.phase === 'live' && !this.recording.stopping,
+				run: () => void this.toggleRecording(),
+			}),
+		];
+		const computer = this.menuService.getMenuActions(RemoteDesktopMenu, this.contextKeyService, { arg: this.device.id, shouldForwardArgs: true })
+			.flatMap(([, actions]) => [new Separator(), ...actions]);
+		return [
+			...own,
+			...computer,
+			new Separator(),
+			toAction({
+				id: 'desktop.showStats',
+				label: nls.localize('desktop.showStats', 'Show Picture Details'),
+				checked: this.stats.shown,
+				run: () => {
+					this.stats.shown = !this.stats.shown;
+					void this.uiState.set('desktop.showStats', this.stats.shown);
+				},
+			}),
+			toAction({
+				id: 'desktop.disconnect',
+				label: nls.localize('desktop.disconnect', 'Disconnect'),
+				run: () => void this.tabService.close(this.id),
+			}),
+		];
+	}
+
+	private async toggleRecording(): Promise<void> {
+		const failure = await this.recording.toggle();
+		if (failure && !this._store.isDisposed) {
+			this.stats.notice(recordingStartMessage(this.device.name, failure));
+		}
+	}
+
+	private async toggleSound(): Promise<void> {
+		const sound = this.sound;
+		if (!sound) {
+			return;
+		}
+		try {
+			const status = await this.session.value?.audio({ type: 'muted', muted: !sound.muted });
+			this.showSound(status);
+		} catch {
+			this.stats.notice(nls.localize('desktop.soundFailed', 'The sound couldn’t be changed.'));
+		}
+	}
+
+	/** Reads the other computer's sound with the stats, one read at a time. */
+	private async readSound(): Promise<void> {
+		const session = this.session.value;
+		if (!session || this.readingSound) {
+			return;
+		}
+		this.readingSound = true;
+		try {
+			const status = await session.audio({ type: 'status' });
+			if (this.session.value === session) {
+				this.showSound(status);
+			}
+		} catch {
+			// The next stats read asks again.
+		} finally {
+			this.readingSound = false;
+		}
+	}
+
+	private showSound(status: DesktopAudioStatus | undefined): void {
+		const playable = status && (status.phase === 'playing' || status.phase === 'muted' || status.phase === 'starting');
+		this.sound = playable ? status : undefined;
+		this.updateBar();
+	}
+
+	private async togglePrivacy(): Promise<void> {
+		if (!this.control || this.settingPrivacy) {
+			return;
+		}
+		this.settingPrivacy = true;
+		try {
+			const result = await this.systemActions.setPrivacy(this.device.id, !this.privacy);
+			if (this._store.isDisposed) {
+				return;
+			}
+			if ('error' in result) {
+				this.stats.notice(nls.localize('desktop.privacyFailed', 'Privacy mode: {0}', result.error));
+			} else {
+				this.privacy = result.privacy.displayPrivate || result.privacy.inputBlocked;
+				this.stats.notice(this.privacy
+					? nls.localize('desktop.privacyStarted', 'Privacy mode on: the screen of {0} is blank there and its keyboard and mouse are blocked.', this.device.name)
+					: nls.localize('desktop.privacyEnded', 'Privacy mode off.'));
+			}
+		} finally {
+			this.settingPrivacy = false;
+			this.updateBar();
+		}
+	}
+
+	/** Keys go back to the other computer once the controls are put away. */
+	private focusScreen(): void {
+		if (this.control && this.tabService.activeTab === this && this.phase === 'live') {
+			this.canvas.focus();
+		}
+	}
+
+	private updateBar(): void {
+		const shownIndex = this.displays.findIndex(display => display.id === (this.requestedDisplay ?? this.shown?.display));
+		this.bar.update({
+			phase: this.phase,
+			size: pictureSizeLabel(this.pictureSize),
+			display: this.control && this.displays.length > 1 && shownIndex >= 0 ? displayLabel(this.displays[shownIndex], shownIndex, false) : undefined,
+			sound: this.sound ? (this.sound.muted ? 'muted' : 'playing') : undefined,
+			privacy: this.control && this.phase === 'live' ? this.privacy : undefined,
+			recording: this.recording.recording ? formatElapsed(this.recording.elapsedMs) : undefined,
+			fullScreen: this.fullScreen,
+		});
 	}
 
 	/**
@@ -489,14 +617,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private applyFullScreen(fullScreen: boolean): void {
 		this.fullScreen = fullScreen;
 		this.element.classList.toggle('desktop-view-fullscreen', fullScreen);
-		this.updateFullScreenButton();
-	}
-
-	private updateFullScreenButton(): void {
-		const text = this.fullScreen ? nls.localize('desktop.exitFullScreen', 'Exit Full Screen') : nls.localize('desktop.fullScreen', 'Full Screen');
-		this.fullScreenButton.title = text;
-		this.fullScreenButton.setAttribute('aria-label', text);
-		this.fullScreenButton.replaceChildren(renderIcon(this.fullScreen ? Icons.exitFullScreen : Icons.fullScreen));
+		this.updateBar();
 	}
 
 	/** Sizes the picture in its stage as chosen, centred where it is smaller, scrolling where it is larger. */
@@ -561,9 +682,14 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.showPointer();
 		this.selected = undefined;
 		this.display = undefined;
+		this.displays = [];
+		this.requestedDisplay = undefined;
 		this.shown = undefined;
+		this.sound = undefined;
+		this.stillShown = false;
 		this.lastRead = -Infinity;
 		this.retries = 0;
+		this.updateBar();
 	}
 
 	/** Tries again after 1, 2, 5 and 10 seconds, then every 30, while the tab is open. */
@@ -590,9 +716,16 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				this.shown = { display, revision };
 				this.display = undefined;
 			}
-			if (this.control && this.selected !== display) {
+			// A display chosen here is shown once its pictures arrive; until then the old one's don't undo the choice.
+			if (this.requestedDisplay === display) {
+				this.requestedDisplay = undefined;
+			}
+			if (this.control && this.selected !== display && this.requestedDisplay === undefined) {
 				this.selected = display;
 				this.session.value?.send({ type: 'selectDisplays', ids: [display] });
+			}
+			if (role === 'still') {
+				this.stillShown = true;
 			}
 			if (!this.display) {
 				void this.readDisplays();
@@ -634,25 +767,18 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.readingDisplays = true;
 		this.lastRead = performance.now();
 		try {
-			const found = (await session.displays()).find(display => display.id === shown.display && display.revision === shown.revision);
+			const displays = (await session.displays()).filter(display => display.revision === shown.revision);
+			const found = displays.find(display => display.id === shown.display);
 			if (found && this.shown === shown) {
 				this.display = found;
+				this.displays = displays;
 			}
 		} catch {
 			// The next picture asks again.
 		} finally {
 			this.readingDisplays = false;
 		}
-		this.updateStatus();
-	}
-
-	private currentDisplay(): DisplayInfo | undefined {
-		return this.display;
-	}
-
-	private updateStatus(): void {
-		const display = this.currentDisplay();
-		this.statusSize.textContent = display ? nls.localize('desktop.size', '{0} × {1}', display.width, display.height) : '';
+		this.updateBar();
 	}
 
 	private registerInput(): void {
@@ -861,7 +987,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 
 	/** Where the pointer is on the other computer's display, through the picture as it is shown. */
 	private pointer(event: PointerEvent): void {
-		const display = this.currentDisplay();
+		const display = this.display;
 		const shown = this.shown;
 		const fit = this.fitted();
 		if (!display || !shown || !fit) {
@@ -944,8 +1070,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 
 	private setOverlay(state: string, title: string, body: string, actions: readonly OverlayAction[]): void {
 		this.statsTimer.clear();
-		this.statusStats.textContent = '';
-		this.showConditions([]);
+		this.setPhase(state === 'ended' ? 'ended' : state === 'connecting' ? 'connecting' : 'reconnecting');
 		// Progress is polite; an end interrupts, once, from the same region.
 		this.overlay.setAttribute('role', state === 'ended' ? 'alert' : 'status');
 		this.overlay.dataset.state = state;
@@ -962,13 +1087,18 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			button.classList.toggle('primary', action.primary === true);
 			this.overlayListeners.add(addDisposableListener(button, EventType.CLICK, action.run));
 		}
-		this.statusRole.textContent = state === 'ended'
-			? nls.localize('desktop.notConnected', 'Not connected')
-			: state === 'connecting' ? nls.localize('desktop.statusConnecting', 'Connecting') : nls.localize('desktop.statusReconnecting', 'Reconnecting');
-		this.statusRole.dataset.state = state;
 	}
 
-	/** Reads how the picture is doing once a second while it shows. */
+	private setPhase(phase: DesktopPhase): void {
+		this.phase = phase;
+		this.stats.setPhase(phase);
+		if (phase !== 'live') {
+			this.sound = undefined;
+		}
+		this.updateBar();
+	}
+
+	/** Reads how the picture is doing, and its sound, once a second while it shows. */
 	private watchStats(): void {
 		const timer = setInterval(() => {
 			void this.session.value?.stats().then(stats => {
@@ -976,42 +1106,13 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				if (this.overlay.dataset.state) {
 					return;
 				}
-				this.statusStats.textContent = stats ? statsText(stats, this.device.name) : '';
-				this.statusStats.title = stats ? latencyText(stats, this.device.name) : '';
-				this.showConditions(stats?.status.conditions ?? []);
+				this.stats.update(stats, { display: this.display, stillShown: this.stillShown });
 			});
+			void this.readSound();
 		}, 1000);
 		this.statsTimer.value = toDisposable(() => {
 			clearInterval(timer);
 		});
-	}
-
-	/**
-	 * Shows the worst condition that needs attention in one phrase, with
-	 * every held one on hover or focus, and says a new worst one aloud
-	 * once. A relay alone is not shown; it is listed with the others.
-	 */
-	private showConditions(conditions: readonly DesktopCondition[]): void {
-		const name = this.device.name;
-		const worst = conditions.find(condition => !informational.has(condition));
-		const element = this.statusCondition;
-		element.hidden = worst === undefined;
-		element.textContent = worst ? conditionText(worst, name) : '';
-		const all = conditions.map(condition => conditionText(condition, name)).join('\n');
-		element.title = all;
-		element.tabIndex = worst ? 0 : -1;
-		element.setAttribute('aria-label', conditions.map(condition => conditionText(condition, name)).join('. '));
-		if (worst) {
-			element.dataset.condition = worst;
-		} else {
-			delete element.dataset.condition;
-		}
-		if (worst !== this.shownCondition) {
-			this.shownCondition = worst;
-			if (worst) {
-				announce(conditionText(worst, name));
-			}
-		}
 	}
 
 	private hideState(): void {
@@ -1020,12 +1121,50 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.overlay.hidden = true;
 		this.overlayListeners.clear();
 		this.stage.classList.remove('desktop-dimmed');
-		this.statusRole.textContent = this.control
-			? nls.localize('desktop.controlling', 'Controlling {0}', this.device.name)
-			: nls.localize('desktop.viewing', 'Viewing {0}', this.device.name);
-		this.statusRole.dataset.state = 'live';
+		this.setPhase('live');
+		void this.readPrivacy();
 		if (this.control && !this.element.contains(document.activeElement) && this.tabService.activeTab === this) {
 			this.canvas.focus();
 		}
+	}
+
+	/** Whether privacy mode is already on, as after a reconnect; only a controlling tab asks. */
+	private async readPrivacy(): Promise<void> {
+		if (!this.control) {
+			return;
+		}
+		const result = await this.systemActions.privacy(this.device.id);
+		if (!this._store.isDisposed && 'privacy' in result) {
+			this.privacy = result.privacy.displayPrivate || result.privacy.inputBlocked;
+			this.updateBar();
+		}
+	}
+}
+
+/** A display as its menu names it: its place among the other computer's displays, and its size. */
+function displayLabel(display: DisplayInfo, index: number, withSize = true): string {
+	return withSize
+		? nls.localize('desktop.displayWithSize', 'Display {0} · {1} × {2}', index + 1, display.width, display.height)
+		: nls.localize('desktop.displayNumber', 'Display {0}', index + 1);
+}
+
+function recordingStartMessage(name: string, failure: RecordingStartFailure): string {
+	switch (failure) {
+		case 'notAllowed': return nls.localize('desktop.recordingNotAllowed', '{0} doesn’t allow recording its screen.', name);
+		case 'disconnected': return nls.localize('desktop.recordingDisconnected', '{0} isn’t connected.', name);
+		case 'failed': return nls.localize('desktop.recordingFailed', 'The recording didn’t start.');
+	}
+}
+
+function recordingEndMessage(status: RecordingStatus | undefined): string {
+	switch (status?.failure) {
+		case undefined: return nls.localize('desktop.recordingLost', 'The recording stopped.');
+		case null: return nls.localize('desktop.recordingSaved', 'Recording saved to the recordings folder.');
+		case 'Startup': return nls.localize('desktop.recordingStartup', 'The recording didn’t start.');
+		case 'Storage': return nls.localize('desktop.recordingStorage', 'The recordings folder can’t be written to.');
+		case 'SlowStorage': return nls.localize('desktop.recordingSlow', 'The recordings folder couldn’t keep up, so the recording stopped.');
+		case 'Limit': return nls.localize('desktop.recordingLimit', 'The recording reached its size limit.');
+		case 'Media':
+		case 'FormatChanged': return nls.localize('desktop.recordingMedia', 'The screen changed size, so the recording stopped.');
 	}
 }

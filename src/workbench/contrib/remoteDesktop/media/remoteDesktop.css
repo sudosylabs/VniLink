@@ -1,11 +1,14 @@
 /* The other computer's screen in the tab, sized as chosen with dark margins
- * around it or scrolling when larger, and a status bar in the Files tab's
- * form says what the session is doing. */
+ * around it or scrolling when larger. Nothing else takes room from it: the
+ * picture's details float over it and the controls come down from the top
+ * edge when wanted. */
 
 .desktop-view {
+	position: relative;
 	display: grid;
+	overflow: hidden;
 	flex: 1;
-	grid-template-rows: minmax(0, 1fr) auto;
+	grid-template-rows: minmax(0, 1fr);
 	min-width: 0;
 	min-height: 0;
 	background: var(--canvas);
@@ -130,130 +133,351 @@
 	}
 }
 
-.desktop-status {
-	display: flex;
-	align-items: center;
-	gap: 14px;
-	height: 26px;
-	padding: 0 12px;
-	border-top: 1px solid var(--line);
-	background: var(--chrome);
-	color: var(--muted);
-	font-size: 12px;
-	font-variant-numeric: tabular-nums;
-}
-
-.desktop-status-role {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	color: var(--text);
-}
-
-.desktop-status-role::before {
-	width: 6px;
-	height: 6px;
-	border-radius: 3px;
-	background: var(--status-pending);
-	content: '';
-}
-
-.desktop-status-role[data-state='live']::before {
-	background: var(--status-connected);
-}
-
-.desktop-status-role[data-state='ended']::before {
-	background: var(--muted);
-}
-
-.desktop-status-condition {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	color: var(--text);
-}
-
-.desktop-status-condition::before {
-	width: 6px;
-	height: 6px;
-	border-radius: 3px;
-	background: var(--status-pending);
-	content: '';
-}
-
-/* Software coders and recovery explain a slower picture; they are not a fault. */
-.desktop-status-condition:is(
-		[data-condition='encoder.software'],
-		[data-condition='decoder.software'],
-		[data-condition='decoder.recovering']
-	)::before {
-	background: var(--muted);
-}
-
-.desktop-status-condition[hidden] {
-	display: none;
-}
-
-.desktop-status-space {
-	flex: 1;
-}
-
-.desktop-size-picker {
-	position: relative;
-	display: inline-flex;
-	align-items: center;
-}
-
-.desktop-size-picker select {
-	appearance: none;
-	height: 20px;
-	padding: 0 22px 0 6px;
-	border: 1px solid transparent;
-	border-radius: 4px;
-	background: transparent;
-	color: var(--text);
-	font: inherit;
-}
-
-.desktop-size-picker select:hover {
-	background: var(--surface-hover);
-}
-
-.desktop-size-picker > .vnilink-icon {
-	--icon-size: 12px;
-
-	position: absolute;
-	right: 6px;
-	pointer-events: none;
-	color: var(--muted);
-}
-
-.desktop-status-button {
-	display: inline-grid;
-	place-items: center;
-	width: 22px;
-	height: 20px;
-	padding: 0;
-	border: 0;
-	border-radius: 4px;
-	background: transparent;
-	color: var(--text);
-
-	--icon-size: 14px;
-}
-
-.desktop-status-button:hover {
-	background: var(--surface-hover);
-}
-
-.desktop-view :is(button, select, .desktop-screen, .desktop-status-condition):focus-visible {
+.desktop-view :is(button, select, .desktop-screen):focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: -2px;
 }
 
+/* The picture's details: barely there over the picture until the pointer or focus reaches them. */
+.desktop-stats {
+	position: absolute;
+	z-index: 2;
+	display: flex;
+	flex-direction: column;
+	max-width: min(340px, calc(100% - 24px));
+	border-radius: 8px;
+	background: var(--desktop-glass);
+	backdrop-filter: blur(10px);
+	color: var(--desktop-on-glass);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	text-shadow: 0 1px 2px rgb(0 0 0 / 45%);
+	opacity: 0.86;
+	touch-action: none;
+	user-select: none;
+	transition:
+		opacity 120ms ease,
+		background-color 120ms ease;
+}
+
+.desktop-stats[data-corner='topLeft'] {
+	top: 12px;
+	left: 12px;
+}
+
+.desktop-stats[data-corner='topRight'] {
+	top: 12px;
+	right: 12px;
+}
+
+.desktop-stats[data-corner='bottomLeft'] {
+	bottom: 12px;
+	left: 12px;
+}
+
+.desktop-stats[data-corner='bottomRight'] {
+	right: 12px;
+	bottom: 12px;
+}
+
+.desktop-stats:is(:hover, :focus-within, .expanded, .dragging) {
+	background: var(--desktop-glass-solid);
+	text-shadow: none;
+	opacity: 1;
+}
+
+.desktop-stats.dragging {
+	cursor: grabbing;
+	transition: none;
+}
+
+.desktop-stats-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 28px;
+	padding: 0 4px 0 2px;
+	white-space: nowrap;
+}
+
+.desktop-stats-grip,
+.desktop-stats-toggle {
+	display: grid;
+	flex: none;
+	place-items: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--desktop-on-glass-muted);
+}
+
+.desktop-stats-grip {
+	cursor: grab;
+}
+
+.desktop-stats-toggle:hover {
+	background: var(--desktop-glass-hover);
+	color: var(--desktop-on-glass);
+}
+
+:is(.desktop-stats-grip, .desktop-stats-toggle) > .vnilink-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.desktop-stats-role {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.desktop-stats-role::before {
+	width: 6px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--desktop-warning);
+	content: '';
+}
+
+.desktop-stats[data-phase='live'] .desktop-stats-role::before {
+	background: var(--desktop-live);
+}
+
+.desktop-stats[data-phase='ended'] .desktop-stats-role::before {
+	background: var(--desktop-on-glass-muted);
+}
+
+.desktop-stats-summary {
+	padding-right: 2px;
+}
+
+.desktop-stats-condition,
+.desktop-stats-notice {
+	margin: 0;
+	padding: 0 10px 6px 32px;
+	color: var(--desktop-warning);
+	line-height: 1.4;
+	white-space: normal;
+}
+
+/* Software coders and recovery explain a slower picture; they are not a fault. */
+.desktop-stats-condition.explanation {
+	color: var(--desktop-on-glass-muted);
+}
+
+.desktop-stats-notice {
+	color: var(--desktop-on-glass);
+}
+
+.desktop-stats-notice:empty {
+	display: none;
+}
+
+.desktop-stats-details {
+	display: grid;
+	gap: 8px;
+	padding: 8px 12px 10px;
+	border-top: 1px solid var(--desktop-glass-line);
+	user-select: text;
+}
+
+.desktop-stats-details dl {
+	display: grid;
+	grid-template-columns: 7.5em minmax(0, 1fr);
+	gap: 4px 14px;
+	margin: 0;
+}
+
+.desktop-stats-details dt {
+	color: var(--desktop-on-glass-muted);
+}
+
+.desktop-stats-details dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.desktop-stats-latency {
+	padding-top: 8px;
+	border-top: 1px solid var(--desktop-glass-line);
+}
+
+.desktop-stats-details .desktop-stats-heading {
+	grid-column: 1 / -1;
+}
+
+.desktop-stats-details dd.desktop-stats-heading {
+	display: none;
+}
+
+.desktop-stats-note {
+	margin: 0;
+	color: var(--desktop-on-glass-muted);
+}
+
+/* Details off: only what just happened still shows, as one line. */
+.desktop-stats.details-off:not(.noticing) {
+	display: none;
+}
+
+.desktop-stats.details-off :is(.desktop-stats-line, .desktop-stats-condition, .desktop-stats-details) {
+	display: none;
+}
+
+.desktop-stats.details-off .desktop-stats-notice {
+	padding: 6px 10px;
+}
+
+/* The controls: a tab at the top edge, and the bar it brings down. */
+.desktop-bar-host {
+	position: absolute;
+	top: 0;
+	left: 50%;
+	z-index: 3;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	transform: translateX(-50%);
+	pointer-events: none;
+}
+
+.desktop-bar-tab {
+	display: grid;
+	place-items: center;
+	width: 40px;
+	height: 12px;
+	padding: 0;
+	border-radius: 0 0 6px 6px;
+	background: var(--desktop-glass);
+	color: var(--desktop-on-glass-muted);
+	opacity: 0.6;
+	pointer-events: auto;
+}
+
+.desktop-bar-tab > .vnilink-icon {
+	width: 10px;
+	height: 10px;
+}
+
+.desktop-bar-tab:hover,
+.desktop-bar-tab:focus-visible {
+	opacity: 1;
+}
+
+.desktop-bar {
+	position: absolute;
+	top: 8px;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: 36px;
+	padding: 0 4px 0 12px;
+	border-radius: 10px;
+	background: var(--desktop-glass-solid);
+	backdrop-filter: blur(16px);
+	box-shadow: 0 6px 20px rgb(0 0 0 / 30%);
+	color: var(--desktop-on-glass);
+	font-size: 13px;
+	white-space: nowrap;
+	opacity: 0;
+	transform: translateY(calc(-100% - 12px));
+	transition:
+		opacity 140ms ease,
+		transform 140ms ease;
+}
+
+.desktop-bar-host.revealed .desktop-bar {
+	opacity: 1;
+	transform: none;
+	pointer-events: auto;
+}
+
+.desktop-bar-host.revealed .desktop-bar-tab {
+	visibility: hidden;
+}
+
+.desktop-bar-name {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding-right: 6px;
+}
+
+.desktop-bar-name::before {
+	width: 6px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--desktop-warning);
+	content: '';
+}
+
+.desktop-bar-name[data-phase='live']::before {
+	background: var(--desktop-live);
+}
+
+.desktop-bar-name[data-phase='ended']::before {
+	background: var(--desktop-on-glass-muted);
+}
+
+.desktop-bar-divider {
+	width: 1px;
+	height: 20px;
+	margin: 0 4px;
+	background: var(--desktop-glass-line);
+}
+
+.desktop-bar button {
+	height: 28px;
+	gap: 6px;
+	padding: 0 8px;
+	border-radius: 6px;
+	background: transparent;
+	color: inherit;
+}
+
+.desktop-bar button.desktop-bar-icon {
+	justify-content: center;
+	width: 30px;
+	padding: 0;
+}
+
+.desktop-bar button:hover,
+.desktop-bar button[aria-expanded='true'] {
+	background: var(--desktop-glass-hover);
+}
+
+.desktop-bar button[aria-pressed='true'] {
+	background: color-mix(in srgb, var(--accent) 36%, transparent);
+}
+
+.desktop-bar button > .vnilink-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.desktop-bar-menu > .vnilink-icon:last-child {
+	width: 10px;
+	height: 10px;
+	color: var(--desktop-on-glass-muted);
+}
+
+.desktop-bar-recording {
+	font-variant-numeric: tabular-nums;
+}
+
+.desktop-bar-recording-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 4px;
+	background: var(--camera-record);
+}
+
 /* Elements with a display of their own still honour `hidden`. */
 .desktop-overlay[hidden],
-.desktop-overlay-body[hidden] {
+.desktop-overlay-body[hidden],
+.desktop-view [hidden] {
 	display: none;
 }
 
@@ -262,13 +486,17 @@
 		animation: none;
 	}
 
-	.desktop-screen {
+	.desktop-screen,
+	.desktop-stats,
+	.desktop-bar {
 		transition: none;
 	}
 }
 
 @media (forced-colors: active) {
-	.desktop-overlay-panel {
+	.desktop-overlay-panel,
+	.desktop-stats,
+	.desktop-bar {
 		border: 1px solid CanvasText;
 	}
 }

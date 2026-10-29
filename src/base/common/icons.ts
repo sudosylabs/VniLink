@@ -23,6 +23,8 @@ export const Icons = Object.freeze({
 	files: 'files',
 	terminal: 'terminal',
 	audio: 'audio',
+	audioMuted: 'audioMuted',
+	privacy: 'privacy',
 	recording: 'recording',
 	power: 'power',
 	importInvitation: 'importInvitation',

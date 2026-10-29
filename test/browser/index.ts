@@ -13,7 +13,7 @@ import { showFilesFixture, verifyFiles } from './files.js';
 import { verifyHomeLifecycle } from './home.js';
 import { verifyIcons } from './icons.js';
 import { verifyRemoteDesktop } from './remoteDesktop.js';
-import { verifyRemoteDesktopSession } from './remoteDesktopSession.js';
+import { showDesktopFixture, verifyRemoteDesktopSession, type DesktopFixtureState } from './remoteDesktopSession.js';
 import { verifyRemoteDesktopStill } from './remoteDesktopStill.js';
 import { verifySettingsPages } from './settings.js';
 import { verifyTabs } from './tabs.js';
@@ -21,6 +21,7 @@ import { verifyTerminal } from './terminal.js';
 
 export class BrowserScenarios {
 	private deviceFixture: DevicePageFixture | undefined;
+	private desktopFixture: { dispose(): void } | undefined;
 	private contextMenuFixture: ContextMenuFixture | undefined;
 
 	public showDeviceFixture(state: DeviceFixtureState): void {
@@ -86,6 +87,17 @@ export class BrowserScenarios {
 	public clearFilesFixture(): void {
 		this.filesFixture?.dispose();
 		this.filesFixture = undefined;
+	}
+
+	/** Shows a controlling remote desktop tab in `state`; `clearDesktopFixture` removes it. */
+	public async showDesktopFixture(state: DesktopFixtureState): Promise<void> {
+		this.clearDesktopFixture();
+		this.desktopFixture = await showDesktopFixture(state);
+	}
+
+	public clearDesktopFixture(): void {
+		this.desktopFixture?.dispose();
+		this.desktopFixture = undefined;
 	}
 
 	public clearDeviceFixture(): void {
