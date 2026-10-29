@@ -153,15 +153,21 @@ impl AudioBackend {
         if source.is_cancelled() {
             return Err(Error::NoSession);
         }
-        // Backend admission requires actual encoded output, not just a device
-        // handle. The first packet also proves the declared channel format.
-        if !source
+        // A microphone is admitted on encoded output, not just a device handle,
+        // and its first packet proves the declared channel format. System
+        // loopback stays silent until something plays, so it is admitted on
+        // a started capture; the stream checks each packet's format as it sends.
+        let first = source
             .queue
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .front()
-            .is_some_and(|p| Some(p.format) == config.format().ok())
-        {
+            .map(|p| p.format);
+        let admitted = match first {
+            Some(format) => Some(format) == config.format().ok(),
+            None => config.kind == AudioKind::System,
+        };
+        if !admitted {
             return Err(Error::InvalidSetting("audio source has no initial packet"));
         }
         if source
@@ -228,5 +234,30 @@ mod tests {
             AudioBackend::new(config(AudioKind::System), source),
             Err(Error::NoSession)
         ));
+    }
+    #[test]
+    fn quiet_system_sound_is_admitted_and_a_quiet_microphone_is_not() {
+        assert!(
+            AudioBackend::new(config(AudioKind::System), AudioSource::new()).is_ok(),
+            "system loopback delivers nothing until something plays"
+        );
+        assert!(
+            matches!(
+                AudioBackend::new(config(AudioKind::Microphone), AudioSource::new()),
+                Err(Error::InvalidSetting(_))
+            ),
+            "a microphone is admitted on its first packet"
+        );
+        let mono = AudioSource::new();
+        let mut encoder = vnilink_audio::AudioEncoder::new(AudioFormat::Mono, false).unwrap();
+        mono.publish(encoder.encode(&[0.125; 960]).unwrap())
+            .unwrap();
+        assert!(
+            matches!(
+                AudioBackend::new(config(AudioKind::System), mono),
+                Err(Error::InvalidSetting(_))
+            ),
+            "a first packet in another format than declared is refused"
+        );
     }
 }

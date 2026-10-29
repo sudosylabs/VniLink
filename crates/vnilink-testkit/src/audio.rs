@@ -81,10 +81,13 @@ impl HostAudioFactory for StandInAudio {
     fn open(&self, config: AudioConfig, startup: BackendStartup) -> Result<AudioBackend, Error> {
         startup.check()?;
         let source = AudioSource::new();
-        // A source opens with its first packet ready, as native capture does.
-        let mut first =
-            AudioEncoder::new(config.format()?, config.voice).map_err(|_| Error::Malformed)?;
-        source.publish(packet(&mut first))?;
+        // As native capture does, a microphone opens with its first packet
+        // ready and system sound opens silent until something plays.
+        if config.kind == AudioKind::Microphone {
+            let mut first =
+                AudioEncoder::new(config.format()?, config.voice).map_err(|_| Error::Malformed)?;
+            source.publish(packet(&mut first))?;
+        }
         self.sources
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -116,8 +119,9 @@ impl AudioHost {
         }
     }
 
-    /// Opens the host's sound of `kind`, once its first packet arrived,
-    /// so what the viewer takes next is what the test sends.
+    /// Opens the host's sound of `kind`, once a microphone's first packet
+    /// arrived, so what the viewer takes next is what the test sends.
+    /// System sound opens silent and has none to take.
     pub fn open(&self, kind: AudioKind) -> Result<RemoteAudioService, Error> {
         let owner = self.pair.attach(&self.connection, kind.service());
         let audio = self.pair.controller.core.open_audio_service(
@@ -125,9 +129,11 @@ impl AudioHost {
             owner.generation,
             config(kind),
         )?;
-        wait_for("the source's first packet", DEFAULT_WAIT, || {
-            audio.try_recv()
-        });
+        if kind == AudioKind::Microphone {
+            wait_for("the microphone's first packet", DEFAULT_WAIT, || {
+                audio.try_recv()
+            });
+        }
         Ok(audio)
     }
 }
