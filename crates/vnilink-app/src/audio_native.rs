@@ -290,6 +290,7 @@ impl HostAudioFactory for NativeFactory {
                         );
                     }
                     let mut last = Instant::now();
+                    let mut silence_noted = false;
                     while !producer.is_cancelled() {
                         if !admitted {
                             worker_startup.check()?;
@@ -312,6 +313,15 @@ impl HostAudioFactory for NativeFactory {
                                     && last.elapsed() > Duration::from_secs(3)
                                 {
                                     return Err(vnilink::Error::Timeout);
+                                }
+                                // Silence is normal while nothing plays, and is
+                                // also how a system that withholds its sound looks.
+                                if !silence_noted && last.elapsed() > Duration::from_secs(10) {
+                                    silence_noted = true;
+                                    tracing::info!(
+                                        target: vnilink::trace::AUDIO,
+                                        "system sound has been silent for ten seconds"
+                                    );
                                 }
                                 std::thread::sleep(Duration::from_millis(2));
                             }

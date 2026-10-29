@@ -407,7 +407,9 @@ pub(super) async fn serve(
         };
         let opened = tokio::time::timeout(TIMEOUT, opening).await;
         if !matches!(opened, Ok(Ok(_))) {
-            tracing::info!(
+            // A viewer asked for sound and hears none: worth seeing in an
+            // ordinary log, not only a debug one.
+            tracing::warn!(
                 target: crate::trace::AUDIO,
                 service = id,
                 kind = ?kind,
@@ -460,13 +462,23 @@ pub(super) async fn serve(
             let mut last_write = std::time::Instant::now();
             loop {
                 if backend.source.is_cancelled() {
-                    tracing::info!(
-                        target: crate::trace::AUDIO,
-                        service = id,
-                        failed = backend.source.has_failed(),
-                        dropped = backend.source.dropped(),
-                        "audio capture ended"
-                    );
+                    if backend.source.has_failed() {
+                        tracing::warn!(
+                            target: crate::trace::AUDIO,
+                            service = id,
+                            failed = true,
+                            dropped = backend.source.dropped(),
+                            "audio capture ended"
+                        );
+                    } else {
+                        tracing::info!(
+                            target: crate::trace::AUDIO,
+                            service = id,
+                            failed = false,
+                            dropped = backend.source.dropped(),
+                            "audio capture ended"
+                        );
+                    }
                     ending.why(if backend.source.has_failed() {
                         HostedEnd::Failed("capture failed")
                     } else {
