@@ -3,14 +3,14 @@ import * as nls from '../../../nls.js';
 import { addDisposableListener, EventType, getWindow, h, isAncestor, triggerDownload, triggerUpload } from '../../../base/browser/dom.js';
 import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
 import { Button } from '../../../base/browser/ui/button/button.js';
+import { CodeInput } from '../../../base/browser/ui/codeInput/codeInput.js';
 import { ContextView, ContextViewDOMPosition } from '../../../base/browser/ui/contextview/contextview.js';
-import { InputBox } from '../../../base/browser/ui/inputbox/inputBox.js';
 import { IntervalTimer } from '../../../base/common/async.js';
 import { KeyCode } from '../../../base/common/keyCodes.js';
 import { AnchorAlignment } from '../../../base/common/layout.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
-import { defaultButtonStyles, defaultInputBoxStyles } from '../../../platform/theme/browser/defaultStyles.js';
+import { defaultButtonStyles, defaultCodeInputStyles } from '../../../platform/theme/browser/defaultStyles.js';
 import { IDevicePairingService, type PairingState } from '../../services/devices/devicePairingService.js';
 import { IDeviceService } from '../../services/devices/deviceService.js';
 
@@ -126,24 +126,59 @@ function formatRemaining(milliseconds: number): string {
 	return `${String(Math.floor(seconds / 60))}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+/** One button in the popover's foot. */
+interface IPairingCommand {
+	readonly label: string;
+	readonly run: () => void;
+	/** Whether it waits for something the person has not done yet, such as typing the whole code. */
+	readonly needsCode?: boolean;
+}
+
+/** What the popover shows for one pairing step. */
+interface IPairingView {
+	/** Where this step sits in its flow, as `[step, steps]`; omitted for an outcome. */
+	readonly progress?: readonly [number, number];
+	readonly heading: string;
+	readonly help?: string;
+	/** Digits this computer shows for the other person to read. */
+	readonly code?: string;
+	readonly fileName?: string;
+	readonly askCode?: boolean;
+	/** Whether a dropped invitation file opens, as choosing one does. */
+	readonly acceptsFile?: boolean;
+	readonly waiting?: string;
+	/** Hides the service's message where the heading and help already say it. */
+	readonly quiet?: boolean;
+	readonly primary?: IPairingCommand;
+	readonly secondary?: IPairingCommand;
+}
+
 /** The popover's body for one showing; it follows the pairing state until hidden. */
 class PairingPopoverContent extends Disposable {
 	private static nextId = 0;
 	private readonly root: HTMLElement;
+	private readonly progress: HTMLElement;
 	private readonly heading: HTMLElement;
 	private readonly help: HTMLElement;
-	private readonly code: HTMLElement;
-	private readonly expiry: HTMLElement;
+	private readonly file: HTMLElement;
 	private readonly fileName: HTMLElement;
+	private readonly changeFile: HTMLButtonElement;
+	private readonly code: HTMLElement;
 	private readonly field: HTMLElement;
+	private readonly waiting: HTMLElement;
+	private readonly expiry: HTMLElement;
 	private readonly message: HTMLElement;
-	private readonly digits: InputBox;
+	private readonly digits: CodeInput;
 	private readonly primary: Button;
 	private readonly secondary: Button;
 	private readonly countdown = this._register(new IntervalTimer());
-	private primaryRun: (() => void) | undefined;
-	private secondaryRun: (() => void) | undefined;
-	private shownStep: PairingState['step']['kind'] | undefined;
+	private view: IPairingView | undefined;
+
+	private get acceptsFile(): boolean {
+		return !!this.view?.acceptsFile && !this.pairing.state.busy && this.devices.available;
+	}
+
+	private shownStep: string | undefined;
 
 	constructor(
 		container: HTMLElement,
@@ -157,25 +192,32 @@ class PairingPopoverContent extends Disposable {
 		const popover = h('section.device-pairing-popover', { role: 'dialog', 'aria-labelledby': headingId }, [
 			h('h2@heading', { id: headingId }),
 			h('p.device-pairing-help@help'),
+			h('div.device-pairing-file@file', [h('span.device-pairing-file-name@fileName'), h('button.device-pairing-change@changeFile', { type: 'button' })]),
 			h('output.device-pairing-code@code', { 'aria-label': nls.localize('devices.code', 'Confirmation code') }),
-			h('p.device-pairing-file@fileName'),
-			h('label.device-pairing-field@field'),
-			h('div.device-pairing-foot@actions', [h('span.device-pairing-expiry@expiry')]),
+			h('div.device-pairing-field@field'),
 			h('p.device-feedback@message', { role: 'status' }),
+			h('p.device-pairing-waiting@waiting'),
+			h('div.device-pairing-foot@actions', [h('span.device-pairing-status', [h('span.device-pairing-progress@progress'), h('span.device-pairing-expiry@expiry')])]),
 		]);
 		this.root = popover.root;
+		this.progress = popover.progress;
 		this.heading = popover.heading;
 		this.help = popover.help;
-		this.code = popover.code;
-		this.expiry = popover.expiry;
+		this.file = popover.file;
 		this.fileName = popover.fileName;
+		this.changeFile = popover.changeFile;
+		this.code = popover.code;
 		this.field = popover.field;
+		this.waiting = popover.waiting;
+		this.expiry = popover.expiry;
 		this.message = popover.message;
-		this.field.append(nls.localize('devices.enterCode', 'Code shown on the other computer'));
-		this.digits = this._register(new InputBox(this.field, undefined, { inputBoxStyles: defaultInputBoxStyles }));
-		this.digits.inputElement.inputMode = 'numeric';
-		this.digits.inputElement.autocomplete = 'off';
-		this.digits.inputElement.maxLength = 3;
+		this.changeFile.textContent = nls.localize('devices.changeInvitation', 'Change…');
+		this.digits = this._register(new CodeInput(this.field, {
+			...defaultCodeInputStyles,
+			length: 3,
+			label: nls.localize('devices.enterCode', 'Code shown on the other computer'),
+			digitLabel: (position, length) => nls.localize('devices.codeDigit', 'Digit {0} of {1}', position, length),
+		}));
 		this.secondary = this.createButton(popover.actions, false);
 		this.primary = this.createButton(popover.actions, true);
 		container.append(this.root);
@@ -199,12 +241,37 @@ class PairingPopoverContent extends Disposable {
 		this._register(this.devices.onDidChangeState(() => {
 			this.render(this.pairing.state);
 		}));
-		this._register(this.primary.onDidClick(() => this.primaryRun?.()));
-		this._register(this.secondary.onDidClick(() => this.secondaryRun?.()));
-		this._register(addDisposableListener(this.digits.inputElement, EventType.KEY_DOWN, event => {
-			if (new StandardKeyboardEvent(event).equals(KeyCode.Enter)) {
+		this._register(this.primary.onDidClick(() => this.view?.primary?.run()));
+		this._register(this.secondary.onDidClick(() => this.view?.secondary?.run()));
+		this._register(this.digits.onDidChange(() => {
+			this.renderButtons(this.pairing.state.busy);
+		}));
+		// Enter submits even an incomplete code, so the service can say what is missing.
+		this._register(this.digits.onDidSubmit(() => {
+			if (!this.pairing.state.busy) {
+				this.view?.primary?.run();
+			}
+		}));
+		this._register(addDisposableListener(this.changeFile, EventType.CLICK, () => void this.chooseInvitation()));
+		// The whole popover takes a dropped invitation while one is wanted.
+		this._register(addDisposableListener(this.root, EventType.DRAG_OVER, (event: DragEvent) => {
+			if (this.acceptsFile && event.dataTransfer?.types.includes('Files')) {
 				event.preventDefault();
-				this.primaryRun?.();
+				event.dataTransfer.dropEffect = 'copy';
+				this.root.classList.add('dropping');
+			}
+		}));
+		this._register(addDisposableListener(this.root, EventType.DRAG_LEAVE, (event: DragEvent) => {
+			if (!(event.relatedTarget instanceof Node && this.root.contains(event.relatedTarget))) {
+				this.root.classList.remove('dropping');
+			}
+		}));
+		this._register(addDisposableListener(this.root, EventType.DROP, (event: DragEvent) => {
+			this.root.classList.remove('dropping');
+			const file = event.dataTransfer?.files[0];
+			if (file && this.acceptsFile) {
+				event.preventDefault();
+				void this.pairing.openInvitation(file);
 			}
 		}));
 	}
@@ -220,107 +287,143 @@ class PairingPopoverContent extends Disposable {
 		}
 	}
 
-	private render(state: PairingState): void {
-		const { step, busy, message } = state;
-		const invite = nls.localize('devices.shareTitle', 'Invite another computer');
-		const join = nls.localize('devices.importTitle', 'Pair with an invitation');
-		let heading = this.kind === 'create' ? invite : join;
-		let help = '';
-		let code = '';
-		let fileName = '';
-		let askDigits = false;
-		let primary: { label: string; run: () => void } | undefined;
-		let secondary: { label: string; run: () => void } | undefined;
-		const choose = { label: nls.localize('devices.chooseInvitation', 'Choose invitation…'), run: () => void this.chooseInvitation() };
-		const submit = (label: string) => ({ label, run: () => void this.pairing.submitCode(this.digits.value) });
-		const done = { label: nls.localize('devices.done', 'Done'), run: this.close };
-		this.countdown.cancel();
+	/** Each step of both flows: inviting from here (two steps) or opening an invitation (three). */
+	private describe(state: PairingState): IPairingView {
+		const { step, busy } = state;
+		const done: IPairingCommand = { label: nls.localize('devices.done', 'Done'), run: this.close };
+		const choose: IPairingCommand = { label: nls.localize('devices.chooseInvitation', 'Choose invitation…'), run: () => void this.chooseInvitation() };
+		const submit = (label: string): IPairingCommand => ({ label, needsCode: true, run: () => void this.pairing.submitCode(this.digits.value) });
 		// Opening an invitation replaces one this computer is still offering.
 		const shown = this.kind === 'import' && step.kind === 'invitation' ? { kind: 'idle' as const } : step;
 		switch (shown.kind) {
 			case 'invitation':
-				heading = invite;
-				help = nls.localize('devices.shareHelp', 'Save the .vnl file and send it to the other person, then read them these digits. Keep VniLink open.');
-				code = shown.file.check;
-				primary = {
-					label: nls.localize('devices.save', 'Save…'), run: () => {
-						triggerDownload(new Uint8Array(shown.file.bytes), 'VniLink.vnl');
-					}
+				return {
+					progress: [1, 2],
+					heading: nls.localize('devices.shareTitle', 'Invite another computer'),
+					help: nls.localize('devices.shareHelp', 'Save the .vnl file and send it to the other person, then read them these digits. Keep VniLink open.'),
+					code: shown.file.check,
+					primary: {
+						label: nls.localize('devices.save', 'Save…'), run: () => {
+							triggerDownload(new Uint8Array(shown.file.bytes), 'VniLink.vnl');
+						}
+					},
 				};
-				this.countdown.cancelAndSet(() => {
-					this.renderExpiry(shown.file.expiresAt);
-				}, 1000, getWindow(this.root));
-				break;
 			case 'approval':
-				heading = nls.localize('devices.approveTitle', 'Approve this computer');
-				help = nls.localize('devices.approveHelp', 'Ask the other person for the three digits on their screen before pairing.');
-				askDigits = true;
-				primary = submit(nls.localize('devices.approve', 'Approve'));
-				secondary = { label: nls.localize('devices.reject', 'Reject'), run: () => void this.pairing.reject() };
-				break;
+				return {
+					progress: [2, 2],
+					heading: nls.localize('devices.approveTitle', 'Approve this computer'),
+					help: nls.localize('devices.approveHelp', 'Ask the other person for the three digits on their screen before pairing.'),
+					askCode: true,
+					primary: submit(busy ? nls.localize('devices.approving', 'Approving…') : nls.localize('devices.approve', 'Approve')),
+					secondary: { label: nls.localize('devices.reject', 'Reject'), run: () => void this.pairing.reject() },
+				};
 			case 'opened':
-				heading = join;
-				help = nls.localize('devices.importHelp', 'Ask the person who created this invitation for the three digits shown on their screen.');
-				fileName = shown.fileName;
-				askDigits = true;
-				primary = submit(nls.localize('devices.pair', 'Pair'));
-				secondary = { ...choose, label: nls.localize('devices.chooseOther', 'Choose another…') };
-				break;
+				return {
+					progress: [2, 3],
+					heading: nls.localize('devices.enterCodeTitle', 'Enter their code'),
+					help: nls.localize('devices.importHelp', 'Ask the person who created this invitation for the three digits shown on their screen.'),
+					fileName: shown.fileName,
+					askCode: true,
+					acceptsFile: true,
+					primary: submit(busy ? nls.localize('devices.pairing', 'Pairing…') : nls.localize('devices.pair', 'Pair')),
+				};
 			case 'reverseCode':
-				heading = join;
-				help = nls.localize('devices.reverseCheck', 'Read these digits to the other person so they can approve this computer.');
-				code = shown.code;
-				primary = done;
-				break;
+				return {
+					progress: [3, 3],
+					heading: nls.localize('devices.reverseTitle', 'Confirm on the other computer'),
+					help: nls.localize('devices.reverseCheck', 'Read these digits to the other person so they can approve this computer.'),
+					code: shown.code,
+					waiting: nls.localize('devices.waitingApproval', 'Waiting for them to approve this computer…'),
+					primary: { ...done, label: nls.localize('devices.close', 'Close') },
+				};
 			case 'paired':
-				primary = done;
-				break;
+				return {
+					heading: nls.localize('devices.pairedTitle', 'Computer paired'),
+					help: nls.localize('devices.pairedHelp', 'It is in your devices now. Your sharing settings still control what it can access.'),
+					quiet: true,
+					primary: done,
+				};
 			case 'ended':
-				primary = this.kind === 'create' ? { label: nls.localize('devices.newInvitation', 'Create new invitation'), run: () => void this.pairing.createInvitation() } : choose;
-				break;
+				return this.kind === 'create'
+					? { heading: nls.localize('devices.endedInvitation', 'Invitation ended'), primary: { label: nls.localize('devices.newInvitation', 'Create new invitation'), run: () => void this.pairing.createInvitation() } }
+					: { heading: nls.localize('devices.endedPairing', 'Pairing ended'), acceptsFile: true, primary: choose };
 			case 'idle':
-				if (this.kind === 'import') {
-					help = nls.localize('devices.chooseHelp', 'Open the .vnl invitation another computer shared with you.');
-					primary = choose;
-				} else {
-					help = busy ? nls.localize('devices.creating', 'Creating an invitation…') : '';
-				}
-				break;
-		}
-		this.heading.textContent = heading;
-		this.help.textContent = help;
-		this.help.hidden = !help;
-		this.code.textContent = code;
-		this.code.hidden = !code;
-		this.fileName.textContent = fileName;
-		this.fileName.hidden = !fileName;
-		this.field.hidden = !askDigits;
-		this.renderExpiry(shown.kind === 'invitation' ? shown.file.expiresAt : 0);
-		this.message.textContent = message;
-		this.primaryRun = primary?.run;
-		this.secondaryRun = secondary?.run;
-		this.renderButton(this.primary, primary?.label, busy);
-		this.renderButton(this.secondary, secondary?.label, busy);
-		this.root.setAttribute('aria-busy', String(busy));
-		if (busy) {
-			this.digits.disable();
-		} else {
-			this.digits.enable();
-		}
-		const stepChanged = this.shownStep !== undefined && this.shownStep !== shown.kind;
-		this.shownStep = shown.kind;
-		if (stepChanged && !busy && isAncestor(getWindow(this.root).document.activeElement, this.root)) {
-			if (askDigits) {
-				this.digits.value = '';
-			}
-			this.focus();
+				return this.kind === 'import'
+					? {
+						progress: [1, 3],
+						heading: nls.localize('devices.importTitle', 'Open an invitation'),
+						help: nls.localize('devices.chooseHelp', 'Choose the .vnl file the other computer saved for you, or drop it here.'),
+						acceptsFile: true,
+						primary: choose,
+					}
+					: {
+						progress: [1, 2],
+						heading: nls.localize('devices.shareTitle', 'Invite another computer'),
+						help: busy ? nls.localize('devices.creating', 'Creating an invitation…') : undefined,
+					};
 		}
 	}
 
-	private renderButton(button: Button, label: string | undefined, busy: boolean): void {
-		button.element.hidden = !label;
-		button.label = label ?? '';
-		button.enabled = !busy && this.devices.available;
+	private render(state: PairingState): void {
+		const { busy, message } = state;
+		const view = this.describe(state);
+		this.view = view;
+		const askChanged = this.field.hidden && !!view.askCode;
+		this.countdown.cancel();
+		const step = this.pairing.state.step;
+		if (step.kind === 'invitation' && this.kind === 'create') {
+			this.countdown.cancelAndSet(() => {
+				this.renderExpiry(step.file.expiresAt);
+			}, 1000, getWindow(this.root));
+		}
+		this.root.dataset.step = this.shownKind(state);
+		this.progress.textContent = view.progress ? nls.localize('devices.stepOf', '{0} of {1}', view.progress[0], view.progress[1]) : '';
+		this.progress.hidden = !view.progress;
+		this.heading.textContent = view.heading;
+		this.help.textContent = view.help ?? '';
+		this.help.hidden = !view.help;
+		this.fileName.textContent = view.fileName ?? '';
+		this.file.hidden = !view.fileName;
+		this.changeFile.disabled = busy;
+		this.code.textContent = view.code ?? '';
+		this.code.hidden = !view.code;
+		this.field.hidden = !view.askCode;
+		this.waiting.textContent = view.waiting ?? '';
+		this.waiting.hidden = !view.waiting;
+		this.renderExpiry(step.kind === 'invitation' && this.kind === 'create' ? step.file.expiresAt : 0);
+		this.message.textContent = view.quiet ? '' : message;
+		// A message beside the code is what went wrong with it.
+		this.message.classList.toggle('error', !!view.askCode && !!message);
+		this.renderButtons(busy);
+		this.root.setAttribute('aria-busy', String(busy));
+		this.digits.enabled = !busy;
+		const shownStep = this.shownKind(state);
+		const stepChanged = this.shownStep !== undefined && this.shownStep !== shownStep;
+		this.shownStep = shownStep;
+		if (askChanged) {
+			this.digits.clear();
+		}
+		if (stepChanged && !busy && isAncestor(getWindow(this.root).document.activeElement, this.root)) {
+			this.focus();
+		} else if (!busy && view.askCode && message && this.root.contains(getWindow(this.root).document.activeElement)) {
+			// A refused code is typed again from the start.
+			this.digits.focus();
+		}
+	}
+
+	private shownKind(state: PairingState): string {
+		return this.kind === 'import' && state.step.kind === 'invitation' ? 'idle' : state.step.kind;
+	}
+
+	private renderButtons(busy: boolean): void {
+		this.renderButton(this.primary, this.view?.primary, busy);
+		this.renderButton(this.secondary, this.view?.secondary, busy);
+	}
+
+	private renderButton(button: Button, command: IPairingCommand | undefined, busy: boolean): void {
+		button.element.hidden = !command;
+		button.label = command?.label ?? '';
+		button.enabled = !busy && this.devices.available && (!command?.needsCode || this.digits.complete);
 	}
 
 	private renderExpiry(expiresAt: number): void {

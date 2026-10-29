@@ -1,40 +1,76 @@
-/* Pairing popover under the Devices titlebar actions. It renders in the window body, outside the page. */
+/* Pairing popover under the Devices page's pairing buttons. It renders in the window body, outside the page. */
 
 .device-pairing-popover {
 	display: grid;
-	gap: 10px;
-	width: 280px;
+	gap: 12px;
+	width: 300px;
 	max-width: calc(100vw - 24px);
-	margin-top: 4px;
-	padding: 12px 14px;
+	margin-top: 6px;
+	padding: 16px;
 	border: 1px solid var(--line);
-	border-radius: 8px;
+	border-radius: 10px;
 	background: var(--surface-raised);
 	color: var(--text);
-	box-shadow: 0 12px 32px rgb(0 0 0 / 16%);
+	box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
 	font-size: 13px;
-	line-height: 1.4;
+	line-height: 1.45;
 }
 
-.device-pairing-popover h2 {
-	margin: 0;
-	font-size: 13px;
-	font-weight: 600;
+/* A dragged invitation file is taken anywhere on the popover. */
+.device-pairing-popover.dropping {
+	border-color: var(--accent);
+	box-shadow:
+		0 0 0 1px var(--accent),
+		0 8px 24px rgb(0 0 0 / 14%);
 }
 
 .device-pairing-popover p {
 	margin: 0;
 }
 
-.device-pairing-help,
-.device-pairing-file {
+.device-pairing-popover h2 {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.device-pairing-help {
+	margin-top: -6px;
 	color: var(--muted);
 	overflow-wrap: anywhere;
 }
 
+/* The opened invitation: its name, and a way to pick another. */
+.device-pairing-file {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+
+.device-pairing-file-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 500;
+}
+
+.device-pairing-change {
+	padding: 0;
+	background: transparent;
+	color: var(--accent);
+}
+
+.device-pairing-change:disabled {
+	color: var(--muted);
+}
+
+/* Digits this computer shows are text to read aloud, not something to fill in. */
 .device-pairing-code {
 	font:
-		600 24px/1 ui-monospace,
+		600 26px/1 ui-monospace,
 		'SF Mono',
 		Menlo,
 		Consolas,
@@ -44,26 +80,16 @@
 	user-select: text;
 }
 
-.device-pairing-field {
-	display: grid;
-	gap: 6px;
+.device-pairing-field .code-input-digit {
+	width: 38px;
+	height: 44px;
+	border-radius: 6px;
+	font-size: 20px;
 }
 
-.device-pairing-field .monaco-inputbox {
-	width: 7.5ch;
-	border-radius: 4px;
-}
-
-.device-pairing-field .monaco-inputbox > .ibwrapper > .input {
-	padding: 4px 6px;
-	font:
-		600 20px/1 ui-monospace,
-		'SF Mono',
-		Menlo,
-		Consolas,
-		monospace;
-	letter-spacing: 0.4em;
-	border-radius: 4px;
+.device-pairing-waiting {
+	font-size: 12px;
+	color: var(--muted);
 }
 
 .device-pairing-foot {
@@ -71,12 +97,25 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px;
+	margin-top: 4px;
 	font-size: 12px;
 	color: var(--muted);
 }
 
-.device-pairing-foot > .monaco-button.primary {
-	margin-left: auto;
+.device-pairing-status {
+	flex: 1;
+	display: flex;
+	gap: 8px;
+}
+
+/* Step count and expiry read as one quiet line: "1 of 2 · Expires in 14:52". */
+.device-pairing-progress + .device-pairing-expiry:not([hidden])::before {
+	content: '·';
+	margin-right: 8px;
+}
+
+.device-pairing-progress[hidden] + .device-pairing-expiry::before {
+	content: none;
 }
 
 .device-pairing-foot > .monaco-button.device-button {
@@ -90,6 +129,10 @@
 	overflow-wrap: anywhere;
 }
 
+.device-pairing-popover .device-feedback.error {
+	color: var(--status-disconnected);
+}
+
 .device-pairing-popover .device-feedback:empty,
 .device-pairing-popover [hidden],
 .device-pairing-foot > .monaco-button[hidden] {
@@ -97,14 +140,18 @@
 }
 
 .device-pairing-popover button:focus-visible,
-.device-pairing-popover .monaco-button:focus-visible,
-.device-pairing-field .monaco-inputbox > .ibwrapper > .input:focus-visible {
+.device-pairing-popover .monaco-button:focus-visible {
 	outline: 2px solid var(--accent);
-	outline-offset: -2px;
+	outline-offset: 2px;
 }
 
 @media (forced-colors: active) {
-	.device-pairing-popover {
+	.device-pairing-popover,
+	.device-pairing-popover.dropping {
 		border-color: CanvasText;
+	}
+
+	.device-pairing-popover.dropping {
+		outline: 2px solid Highlight;
 	}
 }

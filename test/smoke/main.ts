@@ -247,15 +247,55 @@ class SmokeSuite {
 				browserTests.browserScenarios.requestFixturePairing();
 				const popover = document.querySelector('.device-pairing-popover');
 				const deadline = Date.now() + 3000;
-				while (!popover.querySelector('.device-pairing-field:not([hidden]) input')) {
+				const boxes = () => [...popover.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
+				while (boxes().length !== 3) {
 					if (Date.now() > deadline) { throw new Error('Incoming pairing field did not appear'); }
 					await new Promise(resolve => requestAnimationFrame(resolve));
 				}
 				if (popover.querySelector('.device-pairing-code:not([hidden])')) { throw new Error('Incoming confirmation disclosed the expected code'); }
-				const input = popover.querySelector('.device-pairing-field input');
-				input.value = '731';
-				input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+				[...'731'].forEach((digit, index) => {
+					boxes()[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
+				});
+				boxes()[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 			})()`);
+			// Opening an invitation: choose it, type the creator's digits, then read ours back.
+			const frame = `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`;
+			await window.webContents.executeJavaScript(`(async () => {
+				const deadline = Date.now() + 3000;
+				while (document.querySelector('.device-pairing-popover h2')?.textContent !== 'Computer paired') {
+					if (Date.now() > deadline) { throw new Error('Approving did not pair'); }
+					await new Promise(resolve => requestAnimationFrame(resolve));
+				}
+			})()`);
+			await driver.screenshot('devices-pairing-paired');
+			await window.webContents.executeJavaScript(`(() => {
+				document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+				browserTests.browserScenarios.importFixtureInvitation();
+			})()`);
+			await window.webContents.executeJavaScript(frame);
+			await driver.screenshot('devices-import-choose');
+			await window.webContents.executeJavaScript(`(async () => {
+				await browserTests.browserScenarios.openFixtureInvitationFile();
+				const boxes = [...document.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
+				if (boxes.length !== 3) { throw new Error('The opened invitation did not ask for three digits'); }
+				[...'04'].forEach((digit, index) => {
+					boxes[index].focus();
+					boxes[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
+				});
+			})()`);
+			await window.webContents.executeJavaScript(frame);
+			await driver.screenshot('devices-import-code');
+			await window.webContents.executeJavaScript(`(async () => {
+				const box = document.querySelectorAll('.device-pairing-field .code-input-digit')[2];
+				box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '2', bubbles: true, cancelable: true }));
+				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+				const deadline = Date.now() + 3000;
+				while (!document.querySelector('.device-pairing-popover .device-pairing-code:not([hidden])')) {
+					if (Date.now() > deadline) { throw new Error('Pairing did not show the reverse code'); }
+					await new Promise(resolve => requestAnimationFrame(resolve));
+				}
+			})()`);
+			await driver.screenshot('devices-import-confirm');
 		} finally {
 			await window.webContents.executeJavaScript(`browserTests.browserScenarios.clearDeviceFixture()`);
 			nativeTheme.themeSource = theme;

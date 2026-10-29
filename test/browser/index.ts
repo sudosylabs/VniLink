@@ -28,9 +28,19 @@ export class BrowserScenarios {
 		this.deviceFixture = new DevicePageFixture(state);
 	}
 
-	/** Opens the fixture's create-invitation popover, as the titlebar action does. */
+	/** Opens the fixture's create-invitation popover, as the page's button does. */
 	public shareFixtureInvitation(): void {
 		this.deviceFixture?.anchor('create').click();
+	}
+
+	/** Opens the fixture's open-invitation popover, as the page's button does. */
+	public importFixtureInvitation(): void {
+		this.deviceFixture?.anchor('import').click();
+	}
+
+	/** Opens an invitation file in the fixture, as choosing or dropping one does. */
+	public async openFixtureInvitationFile(): Promise<void> {
+		await this.deviceFixture?.popoverPairing.openInvitation(new File(['VNLF'], 'office-pc.vnl'));
 	}
 
 	public requestFixturePairing(): void {

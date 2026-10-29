@@ -475,19 +475,30 @@ async function until(condition: () => boolean, message: string): Promise<void> {
 }
 
 /** Pairing from the titlebar popovers: create, approve an incoming request, and open an invitation. */
+/** Types `code` into a code input one digit at a time, as a keyboard does. */
+function typeCode(boxes: readonly HTMLInputElement[], code: string): void {
+	for (let index = 0; index < code.length; index++) {
+		const box = boxes[index];
+		box.focus();
+		box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: code.charAt(index), bubbles: true, cancelable: true }));
+	}
+}
+
 export async function verifyPairingPopover(): Promise<void> {
 	const fixture = new DevicePageFixture('empty');
 	const popover = (): HTMLElement | null => document.querySelector('.device-pairing-popover');
 	const text = (selector: string): string => popover()?.querySelector<HTMLElement>(`${selector}:not([hidden])`)?.textContent ?? '';
-	const primary = (): HTMLElement | null => popover()?.querySelector<HTMLElement>('.device-pairing-foot .monaco-button.primary:not([hidden])') ?? null;
+	const primary = (): HTMLButtonElement | null => popover()?.querySelector<HTMLButtonElement>('.device-pairing-foot .monaco-button.primary:not([hidden])') ?? null;
 	const confirmation = (): string => fixture.confirmation;
-	const digits = (): HTMLInputElement | null => popover()?.querySelector<HTMLInputElement>('.device-pairing-field:not([hidden]) input') ?? null;
+	const boxes = (): HTMLInputElement[] => [...popover()?.querySelectorAll<HTMLInputElement>('.device-pairing-field:not([hidden]) .code-input-digit') ?? []];
+	const step = (): string => text('.device-pairing-progress');
 	try {
 		const create = fixture.anchor('create');
 		create.click();
 		await until(() => text('.device-pairing-code') === '042', 'The invitation code did not appear');
 		const dialog = popover();
 		assert(dialog?.getAttribute('role') === 'dialog' && dialog.getAttribute('aria-labelledby') === dialog.querySelector('h2')?.id && dialog.querySelector('h2')?.textContent === 'Invite another computer', 'The popover is not a labelled dialog');
+		assert(step() === '1 of 2', 'The invitation is not shown as the first of two steps');
 		assert(/^Expires in 1[45]:[0-5][0-9]$/.test(text('.device-pairing-expiry')), `Expiry is missing: ${text('.device-pairing-expiry')}`);
 		assert(primary()?.textContent === 'Save…' && dialog.contains(document.activeElement), 'Save… is missing or focus stayed outside the popover');
 		pressKey(primary() ?? dialog, 'Escape', 27);
@@ -495,36 +506,47 @@ export async function verifyPairingPopover(): Promise<void> {
 		create.click();
 		await until(() => text('.device-pairing-code') === '042', 'Reopening lost the live invitation');
 		fixture.incoming = { endpoint_id: 'test-computer', check: '731' };
-		await until(() => digits() !== null, 'An incoming request did not ask for its digits');
-		assert(popover()?.querySelector('h2')?.textContent === 'Approve this computer' && !text('.device-pairing-code'), 'Approval disclosed the code or kept the invitation heading');
+		await until(() => boxes().length === 3, 'An incoming request did not ask for its digits');
+		assert(popover()?.querySelector('h2')?.textContent === 'Approve this computer' && !text('.device-pairing-code') && step() === '2 of 2', 'Approval disclosed the code or kept the invitation heading');
 		fixture.incoming = null;
 		await until(() => text('.device-pairing-code') === '042', 'A lapsed request did not return to the invitation');
 		assert(text('.device-feedback') === 'The other computer stopped waiting. It will ask again while this invitation lasts.', 'A lapsed request was not explained');
 		fixture.incoming = { endpoint_id: 'test-computer', check: '731' };
-		await until(() => digits() !== null, 'The renewed request did not ask for its digits');
-		const approve = digits();
-		assert(approve && document.activeElement === approve, 'Approval did not focus the digits');
-		approve.value = '731';
-		pressKey(approve, 'Enter', 13);
-		await until(() => text('.device-feedback').startsWith('Computer paired'), 'Approving did not pair');
-		assert(confirmation() === '731', 'Approval sent the wrong digits');
+		await until(() => boxes().length === 3, 'The renewed request did not ask for its digits');
+		assert(document.activeElement === boxes()[0], 'Approval did not focus the first digit');
+		assert(primary()?.classList.contains('disabled') === true, 'Approve was offered before the whole code was typed');
+		typeCode(boxes(), '73');
+		assert(document.activeElement === boxes()[2], 'Typing a digit did not move to the next box');
+		pressKey(boxes()[2], 'Backspace', 8);
+		assert(document.activeElement === boxes()[1] && boxes().map(box => box.value).join() === '7,,', 'Backspace on an empty box did not return and clear the previous digit');
+		const pasted = new DataTransfer();
+		pasted.setData('text/plain', ' 7-3-1 ');
+		boxes()[1].dispatchEvent(new ClipboardEvent('paste', { clipboardData: pasted, bubbles: true, cancelable: true }));
+		assert(boxes().map(box => box.value).join('') === '731' && primary()?.classList.contains('disabled') === false, 'A pasted code did not fill every box and enable Approve');
+		pressKey(boxes()[2], 'Enter', 13);
+		await until(() => popover()?.querySelector('h2')?.textContent === 'Computer paired', 'Approving did not pair');
+		assert(confirmation() === '731' && !text('.device-pairing-progress'), 'Approval sent the wrong digits or the outcome counted as a step');
 		document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
 		assert(!popover(), 'Pressing outside did not close the popover');
 		const open = fixture.anchor('import');
 		open.click();
-		assert(popover()?.querySelector('h2')?.textContent === 'Pair with an invitation' && primary()?.textContent === 'Choose invitation…', 'A finished pairing was shown again instead of the chooser');
-		await fixture.popoverPairing.openInvitation(new File(['VNLF'], 'office-pc.vnl'));
-		await settle();
-		const code = digits();
-		assert(code && text('.device-pairing-file') === 'office-pc.vnl' && !text('.device-pairing-code'), 'Opening an invitation did not ask for the creator\'s digits');
-		code.value = '42';
-		pressKey(code, 'Enter', 13);
+		const importing = popover();
+		assert(importing && importing.querySelector('h2')?.textContent === 'Open an invitation' && step() === '1 of 3' && primary()?.textContent === 'Choose invitation…', 'A finished pairing was shown again instead of the chooser');
+		const dropped = new DataTransfer();
+		dropped.items.add(new File(['VNLF'], 'office-pc.vnl'));
+		importing.querySelector('h2')?.dispatchEvent(new DragEvent('drop', { dataTransfer: dropped, bubbles: true, cancelable: true }));
+		await until(() => boxes().length === 3, 'Dropping an invitation did not ask for the creator\'s digits');
+		assert(text('.device-pairing-file-name') === 'office-pc.vnl' && !text('.device-pairing-code') && step() === '2 of 3', 'The opened invitation was not shown with its code entry');
+		typeCode(boxes(), '42');
+		pressKey(boxes()[2], 'Enter', 13);
 		await settle();
 		assert(confirmation() === '731' && text('.device-feedback') === 'Enter the three digits shown on the other computer.', 'An incomplete code was submitted');
-		code.value = '042';
-		pressKey(code, 'Enter', 13);
+		assert(popover()?.querySelector('.device-feedback.error') !== null, 'A refused code was not shown as an error');
+		boxes()[0].focus();
+		typeCode(boxes(), '042');
+		pressKey(boxes()[2], 'Enter', 13);
 		await until(() => text('.device-pairing-code') === '731', 'Pairing did not show the reverse code');
-		assert(confirmation() === '042', 'Pairing sent the wrong digits');
+		assert(confirmation() === '042' && step() === '3 of 3' && !!text('.device-pairing-waiting'), 'Pairing sent the wrong digits or did not wait for approval');
 		open.click();
 		assert(!popover(), 'The anchor did not toggle its popover closed');
 	} finally {
