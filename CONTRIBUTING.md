@@ -63,6 +63,7 @@ Architectures: arm64 supported; x64 unsupported (Intel Macs cannot build VniLink
 - **CMake**: Builds Opus for the audio codec (opusic-sys); the AV1 build downloads its own CMake. `brew install cmake`.
 - **Liquid Glass prebuild (@vnilink/elg)**: The optional npm dependency the main process loads for window material. `npm ci` prepares it.
 - **Xcode (actool)** (optional): Compiles the Icon Composer icon of the development app; without it the flat icon is used. Install Xcode from the App Store, then `sudo xcode-select -s /Applications/Xcode.app`.
+- **ffprobe** (optional): Reads the recordings the Rust tests write, as a decoder that is not VniLink's; without it that test says it skipped. `brew install ffmpeg`.
 
 Some tasks need more:
 
@@ -86,6 +87,7 @@ Architectures: x64 supported; arm64 unsupported (Windows on Arm has no GNU (MinG
 - **git**: The first native build clones codec sources, check:hygiene lists the repository's files, and the VS Code import reads the upstream checkout's commit. `winget install Git.Git`.
 - **curl**: The first native build downloads codec and CMake sources with it. Included in Windows 10 and later.
 - **CMake**: Builds Opus for the audio codec (opusic-sys); the AV1 build downloads its own CMake. `pacman -S mingw-w64-x86_64-cmake` in the MSYS2 shell, or `winget install Kitware.CMake`.
+- **ffprobe** (optional): Reads the recordings the Rust tests write, as a decoder that is not VniLink's; without it that test says it skipped. `pacman -S mingw-w64-x86_64-ffmpeg` in the MSYS2 shell.
 
 Some tasks need more:
 
@@ -103,13 +105,13 @@ Architectures: x64 supported; arm64 unverified (it builds in the Linux container
 Ubuntu and Debian (Debian 13 (the Linux test container) and Ubuntu 26.04; CI runs Ubuntu 24.04):
 
 ```bash
-sudo apt-get install --no-install-recommends build-essential cmake curl dbus-daemon dbus-x11 git gnome-keyring libasound2-dev libasound2t64 libatspi2.0-0 libclang-dev libdbus-1-dev libdrm2 libegl-dev libgbm-dev libgtk-3-0 libnotify4 libnss3 libpipewire-0.3-dev libsecret-1-0 libspa-0.2-dev libva-dev libwayland-dev libxcb1 libxkbcommon0 libxss1 libxtst6 nasm openbox perl pkg-config procps x11-utils xauth xdg-utils xvfb
+sudo apt-get install --no-install-recommends build-essential cmake curl dbus-daemon dbus-x11 ffmpeg git gnome-keyring libasound2-dev libasound2t64 libatspi2.0-0 libclang-dev libdbus-1-dev libdrm2 libegl-dev libgbm-dev libgtk-3-0 libnotify4 libnss3 libpipewire-0.3-dev libsecret-1-0 libspa-0.2-dev libva-dev libwayland-dev libxcb1 libxkbcommon0 libxss1 libxtst6 nasm openbox perl pkg-config procps x11-utils xauth xdg-utils xvfb
 ```
 
 Fedora (CI runs Fedora 43):
 
 ```bash
-sudo dnf install alsa-lib alsa-lib-devel at-spi2-core clang-devel cmake curl dbus-daemon dbus-devel dbus-x11 gcc gcc-c++ git gnome-keyring gtk3 libXScrnSaver libXtst libdrm libglvnd-devel libnotify libsecret libva-devel libxcb libxkbcommon make mesa-libgbm-devel nasm nss openbox perl pipewire-devel pkgconf-pkg-config procps-ng wayland-devel xdg-utils xorg-x11-server-Xvfb xorg-x11-xauth xprop
+sudo dnf install alsa-lib alsa-lib-devel at-spi2-core clang-devel cmake curl dbus-daemon dbus-devel dbus-x11 ffmpeg-free gcc gcc-c++ git gnome-keyring gtk3 libXScrnSaver libXtst libdrm libglvnd-devel libnotify libsecret libva-devel libxcb libxkbcommon make mesa-libgbm-devel nasm nss openbox perl pipewire-devel pkgconf-pkg-config procps-ng wayland-devel xdg-utils xorg-x11-server-Xvfb xorg-x11-xauth xprop
 ```
 
 - **Desktop session**: The application opens windows on an X11 or Wayland display. Run it from a graphical session (`DISPLAY` or `WAYLAND_DISPLAY` set).
