@@ -257,12 +257,11 @@
     "ffprobe": {
       "title": "ffprobe",
       "optional": true,
-      "purpose": "Reads the recordings the Rust tests write, as a decoder that is not VniLink's; without it that test says it skipped.",
+      "purpose": "Reads the recordings the Rust tests write, as a decoder that is not VniLink's; without it, or without its H.264 decoder (Fedora's ffmpeg-free), that test says it skipped.",
       "check": {
         "commands": {
           "ffprobe": {
             "debian": "ffmpeg",
-            "fedora": "ffmpeg-free",
             "darwin": "`brew install ffmpeg`",
             "win32": "`pacman -S mingw-w64-x86_64-ffmpeg` in the MSYS2 shell",
             "msys2": "mingw-w64-x86_64-ffmpeg"

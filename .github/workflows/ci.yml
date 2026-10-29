@@ -101,7 +101,6 @@ jobs:
     env:
       # Root in a container: Electron runs without its sandbox, as in the Debian image.
       VNILINK_TEST_CONTAINER: '1'
-      VNILINK_REQUIRE: ffprobe
     steps:
       - name: Install checkout and Node prerequisites
         run: dnf install -y git tar xz

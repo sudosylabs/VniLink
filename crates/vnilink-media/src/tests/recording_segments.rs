@@ -386,12 +386,26 @@ fn concurrent_recorders_sweep_only_their_own_stem_and_spare_live_partials() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `Ok` when ffprobe runs here and decodes H.264: a build without patented
+/// codecs, as Fedora's ffmpeg-free, reads the stream without its pictures.
+fn decodes_h264() -> Result<(), String> {
+    let listing = std::process::Command::new("ffprobe")
+        .args(["-hide_banner", "-decoders"])
+        .output()
+        .map_err(|error| format!("ffprobe could not be run ({error})"))?;
+    String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some("h264"))
+        .then_some(())
+        .ok_or_else(|| "this ffprobe has no H.264 decoder".to_owned())
+}
+
 /// Finished segments decode with independent tooling: ffprobe (not our
 /// remuxer) must see an H.264 64x64 stream with exactly the pushed frames
 /// and the right keyframe cadence in every segment.
 #[test]
 fn rolled_segments_decode_with_independent_tooling() {
-    if !crate::needs::needs("ffprobe", crate::needs::tool("ffprobe", &["-version"])) {
+    if !crate::needs::needs("ffprobe", decodes_h264()) {
         return;
     }
     let dir = scratch("ffprobe");
