@@ -1426,11 +1426,9 @@ impl Core {
                         record.waiting_file = None;
                     }
                     JobState::WaitingDecision => {
-                        record.enter(JobState::WaitingDecision);
-                        record.error = None;
                         // Map the receiver's waiting path back to this
                         // record's file index (manifests correlate by id).
-                        record.waiting_file = reply.waiting_file.as_deref().and_then(|path| {
+                        let waiting = reply.waiting_file.as_deref().and_then(|path| {
                             record
                                 .manifest
                                 .as_ref()?
@@ -1439,6 +1437,15 @@ impl Core {
                                 .filter(|entry| !entry.is_dir)
                                 .position(|entry| entry.path == path)
                         });
+                        // A reply sent before this side's answer reached the
+                        // receiver asks a question already answered here.
+                        let answered = record.state != JobState::WaitingDecision
+                            && waiting.is_some_and(|file| record.choices.contains_key(&file));
+                        if !answered {
+                            record.enter(JobState::WaitingDecision);
+                            record.error = None;
+                            record.waiting_file = waiting;
+                        }
                     }
                     JobState::Transferring if record.state == JobState::WaitingDecision => {
                         super::service_jobs::check_owner(&lock(&self.shared.state), record.owner)?;
