@@ -100,6 +100,11 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'lock' }), /NoSession|StaleSession/);
 		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'format' }), /Invalid system action/);
 		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'lock', force: true }));
+		// Privacy mode is asked of a connected computer too, and takes a plain switch.
+		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: true }), /NoSession|StaleSession/);
+		await assert.rejects(execute(first, { type: 'systemPrivacy', sessionId: '1', generation: '1' }), /NoSession|StaleSession/);
+		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: 'yes' }));
+		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: true, inputBlocked: false }));
 		assert.deepEqual(await execute(first, { type: 'scheduledSystemActions' }), { type: 'scheduledSystemActions', actions: [] });
 		await assert.rejects(execute(first, { type: 'cancelHostedSystemAction', id: '1' }), /InvalidSetting/);
 		await assert.rejects(execute(first, { type: 'runHostedSystemActionNow', id: '1' }), /InvalidSetting/);

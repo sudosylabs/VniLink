@@ -206,6 +206,9 @@ export type EngineCommand =
 	| { type: 'setSystemPolicy'; policy: SystemPolicy }
 	| { type: 'systemAction'; sessionId: string; generation: string; action: SystemActionKind }
 	| { type: 'systemOperation' | 'cancelSystemAction'; sessionId: string; generation: string; id: string }
+	/** Blanks a paired computer's screen and blocks its keyboard and mouse, or gives them back. */
+	| { type: 'setSystemPrivacy'; sessionId: string; generation: string; enabled: boolean }
+	| { type: 'systemPrivacy'; sessionId: string; generation: string }
 	| { type: 'scheduledSystemActions' }
 	| { type: 'cancelHostedSystemAction' | 'runHostedSystemActionNow'; id: string }
 	| { type: 'terminalPolicy' }
@@ -316,6 +319,7 @@ export type EngineReply =
 	| { type: 'sharingPolicy'; policy: SharingPolicy }
 	| { type: 'systemPolicy'; policy: SystemPolicy; support: SystemSupport }
 	| { type: 'systemOperation'; operation: SystemOperation }
+	| { type: 'systemPrivacy'; privacy: SystemPrivacy }
 	| { type: 'scheduledSystemActions'; actions: ScheduledSystemAction[] }
 	| { type: 'terminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalSessions'; sessions: TerminalSession[] }
@@ -438,6 +442,12 @@ export interface SystemOperation {
 	readonly noticeRemainingMs: number;
 }
 
+/** Privacy mode on a paired computer: its screen blanked, its own keyboard and mouse blocked. */
+export interface SystemPrivacy {
+	readonly displayPrivate: boolean;
+	readonly inputBlocked: boolean;
+}
+
 /** A restart or shutdown counting down on this computer. */
 export interface ScheduledSystemAction {
 	readonly id: string;
@@ -458,6 +468,10 @@ function systemOperation(value: unknown): value is SystemOperation {
 	return record(value) && decimal(value.id) && systemActionKinds.includes(String(value.action))
 		&& systemOperationStates.includes(String(value.state)) && typeof value.detail === 'string' && value.detail.length <= 256
 		&& noticeMs(value.noticeRemainingMs) && Object.keys(value).length === 5;
+}
+
+function systemPrivacy(value: unknown): value is SystemPrivacy {
+	return record(value) && typeof value.displayPrivate === 'boolean' && typeof value.inputBlocked === 'boolean' && Object.keys(value).length === 2;
 }
 
 function scheduledSystemAction(value: unknown): value is ScheduledSystemAction {
@@ -792,6 +806,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setSystemPolicy': keys = ['policy']; valid = systemPolicy(value.policy); break;
 		case 'systemAction': keys = ['sessionId', 'generation', 'action']; valid = decimal(value.sessionId) && decimal(value.generation) && systemActionKinds.includes(String(value.action)); break;
 		case 'systemOperation': case 'cancelSystemAction': keys = ['sessionId', 'generation', 'id']; valid = decimal(value.sessionId) && decimal(value.generation) && decimal(value.id); break;
+		case 'setSystemPrivacy': keys = ['sessionId', 'generation', 'enabled']; valid = decimal(value.sessionId) && decimal(value.generation) && typeof value.enabled === 'boolean'; break;
+		case 'systemPrivacy': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'scheduledSystemActions': keys = []; valid = true; break;
 		case 'cancelHostedSystemAction': case 'runHostedSystemActionNow': keys = ['id']; valid = decimal(value.id); break;
 		case 'terminalPolicy': keys = []; valid = true; break;
@@ -855,6 +871,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'sharingPolicy': return sharingPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'systemPolicy': return systemPolicy(value.policy) && systemSupport(value.support) && Object.keys(value).length === 3;
 		case 'systemOperation': return systemOperation(value.operation) && Object.keys(value).length === 2;
+		case 'systemPrivacy': return systemPrivacy(value.privacy) && Object.keys(value).length === 2;
 		case 'scheduledSystemActions': return Array.isArray(value.actions) && value.actions.length <= 64 && value.actions.every((action: unknown) => scheduledSystemAction(action)) && Object.keys(value).length === 2;
 		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;

@@ -603,6 +603,20 @@ enum Command {
         generation: String,
         id: String,
     },
+    /// Blanks a paired computer's screen and blocks its keyboard and
+    /// mouse, or gives them back. The lease lasts while this computer's
+    /// System owner on that connection is open.
+    SetSystemPrivacy {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        enabled: bool,
+    },
+    SystemPrivacy {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+    },
     /// Restarts and shutdowns counting down on this computer.
     ScheduledSystemActions,
     CancelHostedSystemAction {
@@ -1053,6 +1067,9 @@ enum Reply {
     },
     ScheduledSystemActions {
         actions: Vec<system::TransferScheduledSystemAction>,
+    },
+    SystemPrivacy {
+        privacy: system::TransferPrivacy,
     },
     TerminalPolicy {
         policy: TransferTerminalPolicy,
@@ -2161,6 +2178,8 @@ impl EngineBridge {
             Command::SystemAction { .. }
             | Command::SystemOperation { .. }
             | Command::CancelSystemAction { .. }
+            | Command::SetSystemPrivacy { .. }
+            | Command::SystemPrivacy { .. }
             | Command::ScheduledSystemActions
             | Command::CancelHostedSystemAction { .. }
             | Command::RunHostedSystemActionNow { .. } => system::dispatch(state, command),
@@ -2400,6 +2419,8 @@ impl CommandShape {
             "setSystemPolicy" => &["type", "policy"],
             "systemAction" => &["type", "sessionId", "generation", "action"],
             "systemOperation" | "cancelSystemAction" => &["type", "sessionId", "generation", "id"],
+            "setSystemPrivacy" => &["type", "sessionId", "generation", "enabled"],
+            "systemPrivacy" => &["type", "sessionId", "generation"],
             "scheduledSystemActions" => &["type"],
             "cancelHostedSystemAction" | "runHostedSystemActionNow" => &["type", "id"],
             "terminalPolicy" => &["type"],

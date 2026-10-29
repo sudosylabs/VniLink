@@ -43,6 +43,12 @@ test('system commands, replies and events carry only what they name', () => {
 	assert(!isEngineCommand({ type: 'systemAction', sessionId: '1', generation: '2', action: 'format' }));
 	assert(!isEngineCommand({ type: 'systemAction', sessionId: '1', generation: '2', action: 'lock', force: true }));
 	assert(isEngineCommand({ type: 'cancelSystemAction', sessionId: '1', generation: '2', id: '7' }));
+	assert(isEngineCommand({ type: 'setSystemPrivacy', sessionId: '1', generation: '2', enabled: true }));
+	assert(!isEngineCommand({ type: 'setSystemPrivacy', sessionId: '1', generation: '2', enabled: 'on' }));
+	assert(!isEngineCommand({ type: 'setSystemPrivacy', sessionId: '1', generation: '2', enabled: true, inputBlocked: false }), 'privacy mode is one switch');
+	assert(isEngineCommand({ type: 'systemPrivacy', sessionId: '1', generation: '2' }));
+	assert(isEngineReply({ type: 'systemPrivacy', privacy: { displayPrivate: true, inputBlocked: true } }));
+	assert(!isEngineReply({ type: 'systemPrivacy', privacy: { displayPrivate: true, inputBlocked: true, holder: '3' } }), 'the holder stays on the other computer');
 	assert(isEngineCommand({ type: 'runHostedSystemActionNow', id: '7' }));
 	assert(!isEngineCommand({ type: 'cancelHostedSystemAction', id: 'seven' }));
 	const operation = { id: '7', action: 'restart', state: 'scheduled', detail: 'scheduled', noticeRemainingMs: 29000 };

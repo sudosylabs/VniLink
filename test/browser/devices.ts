@@ -19,7 +19,7 @@ import { InstantiationService } from '../../src/platform/instantiation/common/in
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import { IDeviceService as IDeviceServiceId } from '../../src/workbench/services/devices/deviceService.js';
 import { IScreenSnapshotService as IScreenSnapshotServiceId } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
-import { ISystemActionService, type SystemActionProgress } from '../../src/workbench/services/systemActions/systemActionService.js';
+import { ISystemActionService, type SystemActionProgress, type SystemPrivacyResult } from '../../src/workbench/services/systemActions/systemActionService.js';
 
 function assert(value: unknown, message: string): asserts value {
 	if (!value) {
@@ -61,6 +61,14 @@ class FixtureSystemActions implements ISystemActionService {
 
 	public cancel(): Promise<void> {
 		return Promise.resolve();
+	}
+
+	public privacy(): Promise<SystemPrivacyResult> {
+		return Promise.resolve({ privacy: { displayPrivate: false, inputBlocked: false } });
+	}
+
+	public setPrivacy(_deviceId: string, enabled: boolean): Promise<SystemPrivacyResult> {
+		return Promise.resolve({ privacy: { displayPrivate: enabled, inputBlocked: enabled } });
 	}
 }
 
