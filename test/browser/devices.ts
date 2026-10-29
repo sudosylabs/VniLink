@@ -7,6 +7,11 @@ import type { IScreenSnapshotService } from '../../src/workbench/services/screen
 import { DevicesPage } from '../../src/workbench/contrib/devices/devicesPage.js';
 import { DevicePairingPopover, IDevicePairingPopover, type PairingPopoverKind } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
 import { ICommandService, type ICommandEvent } from '../../src/platform/commands/common/commands.js';
+import { ContextKeyService } from '../../src/platform/contextkey/browser/contextKeyService.js';
+import { IContextKeyService, type IContextKey } from '../../src/platform/contextkey/common/contextkey.js';
+import { EngineAvailableContext } from '../../src/workbench/contextkeys.js';
+import { CreateInvitationAction, ImportInvitationAction } from '../../src/workbench/contrib/devices/deviceActions.js';
+import { FakeConfigurationService } from './settingsFixture.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { IDevicePairingService } from '../../src/workbench/services/devices/devicePairingService.js';
 import { DevicePairingService } from '../../src/workbench/services/devices/devicePairingServiceImpl.js';
@@ -77,7 +82,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public readonly popover: IDevicePairingPopover;
 	public readonly popoverPairing: IDevicePairingService;
 	private readonly host = document.createElement('div');
-	/** Stand-ins for the titlebar buttons the popover hangs from. */
+	/** Stand-ins for the page's pairing buttons, which run commands this fixture records rather than the popover. */
 	private readonly anchors = document.createElement('div');
 	public connects: string[] = [];
 	/** Commands the inspector ran, with their arguments. */
@@ -87,6 +92,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public incoming: ControlRequestInfo | null = null;
 	public readonly snapshots: FixtureSnapshots;
 	public readonly systemActions = new FixtureSystemActions();
+	public readonly engineAvailable: IContextKey<boolean>;
 
 	constructor(state: DeviceFixtureState = 'populated', snapshots?: FixtureSnapshots) {
 		super();
@@ -109,7 +115,11 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 				return Promise.resolve(undefined);
 			},
 		};
+		const contextKeys = this._register(new ContextKeyService(new FakeConfigurationService()));
+		this.engineAvailable = EngineAvailableContext.bindTo(contextKeys);
+		this.engineAvailable.set(true);
 		const collection = new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots], [ICommandService, commands],
+			[IContextKeyService, contextKeys],
 			[ISystemActionService, this.systemActions],
 			[IDevicePairingService, new SyncDescriptor(DevicePairingService)], [IDevicePairingPopover, new SyncDescriptor(DevicePairingPopover)]);
 		const services = this._register(new InstantiationService(collection, true));
@@ -201,7 +211,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 		this.availabilityChanged.fire(id);
 	}
 
-	/** The fixture's button for `kind`, standing in for the titlebar action. */
+	/** The fixture's button for `kind`, standing in for the page's pairing button. */
 	public anchor(kind: PairingPopoverKind): HTMLButtonElement {
 		const anchor = this.anchors.querySelector<HTMLButtonElement>(`[data-kind="${kind}"]`);
 		assert(anchor, `No ${kind} anchor`);
@@ -304,6 +314,7 @@ export async function verifyDevices(): Promise<void> {
 		page.querySelector<HTMLButtonElement>('.device-close')?.click();
 		assert(document.activeElement === list && listRow(rows()[1]).classList.contains('focused') && page.querySelector<HTMLElement>('.device-panel')?.hidden, 'Close did not restore list focus');
 		await verifyInspector(fixture, rows);
+		verifyPairingButtons();
 		fixture.update(fixture.devices.map(device => ({ ...device, presence: 'disconnected' })));
 		rows()[1].click();
 		assert(![...page.querySelectorAll('.device-panel button')].some(button => button.textContent === 'Connect'), 'The removed Connect button is still offered');
@@ -353,6 +364,40 @@ export async function verifyDevices(): Promise<void> {
 }
 
 /** Read-only service rows, the details list and their updates for the selected computer. */
+/** Pairing starts on the page: quiet buttons beside a list, two described choices on an empty page. */
+function verifyPairingButtons(): void {
+	const shown = (element: HTMLElement | null): boolean => !!element && element.checkVisibility();
+	const populated = new DevicePageFixture();
+	const empty = new DevicePageFixture('empty');
+	const unavailable = new DevicePageFixture('unavailable');
+	try {
+		const page = populated.page.element;
+		const compact = [...page.querySelectorAll<HTMLButtonElement>('.devices-heading .device-pairing-button')];
+		assert(compact.map(button => button.textContent).join() === 'Invite another computer,Open an invitation' && compact.every(shown), 'Pairing buttons missing beside the device list heading');
+		assert(!shown(page.querySelector('.device-pairing-choices')), 'Empty-page pairing choices shown beside a device list');
+		compact[0].click();
+		compact[1].click();
+		const ran = populated.commands.map(([id, context]) => [id, (context as { anchor?: unknown } | undefined)?.anchor]);
+		assert(ran.length === 2 && ran[0][0] === CreateInvitationAction.ID && ran[0][1] === compact[0] && ran[1][0] === ImportInvitationAction.ID && ran[1][1] === compact[1], 'Pairing buttons did not run their commands from themselves');
+		populated.engineAvailable.set(false);
+		assert(compact.every(button => button.disabled), 'Pairing offered without the engine');
+		populated.engineAvailable.set(true);
+		assert(compact.every(button => !button.disabled), 'Pairing stayed off after the engine returned');
+		const emptyPage = empty.page.element;
+		const choices = [...emptyPage.querySelectorAll<HTMLButtonElement>('.device-empty .device-pairing-choice')];
+		assert(choices.length === 2 && choices.every(shown) && choices[0].classList.contains('primary') && !choices[1].classList.contains('primary'), 'Empty page lacks its pairing buttons, inviting first');
+		assert(!shown(emptyPage.querySelector('.devices-heading .device-pairing-actions')), 'Heading pairing buttons shown on an empty page');
+		assert(!emptyPage.querySelector('[role="status"] .device-pairing-choice'), 'Pairing choices sit inside the status announcement');
+		choices[1].click();
+		assert(empty.commands.at(-1)?.[0] === ImportInvitationAction.ID, 'Empty-page choice did not run its command');
+		assert(!shown(unavailable.page.element.querySelector('.device-pairing-choices')), 'Pairing choices offered while devices are unavailable');
+	} finally {
+		populated.dispose();
+		empty.dispose();
+		unavailable.dispose();
+	}
+}
+
 async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLElement[]): Promise<void> {
 	const page = fixture.page.element;
 	const services = (): Record<string, string> => Object.fromEntries([...page.querySelectorAll('.device-service')].map(row => [row.querySelector('.device-service-label')?.textContent ?? '', row.querySelector('.device-service-status')?.textContent ?? '']));

@@ -486,7 +486,9 @@ class SmokeSuite {
       }
       sidebar.querySelector('[data-section-id="devices"]').click();
       if (document.querySelector('.home-content > main') !== devices) throw new Error('Devices view was discarded');
-      await settled(() => deviceActions() === 2, 'Device actions did not return on Devices');
+      // Pairing is on the Devices page itself; the titlebar holds none of it.
+      if (deviceActions() !== 0) throw new Error('Pairing actions are in the titlebar');
+      if (!devices.querySelector('.device-pairing-choice, .device-pairing-button')) throw new Error('Pairing is not on the Devices page');
       if (sidebar.querySelector('[data-section-id="devices"] .vnilink-icon').dataset.icon !== 'devices') throw new Error('Wrong Devices artwork');
       if (sidebar.querySelector('[data-section-id="desktop"] .vnilink-icon').dataset.icon !== 'remoteDesktop') throw new Error('Wrong Remote Desktop artwork');
       return { labels, settings: sidebar.querySelector('.sidebar-heading').textContent,
@@ -496,7 +498,7 @@ class SmokeSuite {
     })()`);
 		assert.deepEqual(result, {
 			labels: ['Devices', 'General', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
-			settings: 'Settings', fullHeight: true, selected: 'devices', actions: ['Open an invitation', 'Invite another computer'],
+			settings: 'Settings', fullHeight: true, selected: 'devices', actions: [],
 		});
 	}
 
@@ -604,7 +606,8 @@ class SmokeSuite {
         strip: region('.tabs-scrollable'), container: region('.tabs-container'), tab: region('.tab'),
         close: tab.querySelector('.tab-close') !== null, action: document.querySelector('.view-action') ? region('.view-action') : null };
     })()`);
-		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: 'no-drag' });
+		// Home has no titlebar actions now that pairing is on the Devices page; the tabs scenario checks an action's drag region.
+		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: null });
 		const surfaces: unknown = await window.webContents.executeJavaScript(`(() => {
       const color = selector => getComputedStyle(document.querySelector(selector)).backgroundColor;
       return { mode: document.documentElement.dataset.windowMaterial, titlebar: color('.part.titlebar'), sidebar: color('.sidebar'), content: color('.home-content') };

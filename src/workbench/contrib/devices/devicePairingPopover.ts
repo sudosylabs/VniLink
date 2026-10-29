@@ -14,12 +14,12 @@ import { defaultButtonStyles, defaultInputBoxStyles } from '../../../platform/th
 import { IDevicePairingService, type PairingState } from '../../services/devices/devicePairingService.js';
 import { IDeviceService } from '../../services/devices/deviceService.js';
 
-/** Which titlebar action opened the popover: inviting from here, or opening another computer's invitation. */
+/** Which pairing action opened the popover: inviting from here, or opening another computer's invitation. */
 export type PairingPopoverKind = 'create' | 'import';
 
 export const IDevicePairingPopover = createDecorator<IDevicePairingPopover>('devicePairingPopover');
 
-/** The pairing popover under the Devices page's titlebar actions. */
+/** The pairing popover under the Devices page's pairing buttons. */
 export interface IDevicePairingPopover {
 	readonly _serviceBrand: undefined;
 	/** Shows pairing under `anchor`, or closes it when that action's popover is already open. */
@@ -27,7 +27,7 @@ export interface IDevicePairingPopover {
 	hide(): void;
 }
 
-/** Whether a hide returns focus to the titlebar button, as Escape and Done do. */
+/** Whether a hide returns focus to the button that opened it, as Escape and Done do. */
 interface HideData {
 	readonly restoreFocus: boolean;
 }
@@ -37,8 +37,8 @@ function isHideData(value: unknown): value is HideData {
 }
 
 /**
- * Shows `IDevicePairingService` in a context view anchored to the titlebar
- * button. Closing it leaves a live invitation waiting for the other computer.
+ * Shows `IDevicePairingService` in a context view anchored to the Devices
+ * page's button. Closing it leaves a live invitation waiting for the other computer.
  */
 export class DevicePairingPopover extends Disposable implements IDevicePairingPopover {
 	declare public readonly _serviceBrand: undefined;
@@ -113,8 +113,9 @@ export class DevicePairingPopover extends Disposable implements IDevicePairingPo
 		if (kind === 'paired' || kind === 'ended') {
 			this.pairing.reset();
 		}
+		// The anchor may have gone meanwhile, as an empty page's buttons do once a computer pairs.
 		if (isHideData(data) && anchor.isConnected) {
-			anchor.focus();
+			(anchor.checkVisibility() ? anchor : anchor.parentElement?.closest<HTMLElement>('[tabindex]'))?.focus();
 		}
 	}
 }

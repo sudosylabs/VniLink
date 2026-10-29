@@ -29,6 +29,81 @@
 	padding-inline: 0;
 }
 
+/* Pairing beside the heading once computers are listed: quiet, labelled, secondary to the list. */
+.devices-heading {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 12px 24px;
+}
+
+.devices-heading .page-heading {
+	min-width: 0;
+}
+
+.device-pairing-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.device-pairing-button {
+	height: 28px;
+	gap: 6px;
+	padding: 0 10px 0 8px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--surface-raised);
+	white-space: nowrap;
+}
+
+.device-pairing-button > .vnilink-icon {
+	width: 16px;
+	height: 16px;
+	color: var(--muted);
+}
+
+.device-pairing-button:disabled {
+	opacity: 0.5;
+}
+
+.device-pairing-button:hover:not(:disabled) {
+	background: var(--surface-hover);
+}
+
+/* The empty page's first step: inviting leads, opening an invitation follows. */
+.device-pairing-choices {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 8px;
+	margin-top: 24px;
+}
+
+.device-pairing-choice {
+	height: 30px;
+	padding: 0 14px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--surface-raised);
+	white-space: nowrap;
+}
+
+.device-pairing-choice.primary {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.device-pairing-choice:disabled {
+	opacity: 0.5;
+}
+
+.device-pairing-choice:hover:not(:disabled, .primary) {
+	background: var(--surface-hover);
+}
+
 .monaco-button.device-button {
 	display: inline-flex;
 	width: auto;
