@@ -464,13 +464,14 @@ export async function verifyFiles(): Promise<void> {
 		await until(() => crumbs(remote).at(-1) === 'Installers', 'Installers did not open');
 		assert(remoteDisk.watchers.has('2:Users/someone/Downloads/Installers') && !remoteDisk.watchers.has('2:Users/someone/Downloads'), 'The watch did not follow the open folder');
 		// A path longer than its bar scrolls, keeping whole names and the open folder in view. The
-		// bar is narrowed to the open folder's name and its chevron, measured here: names are wider
-		// in some systems' fonts, so a fixed width can leave no room for one whole name.
-		const wide = remote.querySelector<HTMLElement>('.files-crumb-area')?.getBoundingClientRect();
+		// bar itself is narrowed to the open folder's name and its chevron, measured here: names
+		// and the buttons beside the bar are wider in some systems' fonts, so a fixed width, or one
+		// worked out from the pane's, can leave no room for one whole name.
+		const crumbArea = remote.querySelector<HTMLElement>('.files-crumb-area');
 		const folderWidth = [...remote.querySelectorAll<HTMLElement>('.files-crumb')].at(-1)?.getBoundingClientRect().width;
 		const pathWidth = remote.querySelector<HTMLElement>('.files-crumbs')?.scrollWidth;
-		assert(wide !== undefined && folderWidth !== undefined && pathWidth !== undefined && folderWidth + 24 < pathWidth, 'The open path is too short to scroll');
-		remote.style.maxWidth = `${String(remote.getBoundingClientRect().width - wide.width + folderWidth + 24)}px`;
+		assert(crumbArea !== null && folderWidth !== undefined && pathWidth !== undefined && folderWidth + 24 < pathWidth, 'The open path is too short to scroll');
+		crumbArea.style.flex = `0 0 ${String(folderWidth + 24)}px`;
 		await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		const area = remote.querySelector<HTMLElement>('.files-crumb-area')?.getBoundingClientRect();
 		const steps = [...remote.querySelectorAll<HTMLElement>('.files-crumb')];
@@ -478,7 +479,7 @@ export async function verifyFiles(): Promise<void> {
 		assert(steps.every(step => step.scrollWidth <= step.clientWidth), 'A long path squeezed its folder names');
 		assert(area !== undefined && end !== undefined && end.right <= area.right + 1 && end.left >= area.left, `The open folder is not in view at the end of a long path: it spans ${String(end?.left)}–${String(end?.right)} in ${String(area?.left)}–${String(area?.right)}`);
 		assert((steps[0]?.getBoundingClientRect().left ?? 0) < area.left, 'A long path did not scroll');
-		remote.style.maxWidth = '';
+		crumbArea.style.flex = '';
 		press(list(remote), 'End', 35);
 		await until(() => names(remote).includes('setup-59.exe'), 'The end of a long folder is not reachable');
 		await new Promise(resolve => requestAnimationFrame(resolve));
