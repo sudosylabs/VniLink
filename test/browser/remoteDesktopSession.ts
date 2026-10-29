@@ -290,7 +290,8 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		canvas.dispatchEvent(new PointerEvent('pointerdown', { ...center, button: 0 }));
 		canvas.dispatchEvent(new PointerEvent('pointerup', { ...center, button: 0 }));
 		const pointer = sessions[0].sent.find(input => input.type === 'submitPointer');
-		assert(pointer?.type === 'submitPointer' && pointer.x === 1920 + 960 && pointer.y === 540 && pointer.display === '7' && pointer.revision === '3', `Wrong pointer: ${JSON.stringify(pointer)}`);
+		// At a fractional scale the middle of the shown picture falls between two of its pixels.
+		assert(pointer?.type === 'submitPointer' && Math.abs(pointer.x - (1920 + 960)) <= 1 && Math.abs(pointer.y - 540) <= 1 && pointer.display === '7' && pointer.revision === '3', `Wrong pointer: ${JSON.stringify(pointer)}`);
 		assert(sessions[0].sent.filter(input => input.type === 'submitButton').map(input => JSON.stringify(input)).join() === [
 			JSON.stringify({ type: 'submitButton', button: 'Left', down: true }), JSON.stringify({ type: 'submitButton', button: 'Left', down: false }),
 		].join(), 'The click did not reach the other computer');
