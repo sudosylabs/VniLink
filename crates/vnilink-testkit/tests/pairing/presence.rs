@@ -130,6 +130,36 @@ fn a_host_that_stops_accepting_shows_as_such_and_comes_back() -> TestResult {
     Ok(())
 }
 
+/// Every redial of an unreachable host is a session of its own. They do not
+/// pile up in the controller's list: services read that list to find their
+/// link, and a long one cannot be read.
+#[test]
+fn links_that_failed_do_not_pile_up_in_the_controllers_sessions() -> TestResult {
+    let _trace = traced();
+    let pair = Pair::for_desktop();
+    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    host.stop_hosting()?;
+    controller.set_presence_links(true)?;
+    wait_presence(controller, &pair.host, DevicePresence::NotAccepting);
+    let refused = controller.controller_sessions()?;
+    assert!(
+        refused
+            .iter()
+            .all(|s| !matches!(s.phase, SessionPhase::Failed(_))),
+        "a refused link is not kept: {refused:?}"
+    );
+    host.start_hosting()?;
+    wait_presence(controller, &pair.host, DevicePresence::Connected);
+    let sessions = controller.controller_sessions()?;
+    assert_eq!(
+        sessions.len(),
+        1,
+        "only the live link is listed: {sessions:?}"
+    );
+    assert_eq!(sessions[0].phase, SessionPhase::Active);
+    Ok(())
+}
+
 /// Over the link the host reports, for every capability, whether it
 /// allows it, and reports again when what it shares changes.
 #[test]
