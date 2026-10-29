@@ -6,7 +6,8 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
 import { INativeRuntimeService } from '../nativeRuntime/nativeRuntimeService.js';
-import { ICameraService, type CameraFailure, type CameraList, type CameraRecordingFailure, type ICameraStream } from './cameraService.js';
+import { ICameraService, type CameraFailure, type CameraList, type ICameraStream } from './cameraService.js';
+import { recordingStartFailure, type RecordingStartFailure } from '../recording/sessionRecording.js';
 import { EngineCameraStream } from './engineCameraStream.js';
 import { createWebCodecsDecoder } from './webCodecsDecoder.js';
 
@@ -39,16 +40,6 @@ export function cameraOpenFailure(error: unknown): CameraFailure {
 	switch (engineErrorCategory(error) ?? '') {
 		case 'Busy': return 'inUse';
 		case 'Unauthorized': return 'turnedOff';
-		case 'NoSession':
-		case 'StaleSession': return 'disconnected';
-		default: return 'failed';
-	}
-}
-
-/** Why a recording didn't start, from the engine's error category. */
-export function cameraRecordingFailure(error: unknown): CameraRecordingFailure {
-	switch (engineErrorCategory(error) ?? '') {
-		case 'Unauthorized': return 'notAllowed';
 		case 'NoSession':
 		case 'StaleSession': return 'disconnected';
 		default: return 'failed';
@@ -116,7 +107,7 @@ export class CameraService implements ICameraService {
 		return { stream };
 	}
 
-	public async startRecording(deviceId: string): Promise<{ readonly failure: CameraRecordingFailure } | { readonly recording: string }> {
+	public async startRecording(deviceId: string): Promise<{ readonly failure: RecordingStartFailure } | { readonly recording: string }> {
 		const session = await activeControllerSession(this.engine, deviceId);
 		if (!session) {
 			return { failure: 'disconnected' };
@@ -125,7 +116,7 @@ export class CameraService implements ICameraService {
 			const status = await this.nativeRuntime.startRecording({ ...session, source: 'camera' }, {});
 			return { recording: status.id };
 		} catch (error) {
-			return { failure: cameraRecordingFailure(error) };
+			return { failure: recordingStartFailure(error) };
 		}
 	}
 }
