@@ -1,9 +1,22 @@
 //! VideoToolbox H.264 encode of BGRA pictures.
 //!
+//! A ScreenCaptureKit picture is encoded in its own IOSurface, or scaled on
+//! the GPU into the encoder's (`VTPixelTransferSession`); any other picture
+//! is copied into the encoder's surface.
+//!
 //! The session emits length-prefixed NALs. SPS and PPS stay in the format
 //! description, so a keyframe is rewritten as Annex-B with those sets in front.
 //! This encoder does not capture the screen. Callers supply the picture.
 //! Without VideoToolbox H.264 this returns unsupported.
+//!
+//! A recovery keyframe is encoded under a quantiser floor that
+//! [`RecoveryQp`] moves until it fits a few pictures' bytes. VideoToolbox
+//! takes no byte limit for one picture: on this kind of session, neither the
+//! data-rate limit nor `MaxAllowedFrameQP` shrank a forced keyframe, and
+//! `MinAllowedFrameQP` did. The floor is a session property, set for that
+//! one picture and cleared after it; `encode_with_properties` waits for the
+//! picture, so no other picture is encoded under it.
+// trace: records every ignored failure
 
 #[cfg(target_os = "macos")]
 use apple_cf::cm::CMTime;
@@ -13,6 +26,9 @@ use apple_cf::iosurface::IOSurface;
 use videotoolbox::compression::{CompressionSession, FrameProperties, ProfileLevel};
 #[cfg(target_os = "macos")]
 use videotoolbox::session::Codec;
+use vnilink::YuvMatrix;
+#[cfg(target_os = "macos")]
+use vnilink_media::RecoveryQp;
 use vnilink_media::{
     to_annex_b, AvccAccessUnit, EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder,
 };
@@ -20,30 +36,66 @@ use vnilink_media::{
 #[cfg(target_os = "macos")]
 const BGRA: u32 = 0x4247_5241;
 
+/// Scaling ScreenCaptureKit pictures on the GPU, for one encoder.
+#[cfg(target_os = "macos")]
+enum Scaler {
+    /// No picture of another size yet.
+    Untried,
+    Ready(
+        videotoolbox::transfer::PixelTransferSession,
+        apple_cf::cv::CVPixelBuffer,
+    ),
+    /// The GPU could not scale: pictures are read into memory and scaled on
+    /// the CPU until the encoder is reopened.
+    Unavailable,
+}
+
 pub struct MacEncoder {
     codec: vnilink::VideoCodec,
+    /// The matrix the session converts and declares.
+    #[cfg(target_os = "macos")]
+    matrix: YuvMatrix,
     #[cfg(target_os = "macos")]
     session: CompressionSession,
+    /// VideoToolbox opened the session requiring a hardware encoder.
+    #[cfg(target_os = "macos")]
+    required_hardware: bool,
     #[cfg(target_os = "macos")]
     surface: IOSurface,
+    /// Scales ScreenCaptureKit pictures into `surface` on the GPU.
+    #[cfg(target_os = "macos")]
+    scaler: Scaler,
     width: u16,
     height: u16,
     #[cfg(target_os = "macos")]
     frame_rate: i32,
     #[cfg(target_os = "macos")]
     frame_index: i64,
+    #[cfg(target_os = "macos")]
+    recovery_qp: RecoveryQp,
 }
 
 impl MacEncoder {
     /// Inspect the actual session rather than assuming native means hardware.
+    /// A session opened requiring hardware is hardware: VideoToolbox's
+    /// low-latency H.264 encoder on Apple silicon (`h264.rtvc`) does not
+    /// answer whether it uses hardware, and is not marked either way in the
+    /// encoder list, so asking it read as software and every viewer was told
+    /// this computer encoded in software while it did not. A session opened
+    /// without the requirement says what VideoToolbox answers, or software.
     pub fn hardware(&self) -> bool {
         #[cfg(target_os = "macos")]
         unsafe {
-            self.session.copy_property(videotoolbox::ffi::kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder)
-                .ok().flatten().is_some_and(|value| {
-                    value.type_id() as u64 == apple_cf::raw::CFBooleanGetTypeID()
-                        && apple_cf::raw::CFBooleanGetValue(value.as_ptr().cast()) != 0
-                })
+            self.required_hardware
+                || self
+                    .session
+                    .copy_property(videotoolbox::ffi::kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|value| {
+                        value.type_id() as u64 == apple_cf::raw::CFBooleanGetTypeID()
+                            && apple_cf::raw::CFBooleanGetValue(value.as_ptr().cast()) != 0
+                    })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -56,6 +108,7 @@ impl MacEncoder {
         frame_rate: u8,
         bitrate_bps: u32,
         high: bool,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         Self::open_codec(
             width,
@@ -64,6 +117,7 @@ impl MacEncoder {
             bitrate_bps,
             vnilink::VideoCodec::H264,
             high,
+            matrix,
         )
     }
     pub fn open_codec(
@@ -73,6 +127,7 @@ impl MacEncoder {
         bitrate_bps: u32,
         codec: vnilink::VideoCodec,
         high: bool,
+        matrix: YuvMatrix,
     ) -> Result<Self, Error> {
         if !matches!(codec, vnilink::VideoCodec::H264 | vnilink::VideoCodec::H265) {
             return Err(Error::Unsupported("VideoToolbox encoder codec"));
@@ -106,61 +161,309 @@ impl MacEncoder {
             } else {
                 ProfileLevel::H264ConstrainedBaselineAutoLevel
             };
-            let session = CompressionSession::builder(
-                i32::from(width),
-                i32::from(height),
-                if codec == vnilink::VideoCodec::H265 {
-                    Codec::HEVC
-                } else {
-                    Codec::H264
-                },
-            )
-            .with_profile_level(profile)
-            .with_real_time(true)
-            .with_allow_frame_reordering(false)
-            .with_average_bit_rate(bitrate)
-            .with_expected_frame_rate(f64::from(frame_rate))
-            .with_max_keyframe_interval(120)
-            .build()
-            .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
+            let builder = |hardware| {
+                CompressionSession::builder(
+                    i32::from(width),
+                    i32::from(height),
+                    if codec == vnilink::VideoCodec::H265 {
+                        Codec::HEVC
+                    } else {
+                        Codec::H264
+                    },
+                )
+                .with_profile_level(profile)
+                .with_hardware_acceleration(hardware)
+                .with_real_time(true)
+                .with_allow_frame_reordering(false)
+                .with_average_bit_rate(bitrate)
+                .with_expected_frame_rate(f64::from(frame_rate))
+            };
+            // Low-latency rate control encodes each picture as it comes,
+            // one in and one out, and keeps sizes near the target; keyframes
+            // then come only when asked for, as the viewer does after a loss.
+            // An encoder that refuses it keeps the ordinary rate control with
+            // a keyframe every 120 pictures. Hardware is required first, so
+            // a session that opens is known to be hardware; only then is any
+            // encoder VideoToolbox offers taken.
+            let open = |hardware| {
+                builder(hardware)
+                    .with_low_latency_rate_control(true)
+                    .build()
+                    .or_else(|_| builder(hardware).with_max_keyframe_interval(120).build())
+            };
+            let (session, required_hardware) = open(videotoolbox::HardwareAcceleration::Required)
+                .map(|session| (session, true))
+                .or_else(|_| {
+                    open(videotoolbox::HardwareAcceleration::Preferred)
+                        .map(|session| (session, false))
+                })
+                .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
+            low_latency(&session, matrix);
+            set_rate(&session, bitrate, frame_rate);
             let surface = IOSurface::create(usize::from(width), usize::from(height), BGRA, 4)
                 .ok_or(Error::Unsupported("VideoToolbox H.264"))?;
             Ok(Self {
                 codec,
+                matrix,
                 session,
+                required_hardware,
                 surface,
+                scaler: Scaler::Untried,
                 width,
                 height,
                 frame_rate: i32::from(frame_rate),
                 frame_index: 0,
+                recovery_qp: RecoveryQp::default(),
             })
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (bitrate, high);
+            let _ = (bitrate, high, matrix);
             Err(Error::Unsupported("VideoToolbox H.264"))
         }
     }
 }
 
+/// Sets one property on a running session. VideoToolbox decides which it
+/// takes from a given encoder; refusal is reported, not an error.
+#[cfg(target_os = "macos")]
+fn set(
+    session: &CompressionSession,
+    key: videotoolbox::ffi::CFStringRef,
+    value: &dyn apple_cf::cf::AsCFType,
+) -> bool {
+    // SAFETY: `key` is one of VideoToolbox's exported property keys, and
+    // `value` is a live Core Foundation object of the type that key takes
+    // (a number, an array of numbers or a string), borrowed for the call;
+    // VideoToolbox retains whatever it keeps.
+    unsafe { session.set_property(key, value.as_ptr().cast_const()) }.is_ok()
+}
+
+/// The target bitrate and frame rate, with peaks held to 1.5 times the
+/// average over any second, so a keyframe cannot overrun the link. Returns
+/// whether the encoder took the bitrate.
+#[cfg(target_os = "macos")]
+fn set_rate(session: &CompressionSession, bitrate: i32, frame_rate: u8) -> bool {
+    use apple_cf::cf::{CFArray, CFNumber};
+    use videotoolbox::ffi;
+    // SAFETY (all three reads): VideoToolbox's exported constant keys,
+    // initialised by the framework before any session exists.
+    let (average, limits, expected) = unsafe {
+        (
+            ffi::kVTCompressionPropertyKey_AverageBitRate,
+            ffi::kVTCompressionPropertyKey_DataRateLimits,
+            ffi::kVTCompressionPropertyKey_ExpectedFrameRate,
+        )
+    };
+    let took = set(session, average, &CFNumber::from_i64(i64::from(bitrate)));
+    let peak_bytes = CFNumber::from_i64(i64::from(bitrate) * 3 / 16);
+    let second = CFNumber::from_f64(1.0);
+    set(
+        session,
+        limits,
+        &CFArray::from_values(&[&peak_bytes, &second]),
+    );
+    set(
+        session,
+        expected,
+        &CFNumber::from_f64(f64::from(frame_rate)),
+    );
+    took
+}
+
+/// The lowest QP the session may use; [`NO_QP_FLOOR`] clears it. Returns
+/// whether the encoder took it.
+#[cfg(target_os = "macos")]
+fn set_qp_floor(session: &CompressionSession, qp: i64) -> bool {
+    use apple_cf::cf::CFNumber;
+    // SAFETY: VideoToolbox's exported constant key, as in `set_rate`.
+    let key = unsafe { videotoolbox::ffi::kVTCompressionPropertyKey_MinAllowedFrameQP };
+    set(session, key, &CFNumber::from_i64(qp))
+}
+
+/// Clears `MinAllowedFrameQP`. The session reports -1 before one is set,
+/// but setting -1 back leaves the floor where it was: every picture after
+/// the first recovery keyframe stayed at that floor, and a still page of
+/// text stayed as coarse as that keyframe.
+#[cfg(target_os = "macos")]
+const NO_QP_FLOOR: i64 = 0;
+
+/// No frame held back for later output, and colour marked as the session's
+/// matrix, the one VideoToolbox converts the BGRA pictures with, so decoders
+/// do not guess.
+#[cfg(target_os = "macos")]
+fn low_latency(session: &CompressionSession, matrix: YuvMatrix) {
+    use apple_cf::cf::{CFNumber, CFString};
+    use videotoolbox::ffi;
+    // SAFETY: VideoToolbox's exported constant keys, as in `set_rate`.
+    let (delay, primaries, transfer, key_matrix) = unsafe {
+        (
+            ffi::kVTCompressionPropertyKey_MaxFrameDelayCount,
+            ffi::kVTCompressionPropertyKey_ColorPrimaries,
+            ffi::kVTCompressionPropertyKey_TransferFunction,
+            ffi::kVTCompressionPropertyKey_YCbCrMatrix,
+        )
+    };
+    set(session, delay, &CFNumber::from_i64(0));
+    // The values of kCVImageBuffer…_ITU_R_709_2 for primaries and transfer
+    // whatever the matrix (see `VideoSignal::stream`), and of
+    // kCVImageBufferYCbCrMatrix_ITU_R_601_4 for BT.601.
+    let bt709 = CFString::new("ITU_R_709_2");
+    set(session, primaries, &bt709);
+    set(session, transfer, &bt709);
+    set(
+        session,
+        key_matrix,
+        &CFString::new(match matrix {
+            YuvMatrix::Bt709 => "ITU_R_709_2",
+            YuvMatrix::Bt601 => "ITU_R_601_4",
+        }),
+    );
+}
+
+impl MacEncoder {
+    /// Scales a ScreenCaptureKit picture into the encoder's surface on the
+    /// GPU. `false` once the GPU cannot: the caller scales on the CPU.
+    #[cfg(target_os = "macos")]
+    fn scale(&mut self, picture: &crate::pixels::MacPicture) -> bool {
+        if matches!(self.scaler, Scaler::Untried) {
+            self.scaler = (|| {
+                let session = videotoolbox::transfer::PixelTransferSession::new().ok()?;
+                // Each output pixel averages the pixels it covers: text stays
+                // legible where nearest-neighbour would drop strokes.
+                session
+                    .set_downsampling_mode(videotoolbox::transfer::DownsamplingMode::Average)
+                    .ok()?;
+                session.set_real_time(true).ok()?;
+                let target =
+                    apple_cf::cv::CVPixelBuffer::create_with_io_surface(&self.surface).ok()?;
+                Some(Scaler::Ready(session, target))
+            })()
+            .unwrap_or(Scaler::Unavailable);
+        }
+        let Scaler::Ready(session, target) = &self.scaler else {
+            return false;
+        };
+        if session.transfer(picture.pixel_buffer(), target).is_err() {
+            self.scaler = Scaler::Unavailable;
+            return false;
+        }
+        true
+    }
+
+    /// Whether pictures of another size are scaled on the GPU: `None` before
+    /// the first one.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn scales_on_gpu(&self) -> Option<bool> {
+        match self.scaler {
+            Scaler::Untried => None,
+            Scaler::Ready(..) => Some(true),
+            Scaler::Unavailable => Some(false),
+        }
+    }
+
+    /// As if the GPU could not scale, to exercise the CPU path.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn refuse_gpu_scaling(&mut self) {
+        self.scaler = Scaler::Unavailable;
+    }
+}
+
 impl VideoEncoder for MacEncoder {
+    /// VideoToolbox may fall back to its software encoder; the session says.
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        vnilink::EncoderImplementation {
+            name: "videotoolbox",
+            hardware: Some(self.hardware()),
+            input: None,
+        }
+    }
+
+    fn scales_native(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
+    /// Measured with `still_screen_refinement`: H.264 in low-latency mode
+    /// took a recovery keyframe of a page of text from 15 to 46 dB over two
+    /// seconds of the unchanged page at 30 fps.
+    fn refines_still_pictures(&self) -> bool {
+        true
+    }
+
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        #[cfg(target_os = "macos")]
+        {
+            let Some(bitrate) = i32::try_from(bitrate_bps).ok().filter(|bits| *bits > 0) else {
+                return Ok(false);
+            };
+            Ok(frame_rate > 0 && set_rate(&self.session, bitrate, frame_rate))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (bitrate_bps, frame_rate);
+            Ok(false)
+        }
+    }
+
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        if frame.width() != self.width || frame.height() != self.height {
+        #[cfg(target_os = "macos")]
+        let captured = frame
+            .native_picture()
+            .and_then(|picture| picture.as_any().downcast_ref::<crate::pixels::MacPicture>());
+        #[cfg(not(target_os = "macos"))]
+        let captured: Option<()> = None;
+        if captured.is_none() && (frame.width() != self.width || frame.height() != self.height) {
             return Err(Error::InvalidFrame(
                 "the frame size does not match the encoder",
             ));
         }
         #[cfg(target_os = "macos")]
         {
-            paint(&self.surface, frame)?;
+            let same_size = (frame.width(), frame.height()) == (self.width, self.height);
+            let in_surface = captured
+                .filter(|_| same_size)
+                .and_then(|picture| picture.pixel_buffer().io_surface());
+            let scaled_on_gpu = !same_size && captured.is_some_and(|picture| self.scale(picture));
+            let surface = match &in_surface {
+                Some(held) => held,
+                None if scaled_on_gpu => &self.surface,
+                // Not a captured picture, or the GPU could not take it: its
+                // pixels, read into memory and scaled on the CPU if need be.
+                None if same_size => {
+                    paint(&self.surface, frame)?;
+                    &self.surface
+                }
+                None => {
+                    paint(
+                        &self.surface,
+                        &vnilink_media::scale_bgra(frame, self.width, self.height)?,
+                    )?;
+                    &self.surface
+                }
+            };
             let time = CMTime::new(self.frame_index, self.frame_rate);
             let properties = FrameProperties::new().with_force_key_frame(params.force_keyframe);
+            let floored = params.force_keyframe
+                && params.recovery
+                && set_qp_floor(&self.session, i64::from(self.recovery_qp.floor()));
             let encoded = self
                 .session
-                .encode_with_properties(&self.surface, time, properties)
-                .map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
+                .encode_with_properties(surface, time, properties);
+            if floored {
+                set_qp_floor(&self.session, NO_QP_FLOOR);
+            }
+            let encoded =
+                encoded.map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
             if encoded.data.is_empty() {
-                return Err(Error::EncodeRejected("the encoder produced no frame"));
+                // VideoToolbox's rate control dropped the picture; the next
+                // one takes the next presentation time.
+                self.frame_index = self.frame_index.saturating_add(1);
+                return Err(Error::EncodeRejected(vnilink_media::FRAME_DROPPED));
+            }
+            if floored {
+                self.recovery_qp.observe(encoded.data.len(), params);
+            } else if params.force_keyframe {
+                self.recovery_qp.observe_full(encoded.data.len(), params);
             }
             let sample = encoded
                 .cm_sample_buffer()
@@ -186,6 +489,8 @@ impl VideoEncoder for MacEncoder {
                 );
             }
             let keyframe = contains_idr(&encoded.data, usize::from(nal_length_size));
+            // VideoToolbox writes no VUI; `EncodedSample::annex_b` gives the
+            // SPS the stream's colour and low delay.
             let annex_b = to_annex_b(&AvccAccessUnit {
                 nal_length_size,
                 avcc: &encoded.data,
@@ -193,7 +498,7 @@ impl VideoEncoder for MacEncoder {
                 keyframe,
             })?;
             self.frame_index = self.frame_index.saturating_add(1);
-            EncodedSample::annex_b(keyframe, annex_b)
+            EncodedSample::annex_b(keyframe, annex_b, self.matrix)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -260,7 +565,14 @@ pub enum MacVideoEncoder {
     Software(vnilink_media::SoftwareEncoder),
 }
 impl MacVideoEncoder {
-    pub fn open(width: u16, height: u16, fps: u8, bitrate: u32, codec: u8) -> Result<Self, Error> {
+    pub fn open(
+        width: u16,
+        height: u16,
+        fps: u8,
+        bitrate: u32,
+        codec: u8,
+        matrix: YuvMatrix,
+    ) -> Result<Self, Error> {
         let kind = vnilink::VideoCodec::from_wire_id(codec)
             .ok_or(Error::Unsupported("negotiated codec"))?;
         if matches!(kind, vnilink::VideoCodec::H264 | vnilink::VideoCodec::H265) {
@@ -271,16 +583,34 @@ impl MacVideoEncoder {
                 bitrate,
                 kind,
                 codec == vnilink::CODEC_H264_HIGH,
+                matrix,
             ) {
                 Ok(encoder) => Ok(Self::Native(encoder)),
-                Err(_) if kind == vnilink::VideoCodec::H265 => Ok(Self::Software(
-                    vnilink_media::SoftwareEncoder::open(kind, width, height, fps, bitrate)?,
-                )),
-                Err(error) => Err(error),
+                Err(error) if kind == vnilink::VideoCodec::H265 => {
+                    tracing::info!(
+                        target: vnilink::trace::ENCODE,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "VideoToolbox HEVC did not open: the software encoder serves instead"
+                    );
+                    Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
+                        kind, matrix, width, height, fps, bitrate,
+                    )?))
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: vnilink::trace::ENCODE,
+                        codec = ?kind,
+                        failure = vnilink::trace::Failure::failure_name(&error),
+                        reason = vnilink::trace::Failure::failure_reason(&error),
+                        "VideoToolbox did not open"
+                    );
+                    Err(error)
+                }
             }
         } else {
             Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
-                kind, width, height, fps, bitrate,
+                kind, matrix, width, height, fps, bitrate,
             )?))
         }
     }
@@ -292,6 +622,33 @@ impl VideoEncoder for MacVideoEncoder {
             Self::Software(encoder) => encoder.encode(frame, params),
         }
     }
+
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        match self {
+            Self::Native(encoder) => encoder.retune(bitrate_bps, frame_rate),
+            Self::Software(encoder) => encoder.retune(bitrate_bps, frame_rate),
+        }
+    }
+
+    fn refines_still_pictures(&self) -> bool {
+        match self {
+            Self::Native(encoder) => encoder.refines_still_pictures(),
+            Self::Software(encoder) => encoder.refines_still_pictures(),
+        }
+    }
+    fn implementation(&self) -> vnilink::EncoderImplementation {
+        match self {
+            Self::Native(encoder) => encoder.implementation(),
+            Self::Software(encoder) => encoder.implementation(),
+        }
+    }
+
+    fn scales_native(&self) -> bool {
+        match self {
+            Self::Native(encoder) => encoder.scales_native(),
+            Self::Software(encoder) => encoder.scales_native(),
+        }
+    }
 }
 /// Real synthetic roundtrip without screen/camera capture or OS permission changes.
 #[cfg(target_os = "macos")]
@@ -299,12 +656,20 @@ pub fn probe_hevc() -> vnilink::CodecSupport {
     let result = (|| -> Result<bool, Error> {
         use vnilink_media::VideoDecoder;
         let raw = RawFrame::bgra(64, 64, 0, [32u8, 64, 128, 255].repeat(4096))?;
-        let mut encoder =
-            MacEncoder::open_codec(64, 64, 30, 500_000, vnilink::VideoCodec::H265, false)?;
+        let mut encoder = MacEncoder::open_codec(
+            64,
+            64,
+            30,
+            500_000,
+            vnilink::VideoCodec::H265,
+            false,
+            YuvMatrix::Bt709,
+        )?;
         let sample = encoder.encode(
             &raw,
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },

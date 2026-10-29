@@ -386,20 +386,28 @@ fn concurrent_recorders_sweep_only_their_own_stem_and_spare_live_partials() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `Ok` when ffprobe runs here and decodes H.264: a build without patented
+/// codecs, as Fedora's ffmpeg-free, reads the stream without its pictures.
+fn decodes_h264() -> Result<(), String> {
+    let listing = std::process::Command::new("ffprobe")
+        .args(["-hide_banner", "-decoders"])
+        .output()
+        .map_err(|error| format!("ffprobe could not be run ({error})"))?;
+    String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .any(|line| line.split_whitespace().nth(1) == Some("h264"))
+        .then_some(())
+        .ok_or_else(|| "this ffprobe has no H.264 decoder".to_owned())
+}
+
 /// Finished segments decode with independent tooling: ffprobe (not our
 /// remuxer) must see an H.264 64x64 stream with exactly the pushed frames
-/// and the right keyframe cadence in every segment. Skips loudly when
-/// ffprobe is absent; both project gates install it.
+/// and the right keyframe cadence in every segment.
 #[test]
 fn rolled_segments_decode_with_independent_tooling() {
-    let probe = std::process::Command::new("ffprobe")
-        .arg("-version")
-        .output();
-    let Ok(version) = probe else {
-        eprintln!("ffprobe not installed; skipping independent decode");
+    if !crate::needs::needs("ffprobe", decodes_h264()) {
         return;
-    };
-    assert!(version.status.success());
+    }
     let dir = scratch("ffprobe");
     let mut writer = SegmentWriter::create(
         &dir.join("talk.mkv"),
@@ -647,7 +655,7 @@ fn v11_recording_totals(frame_count: u64, wall: bool) {
     if wall {
         budget.max_duration_ms = 1000;
     }
-    let recorder = crate::DesktopRecorder::start(&desktop, &dir.join("talk.mkv"), budget).unwrap();
+    let recorder = crate::Recorder::start(&desktop, &dir.join("talk.mkv"), budget).unwrap();
     let target = host.video_targets().unwrap()[0];
     let deadline = Instant::now() + Duration::from_secs(5);
     for index in 0..frame_count {
@@ -765,8 +773,7 @@ fn review_v12_failed_recorder_preserves_finalized_segment_totals() {
         .open_desktop_service(owner.id, owner.generation)
         .unwrap();
     let dir = scratch("review-v12-failed-status");
-    let recorder =
-        crate::DesktopRecorder::start(&desktop, &dir.join("talk.mkv"), limits()).unwrap();
+    let recorder = crate::Recorder::start(&desktop, &dir.join("talk.mkv"), limits()).unwrap();
     let target = host.video_targets().unwrap()[0];
     host.publish_desktop_video(target.id, target.generation, idr64(0))
         .unwrap();

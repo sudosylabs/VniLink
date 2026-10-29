@@ -14,23 +14,38 @@ fn the_host_encoder_is_unavailable() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
     assert!(matches!(
         HostSession::open(64, 64, quality, |w, h, fps, bps| LinuxEncoder::open(
-            w, h, fps, bps, false
+            vnilink::VideoCodec::H264,
+            w,
+            h,
+            fps,
+            bps,
+            false,
+            vnilink::YuvMatrix::Bt709,
         )),
-        Err(Error::Unsupported("VA-API H.264"))
+        Err(Error::Unsupported("VA-API"))
     ));
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn the_platform_encoder_plugs_into_the_generic_session() {
-    use vnilink::CoreEvent;
-
     let quality = Quality::new(500, 30, 32, 32).unwrap();
     let mut session = match HostSession::open(64, 64, quality, |w, h, fps, bps| {
-        LinuxEncoder::open(w, h, fps, bps, false)
+        LinuxEncoder::open(
+            vnilink::VideoCodec::H264,
+            w,
+            h,
+            fps,
+            bps,
+            false,
+            vnilink::YuvMatrix::Bt709,
+        )
     }) {
         Ok(session) => session,
-        Err(Error::Unsupported("VA-API H.264")) => return,
+        Err(Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(err) => panic!("VA-API failed to open: {err}"),
     };
     assert_eq!(session.capture_size(), (64, 64));
@@ -48,9 +63,7 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
     assert_eq!(skipped, PumpOutput::Skipped);
     assert_eq!(sink.ids.len(), 1);
 
-    session
-        .observe(&CoreEvent::KeyframeRequested { id: 7 })
-        .unwrap();
+    session.request_recovery_keyframe();
     let forced = session
         .publish(&solid(64, 64, 2_000), &mut sink, 7)
         .unwrap();

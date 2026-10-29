@@ -12,6 +12,7 @@
 //! injection backend opens its OS handle lazily on first use so blocking
 //! never depends on injection being available. Non-Windows builds never
 //! install an owner: [`is_blocked`] reads false and injection stays direct.
+// trace: records every ignored failure
 
 use crate::input::InputEvent;
 use crate::Error;
@@ -72,7 +73,9 @@ impl Owner {
         let flag = blocked.clone();
         std::thread::Builder::new()
             .name("vnilink-input-owner".into())
-            .spawn(move || run_owner(&mut block, &mut inject, rx, &flag))
+            .spawn(crate::trace::within(tracing::Span::current(), move || {
+                run_owner(&mut block, &mut inject, rx, &flag)
+            }))
             .map_err(|_| Error::Unsupported("the input owner did not start"))?;
         Ok(Self { tx, blocked })
     }
@@ -126,16 +129,40 @@ where
                 reply,
             } => {
                 let outcome = block.set_blocked(want);
+                tracing::info!(
+                    target: crate::trace::INPUT,
+                    blocked = want,
+                    refused = outcome.as_ref().err().map(Error::name),
+                    reason = outcome.as_ref().err().and_then(Error::reason),
+                    "this computer's own input"
+                );
                 if outcome.is_ok() {
                     blocked.store(want, Ordering::SeqCst);
                     if !want {
                         inject.release_held();
                     }
                 }
-                let _ = reply.send(outcome);
+                crate::ignored!(
+                    crate::trace::INPUT,
+                    "the caller stopped waiting for its answer",
+                    reply.send(outcome)
+                );
             }
             OwnerRequest::Inject { op, reply } => {
-                let _ = reply.send(inject.inject(&op));
+                let injected = inject.inject(&op);
+                if let Err(error) = &injected {
+                    tracing::warn!(
+                        target: crate::trace::INPUT,
+                        failure = error.name(),
+                        reason = error.reason(),
+                        "input was not injected while this computer's own input is blocked"
+                    );
+                }
+                crate::ignored!(
+                    crate::trace::INPUT,
+                    "the caller stopped waiting for its answer",
+                    reply.send(injected)
+                );
             }
         }
     }
@@ -168,7 +195,11 @@ where
     // A lost install race drops the spare owner unused — its thread exits
     // on the disconnected channel having served nothing — and this call
     // joins the winner, so one thread still owns every call.
-    let _ = GLOBAL.set(spare);
+    crate::ignored!(
+        crate::trace::INPUT,
+        "an installer that lost the race drops its spare owner unused",
+        GLOBAL.set(spare)
+    );
     GLOBAL.get().expect("owner installed").set_blocked(blocked)
 }
 

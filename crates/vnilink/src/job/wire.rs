@@ -14,11 +14,12 @@ use crate::manifest::Manifest;
 /// Job wire version. Bump on any incompatible change.
 pub const JOB_VERSION: u8 = 1;
 
-/// Largest job-control frame: manifests stay bounded by manifest limits.
-pub const MAX_JOB_FRAME: usize = 2 * 1024 * 1024;
+/// Largest job-control frame. It holds a whole manifest: up to
+/// `MAX_MANIFEST_FILES` entries of a path, a hash and sizes in JSON.
+pub const MAX_JOB_FRAME: usize = 64 * 1024 * 1024;
 
-/// Stream tag for filesystem requests (see `fs::wire`).
-pub const TAG_FS: u8 = 0x01;
+// Tag 0x01 carried a files-only session's filesystem requests; a link's
+// gate drops it, and it stays unused.
 /// Stream tag for an upload offer.
 pub const TAG_JOB_UPLOAD: u8 = 0x02;
 /// Stream tag for a download request.
@@ -35,6 +36,11 @@ pub const TAG_JOB_RESOLVE: u8 = 0x06;
 /// Stream tag for coordinated resume: either side tells the peer to resume
 /// after symmetric cancellation, reauthorizing offers as needed.
 pub const TAG_JOB_RESUME: u8 = 0x07;
+/// Stream tag for a download's manifest: the controller asks, with a
+/// [`JobStatus`], until the host has prepared it ([`ManifestReply`]).
+/// Auxiliary streams share their tags with the service, desktop and
+/// clipboard streams (8 to 11).
+pub const TAG_JOB_MANIFEST: u8 = 0x0d;
 
 pub(crate) const STATUS_OK: u8 = 0;
 pub(crate) const STATUS_DENIED: u8 = 2;
@@ -53,14 +59,16 @@ pub struct UploadOffer {
     pub dst_rel: String,
 }
 
-/// Controller asks the host to prepare a download from its roots.
+/// Controller asks the host to prepare a download from its roots: the
+/// entries `names` of `src_folder`, or with no names the whole root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadRequest {
     pub v: u8,
     pub id: u32,
     pub generation: u64,
     pub src_root: u64,
-    pub src_rel: String,
+    pub src_folder: String,
+    pub names: Vec<String>,
 }
 
 /// Host answers an upload offer, adopting the sender's job id.
@@ -72,7 +80,8 @@ pub struct JobReply {
     pub job_id: u64,
 }
 
-/// Host answers a download request with the prepared manifest.
+/// Host answers a download request, and each later ask for its manifest:
+/// with the prepared manifest, or with none while it is still preparing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestReply {
     pub v: u8,
@@ -114,6 +123,14 @@ pub struct JobStateReply {
     pub state: String,
     pub error: Option<String>,
     pub waiting_file: Option<String>,
+    /// Bytes the receiver holds, verified, including the file arriving now.
+    #[serde(default)]
+    pub done_bytes: u64,
+    /// Files landed, and files skipped, so far.
+    #[serde(default)]
+    pub files_done: u64,
+    #[serde(default)]
+    pub skipped_files: u64,
 }
 
 /// Sender forwards the owner's conflict decision to the receiver that owns

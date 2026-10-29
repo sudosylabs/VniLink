@@ -1,16 +1,31 @@
 import { Buffer } from 'node:buffer';
-import { dimension, isInputCommand, isDesktopAudioOperation, isDesktopAudioStatus } from '../common/dataChannel.js';
+import { dimension, isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDesktopMediaStatus, MAX_FILE_OPERATIONS } from '../common/dataChannel.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
-import { record } from '../common/engine.js';
+import { isFileOperation } from '../common/files.js';
+import { isDesktopInputCommand, record } from '../common/engine.js';
 
 export interface NativeDataChannel {
 	desktopAudio(operation: string): string;
+	requestKeyframe(): void;
+	mediaStatus(decodeUs: number, software: boolean, recoveries: number, stillsShown: number): string;
+	/** The pointer when it moved or changed shape since the last call, or null. */
+	cursor(): NativeCursor | null;
 	read(): { kind: string; data?: Uint8Array | null; metadata: string } | null;
+	/** Video only: calls `callback` when a picture is ready to read. */
+	onReady?(callback: () => void): void;
 	write(data: Uint8Array): void;
 	resize(rows: number, columns: number): void;
 	input(command: string): void;
 	close(): void | Promise<void>;
 	fileOperation(command: string): Promise<string>;
+}
+
+/** The engine's pointer as napi hands it over; the image only when the shape changed. */
+export interface NativeCursor {
+	x: number;
+	y: number;
+	visible: boolean;
+	image?: { width: number; height: number; hotspotX: number; hotspotY: number; pixels: Uint8Array } | null;
 }
 
 export interface DataPort {
@@ -20,19 +35,36 @@ export interface DataPort {
 	start(): void;
 	close(): void;
 }
-/** One unacknowledged packet per channel. Native queues retain decode/terminal
- * order; the renderer acknowledges only after consuming each packet. */
+/**
+ * Packets the renderer may hold unacknowledged. A desktop picture keeps a few
+ * on the way, so the next is already there while one decodes; other channels
+ * keep one. The renderer takes packets in order and acknowledges each after
+ * consuming it, so a slow consumer still backs up the native queue.
+ */
+const VIDEO_WINDOW = 4;
+/** How often the other computer's pointer is looked at: faster than a screen refreshes. */
+const CURSOR_POLL_MS = 8;
+/** How soon an empty channel is read again; the engine says when a picture is ready. */
+const POLL_MS = 4;
+/** A channel the engine wakes is still read this often, should a wake ever be missed. */
+const WOKEN_POLL_MS = 250;
+
 export class DataChannelHost {
 	private closed = false;
 	private native: NativeDataChannel | undefined;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	private readonly poll = { timer: undefined as ReturnType<typeof setTimeout> | undefined };
+	private cursorTimer: ReturnType<typeof setInterval> | undefined;
 	private sequence = 0;
-	private pending = 0;
+	/** Whether the engine says when a packet is ready, so the channel need not poll. */
+	private woken = false;
+	/** The last packet the renderer acknowledged. */
+	private acknowledged = 0;
 	private ended = false;
 	private sentAt = 0;
 	private lastAckMs = 0;
-	private fileBusy = false;
-	private cancelBusy = false;
+	/** File operations answered by the engine but not yet replied. */
+	private fileFlight = 0;
 
 	constructor(
 		private readonly port: DataPort,
@@ -57,9 +89,42 @@ export class DataChannelHost {
 			return;
 		}
 		this.native = native;
+		if (this.request.kind === 'video' && native.onReady) {
+			native.onReady(() => {
+				this.pump();
+			});
+			this.woken = true;
+		}
 		this.port.postMessage({ type: 'ready' });
-		if (this.request.kind !== 'input' && this.request.kind !== 'files') {
+		// A files channel reads too: the engine pushes its job changes.
+		if (this.request.kind !== 'input') {
 			this.pump();
+		}
+		// The pointer travels beside the picture, so a move never waits behind frames.
+		if (this.request.kind === 'video') {
+			this.cursorTimer = setInterval(() => {
+				this.sendCursor();
+			}, CURSOR_POLL_MS);
+		}
+	}
+
+	private sendCursor(): void {
+		if (this.closed || !this.native) {
+			return;
+		}
+		try {
+			const read = this.native.cursor();
+			if (!read) {
+				return;
+			}
+			const { image, ...position } = read;
+			const cursor = image ? { ...position, image: { ...image, pixels: new Uint8Array(image.pixels) } } : position;
+			if (!isDesktopCursor(cursor)) {
+				throw new Error('Invalid desktop cursor');
+			}
+			this.port.postMessage({ type: 'cursor', cursor });
+		} catch (error) {
+			this.fail(undefined, error instanceof Error ? error.message : undefined);
 		}
 	}
 
@@ -75,14 +140,33 @@ export class DataChannelHost {
 			if (!this.native) {
 				throw new Error('Channel not ready');
 			}
-			if (message.type === 'ack' && message.sequence === this.pending && this.pending > 0) {
+			if (message.type === 'ack' && message.sequence === this.acknowledged + 1 && message.sequence <= this.sequence) {
 				this.lastAckMs = performance.now() - this.sentAt;
-				this.pending = 0;
-				if (this.ended) {
+				this.acknowledged = message.sequence;
+				this.armStall();
+				if (this.ended && this.acknowledged === this.sequence) {
 					this.close();
 				} else {
 					this.pump();
 				}
+				return;
+			}
+			if (message.type === 'mediaStatus' && this.request.kind === 'video' && Number.isSafeInteger(message.id) && Number(message.id) > 0
+				&& Number.isSafeInteger(message.decodeUs) && Number(message.decodeUs) >= 0 && Number(message.decodeUs) <= 0xffffffff
+				&& typeof message.software === 'boolean'
+				&& Number.isSafeInteger(message.recoveries) && Number(message.recoveries) >= 0 && Number(message.recoveries) <= 0xffffffff
+				&& Number.isSafeInteger(message.stillsShown) && Number(message.stillsShown) >= 0 && Number(message.stillsShown) <= 0xffffffff) {
+				// Null once the picture stopped: its last packet says why.
+				const report = this.native.mediaStatus(Number(message.decodeUs), message.software, Number(message.recoveries), Number(message.stillsShown));
+				const status: unknown = JSON.parse(report);
+				if (status !== null && !isDesktopMediaStatus(status)) {
+					throw new Error('Invalid desktop media status');
+				}
+				this.port.postMessage({ type: 'mediaStatus', id: message.id, status });
+				return;
+			}
+			if (message.type === 'keyframe' && this.request.kind === 'video') {
+				this.native.requestKeyframe();
 				return;
 			}
 			if (message.type === 'desktopAudio' && (this.request.kind === 'video' || this.request.kind === 'input') && Number.isSafeInteger(message.id) && Number(message.id) > 0 && isDesktopAudioOperation(message.operation)) {
@@ -97,8 +181,8 @@ export class DataChannelHost {
 				this.port.postMessage({
 					type: 'metrics',
 					sent: this.sequence,
-					acknowledged: this.sequence - Number(this.pending > 0),
-					pending: Number(this.pending > 0),
+					acknowledged: this.acknowledged,
+					pending: this.sequence - this.acknowledged,
 					lastAckMs: this.lastAckMs,
 				});
 				return;
@@ -106,7 +190,7 @@ export class DataChannelHost {
 			if (
 				message.type === 'input' &&
 				this.request.kind === 'input' &&
-				isInputCommand(message.command) &&
+				isDesktopInputCommand(message.command) &&
 				'sessionId' in message.command &&
 				message.command.sessionId === this.request.sessionId &&
 				'generation' in message.command &&
@@ -134,38 +218,26 @@ export class DataChannelHost {
 			if (
 				message.type === 'file' &&
 				this.request.kind === 'files' &&
-				record(message.operation) &&
-				!(message.operation.type === 'cancel' ? this.cancelBusy : this.fileBusy) &&
+				isFileOperation(message.operation) &&
+				this.fileFlight < MAX_FILE_OPERATIONS &&
 				Number.isSafeInteger(message.id)
 			) {
 				const command = JSON.stringify(message.operation);
 				if (command.length > 16384) {
 					throw new Error('File operation too large');
 				}
-				const cancel = message.operation.type === 'cancel';
-				if (cancel) {
-					this.cancelBusy = true;
-				} else {
-					this.fileBusy = true;
-				}
+				this.fileFlight++;
+				// A refused operation is an answer; only a lost session rejects.
 				void this.native.fileOperation(command).then(
 					(metadata) => {
-						if (cancel) {
-							this.cancelBusy = false;
-						} else {
-							this.fileBusy = false;
-						}
+						this.fileFlight--;
 						if (!this.closed) {
 							this.port.postMessage({ type: 'fileReply', id: message.id, metadata });
 						}
 					},
-					() => {
-						if (cancel) {
-							this.cancelBusy = false;
-						} else {
-							this.fileBusy = false;
-						}
-						this.fail();
+					(error: unknown) => {
+						this.fileFlight--;
+						this.fail(undefined, error instanceof Error ? error.message : undefined);
 					},
 				);
 				return;
@@ -180,58 +252,79 @@ export class DataChannelHost {
 				return;
 			}
 			throw new Error('Invalid data-channel message');
-		} catch {
-			this.fail();
+		} catch (error) {
+			this.fail(undefined, error instanceof Error ? error.message : undefined);
 		}
 	}
 
+	/** Reads packets until the renderer holds as many as it may, or none is ready. */
 	private pump(): void {
-		if (
-			this.closed ||
-			this.pending ||
-			!this.native ||
-			this.request.kind === 'input' ||
-			this.request.kind === 'files'
-		) {
+		if (this.closed || this.ended || !this.native || this.request.kind === 'input') {
 			return;
 		}
+		if (this.poll.timer) {
+			clearTimeout(this.poll.timer);
+			this.poll.timer = undefined;
+		}
+		const window = this.request.kind === 'video' ? VIDEO_WINDOW : 1;
+		try {
+			while (this.sequence - this.acknowledged < window && !this.ended) {
+				const packet = this.native.read();
+				if (!packet) {
+					// Nothing ready: look again shortly, unless the engine says when; an
+					// acknowledgement also looks.
+					this.poll.timer = setTimeout(() => {
+						this.poll.timer = undefined;
+						this.pump();
+					}, this.woken ? WOKEN_POLL_MS : POLL_MS);
+					return;
+				}
+				this.ended = packet.kind === 'exited' || packet.kind === 'failed';
+				// A stopped picture's pointer stops with it.
+				if (this.ended && this.cursorTimer) {
+					clearInterval(this.cursorTimer);
+					this.cursorTimer = undefined;
+				}
+				this.sequence++;
+				this.sentAt = performance.now();
+				this.port.postMessage({
+					type: 'data',
+					sequence: this.sequence,
+					kind: packet.kind,
+					data: packet.data ?? undefined,
+					metadata: packet.metadata,
+					readAt: performance.timeOrigin + performance.now(),
+				});
+				this.armStall();
+			}
+		} catch (error) {
+			this.fail(undefined, error instanceof Error ? error.message : undefined);
+		}
+	}
+
+	/** A stalled renderer must not retain a session indefinitely: the oldest unacknowledged packet has ten seconds. */
+	private armStall(): void {
 		if (this.timer) {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
-		try {
-			const packet = this.native.read();
-			if (packet) {
-				this.ended = packet.kind === 'exited' || packet.kind === 'failed';
-				this.pending = ++this.sequence;
-				this.sentAt = performance.now();
-				this.port.postMessage({
-					type: 'data',
-					sequence: this.pending,
-					kind: packet.kind,
-					data: packet.data ?? undefined,
-					metadata: packet.metadata,
-				});
-				// A stalled renderer must not retain a session indefinitely.
-				this.timer = setTimeout(() => {
-					this.fail();
-				}, 10000);
-			} else {
-				this.timer = setTimeout(() => {
-					this.pump();
-				}, 4);
-			}
-		} catch {
-			this.fail();
+		if (this.sequence > this.acknowledged) {
+			this.timer = setTimeout(() => {
+				this.fail(undefined, 'the window did not take a packet within 10 seconds');
+			}, 10000);
 		}
 	}
 
-	public fail(): void {
+	/**
+	 * Ends the channel. `category` is the engine's error category when it
+	 * refused to open; `reason` says why a working channel ended, for the log.
+	 */
+	public fail(category?: string, reason?: string): void {
 		if (this.closed) {
 			return;
 		}
 		try {
-			this.port.postMessage({ type: 'error', message: 'Data channel unavailable' });
+			this.port.postMessage({ type: 'error', message: 'Data channel unavailable', category, reason: reason?.slice(0, 300) });
 		} finally {
 			this.close();
 		}
@@ -244,6 +337,12 @@ export class DataChannelHost {
 		this.closed = true;
 		if (this.timer) {
 			clearTimeout(this.timer);
+		}
+		if (this.cursorTimer) {
+			clearInterval(this.cursorTimer);
+		}
+		if (this.poll.timer) {
+			clearTimeout(this.poll.timer);
 		}
 		const closing = this.native?.close();
 		if (closing) {

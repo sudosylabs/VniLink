@@ -1,7 +1,7 @@
 //! Linux H.264 decode.
 //!
 //! The hardware path is VA-API variable-length decode on the first DRM
-//! render node that offers it. A keyframe carries SPS, PPS, and an IDR;
+//! render node that offers it, in [`crate::gpu::ranked`] order. A keyframe carries SPS, PPS, and an IDR;
 //! those parameter sets open the session, and later predicted frames reuse
 //! it. Output is BGRA for the UI to paint. Bitstreams are screen content:
 //! do not log them.
@@ -11,6 +11,7 @@
 //! 0, sliding-window reference marking, and 4:2:0 eight-bit pictures. The
 //! syntax reader refuses anything outside that subset with an explicit
 //! error instead of misdecoding it.
+// trace: records every ignored failure
 
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -36,10 +37,13 @@ use libva::VAEntrypoint;
 use libva::VAProfile;
 use libva::VA_RT_FORMAT_YUV420;
 use vnilink::EncodedFrame;
-use vnilink_media::{nv12_to_bgra, parse_annex_b, Error, RawFrame, VideoDecoder};
+use vnilink_media::{
+    h264_video_signal, nv12_to_bgra, parse_annex_b, Error, RawFrame, VideoDecoder, VideoSignal,
+    UNDECLARED_SIGNAL,
+};
 
+use crate::gpu::ranked_render_nodes;
 use crate::syntax::{Marking, Pps, Slice, SliceKind, Sps};
-use crate::vaapi::render_nodes;
 
 /// Decoded BGRA picture with its size, moved back to the caller thread.
 struct DecodedPicture {
@@ -81,6 +85,8 @@ struct OpenDecoder {
     visible_height: u16,
     max_refs: usize,
     parameter_key: Vec<u8>,
+    /// The colour the SPS says, BT.709 limited range when it says none.
+    signal: VideoSignal,
     sps: Sps,
     pps: Pps,
     free: Vec<Surface<()>>,
@@ -131,9 +137,15 @@ impl Default for LinuxDecoder {
 impl Drop for LinuxDecoder {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.as_mut() {
-            let _ = worker.tx.send(Job::Stop);
+            vnilink::ignored!(
+                vnilink::trace::DECODE,
+                "a decoder thread already gone needs no stop",
+                worker.tx.send(Job::Stop)
+            );
             if let Some(thread) = worker.thread.take() {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    tracing::warn!(target: vnilink::trace::DECODE, "the VA-API decoder thread panicked");
+                }
             }
         }
     }
@@ -179,7 +191,11 @@ fn worker(jobs: Receiver<Job>) {
                 reply,
             } => {
                 let result = decode_picture(&mut open, &payload, keyframe, timestamp_us);
-                let _ = reply.send(result);
+                vnilink::ignored!(
+                    vnilink::trace::DECODE,
+                    "the caller stopped waiting for its picture",
+                    reply.send(result)
+                );
             }
         }
     }
@@ -246,9 +262,11 @@ fn decode_picture(
     // each on a keyframe. Two passes, so a PPS never depends on SPS order
     // inside the access unit.
     let mut fresh_sps = None;
+    let mut signal = UNDECLARED_SIGNAL;
     for set in &parameter_sets {
         if set.first().map(|header| header & 0x1F) == Some(7) {
             fresh_sps = Some(Sps::parse(set)?);
+            signal = h264_video_signal(set)?.unwrap_or(UNDECLARED_SIGNAL);
         }
     }
     let mut fresh_pps = None;
@@ -274,7 +292,7 @@ fn decode_picture(
             }
         };
         let key = parameter_sets.concat();
-        *open = Some(OpenDecoder::open(sps, pps, key)?);
+        *open = Some(OpenDecoder::open(sps, pps, key, signal)?);
     } else if !parameter_sets.is_empty() {
         let (sps, pps) = match (fresh_sps, fresh_pps) {
             (Some(sps), Some(pps)) => (sps, pps),
@@ -285,7 +303,7 @@ fn decode_picture(
         let key = parameter_sets.concat();
         let changed = key != open.as_ref().expect("decoder is open").parameter_key;
         if changed {
-            *open = Some(OpenDecoder::open(sps, pps, key)?);
+            *open = Some(OpenDecoder::open(sps, pps, key, signal)?);
         }
     }
     let open = open.as_mut().expect("decoder is open");
@@ -355,7 +373,7 @@ fn try_open(
 }
 
 impl OpenDecoder {
-    fn open(sps: Sps, pps: Pps, key: Vec<u8>) -> Result<Self, Error> {
+    fn open(sps: Sps, pps: Pps, key: Vec<u8>, signal: VideoSignal) -> Result<Self, Error> {
         if sps.visible.0 % 2 != 0 || sps.visible.1 % 2 != 0 {
             return Err(Error::Unsupported(
                 "odd H.264 picture sizes are not supported",
@@ -365,7 +383,7 @@ impl OpenDecoder {
             return Err(Error::InvalidFrame("H.264 SPS picture size is empty"));
         }
         let surfaces = sps.num_ref_frames as usize + 2;
-        for path in render_nodes() {
+        for path in ranked_render_nodes() {
             if let Some((context, created, format)) = try_open(&path, &sps, surfaces.max(2)) {
                 return Ok(Self {
                     context,
@@ -376,6 +394,7 @@ impl OpenDecoder {
                     visible_height: sps.visible.1,
                     max_refs: (sps.num_ref_frames as usize).max(1),
                     parameter_key: key,
+                    signal,
                     sps,
                     pps,
                     free: created,
@@ -803,7 +822,14 @@ fn download(
         width,
         height / 2,
     )?;
-    let frame = nv12_to_bgra(open.visible_width, open.visible_height, 0, &y, &uv)?;
+    let frame = nv12_to_bgra(
+        open.visible_width,
+        open.visible_height,
+        0,
+        &y,
+        &uv,
+        open.signal,
+    )?;
     Ok(DecodedPicture {
         width: open.visible_width,
         height: open.visible_height,

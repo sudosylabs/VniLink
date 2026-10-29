@@ -1,0 +1,725 @@
+/* The Files tab: two panes edge to edge with the copy column between them
+ * and the status bar below. Rows look like the system's own file lists:
+ * dense, with the accent selection only in the pane being worked in. A
+ * transfer shows as a row in the folder it lands in; the status bar opens
+ * the list of them all. */
+
+.files-view {
+	container-type: inline-size;
+	position: relative;
+	display: grid;
+	flex: 1;
+	grid-template-rows: minmax(0, 1fr) auto;
+	min-width: 0;
+	min-height: 0;
+	background: var(--canvas);
+	color: var(--text);
+	font-size: 13px;
+}
+
+.files-panes {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 112px minmax(0, 1fr);
+	min-height: 0;
+}
+
+/* A pane */
+
+.files-pane {
+	position: relative;
+	display: grid;
+	grid-template-rows: auto auto minmax(0, 1fr) auto;
+	min-width: 0;
+	min-height: 0;
+}
+
+.files-path-bar {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: 38px;
+	padding: 0 8px 0 10px;
+	border-bottom: 1px solid var(--line);
+	min-width: 0;
+}
+
+.files-icon-button,
+.files-computer,
+.files-crumb,
+.files-sort,
+.files-text-button {
+	border: 0;
+	border-radius: 5px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+}
+
+.files-icon-button {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 26px;
+	height: 26px;
+	color: var(--muted);
+}
+
+.files-icon-button > .vnilink-icon {
+	width: 15px;
+	height: 15px;
+}
+
+.files-computer {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: none;
+	height: 26px;
+	margin-left: 6px;
+	padding: 0 6px;
+	font-weight: 600;
+}
+
+.files-computer > .vnilink-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.files-computer > .files-computer-chevron {
+	width: 10px;
+	height: 10px;
+	color: var(--muted);
+}
+
+.files-crumb-area {
+	flex: 1 1 auto;
+	min-width: 0;
+	height: 100%;
+}
+
+.files-crumbs {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	height: 100%;
+}
+
+.files-crumbs > .vnilink-icon {
+	flex: none;
+	width: 10px;
+	height: 10px;
+	color: var(--muted);
+	opacity: 0.6;
+}
+
+.files-crumb {
+	flex: none;
+	height: 26px;
+	padding: 0 5px;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.files-crumb[aria-current='location'] {
+	color: var(--text);
+}
+
+.files-tools {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+	flex: none;
+}
+
+.files-filter {
+	width: 160px;
+}
+
+.files-columns {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 150px 84px;
+	align-items: center;
+	height: 26px;
+	padding: 0 16px 0 18px;
+	border-bottom: 1px solid var(--line);
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.files-sort {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	height: 22px;
+	padding: 0 6px;
+}
+
+.files-sort-modified,
+.files-sort-size {
+	border-left: 1px solid var(--line);
+	border-radius: 0;
+}
+
+.files-sort-size {
+	justify-content: flex-end;
+}
+
+.files-list {
+	/* No padding: the list is laid out to this box exactly, its top and
+	 * bottom spacing inside its own scrolling (paddingTop/paddingBottom). */
+	min-height: 0;
+}
+
+.files-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 150px 84px;
+	align-items: center;
+	height: 26px;
+	margin: 0 8px;
+	padding: 0 8px 0 10px;
+	border-radius: 5px;
+	transition: background-color 1.2s ease-out;
+}
+
+.files-cell-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.files-row-icon {
+	display: grid;
+	flex: none;
+	color: var(--muted);
+}
+
+.files-row-icon > .vnilink-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.files-row-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-row-name .monaco-inputbox {
+	width: 100%;
+}
+
+.files-cell-modified,
+.files-cell-size {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.files-cell-modified {
+	padding-left: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.files-cell-size {
+	text-align: right;
+}
+
+.files-list .monaco-list-row:hover .files-row {
+	background: var(--surface-hover);
+}
+
+/* Dropping onto a folder from the other pane. */
+.files-list .monaco-list-row.drop-target .files-row {
+	background: var(--selection-surface);
+	outline: 2px dashed var(--accent);
+	outline-offset: -2px;
+}
+
+/* Grey selection in the other pane; the accent in the one being worked in. */
+.files-list .monaco-list-row.selected .files-row {
+	background: var(--selected);
+}
+
+.files-pane.active .files-list .monaco-list-row.selected .files-row {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.files-pane.active .files-list .monaco-list-row.selected :is(.files-row-icon, .files-cell-modified, .files-cell-size) {
+	color: color-mix(in srgb, var(--on-accent) 82%, transparent);
+}
+
+.files-list .monaco-list:focus-visible .monaco-list-row.focused .files-row {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+.files-pane.active .files-list .monaco-list:focus-visible .monaco-list-row.focused.selected .files-row {
+	outline-color: var(--on-accent);
+}
+
+.files-drop-bar {
+	padding: 9px 14px;
+	border-top: 1px solid var(--accent);
+	background: var(--selection-surface);
+}
+
+.files-pane.drop-target {
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* States, inside the pane, where the list would be. */
+.files-state {
+	position: absolute;
+	inset: 66px 0 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 14px 18px;
+}
+
+.files-state p {
+	margin: 0;
+	max-width: 46ch;
+	line-height: 1.5;
+}
+
+.files-state-body {
+	color: var(--muted);
+}
+
+.files-state-action {
+	margin-top: 6px;
+	height: 26px;
+	padding: 0 10px;
+	border: 1px solid var(--line);
+	border-radius: 5px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+}
+
+.files-notice {
+	margin: 0;
+	padding: 8px 14px;
+	border-top: 1px solid var(--line);
+	color: var(--status-disconnected);
+}
+
+/* The copy column */
+
+.files-copy {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 0 12px;
+	border-inline: 1px solid var(--line);
+	text-align: center;
+}
+
+.files-copy-button {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	border: 1px solid var(--accent);
+	border-radius: 10px;
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.files-copy-button > .vnilink-icon {
+	width: 20px;
+	height: 20px;
+}
+
+.files-copy-button:disabled {
+	border-color: var(--line);
+	background: transparent;
+	color: var(--muted);
+}
+
+.files-copy-text {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.files-copy-button:disabled + .files-copy-text {
+	color: var(--muted);
+}
+
+/* A transfer where it lands */
+
+.files-text-button {
+	height: 22px;
+	padding: 0 8px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.files-ring {
+	--progress: 0;
+
+	display: block;
+	flex: none;
+	width: 14px;
+	height: 14px;
+	margin: 1px;
+	border-radius: 50%;
+	background: conic-gradient(currentcolor calc(var(--progress) * 1turn), var(--line) 0);
+	color: var(--accent);
+	mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+}
+
+.files-ring[data-tone='pending'],
+.files-ring[data-tone='stopped'] {
+	color: var(--status-pending);
+}
+
+.files-ring[data-tone='failed'] {
+	color: var(--status-disconnected);
+}
+
+.files-ring[data-tone='landed'] {
+	color: var(--status-connected);
+}
+
+.files-row.arriving .files-row-name {
+	color: var(--muted);
+}
+
+.files-row:is([data-tone='pending'], [data-tone='stopped']) .files-cell-modified {
+	color: var(--status-pending);
+}
+
+.files-row[data-tone='failed'] .files-cell-modified {
+	color: var(--status-disconnected);
+}
+
+/* Just arrived: a moment's tint, which fades as the row becomes ordinary. */
+.files-row[data-tone='landed'] {
+	background: color-mix(in srgb, var(--accent) 14%, transparent);
+	transition: none;
+}
+
+/* The question a name already there raises, answered in place. */
+.files-decision {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 34px;
+	margin: 2px 8px 0 34px;
+	padding: 0 6px 0 10px;
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--status-pending) 13%, transparent);
+}
+
+.files-decision-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-decision-same {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 5px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.files-decision-same > input {
+	margin: 0;
+}
+
+.files-decision .files-text-button,
+.files-activity-item .files-text-button {
+	flex: none;
+	border: 1px solid var(--line);
+	color: var(--text);
+}
+
+.files-decision .files-text-button.primary,
+.files-activity-item .files-text-button.primary {
+	border-color: var(--accent);
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.files-list .monaco-list-row:hover .files-decision {
+	background: color-mix(in srgb, var(--status-pending) 18%, transparent);
+}
+
+.files-status-space {
+	flex: 1;
+}
+
+/* The activity list, above the status bar's summary that opens it. */
+.files-activity {
+	position: absolute;
+	right: 10px;
+	bottom: 32px;
+	z-index: 2;
+	display: flex;
+	flex-direction: column;
+	width: min(440px, calc(100% - 20px));
+	max-height: min(480px, calc(100% - 80px));
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--surface-raised);
+	box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
+	outline: none;
+	overflow: hidden;
+}
+
+.files-activity-header {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	height: 38px;
+	padding: 0 8px 0 14px;
+	border-bottom: 1px solid var(--line);
+}
+
+.files-activity-title {
+	flex: 1;
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.files-activity-entries {
+	min-height: 0;
+	padding: 4px 6px 8px;
+	overflow: auto;
+}
+
+.files-activity-heading {
+	margin: 0;
+	padding: 8px 8px 4px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.files-activity-items {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.files-activity-item {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 8px;
+	border-radius: 6px;
+}
+
+.files-activity-text {
+	display: grid;
+	min-width: 0;
+}
+
+.files-activity-name,
+.files-activity-detail {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-activity-detail {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.files-activity-item:is([data-state='WaitingDecision'], [data-state='Interrupted']) .files-activity-detail {
+	color: var(--status-pending);
+}
+
+.files-activity-item[data-state='Failed'] .files-activity-detail {
+	color: var(--status-disconnected);
+}
+
+.files-activity-empty {
+	margin: 0;
+	padding: 12px 8px;
+	color: var(--muted);
+}
+
+/* Status bar */
+
+.files-status {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	height: 26px;
+	padding: 0 12px;
+	border-top: 1px solid var(--line);
+	background: var(--chrome);
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.files-status-selection {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.files-status-transfers {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 22px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+}
+
+.files-status-transfers.open,
+.files-status-transfers:hover {
+	background: var(--surface-hover);
+}
+
+.files-status-transfers > .vnilink-icon {
+	width: 13px;
+	height: 13px;
+}
+
+.files-status-transfers > .files-ring {
+	width: 12px;
+	height: 12px;
+}
+
+.files-status-transfers.stopped {
+	color: var(--status-pending);
+}
+
+.files-status-decision {
+	height: 22px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--status-pending);
+	font: inherit;
+}
+
+.files-status-decision:hover {
+	background: var(--surface-hover);
+}
+
+.files-view :is(button, .monaco-list):focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+/* Elements with a display of their own still honour `hidden`. */
+.files-state[hidden],
+.files-activity[hidden],
+.files-decision-same[hidden],
+.files-status-transfers[hidden],
+.files-status-decision[hidden],
+.files-filter[hidden] {
+	display: none;
+}
+
+/* The sort marker, then hover and disabled, after every component's own rules. */
+.files-sort > .vnilink-icon {
+	width: 9px;
+	height: 9px;
+	visibility: hidden;
+}
+
+.files-sort.sorted {
+	color: var(--text);
+}
+
+.files-sort.sorted > .vnilink-icon {
+	visibility: visible;
+}
+
+.files-sort.descending > .vnilink-icon {
+	transform: rotate(180deg);
+}
+
+.files-icon-button:disabled {
+	opacity: 0.4;
+}
+
+.files-icon-button:hover:not(:disabled),
+.files-computer:hover,
+.files-crumb:hover,
+.files-sort:hover,
+.files-text-button:hover:not(:disabled) {
+	background: var(--surface-hover);
+}
+
+/* A narrow window stacks the panes, the copy column between them. */
+@container (width < 760px) {
+	.files-panes {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+	}
+
+	.files-copy {
+		flex-direction: row;
+		padding: 8px 12px;
+		border-inline: 0;
+		border-block: 1px solid var(--line);
+	}
+
+	.files-copy-button > .vnilink-icon {
+		transform: rotate(90deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.files-row {
+		transition: none;
+	}
+}
+
+@media (forced-colors: active) {
+	.files-ring {
+		forced-color-adjust: none;
+		background: conic-gradient(Highlight calc(var(--progress) * 1turn), GrayText 0);
+	}
+
+	.files-activity {
+		border-color: CanvasText;
+	}
+
+	.files-decision {
+		outline: 1px solid CanvasText;
+	}
+
+	.files-pane.active .files-list .monaco-list-row.selected .files-row {
+		forced-color-adjust: none;
+		background: Highlight;
+		color: HighlightText;
+	}
+}

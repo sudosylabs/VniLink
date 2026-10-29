@@ -56,3 +56,24 @@ fn a_restore_token_is_kept_out_of_debug() {
     assert!(rendered.contains("has_restore_token"));
     assert!(!rendered.contains("secret-token"));
 }
+
+#[test]
+fn a_refused_portal_dialog_is_its_own_phase() {
+    let mut session = PortalSession::new();
+    assert!(
+        session.refuse().is_err(),
+        "nothing was asked before a session"
+    );
+    session.create_session().unwrap();
+    session.select_monitor().unwrap();
+    session.refuse().unwrap();
+    assert_eq!(session.phase(), PortalPhase::Refused);
+    assert!(session.pipewire_node().is_none());
+    assert!(session.refuse().is_err(), "a refusal is answered once");
+    assert!(
+        session.start(3).is_err(),
+        "a refused session does not start"
+    );
+    session.close().unwrap();
+    assert_eq!(session.phase(), PortalPhase::Closed);
+}

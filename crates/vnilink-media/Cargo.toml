@@ -8,6 +8,7 @@ description = "Frame pacing and H.264 Annex-B for VniLink platform adapters"
 publish = false
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 thiserror = "2"
 vnilink = { path = "../vnilink" }
 
@@ -16,6 +17,17 @@ shiguredo_libvpx = "=2026.1.0"
 shiguredo_aom = "=2026.1.0"
 
 vnilink-hevc = { path = "../vnilink-hevc" }
+
+[dev-dependencies]
+# The browser still fixture carries its bytes as base64 in JSON.
+base64 = "=0.22.1"
+serde_json = "=1.0.151"
+# The impaired-network harness reads each core's Files connection paths.
+vnilink = { path = "../vnilink", features = ["test-probes"] }
+
+# The impaired-network harness boots each test core inside its own network namespace.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+nix = { version = "=0.28.0", features = ["sched"] }
 
 # Build against the local Linux libc instead of assuming an Ubuntu prebuilt ABI.
 [target.'cfg(target_os = "linux")'.dependencies]

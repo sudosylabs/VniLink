@@ -1,6 +1,6 @@
-//! Relative paths and single names under an approved root.
+//! Relative paths and single names under a shared root.
 //!
-//! The rules mirror the transfer jail: no absolute paths, no drive
+//! The rules mirror a transfer manifest's: no absolute paths, no drive
 //! prefixes, no backslashes or colons (so a controller library never
 //! interprets a Windows path from a Windows host), no NUL, no `.`/`..`
 //! components. An empty relative path names the root itself.
@@ -26,6 +26,21 @@ pub(crate) fn check_name(name: &str) -> Result<(), Error> {
         return Err(Error::InvalidSetting(UNSAFE_NAME));
     }
     Ok(())
+}
+
+/// Prefixes of the names VniLink gives what it is still writing into, or
+/// moving out of, a folder: a copy staged beside its destination
+/// (`.vnlpub.`), a file arriving in place (`.vnlpart.`), a name changing
+/// only its case (`.vnlcase.`) and a folder being deleted (`.vnldelete.`).
+const ENGINE_TEMP_PREFIXES: [&str; 4] = [".vnlpub.", ".vnlpart.", ".vnlcase.", ".vnldelete."];
+
+/// Whether `name` is one of VniLink's own temporary entries. They are not
+/// the user's: listings, folder fingerprints and watches leave them out,
+/// so a pane never shows them or lists its folder again because of them.
+pub(crate) fn is_engine_temp(name: &str) -> bool {
+    ENGINE_TEMP_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 /// Validates a relative directory path. Empty names the root itself.

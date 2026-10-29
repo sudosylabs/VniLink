@@ -181,11 +181,18 @@ where
                         buffer.failed.store(true, Ordering::Release);
                         return;
                     }
+                    // The ring was checked for room for the whole callback above;
+                    // this real-time thread neither locks nor records.
                     if output == Format::Mono {
-                        let _ = producer.push(((left + right) * 0.5).clamp(-1.0, 1.0));
+                        let pushed = producer.push(((left + right) * 0.5).clamp(-1.0, 1.0));
+                        debug_assert!(pushed.is_ok(), "the ring had room for the callback");
                     } else {
-                        let _ = producer.push(left.clamp(-1.0, 1.0));
-                        let _ = producer.push(right.clamp(-1.0, 1.0));
+                        let left = producer.push(left.clamp(-1.0, 1.0));
+                        let right = producer.push(right.clamp(-1.0, 1.0));
+                        debug_assert!(
+                            left.is_ok() && right.is_ok(),
+                            "the ring had room for the callback"
+                        );
                     }
                 }
             },

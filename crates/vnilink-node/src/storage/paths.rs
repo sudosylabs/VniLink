@@ -3,6 +3,7 @@
 //! One production installation exists per OS user. Persistent engines share
 //! it. The lease is `installation.lock` in the engine directory. It is taken
 //! before the key or database is inspected and is never deleted.
+// trace: records every ignored failure
 
 use std::fs::{self, File};
 use std::io::{self, ErrorKind};
@@ -14,6 +15,8 @@ use super::StoreFailure;
 
 const DATABASE_NAME: &str = "installation.sqlite3";
 const LOCK_NAME: &str = "installation.lock";
+const SCREEN_GRANT_NAME: &str = "screen-grant";
+const SCREENSHOT_GRANT_NAME: &str = "screenshot-grant";
 
 pub(crate) struct InstallationPaths {
     pub(crate) engine_dir: PathBuf,
@@ -22,6 +25,12 @@ pub(crate) struct InstallationPaths {
     pub(crate) wal: PathBuf,
     pub(crate) shm: PathBuf,
     pub(crate) lock_file: PathBuf,
+    /// The desktop portal's restore token for sharing this screen
+    /// (`vnilink_linux::ScreenGrant`), private as the database is.
+    pub(crate) screen_grant: PathBuf,
+    /// The same for screenshots, which ask the ScreenCast portal: its
+    /// grants are its own, not the RemoteDesktop host's.
+    pub(crate) screenshot_grant: PathBuf,
 }
 
 impl InstallationPaths {
@@ -32,6 +41,8 @@ impl InstallationPaths {
             wal: sibling(&database, "-wal"),
             shm: sibling(&database, "-shm"),
             lock_file: engine_dir.join(LOCK_NAME),
+            screen_grant: engine_dir.join(SCREEN_GRANT_NAME),
+            screenshot_grant: engine_dir.join(SCREENSHOT_GRANT_NAME),
             database,
             engine_dir,
         }
@@ -594,7 +605,11 @@ impl InstallationLease {
 
 impl Drop for InstallationLease {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        vnilink::ignored!(
+            vnilink::trace::STORAGE,
+            "a lease that cannot unlock is released when its file closes",
+            self.file.unlock()
+        );
         unreserve(&self.engine_dir);
     }
 }
@@ -1040,7 +1055,8 @@ mod windows_support {
         unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
             .map_err(|_| StoreFailure::Unavailable)?;
         let mut length = 0u32;
-        let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut length) };
+        // Asks only for the size: it fails with ERROR_INSUFFICIENT_BUFFER by design.
+        let _sized = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut length) };
         let mut buffer = vec![0u8; length as usize];
         unsafe {
             GetTokenInformation(
@@ -1052,12 +1068,20 @@ mod windows_support {
             )
         }
         .map_err(|_| {
-            let _ = unsafe { windows::Win32::Foundation::CloseHandle(token) };
+            vnilink::ignored!(
+                vnilink::trace::STORAGE,
+                "a token handle that cannot close ends with the process",
+                unsafe { windows::Win32::Foundation::CloseHandle(token) }
+            );
             StoreFailure::Unavailable
         })?;
         let user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
         let text = sid_string(user.User.Sid);
-        let _ = unsafe { windows::Win32::Foundation::CloseHandle(token) };
+        vnilink::ignored!(
+            vnilink::trace::STORAGE,
+            "a token handle that cannot close ends with the process",
+            unsafe { windows::Win32::Foundation::CloseHandle(token) }
+        );
         text
     }
 

@@ -16,6 +16,45 @@
 	--status-connected: #22863a;
 	--status-pending: #a66b00;
 	--status-disconnected: #cf3434;
+
+	/* Window chrome (titlebar, tabs, sidebar). Opaque here; a window material
+	 * makes them translucent so they take on the backdrop like the system's own. */
+	--chrome-muted: var(--muted);
+	--chrome-line: var(--line);
+	--chrome-hover: color-mix(in srgb, var(--text) 5%, transparent);
+	--chrome-selected: var(--selected);
+
+	/* Camera: pictures sit on a dark stage in either theme, as photos and video do. */
+	--camera-stage: #1c1c1e;
+	--camera-on-stage: #ececef;
+	--camera-scrim: rgb(0 0 0 / 45%);
+	--camera-record: #ff453a;
+
+	/* Terminal: the page's own colours, with VS Code's default ANSI palette (terminalColorRegistry.ts). */
+	--terminal-background: var(--canvas);
+	--terminal-foreground: var(--text);
+	--terminal-cursor: var(--text);
+	--terminal-selection: color-mix(in srgb, var(--accent) 30%, transparent);
+	--terminal-selection-inactive: color-mix(in srgb, var(--text) 12%, transparent);
+	--terminal-scrollbar: color-mix(in srgb, var(--text) 20%, transparent);
+	--terminal-scrollbar-hover: color-mix(in srgb, var(--text) 30%, transparent);
+	--terminal-scrollbar-active: color-mix(in srgb, var(--text) 40%, transparent);
+	--terminal-ansi-black: #000;
+	--terminal-ansi-red: #cd3131;
+	--terminal-ansi-green: #107c10;
+	--terminal-ansi-yellow: #949800;
+	--terminal-ansi-blue: #0451a5;
+	--terminal-ansi-magenta: #bc05bc;
+	--terminal-ansi-cyan: #0598bc;
+	--terminal-ansi-white: #555;
+	--terminal-ansi-bright-black: #666;
+	--terminal-ansi-bright-red: #f14c4c;
+	--terminal-ansi-bright-green: #14ce14;
+	--terminal-ansi-bright-yellow: #b5ba00;
+	--terminal-ansi-bright-blue: #3b8eea;
+	--terminal-ansi-bright-magenta: #d670d6;
+	--terminal-ansi-bright-cyan: #29b8db;
+	--terminal-ansi-bright-white: #a5a5a5;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -39,6 +78,15 @@
 		--status-connected: #4ac776;
 		--status-pending: #e5b643;
 		--status-disconnected: #f06b6b;
+		--terminal-ansi-green: #0dbc79;
+		--terminal-ansi-yellow: #e5e510;
+		--terminal-ansi-blue: #2472c8;
+		--terminal-ansi-magenta: #bc3fbc;
+		--terminal-ansi-cyan: #11a8cd;
+		--terminal-ansi-white: #e5e5e5;
+		--terminal-ansi-bright-green: #23d18b;
+		--terminal-ansi-bright-yellow: #f5f543;
+		--terminal-ansi-bright-white: #e5e5e5;
 	}
 }
 
@@ -58,6 +106,21 @@
 		--surface-hover: Canvas;
 		--selection-surface: Canvas;
 		--native-chrome: Canvas;
+		--chrome-muted: GrayText;
+		--chrome-line: CanvasText;
+		--chrome-hover: Canvas;
+		--chrome-selected: Highlight;
+		--camera-stage: Canvas;
+		--camera-on-stage: CanvasText;
+		--camera-scrim: Canvas;
+		--camera-record: CanvasText;
+		--terminal-foreground: CanvasText;
+		--terminal-cursor: CanvasText;
+		--terminal-selection: Highlight;
+		--terminal-selection-inactive: Highlight;
+		--terminal-scrollbar: GrayText;
+		--terminal-scrollbar-hover: CanvasText;
+		--terminal-scrollbar-active: CanvasText;
 		--status-connected: CanvasText;
 		--status-pending: CanvasText;
 		--status-disconnected: CanvasText;

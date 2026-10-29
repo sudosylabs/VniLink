@@ -9,9 +9,9 @@ Architecture belongs to `workbench-architecture` and `crates/AGENTS.md`; formatt
 
 ## Imports and structure
 
-TypeScript imports form a coherent top block; group external packages before project imports, order within groups consistently, and consolidate duplicate value imports. Types may be separate when the lint rules permit it. Relative module specifiers end in `.js`; stylesheet specifiers retain `.css`. Side-effect registration imports are intentional and their order must preserve initialization dependencies. Keep license/provenance headers first.
+TypeScript imports form a coherent top block; group external packages before project imports, order within groups consistently, and consolidate duplicate value imports. Types may be separate when the lint rules permit it. In `src/` and `test/`, relative module specifiers end in `.js` (esbuild resolves them); in `build/`, Node runs the TypeScript directly, so they name the `.ts` file and types use `import type`. Stylesheet specifiers retain `.css`. Side-effect registration imports are intentional and their order must preserve initialization dependencies. Keep license/provenance headers first.
 
-Separate top-level declarations and methods with one blank line. Use tabs and the repository's TypeScript formatter (`tsfmt.json`/`build/format.mjs`). Do not manually reformat pinned upstream copies or reorder their imports to satisfy application conventions; see `workbench-architecture`.
+Separate top-level declarations and methods with one blank line. Use tabs and the repository's TypeScript formatter (`tsfmt.json`/`build/format.ts`, run with `npm run format`). Do not manually reformat pinned upstream copies or reorder their imports to satisfy application conventions; see `workbench-architecture`.
 
 Rust module intent docs precede declarations. Group imports by standard library, external crates and workspace/crate modules consistently, letting rustfmt order names. Locally scoped imports remain appropriate for isolated tests or features where the owning area uses them. Use idiomatic structs/traits; class preference does not change Rust idioms.
 

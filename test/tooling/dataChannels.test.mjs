@@ -11,9 +11,14 @@ async function load(path) {
 
 const { DataChannelHost } = await load('../../src/platform/engine/electron-utility/dataChannelHost.ts');
 
-const { DataChannelClient } = await load('../../src/platform/engine/browser/dataChannelClient.ts');
+// The client reads the preload's sandbox globals when it loads.
+globalThis.vscode = { ipcRenderer: {}, ipcMessagePort: { acquire() { } }, webFrame: {}, process: { env: {} }, context: {}, webUtils: {} };
+
+const { DataChannelClient } = await load('../../src/platform/engine/electron-browser/dataChannelClient.ts');
 
 const { isChannelRequest } = await load('../../src/platform/engine/common/dataChannel.ts');
+
+const { parseScreenSnapshot } = await load('../../src/workbench/services/screenSnapshot/screenSnapshot.ts');
 
 const request = { kind: 'video', requestId: 'test', sessionId: '1', generation: '2' };
 
@@ -24,14 +29,49 @@ function fixture(kind = 'video') {
 	const port = { on: (name, fn) => listeners.set(name, fn), start() { }, close() { }, postMessage: packet => messages.push(packet) };
 	const packets = [];
 	const inputs = [];
-	const native = { read: () => packets.shift() ?? null, close: () => closed++, input: command => inputs.push(JSON.parse(command)), write() { }, resize() { }, fileOperation: async () => '{}' };
+	const cursors = [];
+	const native = { read: () => packets.shift() ?? null, cursor: () => cursors.shift() ?? null, close: () => closed++, input: command => inputs.push(JSON.parse(command)), write() { }, resize() { }, fileOperation: async () => '{}' };
 	const host = new DataChannelHost(port, { ...request, kind }, () => { });
 	return {
-		host, messages, packets, inputs, native, receive: data => listeners.get('message')({ data }), get closed() {
+		host, messages, packets, inputs, native, cursors, receive: data => listeners.get('message')({ data }), get closed() {
 			return closed;
 		}
 	};
 }
+
+function jpeg(width, height) {
+	return new Uint8Array([
+		0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08,
+		(height >> 8) & 0xff, height & 0xff,
+		(width >> 8) & 0xff, width & 0xff,
+		0x01, 0x01, 0x11, 0x00, 0xff, 0xd9,
+	]);
+}
+
+test('a screenshot packet rejects malformed images and accepts one bounded jpeg', () => {
+	const image = jpeg(8, 8);
+	const ready = { outcome: 'ready', width: 8, height: 8, capturedUnixMs: '1700000000000', displayId: 'display-7', mime: 'image/jpeg', endpointId: 'a'.repeat(64), sessionId: '1', generation: '2' };
+	const parsed = parseScreenSnapshot(JSON.stringify(ready), image);
+	assert.equal(parsed.status, 'ready');
+	assert.equal(parsed.width, 8);
+	assert.equal(parsed.capturedUnixMs, 1700000000000);
+	assert.equal(parsed.endpointId, 'a'.repeat(64));
+	assert.equal(parsed.generation, '2');
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, extra: true }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, width: 641 }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, mime: 'image/png' }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ ...ready, capturedUnixMs: 1700000000000 }), image), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify(ready), new Uint8Array([0xff, 0xd8, 0x00, 0xff, 0xd9])), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify(ready), jpeg(4, 4)), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify(ready), jpeg(800, 8)), undefined);
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'needsPermission' }), undefined), { status: 'needsPermission' });
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'needsSourceSelection' }), undefined), { status: 'needsSourceSelection' });
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'cancelled' }), undefined), { status: 'cancelled' });
+	assert.deepEqual(parseScreenSnapshot(JSON.stringify({ outcome: 'replaced' }), undefined), { status: 'replaced' });
+	assert.equal(parseScreenSnapshot(JSON.stringify({ outcome: 'needsPermission', width: 1 }), undefined), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ outcome: 'asleep' }), undefined), undefined);
+	assert.equal(parseScreenSnapshot(JSON.stringify({ outcome: 'allowed' }), undefined), undefined);
+});
 
 test('data requests reject loss of identity, invalid terminal sizes and additional authority', () => {
 	assert.equal(isChannelRequest(request), true);
@@ -41,21 +81,102 @@ test('data requests reject loss of identity, invalid terminal sizes and addition
 	assert.equal(isChannelRequest({ ...request, extra: true }), false);
 	assert.equal(isChannelRequest({ ...request, kind: 'terminal', rows: 24, columns: 80 }), true);
 	assert.equal(isChannelRequest({ ...request, kind: 'terminal', rows: 0, columns: 80 }), false);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot' }), false);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'snapshot', prompt: false, access: false } }), true);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'snapshot', prompt: true, access: true } }), true);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'snapshot', prompt: false } }), false);
+	assert.equal(isChannelRequest({ ...request, kind: 'snapshot', media: { type: 'camera', deviceId: 'x', width: 640, height: 360, fps: 5 } }), false);
 });
 
 test('binary output is ordered and a slow consumer cannot grow the IPC queue', () => {
 	const f = fixture();
 	try {
 		const bytes = Buffer.from([0, 255, 19]);
-		f.packets.push({ kind: 'video', data: bytes, metadata: '{}' }, { kind: 'video', data: Buffer.from([2]), metadata: '{}' });
+		f.packets.push({ kind: 'video', data: bytes, metadata: '{}' }, ...Array.from({ length: 5 }, (_, index) => ({ kind: 'video', data: Buffer.from([index]), metadata: '{}' })));
+		f.host.start(f.native);
+		// A desktop picture keeps four on the way, no more, in order.
+		const sent = () => f.messages.filter(m => m.type === 'data');
+		assert.deepEqual(sent().map(m => m.sequence), [1, 2, 3, 4]);
+		assert.deepEqual(sent()[0].data, bytes);
+		f.receive({ type: 'ack', sequence: 1 });
+		assert.deepEqual(sent().map(m => m.sequence), [1, 2, 3, 4, 5], 'an acknowledgement did not let the next one go');
+		f.receive({ type: 'ack', sequence: 3 });
+		assert.equal(f.closed, 1, 'acknowledging out of order terminates the channel');
+	} finally {
+		f.host.close();
+	}
+});
+
+test('the other pointer travels beside the picture, checked, and only on a picture channel', async t => {
+	const f = fixture();
+	try {
+		f.cursors.push(
+			{ x: 3, y: 4, visible: true, image: { width: 1, height: 1, hotspotX: 0, hotspotY: 0, pixels: Buffer.from([1, 2, 3, 4]) } },
+			{ x: 5, y: 6, visible: true, image: null },
+		);
+		f.host.start(f.native);
+		const posted = () => f.messages.filter(m => m.type === 'cursor').map(m => m.cursor);
+		await until(() => posted().length === 2);
+		const cursors = posted();
+		assert.deepEqual(cursors.map(c => [c.x, c.y, 'image' in c]), [[3, 4, true], [5, 6, false]]);
+		assert.ok(cursors[0].image.pixels instanceof Uint8Array && !Buffer.isBuffer(cursors[0].image.pixels), 'the image crosses as plain bytes');
+		f.cursors.push({ x: 1, y: 1, visible: true, image: { width: 2, height: 1, hotspotX: 0, hotspotY: 0, pixels: Buffer.from([1]) } });
+		await until(() => f.closed === 1);
+		assert.equal(posted().length, 2, 'an image that does not fill its size reached the window');
+	} finally {
+		f.host.close();
+	}
+	const terminal = fixture('terminal');
+	try {
+		// A second of the channel's timers runs at once, however busy the computer.
+		t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+		terminal.cursors.push({ x: 1, y: 1, visible: true });
+		terminal.host.start(terminal.native);
+		t.mock.timers.tick(1000);
+		assert.equal(terminal.cursors.length, 1, 'a terminal asked for a pointer');
+	} finally {
+		terminal.host.close();
+		t.mock.timers.reset();
+	}
+});
+
+test('a picture channel reads when the engine says a picture is ready, not every few milliseconds', t => {
+	const f = fixture();
+	let ready;
+	let reads = 0;
+	const read = f.native.read;
+	f.native.read = () => {
+		reads++;
+		return read();
+	};
+	f.native.onReady = callback => {
+		ready = callback;
+	};
+	// The channel's timers run a second at once: a reader on a timer would
+	// read hundreds of times in it, however busy the computer.
+	t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+	try {
+		f.host.start(f.native);
+		assert.equal(typeof ready, 'function', 'the channel did not ask to be woken');
+		const before = reads;
+		t.mock.timers.tick(1000);
+		assert(reads - before <= 1, `an empty channel was read ${String(reads - before)} times in a second`);
+		f.packets.push({ kind: 'video', data: Buffer.from([1]), metadata: '{}' });
+		ready();
+		assert.equal(f.messages.filter(m => m.type === 'data').length, 1, 'a ready picture waited');
+	} finally {
+		f.host.close();
+	}
+});
+
+test('other channels keep one packet on the way', () => {
+	const f = fixture('terminal');
+	try {
+		f.packets.push({ kind: 'data', data: Buffer.from([1]), metadata: '{}' }, { kind: 'data', data: Buffer.from([2]), metadata: '{}' });
 		f.host.start(f.native);
 		assert.equal(f.messages.filter(m => m.type === 'data').length, 1);
-		assert.deepEqual(f.messages[1].data, bytes);
 		f.receive({ type: 'ack', sequence: 1 });
 		assert.equal(f.messages.filter(m => m.type === 'data').length, 2);
-		assert.equal(f.messages[2].sequence, 2);
-		f.receive({ type: 'ack', sequence: 1 });
-		assert.equal(f.closed, 1, 'invalid acknowledgements terminate the channel');
 	} finally {
 		f.host.close();
 	}
@@ -135,6 +256,27 @@ test('renderer acknowledges only after consumption and coalesces positions witho
 	}
 });
 
+test('a packet keeps when the engine read it, and a malformed read time fails the channel', async () => {
+	const { port1, port2 } = new MessageChannel();
+	const consumed = [];
+	const errors = [];
+	const client = new DataChannelClient(port1, packet => {
+		consumed.push(packet);
+		return Promise.resolve();
+	}, error => errors.push(error));
+	try {
+		port2.postMessage({ type: 'data', sequence: 1, kind: 'video', data: new Uint8Array([7]), metadata: '{}', readAt: 1234.5 });
+		await until(() => consumed.length === 1);
+		assert.equal(consumed[0].readAt, 1234.5);
+		port2.postMessage({ type: 'data', sequence: 2, kind: 'video', data: new Uint8Array([7]), metadata: '{}', readAt: 'now' });
+		await until(() => errors.length === 1);
+		assert.equal(consumed.length, 1);
+	} finally {
+		client.close();
+		port2.close();
+	}
+});
+
 test('intentional close with unacknowledged input does not report a failure', async () => {
 	const { port1, port2 } = new MessageChannel();
 	const messages = [];
@@ -153,46 +295,82 @@ test('intentional close with unacknowledged input does not report a failure', as
 	}
 });
 
-test('cancel passes through renderer and utility while progress is pending', async () => {
+test('file operations run side by side, a refusal is an answer, and job changes arrive unasked', async () => {
 	const { port1, port2 } = new MessageChannel();
-	let resolvePoll;
+	let resolveList;
 	const operations = [];
 	const errors = [];
+	const packets = [];
+	const job = { id: '7', peer: 'p', label: 'a.txt', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '40', files_total: '1', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, current_file: null, error: null, destination: null };
+	const pushed = [{ kind: 'jobs', metadata: JSON.stringify({ jobs: [job] }) }];
 	const native = {
-		close() { }, fileOperation: command => {
+		read: () => pushed.shift() ?? null,
+		close() { },
+		fileOperation: command => {
 			const operation = JSON.parse(command);
 			operations.push(operation);
-			if (operation.type === 'poll') {
+			if (operation.type === 'list') {
 				return new Promise(resolve => {
-					resolvePoll = resolve;
+					resolveList = resolve;
 				});
 			}
-			return Promise.resolve('{"state":"Cancelled"}');
-		}
+			if (operation.type === 'rename') {
+				return Promise.resolve('{"error":"FileExists: the name is taken"}');
+			}
+			return Promise.resolve(JSON.stringify({ ok: { ...job, state: 'Cancelled' } }));
+		},
 	};
 	const port = { on: (name, listener) => port2.on(name, name === 'message' ? data => listener({ data }) : listener), start() { }, close: () => port2.close(), postMessage: message => port2.postMessage(message) };
 	const host = new DataChannelHost(port, { ...request, kind: 'files' }, () => { });
 	host.start(native);
 	// The startup handshake is handled by open(), outside the client constructor.
 	await new Promise(resolve => port1.once('message', resolve));
-	const client = new DataChannelClient(port1, () => { }, error => errors.push(error));
-	let poll;
+	const client = new DataChannelClient(port1, packet => packets.push(packet), error => errors.push(error));
+	let list;
 	try {
-		poll = client.fileOperation({ type: 'poll', jobId: '1' });
-		await until(() => resolvePoll !== undefined);
-		await assert.rejects(client.fileOperation({ type: 'poll', jobId: '2' }), /backpressure/);
-		assert.equal(await client.fileOperation({ type: 'cancel', jobId: '1' }), '{"state":"Cancelled"}');
-		assert.deepEqual(operations.map(operation => operation.type), ['poll', 'cancel']);
-		resolvePoll('{"state":"Cancelled"}');
-		assert.equal(await poll, '{"state":"Cancelled"}');
+		list = client.fileOperation({ type: 'list', root: '0', path: 'Users', offset: '0' });
+		await until(() => resolveList !== undefined);
+		// A slow listing holds up neither a rename nor a cancel.
+		assert.deepEqual(await client.fileOperation({ type: 'rename', root: '0', path: 'Users', name: 'a.txt', token: null, newName: 'b.txt' }), { error: 'FileExists: the name is taken' });
+		assert.equal((await client.fileOperation({ type: 'cancel', jobId: '7' })).ok.state, 'Cancelled');
+		await until(() => packets.length === 1);
+		assert.equal(packets[0].kind, 'jobs');
+		assert.deepEqual(JSON.parse(packets[0].metadata).jobs[0], job);
+		resolveList(JSON.stringify({ ok: { entries: [], total: '0', nextOffset: null, truncated: false, skipped: '0' } }));
+		assert.equal((await list).ok.total, '0');
+		assert.deepEqual(operations.map(operation => operation.type), ['list', 'rename', 'cancel']);
 		assert.deepEqual(errors, []);
 	} finally {
 		client.close();
 		host.close();
-		if (poll) {
-			await poll.catch(() => { });
+		if (list) {
+			await list.catch(() => { });
 		}
 	}
+});
+
+test('a file operation outside its shape never reaches the engine', async () => {
+	const { isFileOperation } = await load('../../src/platform/engine/common/files.ts');
+	assert(isFileOperation({ type: 'list', root: '0', path: 'Users/someone', offset: '0' }));
+	assert(isFileOperation({ type: 'list', root: '2', path: '', offset: '500' }));
+	assert(!isFileOperation({ type: 'list', root: '0', path: '/Users', offset: '0' }), 'a leading slash');
+	assert(!isFileOperation({ type: 'list', root: '0', path: 'Users/../etc', offset: '0' }), 'a parent step');
+	assert(!isFileOperation({ type: 'mkdir', root: '0', path: '', name: 'a/b' }), 'a name with a separator');
+	assert(!isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', newName: 'b' }), 'no token field');
+	assert(isFileOperation({ type: 'rename', root: '0', path: '', name: 'a', token: { kind: 'identity', dev: '1', ino: null, born: '7', fingerprint: null }, newName: 'b' }));
+	assert(isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', names: ['a.txt', 'Photos'], dstRoot: '0', dstPath: 'x' }), 'entries of a whole disk');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: '', names: [], dstRoot: '0', dstPath: 'x' }), 'copying a whole root');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users', names: ['a', 'a'], dstRoot: '0', dstPath: 'x' }), 'an item twice');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users', names: ['a/b'], dstRoot: '0', dstPath: 'x' }), 'a path for a name');
+	assert(!isFileOperation({ type: 'submit', direction: 'upload', srcRoot: '0', srcPath: 'Users/someone/a.txt', dstRoot: '0', dstPath: 'x' }), 'no names');
+	assert(isFileOperation({ type: 'resolve', jobId: '3', choice: 'keepBoth', applyToRemaining: true }));
+	assert(!isFileOperation({ type: 'resolve', jobId: '3', choice: 'overwrite', applyToRemaining: true }));
+	assert(!isFileOperation({ type: 'poll', jobId: '3' }), 'progress is pushed, never polled');
+	assert(isFileOperation({ type: 'adopt' }));
+	assert(isFileOperation({ type: 'watch', folder: { root: '2', path: 'Users/someone/Downloads' } }));
+	assert(isFileOperation({ type: 'watch', folder: null }), 'watching nothing');
+	assert(!isFileOperation({ type: 'watch', folder: { root: '2', path: '../etc' } }), 'a watch is a path like any other');
+	assert(!isFileOperation({ type: 'adopt', jobId: '3' }), 'adoption names no job: it takes over every interrupted one');
 });
 
 test('media channels require matching bounded source configuration and reject extra authority', () => {
@@ -209,19 +387,6 @@ test('media channels require matching bounded source configuration and reject ex
 	assert(isChannelRequest(audio));
 	assert(!isChannelRequest({ ...audio, media: { ...audio.media, channels: 3 } }));
 	assert(!isChannelRequest({ ...audio, media: { ...audio.media, sourceKind: 'output' } }));
-});
-
-test('video publication identifies its codec and refuses ambiguous packets', async () => {
-	const { isEngineCommand, isEngineReply } = await load('../../src/platform/engine/common/engine.ts');
-	for (const codec of ['h264', 'h265', 'vp8', 'vp9', 'av1']) {
-		const command = { type: 'publishVideo', codec, sessionId: '1', keyframe: true, timestampUs: '0', data: 'AQ==' };
-		assert(isEngineCommand(command));
-		const { codec: ignored, ...ambiguous } = command;
-		void ignored;
-		assert(!isEngineCommand(ambiguous));
-		assert(!isEngineCommand({ ...command, codec: 'other' }));
-		assert(isEngineReply({ type: 'videoFrame', frame: { codec, keyframe: true, timestamp_us: '0', data: 'AQ==', display_id: '1', revision: '1' } }));
-	}
 });
 
 test('desktop audio controls validate exact shapes and never carry decoded audio', async () => {

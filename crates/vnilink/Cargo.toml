@@ -11,13 +11,15 @@ publish = false
 # Application tests open a loopback core on a real store and read the
 # endpoint-close count. Production builds leave this off.
 test-probes = []
+# Entry points for the fuzz targets in `fuzz/`, which reach parsers of peer
+# input that are otherwise private. Production builds leave this off.
+fuzzing = []
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 bytes = "=1.12.1"
 enigo = "=0.6.1"
 iroh = "=1.3.0"
-iroh-blobs = { version = "=0.103.1", default-features = false, features = ["fs-store"] }
-n0-future = "=0.3.2"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 vnilink-rename = { version = "=0.1.0", path = "../vnilink-rename" }
@@ -25,12 +27,40 @@ vnilink-audio = { path = "../vnilink-audio" }
 rand = "0.10"
 sha2 = "=0.11.0"
 blake3 = "=1.8.7"
+jpeg-encoder = "=0.6.1"
 thiserror = "2"
+# The system Trash on each OS. Default features would initialize COM
+# apartment-threaded and pull chrono; trash calls run on their own thread.
+trash = { version = "=5.2.9", default-features = false, features = ["coinit_multithreaded"] }
+# Folder changes on each OS: kqueue on macOS, ReadDirectoryChangesW,
+# inotify. kqueue rather than FSEvents: a pane watches one folder at a
+# time, which kqueue holds with one descriptor, while starting an FSEvents
+# stream took seconds in a process linking the media frameworks.
+notify = { version = "=8.2.0", default-features = false, features = ["macos_kqueue"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "time"] }
+reed-solomon-simd = "=3.1.0"
+
+[dev-dependencies]
+jpeg-decoder = "=0.3.2"
+# The impaired-network harness's local relay (`examples/impaired_relay.rs`).
+iroh-relay = { version = "=1.3.0", features = ["server"] }
+
+# The impaired-network harness boots each test core inside its own network namespace.
+# `tests/terminal_owned_descriptors.rs` replaces `close` as Chromium does.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+nix = { version = "=0.28.0", features = ["sched"] }
+libc = "=0.2.189"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11rb = "=0.14.0"
 
 [target.'cfg(unix)'.dependencies]
 portable-pty = "=0.9.0"
-nix = { version = "=0.28.0", features = ["fs", "signal", "process", "user"] }
+nix = { version = "=0.28.0", features = ["fs", "poll", "signal", "process", "user"] }
+
+[[example]]
+name = "impaired_relay"
+
+[[example]]
+name = "transfer_bench"
+required-features = ["test-probes"]

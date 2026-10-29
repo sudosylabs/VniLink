@@ -4,8 +4,8 @@
 //! token from listing must still name the same object, otherwise the entry
 //! was replaced and the mutation is refused instead of renaming a different
 //! object. The destination must not exist; the atomic primitive in
-//! `vnilink-rename` enforces that without a check-then-rename race on Linux
-//! and macOS. Renaming a folder never transfers or rewrites its children:
+//! `vnilink-rename` enforces that without a check-then-rename race on Linux,
+//! macOS and Windows. Renaming a folder never transfers or rewrites its children:
 //! the directory entry itself moves.
 //!
 //! Case-only renames on case-insensitive filesystems go through a temporary
@@ -13,20 +13,52 @@
 //! in place. Anything that was actively transferred stays the transfer
 //! manager's business: this layer refuses to rename a source or destination
 //! it cannot state, and reports interruption instead of guessing.
+// trace: records every ignored failure
 
 use crate::error::Error;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use super::entry::stat;
 use super::entry::{EntryKind, EntryToken};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::path::check_name;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use super::path::{check_name, UNSAFE_NAME};
 use super::roots::RootSet;
 
 pub(crate) const STALE_ENTRY: &str = "the entry changed since it was listed";
 pub(crate) const RENAME_FAILED: &str = "the entry could not be renamed";
+/// How the volume `dir` is on names its entries. A volume that cannot say
+/// is treated as one naming them by position, so changes there need a
+/// fingerprint.
+#[cfg(any(unix, windows))]
+pub(crate) fn volume_ids(dir: &vnilink_rename::anchored::Dir) -> vnilink_rename::VolumeIds {
+    use vnilink_rename::anchored::AsDir;
+    vnilink_rename::anchored::volume_ids(dir.as_dir()).unwrap_or(vnilink_rename::VolumeIds::FAT)
+}
+
+/// Whether a change may act on the entry now tokened `current`, listed as
+/// `expected`, on a volume naming its entries as `ids` does. A strong
+/// listed token must name the same object, or match the same fingerprint.
+/// Where ids are positions, a change needs a listed fingerprint; elsewhere
+/// a change without a token proves nothing and is the caller's choice.
+pub(crate) fn still_listed(
+    expected: Option<EntryToken>,
+    current: EntryToken,
+    positional: bool,
+) -> Result<(), Error> {
+    match expected {
+        Some(expected) if expected.is_strong() => {
+            if current.is_strong() && expected.same_object(current) {
+                Ok(())
+            } else {
+                Err(Error::InvalidSetting(STALE_ENTRY))
+            }
+        }
+        _ if positional => Err(Error::UnprovenEntry),
+        _ => Ok(()),
+    }
+}
 
 pub(crate) fn rename_entry(
     roots: &RootSet,
@@ -41,31 +73,28 @@ pub(crate) fn rename_entry(
     if name == new_name {
         return Ok(());
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
-        use std::os::unix::io::AsFd;
-        let dir = roots.open_dir_fd(id, rel)?;
-        let before = stat_anchored(&dir, name)?;
+        use vnilink_rename::anchored::AsDir;
+        let dir = roots.open_dir_held(id, rel)?;
+        let ids = volume_ids(&dir);
+        let (before, identity) = stat_anchored(&dir, name, ids)?;
         if before.kind == EntryKind::Other && before.token == EntryToken::NONE {
             return Err(Error::InvalidSetting(RENAME_FAILED));
         }
-        if let Some(expected) = expected {
-            if expected.is_strong()
-                && before.token.is_strong()
-                && !expected.same_object(before.token)
-            {
-                return Err(Error::InvalidSetting(STALE_ENTRY));
-            }
-            if expected.is_strong() && !before.token.is_strong() {
-                return Err(Error::InvalidSetting(STALE_ENTRY));
-            }
-        }
+        still_listed(
+            expected,
+            before.token,
+            ids != vnilink_rename::VolumeIds::Stable,
+        )?;
+        // The object's own id says whether both spellings name it, even
+        // where ids are positions: one entry has one position.
         if same_spelling_different_case(name, new_name)
-            && dest_exists_pointing_at_anchored(&dir, new_name, before.token)
+            && dest_exists_pointing_at_anchored(&dir, new_name, identity)
         {
             return rename_case_only_anchored(&dir, name, new_name);
         }
-        match vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), name, new_name) {
+        match vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), name, new_name) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 Err(Error::FileExists)
@@ -76,7 +105,7 @@ pub(crate) fn rename_entry(
             Err(_) => Err(Error::InvalidSetting(RENAME_FAILED)),
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let (_parent, source) = roots.resolve_parent(id, rel, name)?;
         let (_parent, dest) = roots.resolve_parent(id, rel, new_name)?;
@@ -116,13 +145,16 @@ pub(crate) fn rename_entry(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+/// `name` in `dir` as a listing on a volume naming its entries as `ids`
+/// does states it, and its object identity.
 fn stat_anchored(
-    dir: &std::os::unix::io::OwnedFd,
+    dir: &vnilink_rename::anchored::Dir,
     name: &str,
-) -> Result<super::entry::FsEntry, Error> {
-    use std::os::unix::io::AsFd;
-    match vnilink_rename::anchored::stat_at(dir.as_fd(), name) {
+    ids: vnilink_rename::VolumeIds,
+) -> Result<(super::entry::FsEntry, EntryToken), Error> {
+    use vnilink_rename::anchored::AsDir;
+    match vnilink_rename::anchored::stat_at(dir.as_dir(), name) {
         Ok(st) => {
             let kind = if st.is_symlink {
                 EntryKind::Symlink
@@ -137,52 +169,60 @@ fn stat_anchored(
             if kind == EntryKind::Symlink {
                 return Err(Error::InvalidSetting(RENAME_FAILED));
             }
-            Ok(super::entry::FsEntry {
-                name: String::new(),
-                kind,
-                size: if kind == EntryKind::File { st.size } else { 0 },
-                mtime_ms: st.mtime_ms,
-                token: EntryToken {
-                    dev: Some(st.dev),
-                    ino: Some(st.ino),
+            Ok((
+                super::entry::FsEntry {
+                    name: String::new(),
+                    kind,
+                    size: if kind == EntryKind::File { st.size } else { 0 },
+                    mtime_ms: st.mtime_ms,
+                    token: super::entry::token_of(name, &st, ids),
                 },
-            })
+                EntryToken::identity(st.dev, st.ino, st.born),
+            ))
         }
         Err(_) => Err(Error::InvalidSetting(RENAME_FAILED)),
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn dest_exists_pointing_at_anchored(
-    dir: &std::os::unix::io::OwnedFd,
+    dir: &vnilink_rename::anchored::Dir,
     dest: &str,
     source: EntryToken,
 ) -> bool {
-    let Ok(after) = stat_anchored(dir, dest) else {
+    let Ok((_, after)) = stat_anchored(dir, dest, vnilink_rename::VolumeIds::Stable) else {
         return false;
     };
-    source.is_strong() && after.token.is_strong() && source.same_object(after.token)
+    source.same_object(after)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn rename_case_only_anchored(
-    dir: &std::os::unix::io::OwnedFd,
+    dir: &vnilink_rename::anchored::Dir,
     source: &str,
     dest: &str,
 ) -> Result<(), Error> {
-    use std::os::unix::io::AsFd;
+    use vnilink_rename::anchored::AsDir;
     for attempt in 0..8u32 {
         let temp = format!(".vnlcase.{attempt}.tmp");
         // Skip occupied temp names without touching them.
-        if stat_anchored(dir, &temp).is_ok() {
+        if stat_anchored(dir, &temp, vnilink_rename::VolumeIds::Stable).is_ok() {
             continue;
         }
-        vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), source, &temp)
+        vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), source, &temp)
             .map_err(|_| Error::InvalidSetting(RENAME_FAILED))?;
-        match vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), &temp, dest) {
+        match vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), &temp, dest) {
             Ok(()) => return Ok(()),
             Err(_) => {
-                let _ = vnilink_rename::anchored::rename_at_noreplace(dir.as_fd(), &temp, source);
+                if let Err(error) =
+                    vnilink_rename::anchored::rename_at_noreplace(dir.as_dir(), &temp, source)
+                {
+                    tracing::warn!(
+                        target: crate::trace::FILES,
+                        failure = crate::trace::failure(&error),
+                        "a rename failed and so did moving it back: the entry keeps a temporary name until it is swept"
+                    );
+                }
                 return Err(Error::InvalidSetting(RENAME_FAILED));
             }
         }
@@ -197,7 +237,7 @@ fn same_spelling_different_case(a: &str, b: &str) -> bool {
 /// True when the destination already resolves to the source object itself,
 /// i.e. a case-only rename on a case-insensitive filesystem where both
 /// spellings address one entry.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn dest_exists_pointing_at(dest: &std::path::Path, source: EntryToken) -> bool {
     let after = stat(dest, String::new());
     source.is_strong() && after.token.is_strong() && source.same_object(after.token)
@@ -206,7 +246,7 @@ fn dest_exists_pointing_at(dest: &std::path::Path, source: EntryToken) -> bool {
 /// Moves aside through a unique temporary sibling, then onto the new
 /// spelling. Either step failing leaves the temporary name for a later
 /// sweep; the original bytes are never copied.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn rename_case_only(source: &std::path::Path, dest: &std::path::Path) -> Result<(), Error> {
     let parent = source.parent().ok_or(Error::InvalidSetting(UNSAFE_NAME))?;
     for attempt in 0..8u32 {
@@ -219,7 +259,13 @@ fn rename_case_only(source: &std::path::Path, dest: &std::path::Path) -> Result<
             Ok(()) => return Ok(()),
             Err(_) => {
                 // Best effort: move back so the entry keeps a stable name.
-                let _ = std::fs::rename(&temp, source);
+                if let Err(error) = std::fs::rename(&temp, source) {
+                    tracing::warn!(
+                        target: crate::trace::FILES,
+                        failure = crate::trace::failure(&error),
+                        "a rename failed and so did moving it back: the entry keeps a temporary name until it is swept"
+                    );
+                }
                 return Err(Error::InvalidSetting(RENAME_FAILED));
             }
         }

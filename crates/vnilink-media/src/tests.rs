@@ -12,11 +12,23 @@ mod fanout_tests;
 mod frame_tests;
 #[path = "tests/host.rs"]
 mod host_tests;
+#[path = "tests/impaired_video.rs"]
+mod impaired_video_tests;
+#[path = "tests/measure.rs"]
+mod measure_tests;
 #[path = "tests/nv12.rs"]
 mod nv12_tests;
+#[path = "tests/perceived.rs"]
+mod perceived_tests;
 #[path = "tests/pump.rs"]
 mod pump_tests;
 #[path = "tests/rate.rs"]
 mod rate_tests;
 #[path = "tests/recording_segments.rs"]
 mod recording_segments_tests;
+#[path = "tests/recovery.rs"]
+mod recovery_tests;
+#[path = "tests/still.rs"]
+mod still_tests;
+#[path = "tests/timecode.rs"]
+mod timecode_tests;

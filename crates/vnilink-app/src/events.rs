@@ -74,6 +74,12 @@ impl VideoPoller {
         self.inner.try_recv().map(Into::into)
     }
 
+    /// Calls `waker` each time a frame is queued; see
+    /// [`vnilink::VideoSubscription::on_ready`].
+    pub fn on_ready(&self, waker: impl Fn() + Send + Sync + 'static) {
+        self.inner.on_ready(waker);
+    }
+
     pub fn lagged(&self) -> u64 {
         self.inner.lagged()
     }

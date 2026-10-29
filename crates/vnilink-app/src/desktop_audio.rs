@@ -1,4 +1,5 @@
 //! Optional desktop audio. Failure and listening controls never retire the desktop.
+// trace: records every ignored failure
 use crate::{
     AudioService, DesktopService, FfiAudioConfig, FfiAudioKind, FfiError, FfiServiceKind,
     NativeAudioPlayback, VnilinkCore,
@@ -178,7 +179,11 @@ fn retire(state: &mut State) -> Option<(u64, u64)> {
 fn close_owner(core: &VnilinkCore, owner: Option<(u64, u64)>) {
     if let Some((id, generation)) = owner {
         if core.close_controller_service(id, generation).is_ok() {
-            let _ = core.forget_controller_service(id);
+            vnilink::ignored!(
+                vnilink::trace::AUDIO,
+                "a closed owner already forgotten needs no forgetting",
+                core.forget_controller_service(id)
+            );
         }
     }
 }

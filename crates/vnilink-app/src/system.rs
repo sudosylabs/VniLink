@@ -36,6 +36,8 @@ pub enum FfiOperationState {
     Refused,
     Executed,
     Failed,
+    Scheduled,
+    Cancelled,
 }
 
 impl From<vnilink::OperationState> for FfiOperationState {
@@ -45,6 +47,8 @@ impl From<vnilink::OperationState> for FfiOperationState {
             vnilink::OperationState::Refused => Self::Refused,
             vnilink::OperationState::Executed => Self::Executed,
             vnilink::OperationState::Failed => Self::Failed,
+            vnilink::OperationState::Scheduled => Self::Scheduled,
+            vnilink::OperationState::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -56,6 +60,8 @@ pub struct FfiSystemOperation {
     pub state: FfiOperationState,
     pub completion_observable: bool,
     pub detail: String,
+    /// Time left in a restart or shutdown's notice; zero once it ends.
+    pub notice_remaining_ms: u32,
 }
 
 impl From<vnilink::SystemOperation> for FfiSystemOperation {
@@ -66,8 +72,18 @@ impl From<vnilink::SystemOperation> for FfiSystemOperation {
             state: value.state.into(),
             completion_observable: value.completion_observable,
             detail: value.detail,
+            notice_remaining_ms: value.notice_remaining_ms,
         }
     }
+}
+
+/// A restart or shutdown counting down on this computer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiScheduledSystemAction {
+    pub operation_id: u64,
+    pub action: FfiSystemAction,
+    pub endpoint_id: String,
+    pub remaining_ms: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +209,11 @@ impl SystemServiceHandle {
         self.inner.operation(id).map(Into::into).map_err(map_error)
     }
 
+    /// Cancels a restart or shutdown this owner asked for, during its notice.
+    pub fn cancel(&self, id: u64) -> Result<FfiSystemOperation, FfiError> {
+        self.inner.cancel(id).map(Into::into).map_err(map_error)
+    }
+
     pub fn support(&self) -> Result<FfiHostSystemReport, FfiError> {
         self.inner
             .support()
@@ -252,6 +273,37 @@ impl VnilinkCore {
                 session: session.into(),
             })
             .map_err(map_error)
+    }
+
+    /// Restarts and shutdowns counting down on this computer, for its notice.
+    pub fn scheduled_system_actions(&self) -> Result<Vec<FfiScheduledSystemAction>, FfiError> {
+        self.inner
+            .scheduled_system_actions()
+            .map(|actions| {
+                actions
+                    .into_iter()
+                    .map(|action| FfiScheduledSystemAction {
+                        operation_id: action.operation_id,
+                        action: action.action.into(),
+                        endpoint_id: action.endpoint_id,
+                        remaining_ms: action.remaining_ms,
+                    })
+                    .collect()
+            })
+            .map_err(map_error)
+    }
+
+    /// Cancels a restart or shutdown counting down here, as its user chose.
+    pub fn cancel_system_action(&self, id: u64) -> Result<FfiSystemOperation, FfiError> {
+        self.inner
+            .cancel_system_action(id)
+            .map(Into::into)
+            .map_err(map_error)
+    }
+
+    /// Starts a restart or shutdown counting down here without waiting.
+    pub fn run_system_action_now(&self, id: u64) -> Result<(), FfiError> {
+        self.inner.run_system_action_now(id).map_err(map_error)
     }
 
     pub fn system_privacy(&self) -> Result<FfiPrivacyState, FfiError> {

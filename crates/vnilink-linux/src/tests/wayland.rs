@@ -127,6 +127,8 @@ struct FakePortal(
     Arc<std::sync::atomic::AtomicU32>,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
+    /// Each SelectDevices' persist mode and the restore token it offered.
+    Arc<Mutex<Vec<(u32, Option<String>)>>>,
 );
 #[zbus::interface(name = "org.freedesktop.portal.RemoteDesktop")]
 impl FakePortal {
@@ -185,10 +187,12 @@ impl FakePortal {
             u32::try_from(options["types"].try_clone().unwrap()).unwrap(),
             3
         );
-        assert_eq!(
+        self.5.lock().unwrap().push((
             u32::try_from(options["persist_mode"].try_clone().unwrap()).unwrap(),
-            0
-        );
+            options
+                .get("restore_token")
+                .map(|token| String::try_from(token.try_clone().unwrap()).unwrap()),
+        ));
         if self.3.load(Ordering::Acquire) {
             self.4.store(true, Ordering::Release);
             let sender = header
@@ -226,6 +230,16 @@ impl FakePortal {
             }),
         );
         result.insert("streams", Value::from(vec![(42u32, props)]));
+        // A start asked to keep its grant answers with the token for the next.
+        if self
+            .5
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|(mode, _)| *mode == 2)
+        {
+            result.insert("restore_token", Value::from("next-token"));
+        }
         response(connection, header, &options, result).await
     }
     async fn notify_keyboard_keycode(
@@ -419,6 +433,7 @@ fn real_portal_notify_transport_preserves_all_events() {
             let closed = Arc::new(std::sync::atomic::AtomicU32::new(0));
             let stall = Arc::new(AtomicBool::new(false));
             let entered = Arc::new(AtomicBool::new(false));
+            let offers = Arc::new(Mutex::new(Vec::new()));
             let cursor_modes = Arc::new(std::sync::atomic::AtomicU32::new(6));
             let _service = zbus::connection::Builder::session()
                 .unwrap()
@@ -432,6 +447,7 @@ fn real_portal_notify_transport_preserves_all_events() {
                         closed.clone(),
                         stall.clone(),
                         entered.clone(),
+                        offers.clone(),
                     ),
                 )
                 .unwrap()
@@ -465,15 +481,9 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .await
                 .unwrap();
             assert_eq!(*recorded.lock().unwrap(), expected);
-            let grant = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
-                .await
-                .unwrap();
-            assert!(grant.cursor_metadata);
-            assert_eq!(grant.logical, (1920, 1080));
-            assert_eq!(grant.node, 42);
-            grant.session.close().await.unwrap();
-            assert_eq!(closed.load(Ordering::Relaxed), 1);
             // Exercise the actual worker/runtime boundary and explicit close.
+            // These run before any other portal open: each worker's runtime
+            // ends with it, and the second must still reach the portal.
             for revoked in [false, true] {
                 tokio::task::spawn_blocking(move || {
                     let (tx, rx) = mpsc::sync_channel(64);
@@ -489,13 +499,15 @@ fn real_portal_notify_transport_preserves_all_events() {
                             rx,
                             ready_tx,
                             vnilink::BackendStartup::new(Duration::from_secs(5)),
+                            None,
                         )
                     });
-                    let (_fd, node, logical, _) = ready_rx
+                    let (_fd, node, logical, _, control) = ready_rx
                         .recv_timeout(Duration::from_secs(2))
                         .unwrap()
                         .unwrap();
                     assert_eq!(node, 42);
+                    assert!(control);
                     let mut input = WaylandInput {
                         connection,
                         pixels: (3840, 2160),
@@ -523,26 +535,61 @@ fn real_portal_notify_transport_preserves_all_events() {
                 .await
                 .unwrap();
             }
+            assert_eq!(closed.load(Ordering::Relaxed), 2);
+            let grant = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)), None)
+                .await
+                .unwrap();
+            assert!(grant.cursor_metadata);
+            assert!(grant.control);
+            assert_eq!(grant.logical, (1920, 1080));
+            assert_eq!(grant.node, 42);
+            grant.session.close().await.unwrap();
             assert_eq!(closed.load(Ordering::Relaxed), 3);
+            // The screen without keyboard and pointer is a view-only grant,
+            // kept open so its revocation still ends the capture.
             granted.store(false, Ordering::Relaxed);
-            assert!(
-                open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
-                    .await
-                    .is_err()
-            );
-            assert_eq!(
-                closed.load(Ordering::Relaxed),
-                4,
-                "partial grants must be closed"
-            );
+            let view_only = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)), None)
+                .await
+                .unwrap();
+            assert!(!view_only.control);
+            assert_eq!(closed.load(Ordering::Relaxed), 3);
+            view_only.session.close().await.unwrap();
+            assert_eq!(closed.load(Ordering::Relaxed), 4);
             granted.store(true, Ordering::Relaxed);
             cursor_modes.store(2, Ordering::Relaxed);
-            let embedded = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)))
+            let embedded = open_grant(&vnilink::BackendStartup::new(Duration::from_secs(5)), None)
                 .await
                 .unwrap();
             assert!(!embedded.cursor_metadata);
             embedded.session.close().await.unwrap();
             assert_eq!(closed.load(Ordering::Relaxed), 5);
+            // Without a grant, the portal is asked to forget each start.
+            assert!(offers
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|offer| *offer == (0, None)));
+            // With one, it keeps the consent: the kept token is offered,
+            // and the one the start answers with is kept for the next.
+            let directory =
+                std::env::temp_dir().join(format!("vnilink-grant-portal-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let kept = crate::ScreenGrant::at(directory.join("screen-grant"));
+            kept.keep("kept-token").unwrap();
+            let restored = open_grant(
+                &vnilink::BackendStartup::new(Duration::from_secs(5)),
+                Some(&kept),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                offers.lock().unwrap().last().cloned(),
+                Some((2, Some("kept-token".to_owned())))
+            );
+            assert_eq!(kept.token().as_deref(), Some("next-token"));
+            restored.session.close().await.unwrap();
+            let _ = std::fs::remove_dir_all(&directory);
+            let closed_before = closed.load(Ordering::Relaxed);
             // Permission response is intentionally never emitted. Cancellation
             // must close the actual portal Session rather than await consent.
             stall.store(true, Ordering::Release);
@@ -554,9 +601,9 @@ fn real_portal_notify_transport_preserves_all_events() {
                 }
                 stop.store(true, Ordering::Release);
             };
-            let (result, ()) = tokio::join!(open_grant(&startup), cancel);
+            let (result, ()) = tokio::join!(open_grant(&startup, None), cancel);
             assert!(result.is_err());
-            assert_eq!(closed.load(Ordering::Relaxed), 6);
+            assert_eq!(closed.load(Ordering::Relaxed), closed_before + 1);
         })
         .await
         .unwrap();
@@ -583,4 +630,18 @@ fn fractional_scroll_relative_motion_and_side_buttons_map_without_rounding() {
         vec![Notify::Button(277, false)]
     );
     assert!(notifications(InputEvent::precise_wheel(9000, 0), (1, 1), (1, 1), (0, 0)).is_err());
+}
+
+#[test]
+fn a_declined_dialog_is_a_denial_and_any_other_failure_is_not() {
+    use ashpd::desktop::ResponseError;
+    assert!(matches!(
+        grant_error(&ashpd::Error::Response(ResponseError::Cancelled)),
+        Error::CaptureDenied(_)
+    ));
+    // Cancellation from here and an incomplete grant both answer `Other`.
+    assert!(matches!(
+        grant_error(&ashpd::Error::Response(ResponseError::Other)),
+        Error::CaptureRejected(_)
+    ));
 }

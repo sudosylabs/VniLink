@@ -10,6 +10,9 @@ pub(super) struct HostedTerminal {
     pub(super) info: Mutex<TerminalSessionInfo>,
     pub(super) commands: std::sync::mpsc::SyncSender<TerminalCommand>,
     pub(super) stop: Arc<AtomicBool>,
+    /// Set when its viewer asked to close it, before `stop`, so its stream
+    /// says the viewer closed it rather than the host.
+    pub(super) closed_by_viewer: AtomicBool,
     pub(super) changed: tokio::sync::watch::Sender<u64>,
     policy: TerminalPolicy,
     log: Mutex<Log>,
@@ -47,14 +50,10 @@ impl HostedTerminal {
     pub(super) fn read(&self, offset: u64) -> (u64, Vec<u8>, Option<TerminalEvent>) {
         let log = lock(&self.log);
         let first = offset.max(log.offset);
-        let skip = (first - log.offset) as usize;
-        let bytes = log
-            .bytes
-            .iter()
-            .skip(skip)
-            .take(TERMINAL_CHUNK)
-            .copied()
-            .collect();
+        // A range starts where it asks, however much history is kept before it.
+        let start = ((first - log.offset) as usize).min(log.bytes.len());
+        let end = (start + TERMINAL_CHUNK).min(log.bytes.len());
+        let bytes = log.bytes.range(start..end).copied().collect();
         (first, bytes, log.ended.clone())
     }
     pub(super) fn replay_start(&self) -> u64 {
@@ -123,6 +122,7 @@ pub(super) fn start(
         }),
         commands: backend.commands.clone(),
         stop: backend.stop.clone(),
+        closed_by_viewer: AtomicBool::new(false),
         changed: tokio::sync::watch::channel(0).0,
         log: Mutex::new(Log {
             bytes: VecDeque::new(),
@@ -193,6 +193,7 @@ mod attachment_tests {
                 let (commands, _rx) = std::sync::mpsc::sync_channel(1);
                 let terminal = Arc::new(HostedTerminal {
                     peer: [0; 32],
+                    closed_by_viewer: AtomicBool::new(false),
                     policy: TerminalPolicy::default(),
                     info: Mutex::new(TerminalSessionInfo {
                         id: "test".into(),
@@ -317,6 +318,7 @@ mod policy_tests {
         let at = Instant::now();
         let terminal = HostedTerminal {
             peer: [0; 32],
+            closed_by_viewer: AtomicBool::new(false),
             info: Mutex::new(TerminalSessionInfo {
                 id: "test".into(),
                 process_id: 0,

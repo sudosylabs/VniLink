@@ -5,6 +5,7 @@
 //! longer in the snapshot is not applied, and it is not retargeted onto a
 //! remaining display. One desktop stream shows one selected display; another
 //! display is another desktop owner.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -29,6 +30,7 @@ impl Core {
     /// stamped with `revision`, so callers cannot mix revisions in one snapshot.
     /// An empty list removes every display at that revision.
     pub fn set_topology(&self, revision: u64, displays: &[DisplayInfo]) -> Result<(), Error> {
+        let _engine = self.engine();
         if revision == 0 {
             return Err(Error::InvalidSetting("a display revision is invalid"));
         }
@@ -46,7 +48,7 @@ impl Core {
         // Otherwise a delayed publisher can replace a newer topology after
         // both publishers passed the revision check against the old snapshot.
         // State precedes topology in the input/selection paths as well.
-        let mut state = self.alive_state()?;
+        let state = self.alive_state()?;
         let previous = lock(&self.shared.topology).clone();
         if geometry(&previous.displays) == geometry(&stamped) {
             return Ok(());
@@ -54,45 +56,28 @@ impl Core {
         if revision <= previous.revision {
             return Err(Error::InvalidSetting("the display revision must increase"));
         }
-        let mut legacy_keyframes = Vec::new();
-        {
-            for record in state.hosted_services.values() {
-                let Some(desktop) = &record.desktop else {
-                    continue;
-                };
-                let mut selected = lock(&desktop.selected);
-                let mut fault = lock(&desktop.display_fault);
-                if reconcile(&mut selected, &mut fault, &previous.displays, &stamped) {
-                    desktop.keyframe.request();
-                }
-            }
-            for session in state.incoming.values_mut() {
-                if finished(&session.phase) || session.services_only {
-                    continue;
-                }
-                if reconcile(
-                    &mut session.selected_displays,
-                    &mut session.display_fault,
-                    &previous.displays,
-                    &stamped,
-                ) {
-                    legacy_keyframes.push(session.id);
-                }
+        for record in state.hosted_services.values() {
+            let Some(desktop) = &record.desktop else {
+                continue;
+            };
+            let mut selected = lock(&desktop.selected);
+            let mut fault = lock(&desktop.display_fault);
+            if reconcile(&mut selected, &mut fault, &previous.displays, &stamped) {
+                desktop.keyframe.request();
             }
         }
         *lock(&self.shared.topology) = TopologySnapshot {
             revision,
             displays: stamped,
         };
-        let _ = self.shared.topology_watch.send(revision);
+        crate::ignored!(
+            crate::trace::TOPOLOGY,
+            "no viewer watches the topology now",
+            self.shared.topology_watch.send(revision)
+        );
         self.shared
             .events
             .publish(CoreEvent::TopologyChanged { revision });
-        for id in legacy_keyframes {
-            self.shared
-                .events
-                .publish(CoreEvent::KeyframeRequested { id });
-        }
         Ok(())
     }
 
@@ -100,6 +85,7 @@ impl Core {
     /// Selection and failure are one state transaction; a concurrent reselection
     /// cannot close a healthy owner. Neutral parents and Files are preserved.
     pub fn fail_desktop_source(&self, display_id: u64, message: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let routing = super::video::video_routing_locked(&self.shared, &state);
         let routes_to_source = |selected: &[u64]| routing.serves_selection(selected, display_id);
@@ -110,13 +96,10 @@ impl Core {
                 if record.info.kind != crate::ServiceKind::Desktop || record.info.phase.finished() {
                     return false;
                 }
-                if let Some(desktop) = &record.desktop {
-                    return routes_to_source(&lock(&desktop.selected));
-                }
-                state.incoming.values().any(|session| {
-                    session.desktop_owner == Some(record.info.id)
-                        && routes_to_source(&session.selected_displays)
-                })
+                record
+                    .desktop
+                    .as_ref()
+                    .is_some_and(|desktop| routes_to_source(&lock(&desktop.selected)))
             })
             .map(|record| (record.info.id, record.info.generation))
             .collect();
@@ -130,30 +113,13 @@ impl Core {
                     service: record.info.clone(),
                 });
             }
-            super::desktop_service::retire_owner(&mut state, id, generation, true);
-        }
-        // The retained legacy Desktop shares a parent with Files; retire its
-        // desktop resources rather than disconnecting the connection.
-        for session in state.incoming.values_mut() {
-            if session.phase == SessionPhase::Active
-                && !session.services_only
-                && !session.files_only
-                && routes_to_source(&session.selected_displays)
-            {
-                session
-                    .input_epoch
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                session.desktop_stop.send_replace(true);
-                session.quality = None;
-                session.video = None;
-                session.display_fault = Some("the capture source failed");
-            }
         }
         Ok(())
     }
 
     /// The published snapshot. Revision 0 and an empty list means none yet.
     pub fn topology(&self) -> Result<TopologySnapshot, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.topology).clone())
     }
@@ -164,6 +130,7 @@ impl Core {
         session_id: u64,
         generation: u64,
     ) -> Result<Vec<DisplayInfo>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let session = state.outgoing.get(&session_id).ok_or(Error::NoSession)?;
         if session.generation != generation {
@@ -175,6 +142,7 @@ impl Core {
     /// Displays a capture supervisor should open. One id per desktop owner,
     /// the display that owner selected. Unselected owners are absent.
     pub fn capture_displays(&self) -> Result<Vec<u64>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let mut ids = Vec::new();
         for record in state.hosted_services.values() {
@@ -190,21 +158,12 @@ impl Core {
                 }
             }
         }
-        for session in state.incoming.values() {
-            if finished(&session.phase) || session.services_only || *session.desktop_stop.borrow() {
-                continue;
-            }
-            if let Some(id) = session.selected_displays.first().copied() {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-        }
         ids.sort_unstable();
         Ok(ids)
     }
 
     pub fn hosted_display_selection(&self, id: u64, generation: u64) -> Result<Vec<u64>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let desktop = super::desktop_stream::runtime(&state, id, generation, true)?;
         let selected = lock(&desktop.selected).clone();
@@ -216,40 +175,11 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<Option<&'static str>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let desktop = super::desktop_stream::runtime(&state, id, generation, true)?;
         let fault = *lock(&desktop.display_fault);
         Ok(fault)
-    }
-
-    pub fn incoming_display_selection(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<Vec<u64>, Error> {
-        let state = self.alive_state()?;
-        let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
-        if session.generation != generation {
-            return Err(Error::StaleSession);
-        }
-        Ok(session.selected_displays.clone())
-    }
-
-    /// Reason a hosted legacy session lost its display, if it did.
-    ///
-    /// Cleared when that session selects a display that is still present.
-    /// A later pointer does not clear it, and a removed id is not replaced.
-    pub fn incoming_display_fault(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<Option<&'static str>, Error> {
-        let state = self.alive_state()?;
-        let session = state.incoming.get(&session_id).ok_or(Error::NoSession)?;
-        if session.generation != generation {
-            return Err(Error::StaleSession);
-        }
-        Ok(session.display_fault)
     }
 }
 
@@ -364,10 +294,7 @@ pub(super) fn store_peer_topology(
     let Some(session) = state.outgoing.get_mut(&local_id) else {
         return;
     };
-    if session.wire_stamp != stamp
-        || session.phase != crate::session::SessionPhase::Active
-        || *session.desktop_stop.borrow()
-    {
+    if session.wire_stamp != stamp || session.phase != crate::session::SessionPhase::Active {
         return;
     }
     session.peer_topology = displays;

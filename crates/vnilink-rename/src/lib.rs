@@ -8,17 +8,53 @@
 //!
 //! Windows uses MoveFileExW without replacement or copy flags. Remaining
 //! targets use the documented check-then-rename fallback.
+//!
+//! [`anchored`] holds the handle-relative operations the shared disk is
+//! walked with, on Unix and Windows alike.
 
 #[cfg(windows)]
 pub mod windows;
 
+/// Handle-relative operations under a shared root: one API, opened with
+/// `openat` on Unix and `NtCreateFile` relative to a handle on Windows.
 #[cfg(unix)]
+pub mod anchored;
+#[cfg(windows)]
+#[path = "anchored_windows.rs"]
 pub mod anchored;
 
 pub mod recording_retention;
 
 use std::io;
 use std::path::Path;
+
+/// How a volume names its entries, read from the volume a directory
+/// handle is on ([`anchored::volume_ids`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeIds {
+    /// File ids are object identities (NTFS, ReFS, APFS, HFS+, ext4,
+    /// XFS, Btrfs and most others): an id names one object for its life.
+    Stable,
+    /// File ids derive from an entry's position in its folder (FAT and
+    /// exFAT, and a Windows volume reporting no usable id): a replaced
+    /// entry can take the listed one's id. Its times are kept to these
+    /// granularities, in milliseconds.
+    Positional { mtime_ms: u64, born_ms: u64 },
+}
+
+impl VolumeIds {
+    /// FAT12, FAT16 and FAT32: modification times to 2 s, creation times
+    /// to 10 ms.
+    pub const FAT: Self = Self::Positional {
+        mtime_ms: 2_000,
+        born_ms: 10,
+    };
+    /// exFAT: both times to 10 ms.
+    pub const EXFAT: Self = Self::Positional {
+        mtime_ms: 10,
+        born_ms: 10,
+    };
+}
 
 /// Open an existing regular file for in-place recovery, refusing final symlinks
 /// and multiply linked files. Callers must still validate their own file format.

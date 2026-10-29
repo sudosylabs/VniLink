@@ -5,21 +5,27 @@
 //! [`MAX_LISTED`] set `truncated` instead of growing the response without
 //! bound. Names that are not valid UTF-8 are skipped and counted: the name
 //! API is UTF-8, so such entries are unreachable until a byte-path policy
-//! exists.
+//! exists. VniLink's own temporary entries ([`super::is_engine_temp`]) are
+//! left out without being counted: they are not the user's.
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::Error;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use super::entry::stat;
 use super::entry::FsEntry;
 use super::roots::RootSet;
 
 /// Largest page a caller may ask for.
 pub const MAX_PAGE: u16 = 500;
-/// Largest directory prefix ever listed in one call.
+/// Largest directory prefix ever listed in one call. Each page reads the
+/// directory again, so this bounds the work per page, not just the reply.
+/// Tests exercise the same bound with a smaller budget.
+#[cfg(not(test))]
+pub const MAX_LISTED: usize = 20_000;
+#[cfg(test)]
 pub const MAX_LISTED: usize = 5000;
 
 /// One page of a listing. `Debug` redacts names.
@@ -105,11 +111,11 @@ pub(crate) fn list_page_with_hooks(
         }
         return Err(Error::NoSession);
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         list_page_anchored(roots, id, rel, offset, limit, cancelled, hooks)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         list_page_pathname(roots, id, rel, offset, limit, cancelled, hooks)
     }
@@ -155,7 +161,7 @@ fn list_probe(unit: u64, cancelled: &AtomicBool, hooks: ListHooks) -> bool {
     false
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn list_page_anchored(
     roots: &RootSet,
     id: u64,
@@ -165,7 +171,7 @@ fn list_page_anchored(
     cancelled: &AtomicBool,
     hooks: ListHooks,
 ) -> Result<DirPage, Error> {
-    use std::os::unix::io::AsFd;
+    use vnilink_rename::anchored::AsDir;
     let aborted = || -> Result<DirPage, Error> {
         if let Some(finish) = hooks.finish_probe {
             finish(true);
@@ -173,18 +179,23 @@ fn list_page_anchored(
         Err(Error::NoSession)
     };
     let dir_fd = roots.open_dir_fd(id, rel)?;
+    // Each entry's token is an identity, or a fingerprint on a volume whose
+    // ids are entry positions; an unreadable volume lists fingerprints too.
+    let ids = vnilink_rename::anchored::volume_ids(dir_fd.as_dir())
+        .unwrap_or(vnilink_rename::VolumeIds::FAT);
     // Single bounded enumeration: at most MAX_LISTED + 1 raw entries are
     // ever allocated, and the truncation state comes from the same pass
     // (a second scan of the handle would see an exhausted offset, not
     // the directory).
     let (raw, raw_truncated) =
-        vnilink_rename::anchored::list_names_bounded(dir_fd.as_fd(), MAX_LISTED + 1)
+        vnilink_rename::anchored::list_names_bounded(dir_fd.as_dir(), MAX_LISTED + 1)
             .map_err(|_| Error::InvalidSetting("the folder cannot be listed"))?;
     let mut names: Vec<String> = Vec::new();
     let mut non_utf8_skipped = 0u64;
     let mut utf8_overflow = false;
     for os in raw {
         match os.into_string() {
+            Ok(name) if super::is_engine_temp(&name) => {}
             Ok(name) => {
                 if names.len() >= MAX_LISTED {
                     utf8_overflow = true;
@@ -206,7 +217,7 @@ fn list_page_anchored(
         if list_probe(position as u64 + 1, cancelled, hooks) {
             return aborted();
         }
-        entries.push(stat_anchored(&dir_fd, name));
+        entries.push(stat_anchored(&dir_fd, name, ids));
     }
     let next_offset = if (end as u64) < total {
         Some(end as u64)
@@ -225,7 +236,7 @@ fn list_page_anchored(
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn list_page_pathname(
     roots: &RootSet,
     id: u64,
@@ -249,6 +260,7 @@ fn list_page_pathname(
     for entry in read {
         let entry = entry.map_err(|_| Error::InvalidSetting("the folder cannot be listed"))?;
         match entry.file_name().into_string() {
+            Ok(name) if super::is_engine_temp(&name) => {}
             Ok(name) => names.push(name),
             Err(_) => non_utf8_skipped += 1,
         }
@@ -286,10 +298,14 @@ fn list_page_pathname(
     })
 }
 
-#[cfg(unix)]
-fn stat_anchored(dir_fd: &std::os::unix::io::OwnedFd, name: &str) -> FsEntry {
-    use std::os::unix::io::AsFd;
-    match vnilink_rename::anchored::stat_at(dir_fd.as_fd(), name) {
+#[cfg(any(unix, windows))]
+fn stat_anchored(
+    dir_fd: &vnilink_rename::anchored::Dir,
+    name: &str,
+    ids: vnilink_rename::VolumeIds,
+) -> FsEntry {
+    use vnilink_rename::anchored::AsDir;
+    match vnilink_rename::anchored::stat_at(dir_fd.as_dir(), name) {
         Ok(st) => {
             let kind = if st.is_symlink {
                 super::entry::EntryKind::Symlink
@@ -309,10 +325,7 @@ fn stat_anchored(dir_fd: &std::os::unix::io::OwnedFd, name: &str) -> FsEntry {
                     0
                 },
                 mtime_ms: st.mtime_ms,
-                token: super::entry::EntryToken {
-                    dev: Some(st.dev),
-                    ino: Some(st.ino),
-                },
+                token: super::entry::token_of(name, &st, ids),
             }
         }
         Err(_) => FsEntry {
@@ -325,10 +338,161 @@ fn stat_anchored(dir_fd: &std::os::unix::io::OwnedFd, name: &str) -> FsEntry {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn dir_has_more(dir: &std::path::Path, at_least: usize) -> bool {
     match std::fs::read_dir(dir) {
         Ok(read) => read.count() > at_least,
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{FilesystemLocation, Scratch};
+    use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
+
+    static LIST_PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static LIST_MAX_UNIT: AtomicU64 = AtomicU64::new(0);
+    static LIST_FINISHED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+    static LIST_FINISH_CV: std::sync::Condvar = std::sync::Condvar::new();
+
+    fn list_park_probe(unit: u64, cancelled: &std::sync::atomic::AtomicBool) {
+        use std::sync::atomic::Ordering as Seq;
+        LIST_MAX_UNIT.fetch_max(unit, Seq::SeqCst);
+        if LIST_PARKED.swap(true, Seq::SeqCst) {
+            return;
+        }
+        while !cancelled.load(Seq::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn list_finish_probe(cancelled: bool) {
+        *LIST_FINISHED.lock().unwrap() = Some(cancelled);
+        LIST_FINISH_CV.notify_all();
+    }
+
+    /// STD08: detached listing yields the executor and holds no shared lock
+    /// (a sibling listing completes while the first is parked), and dropping
+    /// the future aborts the worker before anything is enumerated.
+    #[test]
+    fn parked_list_yields_sibling_and_cancels_before_enumeration() {
+        use std::sync::{Arc, Mutex};
+
+        let scratch = Scratch::tagged("fs");
+        let root = scratch.join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("alpha.txt"), b"a").unwrap();
+        std::fs::write(root.join("beta.txt"), b"beta-bytes").unwrap();
+        let mut roots = crate::fs::RootSet::default();
+        roots.set_filesystem().unwrap();
+        let files = FilesystemLocation::in_roots(&roots, &root);
+        // Stand-in for the shared file-roots lock: the parked listing must
+        // hold no lock across its worker await, so the sibling locks,
+        // snapshots and completes while the first stays parked.
+        let shared = Arc::new(Mutex::new(roots));
+        let first = shared.lock().unwrap().clone();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let hooks = crate::fs::ListHooks {
+            entry_probe: Some(list_park_probe),
+            finish_probe: Some(list_finish_probe),
+        };
+        let (handle_tx, handle_rx) = std::sync::mpsc::channel();
+        let (sibling_tx, sibling_rx) = std::sync::mpsc::channel();
+        let sibling_shared = shared.clone();
+        // A current-thread runtime only drives tasks under `block_on`; the
+        // driver thread owns it while the test observes from outside.
+        let driver = std::thread::spawn(move || {
+            runtime.block_on(async move {
+                let sibling_files = files.clone();
+                let list = tokio::spawn(crate::fs::list_page_async(
+                    first,
+                    files.root,
+                    files.path(""),
+                    0,
+                    50,
+                    hooks,
+                ));
+                handle_tx.send(list).unwrap();
+                let cap = std::time::Instant::now() + Duration::from_secs(30);
+                while !LIST_PARKED.load(Ordering::SeqCst) {
+                    if std::time::Instant::now() > cap {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                // Spawned only after the park is observed: it must lock the
+                // shared roots, snapshot and finish while parked.
+                tokio::spawn(async move {
+                    let snapshot = sibling_shared.lock().unwrap().clone();
+                    let page = crate::fs::list_page_async(
+                        snapshot,
+                        sibling_files.root,
+                        sibling_files.path(""),
+                        0,
+                        50,
+                        crate::fs::ListHooks::none(),
+                    )
+                    .await;
+                    let _ = sibling_tx.send(page.map(|page| page.total));
+                });
+                while LIST_FINISHED.lock().unwrap().is_none() {
+                    if std::time::Instant::now() > cap {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            });
+        });
+        // The worker must reach the parked probe; on the old inline path no
+        // probe exists and this times out.
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while !LIST_PARKED.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "list worker never parked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Sibling progress while parked: the async worker is free and no
+        // shared lock is held, so a full second listing completes.
+        let sibling = sibling_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("sibling blocked during parked list");
+        assert_eq!(
+            sibling.expect("sibling list failed"),
+            2,
+            "sibling list result changed while parked"
+        );
+        // Cancellation aborts the worker without enumerating anything: only
+        // the pre-access probe fired.
+        let list = handle_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        list.abort();
+        let finished = LIST_FINISHED.lock().unwrap();
+        let (finished, timeout) = LIST_FINISH_CV
+            .wait_timeout_while(finished, Duration::from_secs(5), |done| done.is_none())
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "list worker never finished after abort"
+        );
+        assert_eq!(
+            *finished,
+            Some(true),
+            "list worker did not report cancellation"
+        );
+        drop(finished);
+        assert_eq!(
+            LIST_MAX_UNIT.load(Ordering::SeqCst),
+            0,
+            "parked list enumerated entries"
+        );
+        driver.join().expect("driver thread panicked");
     }
 }

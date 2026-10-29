@@ -8,6 +8,7 @@ description = "VideoToolbox H.264 and ScreenCaptureKit for VniLink"
 publish = false
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink = { path = "../vnilink" }
 vnilink-media = { path = "../vnilink-media" }
 vnilink-audio = { path = "../vnilink-audio" }
@@ -16,13 +17,15 @@ vnilink-audio = { path = "../vnilink-audio" }
 apple-cf = "=0.11.0"
 screencapturekit = { version = "=11.0.0", features = ["macos_14_0"] }
 videotoolbox = { version = "=0.21.0", default-features = false, features = ["compression", "decompression"] }
-objc2 = "=0.6.4"
+objc2 = { version = "=0.6.4", features = ["exception"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSDictionary", "NSError", "NSValue", "NSObject", "NSString"] }
 objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVCaptureInput", "AVCaptureOutputBase", "AVCaptureSession", "AVCaptureVideoDataOutput", "AVMediaFormat", "objc2-core-media", "objc2-core-video", "dispatch2"] }
 objc2-core-media = { version = "=0.3.2", default-features = false, features = ["std", "CMSampleBuffer", "CMFormatDescription", "CMTime", "objc2-core-video"] }
 objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVPixelBuffer", "CVBuffer", "CVImageBuffer", "CVReturn", "CVBase"] }
 dispatch2 = "=0.3.1"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSGraphicsContext", "objc2-core-graphics"] }
+objc2-core-graphics = { version = "=0.3.2", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGEvent", "CGEventTypes", "CGImage"] }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 opus = "=0.4.0"
-objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std"] }

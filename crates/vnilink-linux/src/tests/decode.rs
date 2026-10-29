@@ -17,7 +17,15 @@ fn mac_encoder_output_is_accepted_by_linux_syntax() {
         (64, 64, true),
         (1920, 1080, true),
     ] {
-        let mut encoder = MacEncoder::open(width, height, 30, 2_000_000, high).unwrap();
+        let mut encoder = MacEncoder::open(
+            width,
+            height,
+            30,
+            2_000_000,
+            high,
+            vnilink::YuvMatrix::Bt709,
+        )
+        .unwrap();
         let mut sps = None;
         let mut pps = None;
         let mut predictive_slices = 0;
@@ -34,6 +42,7 @@ fn mac_encoder_output_is_accepted_by_linux_syntax() {
                     &frame,
                     &EncodeParams {
                         force_keyframe: index == 0,
+                        recovery: false,
                         bitrate_bps: 2_000_000,
                         frame_rate: 30,
                     },
@@ -402,14 +411,26 @@ fn vaapi_decodes_what_it_encoded() {
 
     use crate::encode::LinuxEncoder;
 
-    let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000, false) {
+    let mut encoder = match LinuxEncoder::open(
+        vnilink::VideoCodec::H264,
+        64,
+        64,
+        30,
+        500_000,
+        false,
+        vnilink::YuvMatrix::Bt709,
+    ) {
         Ok(encoder) => encoder,
-        Err(vnilink_media::Error::Unsupported(_)) => return,
+        Err(vnilink_media::Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(error) => panic!("VA-API failed to open: {error}"),
     };
     let mut decoder = crate::decode::LinuxDecoder::new();
     let key_params = EncodeParams {
         force_keyframe: true,
+        recovery: false,
         bitrate_bps: 500_000,
         frame_rate: 30,
     };
@@ -428,6 +449,7 @@ fn vaapi_decodes_what_it_encoded() {
             &solid(64, 64, 33_333, 0, 255, 0),
             &EncodeParams {
                 force_keyframe: false,
+                recovery: false,
                 ..key_params
             },
         )
@@ -437,9 +459,20 @@ fn vaapi_decodes_what_it_encoded() {
         .unwrap();
     assert_green(&picture);
     // A cropped size decodes at the visible size, not the coded size.
-    let mut small_encoder = match LinuxEncoder::open(62, 30, 30, 500_000, false) {
+    let mut small_encoder = match LinuxEncoder::open(
+        vnilink::VideoCodec::H264,
+        62,
+        30,
+        30,
+        500_000,
+        false,
+        vnilink::YuvMatrix::Bt709,
+    ) {
         Ok(encoder) => encoder,
-        Err(vnilink_media::Error::Unsupported(_)) => return,
+        Err(vnilink_media::Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(error) => panic!("VA-API failed to open: {error}"),
     };
     let small = small_encoder
@@ -464,9 +497,20 @@ fn vaapi_high_round_trips_where_the_entrypoint_exists() {
     if !crate::video_codec_caps().encode_high {
         return;
     }
-    let mut encoder = match LinuxEncoder::open(64, 64, 30, 500_000, true) {
+    let mut encoder = match LinuxEncoder::open(
+        vnilink::VideoCodec::H264,
+        64,
+        64,
+        30,
+        500_000,
+        true,
+        vnilink::YuvMatrix::Bt709,
+    ) {
         Ok(encoder) => encoder,
-        Err(vnilink_media::Error::Unsupported(_)) => return,
+        Err(vnilink_media::Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(error) => panic!("VA-API High failed to open: {error}"),
     };
     let mut decoder = crate::decode::LinuxDecoder::new();
@@ -475,6 +519,7 @@ fn vaapi_high_round_trips_where_the_entrypoint_exists() {
             &solid(64, 64, 0, 0, 0, 255),
             &EncodeParams {
                 force_keyframe: true,
+                recovery: false,
                 bitrate_bps: 500_000,
                 frame_rate: 30,
             },

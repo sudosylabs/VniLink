@@ -4,12 +4,13 @@
 //! connection, then sends framed requests and reads framed replies. Error
 //! replies reuse the shared status triple; success replies start with a zero
 //! byte so the two can never be confused.
+// trace: records every ignored failure
 
 use super::service_stream::{preamble, read, status, write, VERSION};
 use super::*;
 use crate::system::{
-    truncate_detail, HostSessionState, OperationState, PrivacyLease, PrivacyState, SystemAction,
-    SystemOperation, SystemOperationRecord, SystemSupport,
+    truncate_detail, HostSessionState, Notice, OperationState, PrivacyLease, PrivacyState,
+    ScheduledSystemAction, SystemAction, SystemOperation, SystemOperationRecord, SystemSupport,
 };
 use crate::{CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePhase};
 use iroh::endpoint::{RecvStream, SendStream};
@@ -23,6 +24,7 @@ const REQ_QUERY: u8 = 2;
 const REQ_SUPPORT: u8 = 3;
 const REQ_SET_PRIVACY: u8 = 4;
 const REQ_GET_PRIVACY: u8 = 5;
+const REQ_CANCEL: u8 = 6;
 
 const TAG_OPERATION: u8 = 1;
 const TAG_SUPPORT: u8 = 3;
@@ -34,7 +36,7 @@ const MAX_OPERATIONS: usize = 64;
 const MAX_DETAIL: usize = 256;
 const MAX_SESSION_LABEL: usize = 64;
 
-fn encode_operation(operation: &SystemOperation) -> Vec<u8> {
+pub(crate) fn encode_operation(operation: &SystemOperation) -> Vec<u8> {
     let detail = truncate_detail(operation.detail.clone());
     let mut out = vec![
         0,
@@ -44,13 +46,14 @@ fn encode_operation(operation: &SystemOperation) -> Vec<u8> {
     ];
     out.extend_from_slice(&operation.id.to_be_bytes());
     out.push(u8::from(operation.completion_observable));
+    out.extend_from_slice(&operation.notice_remaining_ms.to_be_bytes());
     out.extend_from_slice(&(detail.len() as u16).to_be_bytes());
     out.extend_from_slice(detail.as_bytes());
     out
 }
 
-fn decode_operation(bytes: &[u8]) -> Result<SystemOperation, Error> {
-    if bytes.len() < 15 || bytes[0] != 0 || bytes[1] != TAG_OPERATION {
+pub(crate) fn decode_operation(bytes: &[u8]) -> Result<SystemOperation, Error> {
+    if bytes.len() < 19 || bytes[0] != 0 || bytes[1] != TAG_OPERATION {
         return Err(Error::Malformed);
     }
     let action = SystemAction::decode(bytes[2])?;
@@ -61,21 +64,24 @@ fn decode_operation(bytes: &[u8]) -> Result<SystemOperation, Error> {
         1 => true,
         _ => return Err(Error::Malformed),
     };
-    let len = u16::from_be_bytes(bytes[13..15].try_into().map_err(|_| Error::Malformed)?) as usize;
-    if len > MAX_DETAIL || bytes.len() != 15 + len {
+    let notice_remaining_ms =
+        u32::from_be_bytes(bytes[13..17].try_into().map_err(|_| Error::Malformed)?);
+    let len = u16::from_be_bytes(bytes[17..19].try_into().map_err(|_| Error::Malformed)?) as usize;
+    if len > MAX_DETAIL || bytes.len() != 19 + len {
         return Err(Error::Malformed);
     }
-    let detail = std::str::from_utf8(&bytes[15..]).map_err(|_| Error::Malformed)?;
+    let detail = std::str::from_utf8(&bytes[19..]).map_err(|_| Error::Malformed)?;
     Ok(SystemOperation {
         id,
         action,
         state,
         completion_observable,
         detail: detail.into(),
+        notice_remaining_ms,
     })
 }
 
-fn encode_support(support: SystemSupport, session: &HostSessionState) -> Vec<u8> {
+pub(crate) fn encode_support(support: SystemSupport, session: &HostSessionState) -> Vec<u8> {
     let mut label = session.session.as_bytes().to_vec();
     if label.len() > MAX_SESSION_LABEL {
         label.truncate(MAX_SESSION_LABEL);
@@ -101,7 +107,7 @@ fn encode_support(support: SystemSupport, session: &HostSessionState) -> Vec<u8>
     out
 }
 
-fn decode_support(bytes: &[u8]) -> Result<(SystemSupport, HostSessionState), Error> {
+pub(crate) fn decode_support(bytes: &[u8]) -> Result<(SystemSupport, HostSessionState), Error> {
     if bytes.len() < 7 || bytes[0] != 0 || bytes[1] != TAG_SUPPORT {
         return Err(Error::Malformed);
     }
@@ -135,7 +141,7 @@ fn decode_support(bytes: &[u8]) -> Result<(SystemSupport, HostSessionState), Err
     ))
 }
 
-fn encode_privacy(state: PrivacyState) -> Vec<u8> {
+pub(crate) fn encode_privacy(state: PrivacyState) -> Vec<u8> {
     let mut out = vec![
         0,
         TAG_PRIVACY,
@@ -147,7 +153,7 @@ fn encode_privacy(state: PrivacyState) -> Vec<u8> {
     out
 }
 
-fn decode_privacy(bytes: &[u8]) -> Result<PrivacyState, Error> {
+pub(crate) fn decode_privacy(bytes: &[u8]) -> Result<PrivacyState, Error> {
     if bytes.len() != 13 || bytes[0] != 0 || bytes[1] != TAG_PRIVACY {
         return Err(Error::Malformed);
     }
@@ -255,6 +261,14 @@ impl RemoteSystemService {
         decode_operation(&self.request(bytes)?)
     }
 
+    /// Cancels a restart or shutdown this connection asked for while its
+    /// notice is still counting down.
+    pub fn cancel(&self, id: u64) -> Result<SystemOperation, Error> {
+        let mut bytes = vec![REQ_CANCEL];
+        bytes.extend_from_slice(&id.to_be_bytes());
+        decode_operation(&self.request(bytes)?)
+    }
+
     /// Native facilities and session boundaries of the host. Grant and
     /// policy still gate every action; support alone authorizes nothing.
     pub fn support(&self) -> Result<(SystemSupport, HostSessionState), Error> {
@@ -289,6 +303,7 @@ impl Core {
         &self,
         actions: Option<Arc<dyn crate::system::HostSystemActions>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         // Serial first (privacy order), then state, then the adapter slot:
         // a replacement never interleaves with an in-flight enable, level
         // change or restore.
@@ -314,6 +329,7 @@ impl Core {
     }
 
     pub fn system_policy(&self) -> Result<crate::system::SystemPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.system_policy)
     }
 
@@ -323,6 +339,7 @@ impl Core {
     /// lease granted under the old policy must not survive it; the holding
     /// owner stays connected, only the local facilities restore.
     pub fn set_system_policy(&self, policy: crate::system::SystemPolicy) -> Result<(), Error> {
+        let _engine = self.engine();
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = std::mem::replace(&mut state.system_policy, policy);
@@ -346,6 +363,7 @@ impl Core {
 
     /// Local backend facilities and session boundaries, without a peer.
     pub fn system_support(&self) -> Result<(SystemSupport, HostSessionState), Error> {
+        let _engine = self.engine();
         let _state = self.alive_state()?;
         match lock(&self.shared.system_actions).clone() {
             Some(actions) => Ok((actions.support(), actions.session_state())),
@@ -353,8 +371,64 @@ impl Core {
         }
     }
 
+    /// Restarts and shutdowns counting down on this computer.
+    pub fn scheduled_system_actions(&self) -> Result<Vec<ScheduledSystemAction>, Error> {
+        let _engine = self.engine();
+        let state = self.alive_state()?;
+        let mut scheduled: Vec<_> = state
+            .system_operations
+            .values()
+            .filter(|record| record.operation.state == OperationState::Scheduled)
+            .filter_map(|record| {
+                Some(ScheduledSystemAction {
+                    operation_id: record.operation.id,
+                    action: record.operation.action,
+                    endpoint_id: PublicKey::from_bytes(&record.peer).ok()?.to_string(),
+                    remaining_ms: with_remaining(record).notice_remaining_ms,
+                })
+            })
+            .collect();
+        scheduled.sort_by_key(|action| action.operation_id);
+        Ok(scheduled)
+    }
+
+    /// Cancels a restart or shutdown counting down on this computer, as its
+    /// user chose in the notice. One that already ended is left as it is.
+    pub fn cancel_system_action(&self, id: u64) -> Result<SystemOperation, Error> {
+        let _engine = self.engine();
+        drop(self.alive_state()?);
+        cancel(&self.shared, None, id, "cancelled at that computer")
+            .map_err(|_| Error::InvalidSetting("no such system action"))
+    }
+
+    /// Runs a scheduled restart or shutdown now, as its user chose in the notice.
+    pub fn run_system_action_now(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
+        let mut state = self.alive_state()?;
+        let record = state
+            .system_operations
+            .get_mut(&id)
+            .ok_or(Error::InvalidSetting("no such system action"))?;
+        let notice = record
+            .notice
+            .as_mut()
+            .filter(|_| record.operation.state == OperationState::Scheduled)
+            .ok_or(Error::InvalidSetting("the system action is not scheduled"))?;
+        notice.run_now = true;
+        notice.wake.notify_one();
+        Ok(())
+    }
+
+    /// Shortens the notice a restart or shutdown waits out, for tests.
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn set_system_action_notice(&self, notice: Duration) {
+        let _engine = self.engine();
+        *lock(&self.shared.system_notice) = notice;
+    }
+
     /// Local privacy/input state and its holding connection, if any.
     pub fn system_privacy(&self) -> Result<PrivacyState, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         Ok(current_privacy(&state))
     }
@@ -366,6 +440,7 @@ impl Core {
         id: u64,
         generation: u64,
     ) -> Result<RemoteSystemService, Error> {
+        let _engine = self.engine();
         let mut lease = self.service_lease(id, generation)?;
         if lease.info().kind != ServiceKind::System {
             return Err(Error::InvalidSetting("this is not a System service"));
@@ -397,11 +472,19 @@ impl Core {
                 .await;
             let (mut send, mut recv) = match connection {
                 Ok(pair) => {
-                    let _ = ready.send(Ok(()));
+                    crate::ignored!(
+                        crate::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(()))
+                    );
                     pair
                 }
                 Err(error) => {
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                     return;
                 }
             };
@@ -427,7 +510,11 @@ impl Core {
                     },
                 };
                 if std::time::Instant::now() >= work.deadline {
-                    let _ = work.reply.send(Err(Error::Timeout));
+                    crate::ignored!(
+                        crate::trace::SYSTEM,
+                        "the caller stopped waiting for its answer",
+                        work.reply.send(Err(Error::Timeout))
+                    );
                     continue;
                 }
                 let outcome = lease
@@ -448,12 +535,20 @@ impl Core {
                         | Error::StaleSession
                         | Error::NoSession)
                 );
-                let _ = work.reply.send(outcome);
+                crate::ignored!(
+                    crate::trace::SYSTEM,
+                    "the caller stopped waiting for its answer",
+                    work.reply.send(outcome)
+                );
                 if fatal {
                     break;
                 }
             }
-            let _ = send.finish();
+            crate::ignored!(
+                crate::trace::SYSTEM,
+                "a stream that cannot finish is closed with its link",
+                send.finish()
+            );
             let cause = if lease.is_cancelled() || owner_done {
                 CloseCause::OwnerClose
             } else {
@@ -472,7 +567,7 @@ impl Core {
                 }
             }
             drop(state);
-            super::service_jobs::cancel_orphaned(&shared);
+            super::service_jobs::interrupt_orphaned(&shared);
         });
         result
             .recv_timeout(TIMEOUT + Duration::from_secs(1))
@@ -511,10 +606,7 @@ fn admit_locked(state: &State, id: u64) -> Result<Admission, u8> {
     let connection_id = record.info.connection_id;
     let generation = record.info.generation;
     let session = state.incoming.get(&connection_id).ok_or(3)?;
-    if session.phase != SessionPhase::Active
-        || session.generation != generation
-        || !session.services_only
-    {
+    if session.phase != SessionPhase::Active || session.generation != generation {
         return Err(3);
     }
     let peer = session.peer_key;
@@ -554,7 +646,8 @@ async fn execute(
     admission: Admission,
     action: SystemAction,
 ) -> Result<Vec<u8>, Error> {
-    let prepared = {
+    let scheduled = action != SystemAction::Lock;
+    let id = {
         let mut state = lock(&shared.state);
         if !state.system_policy.allows(action) {
             let reply = refuse_locked(&mut state, &admission, action, "disabled by host policy");
@@ -574,33 +667,168 @@ async fn execute(
             let reply = refuse_locked(&mut state, &admission, action, "not supported on this host");
             return Ok(reply);
         }
+        let peer = state
+            .incoming
+            .get(&admission.connection_id)
+            .map(|session| session.peer_key)
+            .ok_or(Error::NoSession)?;
         let id = state.next_operation_id;
         state.next_operation_id = id.saturating_add(1).max(1);
+        // Its end is recorded as it ends; an action the computer never
+        // answers shows as admitted and never ended.
+        tracing::info!(
+            target: crate::trace::SYSTEM,
+            operation = id,
+            action = ?action,
+            connection = admission.connection_id,
+            scheduled,
+            "system action admitted"
+        );
+        // A restart or shutdown waits out its notice first; a lock runs now.
+        let notice = scheduled.then(|| Notice {
+            deadline: std::time::Instant::now() + *lock(&shared.system_notice),
+            run_now: false,
+            wake: Arc::new(tokio::sync::Notify::new()),
+        });
         state.system_operations.insert(
             id,
             SystemOperationRecord {
                 operation: SystemOperation {
                     id,
                     action,
-                    state: OperationState::Admitted,
+                    state: if scheduled {
+                        OperationState::Scheduled
+                    } else {
+                        OperationState::Admitted
+                    },
                     completion_observable: action.completion_observable(),
-                    detail: "admitted".into(),
+                    detail: if scheduled { "scheduled" } else { "admitted" }.into(),
+                    notice_remaining_ms: 0,
                 },
                 connection_id: admission.connection_id,
                 generation: admission.generation,
+                peer,
+                notice,
             },
         );
         prune(&mut state);
-        (id, actions)
+        if scheduled {
+            let record = &state.system_operations[&id];
+            let operation = with_remaining(record);
+            shared.events.publish(CoreEvent::SystemActionScheduled {
+                operation_id: id,
+                action,
+                endpoint_id: PublicKey::from_bytes(&peer)
+                    .map_err(|_| Error::Malformed)?
+                    .to_string(),
+                remaining_ms: operation.notice_remaining_ms,
+            });
+            drop(state);
+            tokio::spawn(run_scheduled(Arc::clone(shared), admission, action, id));
+            return Ok(encode_operation(&operation));
+        }
+        id
     };
-    let (id, _) = prepared;
+    let outcome = start(shared, admission, action).await?;
+    finish(shared, id, action, outcome, false)
+}
+
+/// Waits out a scheduled operation's notice, then runs it under fresh
+/// authority. Cancelling, or the asking computer going away, ends it first.
+async fn run_scheduled(
+    shared: std::sync::Arc<Shared>,
+    admission: Admission,
+    action: SystemAction,
+    id: u64,
+) {
+    loop {
+        let (wake, deadline, run_now) = {
+            let state = lock(&shared.state);
+            let Some(record) = state.system_operations.get(&id) else {
+                return;
+            };
+            let Some(notice) = record.notice.as_ref() else {
+                return;
+            };
+            if record.operation.state != OperationState::Scheduled {
+                return;
+            }
+            let asker_present = asker_present(&state, &admission);
+            if !asker_present {
+                drop(state);
+                crate::ignored!(
+                    crate::trace::SYSTEM,
+                    "an operation already settled needs no change",
+                    cancel(&shared, None, id, "the computer that asked disconnected")
+                );
+                return;
+            }
+            (notice.wake.clone(), notice.deadline, notice.run_now)
+        };
+        let now = std::time::Instant::now();
+        if run_now || now >= deadline {
+            break;
+        }
+        // Short waits notice a departed asker during the countdown.
+        let wait = (deadline - now).min(Duration::from_millis(500));
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = wake.notified() => {}
+        }
+    }
+    {
+        let mut state = lock(&shared.state);
+        let Some(record) = state.system_operations.get_mut(&id) else {
+            return;
+        };
+        if record.operation.state != OperationState::Scheduled {
+            return;
+        }
+        record.notice = None;
+        record.operation.state = OperationState::Admitted;
+        record.operation.detail = "admitted".into();
+    }
+    let Ok(outcome) = start(&shared, admission, action).await else {
+        return;
+    };
+    crate::ignored!(
+        crate::trace::SYSTEM,
+        "an operation already settled needs no change",
+        finish(&shared, id, action, outcome, true)
+    );
+}
+
+/// Whether the connection and System owner that asked are still active.
+fn asker_present(state: &State, admission: &Admission) -> bool {
+    state
+        .incoming
+        .get(&admission.connection_id)
+        .is_some_and(|session| {
+            session.generation == admission.generation && session.phase == SessionPhase::Active
+        })
+        && state
+            .hosted_services
+            .get(&admission.service_id)
+            .is_some_and(|owner| {
+                owner.info.phase == ServicePhase::Active
+                    && owner.info.connection_id == admission.connection_id
+                    && owner.info.generation == admission.generation
+            })
+}
+
+/// Runs the native call on a blocking worker under fresh authority.
+async fn start(
+    shared: &std::sync::Arc<Shared>,
+    admission: Admission,
+    action: SystemAction,
+) -> Result<Started, Error> {
     // Native calls run on a blocking worker; the serve loop stays responsive
     // to revoke and parent loss while one runs. Authority is rechecked when
     // the worker STARTS, not when the action was admitted: a policy, grant,
     // backend, owner, or connection change that lands while queued stands the
     // action down as Refused instead of running it.
     let gate_shared = std::sync::Arc::clone(shared);
-    let outcome = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let shared = gate_shared;
         let gate =
             || -> Result<std::sync::Arc<dyn crate::system::HostSystemActions>, &'static str> {
@@ -665,7 +893,18 @@ async fn execute(
         })
     })
     .await
-    .map_err(|_| Error::ShutDown)?;
+    .map_err(|_| Error::ShutDown)
+}
+
+/// Records how a started operation ended. A scheduled one also tells the
+/// host's notice; its asker leaving reads as cancelled, not refused.
+fn finish(
+    shared: &Shared,
+    id: u64,
+    action: SystemAction,
+    outcome: Started,
+    scheduled: bool,
+) -> Result<Vec<u8>, Error> {
     let mut state = lock(&shared.state);
     let Some(record) = state.system_operations.get_mut(&id) else {
         return Err(Error::NoSession);
@@ -684,11 +923,40 @@ async fn execute(
             },
         ),
         Started::Ran(Err(error)) => (OperationState::Failed, error.to_string()),
+        Started::StoodDown(
+            "connection closed" | "connection not active" | "system owner closed",
+        ) if scheduled => (
+            OperationState::Cancelled,
+            "the computer that asked disconnected".to_owned(),
+        ),
         Started::StoodDown(detail) => (OperationState::Refused, detail.to_string()),
     };
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        operation = id,
+        action = ?action,
+        state = ?next,
+        scheduled,
+        error = match &outcome {
+            Started::Ran(Err(error)) => Some(error.name()),
+            _ => None,
+        },
+        stood_down = match &outcome {
+            Started::StoodDown(detail) => Some(*detail),
+            _ => None,
+        },
+        "system action ended"
+    );
     record.operation.state = next;
     record.operation.detail = truncate_detail(detail);
-    Ok(encode_operation(&record.operation.clone()))
+    let operation = with_remaining(record);
+    if scheduled {
+        shared.events.publish(CoreEvent::SystemActionEnded {
+            operation_id: id,
+            state: next,
+        });
+    }
+    Ok(encode_operation(&operation))
 }
 
 fn refuse_locked(
@@ -699,19 +967,34 @@ fn refuse_locked(
 ) -> Vec<u8> {
     let id = state.next_operation_id;
     state.next_operation_id = id.saturating_add(1).max(1);
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        operation = id,
+        action = ?action,
+        connection = admission.connection_id,
+        detail,
+        "system action refused"
+    );
     let operation = SystemOperation {
         id,
         action,
         state: OperationState::Refused,
         completion_observable: action.completion_observable(),
         detail: truncate_detail(detail.into()),
+        notice_remaining_ms: 0,
     };
+    let peer = state
+        .incoming
+        .get(&admission.connection_id)
+        .map_or([0; 32], |session| session.peer_key);
     state.system_operations.insert(
         id,
         SystemOperationRecord {
             operation: operation.clone(),
             connection_id: admission.connection_id,
             generation: admission.generation,
+            peer,
+            notice: None,
         },
     );
     prune(state);
@@ -725,7 +1008,61 @@ fn query(shared: &Shared, admission: &Admission, id: u64) -> Result<Vec<u8>, u8>
     {
         return Err(7);
     }
-    Ok(encode_operation(&record.operation))
+    Ok(encode_operation(&with_remaining(record)))
+}
+
+/// The operation as it reads now: a scheduled one with the notice left.
+fn with_remaining(record: &SystemOperationRecord) -> SystemOperation {
+    let mut operation = record.operation.clone();
+    operation.notice_remaining_ms = record.notice.as_ref().map_or(0, |notice| {
+        u32::try_from(
+            notice
+                .deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis(),
+        )
+        .unwrap_or(u32::MAX)
+    });
+    operation
+}
+
+/// Ends a scheduled operation without running it. `from` limits who may:
+/// a viewer cancels only what its own connection asked for.
+fn cancel(
+    shared: &Shared,
+    from: Option<&Admission>,
+    id: u64,
+    detail: &str,
+) -> Result<SystemOperation, u8> {
+    let mut state = lock(&shared.state);
+    let record = state.system_operations.get_mut(&id).ok_or(7)?;
+    if from.is_some_and(|admission| {
+        record.connection_id != admission.connection_id || record.generation != admission.generation
+    }) {
+        return Err(7);
+    }
+    if record.operation.state != OperationState::Scheduled {
+        return Ok(with_remaining(record));
+    }
+    record.operation.state = OperationState::Cancelled;
+    record.operation.detail = truncate_detail(detail.into());
+    if let Some(notice) = record.notice.take() {
+        notice.wake.notify_one();
+    }
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        operation = id,
+        action = ?record.operation.action,
+        by_viewer = from.is_some(),
+        detail,
+        "system action cancelled"
+    );
+    let operation = with_remaining(record);
+    shared.events.publish(CoreEvent::SystemActionEnded {
+        operation_id: id,
+        state: OperationState::Cancelled,
+    });
+    Ok(operation)
 }
 
 fn support(shared: &Shared) -> Vec<u8> {
@@ -792,19 +1129,30 @@ fn set_privacy_inner(
     // One lock order, serial then state: the adapter call below runs without
     // the state lock, and a concurrent restore cannot interleave with it.
     let _serial = lock(&shared.privacy_serial);
+    let refused = |status: u8, why: &'static str| {
+        tracing::info!(
+            target: crate::trace::SYSTEM,
+            connection = admission.connection_id,
+            display_private,
+            input_blocked,
+            why,
+            "privacy refused"
+        );
+        Err(status)
+    };
     let (actions, previous) = {
         let state = lock(&shared.state);
         if !privacy_authorized(&state, admission, cancelled) {
-            return Err(3);
+            return refused(3, "the viewer may not use system actions now");
         }
         if let Some(lease) = state.privacy.as_ref() {
             if lease.connection_id != admission.connection_id || lease.service_id != service_id {
-                return Err(4);
+                return refused(4, "another viewer holds privacy");
             }
         }
         let enabling = display_private || input_blocked;
         if enabling && !state.system_policy.allow_privacy {
-            return Err(6);
+            return refused(6, "the host's policy does not allow privacy");
         }
         if !enabling && state.privacy.is_none() {
             return Ok(encode_privacy(PrivacyState::default()));
@@ -852,6 +1200,15 @@ fn set_privacy_inner(
     let display_ok = !display_tried || actions.set_display_private(display_private).is_ok();
     let input_ok =
         !input_tried || (authorized() && actions.set_input_blocked(input_blocked).is_ok());
+    tracing::info!(
+        target: crate::trace::SYSTEM,
+        connection = admission.connection_id,
+        display_private,
+        input_blocked,
+        display_ok,
+        input_ok,
+        "privacy applied"
+    );
     let mut state = lock(&shared.state);
     if !privacy_authorized(&state, admission, cancelled)
         || ((display_private || input_blocked) && !state.system_policy.allow_privacy)
@@ -966,7 +1323,25 @@ fn restore_privacy_lease(lease: &PrivacyLease) -> ((bool, bool), Option<Error>) 
         None
     };
     let remainder = (display_error.is_some(), input_error.is_some());
-    (remainder, display_error.or(input_error))
+    let error = display_error.or(input_error);
+    match &error {
+        None => tracing::info!(
+            target: crate::trace::SYSTEM,
+            connection = lease.connection_id,
+            display = lease.display_private,
+            input = lease.input_blocked,
+            "privacy restored"
+        ),
+        Some(error) => tracing::warn!(
+            target: crate::trace::SYSTEM,
+            connection = lease.connection_id,
+            display_held = remainder.0,
+            input_held = remainder.1,
+            failure = error.name(),
+            "privacy not restored: it stays held until a restore works"
+        ),
+    }
+    (remainder, error)
 }
 
 /// Releases the active privacy lease after a saved policy revoked its
@@ -1147,10 +1522,15 @@ async fn serve_inner(
                     Ok(action) => action,
                     Err(_) => return Err(Error::Malformed),
                 };
+                // The viewer sends nothing while it waits for this reply:
+                // anything it sends now, its stream closing included, means
+                // it gave up. A native action that never answers then holds
+                // no owner, and the viewer's next request is served.
                 let reply = tokio::select! {
                     biased;
                     _ = parent_stop.changed() => break,
                     _ = service_stop.changed() => break,
+                    _ = read(recv) => break,
                     reply = execute(shared, admission, action) => reply?,
                 };
                 write(send, reply).await?;
@@ -1160,6 +1540,19 @@ async fn serve_inner(
                     u64::from_be_bytes(request[1..9].try_into().map_err(|_| Error::Malformed)?);
                 match query(shared, &admission, id) {
                     Ok(reply) => write(send, reply).await?,
+                    Err(code) => write(send, vec![1, code, 0]).await?,
+                }
+            }
+            REQ_CANCEL if request.len() == 9 => {
+                let id =
+                    u64::from_be_bytes(request[1..9].try_into().map_err(|_| Error::Malformed)?);
+                match cancel(
+                    shared,
+                    Some(&admission),
+                    id,
+                    "cancelled by the computer that asked",
+                ) {
+                    Ok(operation) => write(send, encode_operation(&operation)).await?,
                     Err(code) => write(send, vec![1, code, 0]).await?,
                 }
             }
@@ -1228,8 +1621,8 @@ mod review_authority_tests {
     }
     #[test]
     fn review_queued_restart_rechecks_disabled_policy() {
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1248,9 +1641,8 @@ mod review_authority_tests {
             let (entered,ready)=std::sync::mpsc::sync_channel(1);
             let blocker=tokio::task::spawn_blocking(move || { entered.send(()).unwrap(); blocked.recv().unwrap(); });
             ready.recv().unwrap();
-            let mut action=Box::pin(execute(&host.shared,admission,SystemAction::Restart));
+            let mut action=Box::pin(start(&host.shared,admission,SystemAction::Restart));
             tokio::select! { biased; _=&mut action => panic!("execution unexpectedly completed"), _=tokio::task::yield_now()=>{} }
-            assert_eq!(lock(&host.shared.state).system_operations.len(),1);
             host.set_system_policy(crate::SystemPolicy::default()).unwrap();
             release.send(()).unwrap();
             blocker.await.unwrap();
@@ -1270,7 +1662,7 @@ mod review_authority_tests {
 /// admission the serve loop would hand the worker. Test-only.
 #[cfg(test)]
 fn admitted_system_owner(host: &Core, controller: &Core) -> (Admission, RemoteSystemService) {
-    use crate::tests::support::pair_for_control;
+    use crate::test_support::pair_for_control;
     pair_for_control(host, controller);
     host.set_service_sharing(crate::ServiceKind::System, true)
         .unwrap();
@@ -1303,7 +1695,7 @@ fn admitted_system_owner(host: &Core, controller: &Core) -> (Admission, RemoteSy
 #[cfg(test)]
 mod worker_start_gate_tests {
     use super::*;
-    use crate::tests::support::{pair_for_control, start_direct};
+    use crate::test_support::{loopback_core, pair_for_control};
 
     struct Actions(std::sync::atomic::AtomicUsize);
     impl crate::HostSystemActions for Actions {
@@ -1351,23 +1743,24 @@ mod worker_start_gate_tests {
                 blocked.recv().unwrap();
             });
             ready.recv().unwrap();
-            let mut action = Box::pin(execute(&core.shared, admission, SystemAction::Restart));
+            // The start gate runs for a lock at once and for a restart once
+            // its notice ends; both stand down the same way.
+            let mut action = Box::pin(start(&core.shared, admission, SystemAction::Restart));
             tokio::select! { biased; _=&mut action => panic!("execution unexpectedly completed"), _=tokio::task::yield_now()=>{} }
             change();
             release.send(()).unwrap();
             blocker.await.unwrap();
-            let _ = action.await.unwrap();
-        });
-        let state = lock(&core.shared.state);
-        let id = state.system_operations.keys().max().copied().unwrap();
-        let record = &state.system_operations[&id].operation;
-        (record.state, record.detail.clone())
+            match action.await.unwrap() {
+                Started::StoodDown(detail) => (OperationState::Refused, detail.to_owned()),
+                Started::Ran(_) => (OperationState::Executed, "ran".to_owned()),
+            }
+        })
     }
 
     #[test]
     fn rereview_queued_restart_must_stand_down_when_system_owner_closes() {
-        let host = start_direct();
-        let controller = start_direct();
+        let host = loopback_core();
+        let controller = loopback_core();
         pair_for_control(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1426,8 +1819,8 @@ mod worker_start_gate_tests {
         // Adapted from the v3 probe: the admission now carries the exact
         // System owner, so the fixture opens a real owner (otherwise the
         // owner check, not the parent check, would fire).
-        let host = start_direct();
-        let controller = start_direct();
+        let host = loopback_core();
+        let controller = loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1462,8 +1855,8 @@ mod worker_start_gate_tests {
 
     #[test]
     fn queued_restart_stands_down_as_refused_on_policy_backend_and_grant_changes() {
-        let host = start_direct();
-        let controller = start_direct();
+        let host = loopback_core();
+        let controller = loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
         let actions = Arc::new(Actions(std::sync::atomic::AtomicUsize::new(0)));
         host.set_system_actions(Some(actions.clone())).unwrap();
@@ -1546,8 +1939,8 @@ mod v7_privacy_admission_probe {
     }
     #[test]
     fn v7_stale_privacy_admission_after_revoke_must_not_apply() {
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let actions = Arc::new(Fake(AtomicBool::new(false), AtomicBool::new(false)));
         host.set_system_actions(Some(actions.clone())).unwrap();
         host.set_system_policy(crate::SystemPolicy {
@@ -1628,8 +2021,8 @@ mod v7_privacy_admission_probe {
                 HostSessionState::unknown("delayed")
             }
         }
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
         let actions = Arc::new(Delayed {
@@ -1707,8 +2100,8 @@ mod v7_privacy_admission_probe {
                 HostSessionState::unknown("delayed")
             }
         }
-        let host = crate::tests::support::start_direct();
-        let controller = crate::tests::support::start_direct();
+        let host = crate::test_support::loopback_core();
+        let controller = crate::test_support::loopback_core();
         let (entered, mut ready) = tokio::sync::mpsc::unbounded_channel();
         let (proceed, wait) = std::sync::mpsc::channel();
         let actions = Arc::new(Delayed {

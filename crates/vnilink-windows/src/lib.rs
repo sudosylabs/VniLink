@@ -1,11 +1,30 @@
 //! Windows capture and H.264 for VniLink.
 //!
 //! [`WindowsCapture`] uses Desktop Duplication on the interactive desktop of
-//! this session. [`WindowsEncoder`] uses the Media Foundation H.264 transform
-//! and expects NV12. The transform's length-prefixed samples are turned into
-//! Annex-B before they leave this crate. Neither Win32 path is compiled on
-//! another operating system, and neither one reaches the secure UAC desktop.
+//! this session. [`WindowsEncoder`] uses a Media Foundation H.264 transform,
+//! hardware where one opens, and expects NV12. The transform's
+//! length-prefixed samples are turned into Annex-B before they leave this
+//! crate. Neither Win32 path is compiled on another operating system, and
+//! neither one reaches the secure UAC desktop.
 //! A build on macOS or Linux does not execute the Win32 code.
+
+/// Records a Windows call's failure this crate carries on from: why, and
+/// its HRESULT, a system code, never text; counted like `vnilink::ignored!`.
+#[allow(unused_macros)]
+macro_rules! ignored_hr {
+    ($target:expr, $why:literal, $result:expr $(,)?) => {
+        if let Err(error) = $result {
+            let error: windows::core::Error = error;
+            tracing::debug!(
+                target: $target,
+                why = $why,
+                hresult = format_args!("{:#010x}", error.code().0),
+                "ignored"
+            );
+            vnilink::trace::count_ignored($target, $why);
+        }
+    };
+}
 
 mod bitstream;
 mod codecs;
@@ -16,16 +35,28 @@ mod encode;
 mod host;
 #[cfg(any(windows, test))]
 mod idle;
+#[cfg(any(windows, test))]
+mod outputs;
 mod plan;
+#[cfg(windows)]
+mod transform;
+#[cfg(windows)]
+mod transform_events;
 
 #[cfg(windows)]
 mod capture;
+#[cfg(windows)]
+mod gpu;
+#[cfg(windows)]
+pub use gpu::GpuDevice;
+#[cfg(any(windows, test))]
+mod shells;
 #[cfg(windows)]
 mod terminal;
 #[cfg(any(windows, test))]
 mod terminal_io;
 #[cfg(windows)]
-pub use terminal::WindowsTerminalFactory;
+pub use terminal::{automatic_of, automatic_shell, available_shells, WindowsTerminalFactory};
 
 pub use codecs::probe_video_codecs;
 pub use decode::WindowsDecoder;
@@ -35,8 +66,10 @@ pub use plan::{WindowsPlan, SECURE_DESKTOP_SUPPORTED};
 #[cfg(windows)]
 pub use capture::WindowsCapture;
 #[cfg(windows)]
-pub use host::serve_windows;
+mod snapshot;
 pub use host::HostSession;
+#[cfg(windows)]
+pub use snapshot::WindowsSnapshot;
 
 #[cfg(test)]
 #[path = "tests.rs"]

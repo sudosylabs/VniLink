@@ -6,11 +6,12 @@ use crate::frame::RawFrame;
 use crate::host::HostSession;
 use crate::pump::{EncodeParams, EncodedSample, FrameSink, PumpOutput, VideoEncoder};
 use crate::{parse_annex_b, Quality};
-use vnilink::CoreEvent;
 
 struct Fake {
     width: u16,
     height: u16,
+    /// Whether this encoder takes a new rate while running; what it took.
+    retunes: Option<Arc<Mutex<Vec<(u32, u8)>>>>,
 }
 
 impl Fake {
@@ -30,7 +31,11 @@ impl Fake {
         if frame_rate == 0 || bitrate_bps == 0 {
             return Err(Error::InvalidSetting("frame rate must be non-zero"));
         }
-        Ok(Self { width, height })
+        Ok(Self {
+            width,
+            height,
+            retunes: None,
+        })
     }
 }
 
@@ -43,6 +48,13 @@ impl VideoEncoder for Fake {
         }
         sample(params.force_keyframe)
     }
+
+    fn retune(&mut self, bitrate_bps: u32, frame_rate: u8) -> Result<bool, Error> {
+        Ok(self.retunes.as_ref().is_some_and(|taken| {
+            taken.lock().unwrap().push((bitrate_bps, frame_rate));
+            true
+        }))
+    }
 }
 
 fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
@@ -53,14 +65,18 @@ fn sample(keyframe: bool) -> Result<EncodedSample, Error> {
     };
     let mut avcc = (picture.len() as u32).to_be_bytes().to_vec();
     avcc.extend_from_slice(picture);
-    let sets = [vec![0x67, 0x42], vec![0x68, 0xCE]];
+    // A real SPS: hosts give every SPS the stream's VUI.
+    let sets = [
+        vec![0x67, 0x42, 0x00, 0x1e, 0xda, 0x10, 0x99],
+        vec![0x68, 0xCE],
+    ];
     let annex = to_annex_b(&AvccAccessUnit {
         nal_length_size: 4,
         avcc: &avcc,
         parameter_sets: &sets,
         keyframe,
     })?;
-    EncodedSample::annex_b(keyframe, annex)
+    EncodedSample::annex_b(keyframe, annex, vnilink::YuvMatrix::Bt709)
 }
 
 fn solid(width: u16, height: u16, timestamp_us: u64) -> RawFrame {
@@ -326,9 +342,7 @@ fn a_paced_picture_is_published_and_a_fast_one_is_skipped() {
     assert_eq!(skipped, PumpOutput::Skipped);
     assert_eq!(sink.ids.len(), 1);
 
-    session
-        .observe(&CoreEvent::KeyframeRequested { id: 7 })
-        .unwrap();
+    session.request_recovery_keyframe();
     let forced = session
         .publish(&solid(64, 64, 2_000), &mut sink, 7)
         .unwrap();
@@ -343,17 +357,138 @@ fn a_paced_picture_is_published_and_a_fast_one_is_skipped() {
 }
 
 #[test]
+fn a_new_rate_retunes_the_running_encoder_without_a_keyframe() {
+    let opens = Arc::new(Mutex::new(0));
+    let taken = Arc::new(Mutex::new(Vec::new()));
+    let opener = Arc::clone(&opens);
+    let retunes = Arc::clone(&taken);
+    let mut session = HostSession::open(
+        64,
+        64,
+        Quality::new(500, 30, 32, 32).unwrap(),
+        move |w, h, fps, bps| {
+            let mut encoder = Fake::open(&opener, w, h, fps, bps)?;
+            encoder.retunes = Some(Arc::clone(&retunes));
+            Ok(encoder)
+        },
+    )
+    .unwrap();
+    let mut sink = MemorySink::default();
+    session.publish(&solid(64, 64, 0), &mut sink, 7).unwrap();
+    session
+        .set_quality(Quality::new(900, 20, 32, 32).unwrap())
+        .unwrap();
+    assert_eq!(*taken.lock().unwrap(), vec![(900_000, 20)]);
+    assert_eq!((*opens.lock().unwrap(), session.reopens()), (1, 0));
+    session
+        .publish(&solid(64, 64, 100_000), &mut sink, 7)
+        .unwrap();
+    assert!(!sink.frames[1].keyframe, "a retune forced a keyframe");
+}
+
+/// An encoder whose next picture comes out larger than a frame may be.
+struct Swelling {
+    too_large: Arc<Mutex<bool>>,
+    retunes: Arc<Mutex<Vec<u32>>>,
+    keyframes: Arc<Mutex<Vec<bool>>>,
+}
+
+impl VideoEncoder for Swelling {
+    fn encode(&mut self, _frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
+        if std::mem::take(&mut *self.too_large.lock().unwrap()) {
+            return Err(Error::InvalidFrame(crate::error::FRAME_TOO_LARGE));
+        }
+        self.keyframes.lock().unwrap().push(params.force_keyframe);
+        sample(params.force_keyframe)
+    }
+
+    fn retune(&mut self, bitrate_bps: u32, _frame_rate: u8) -> Result<bool, Error> {
+        self.retunes.lock().unwrap().push(bitrate_bps);
+        Ok(true)
+    }
+}
+
+#[test]
+fn a_frame_too_large_is_dropped_and_the_encoder_aims_lower() {
+    let too_large = Arc::new(Mutex::new(false));
+    let retunes = Arc::new(Mutex::new(Vec::new()));
+    let keyframes = Arc::new(Mutex::new(Vec::new()));
+    let (swell, taken, made) = (
+        Arc::clone(&too_large),
+        Arc::clone(&retunes),
+        Arc::clone(&keyframes),
+    );
+    let mut session = HostSession::open(
+        64,
+        64,
+        Quality::new(500, 30, 64, 64).unwrap(),
+        move |_, _, _, _| {
+            Ok(Swelling {
+                too_large: Arc::clone(&swell),
+                retunes: Arc::clone(&taken),
+                keyframes: Arc::clone(&made),
+            })
+        },
+    )
+    .unwrap();
+    let mut sink = MemorySink::default();
+    session.publish(&solid(64, 64, 0), &mut sink, 7).unwrap();
+    *too_large.lock().unwrap() = true;
+    assert!(matches!(
+        session.publish(&solid(64, 64, 100_000), &mut sink, 7),
+        Ok(PumpOutput::Skipped)
+    ));
+    assert_eq!(*retunes.lock().unwrap(), vec![375_000]);
+    session
+        .publish(&solid(64, 64, 200_000), &mut sink, 7)
+        .unwrap();
+    assert_eq!(
+        *keyframes.lock().unwrap(),
+        vec![true, true],
+        "the next picture was not a keyframe"
+    );
+    assert_eq!(
+        sink.frames.len(),
+        2,
+        "the oversize frame reached the viewer"
+    );
+    // A second oversize frame aims lower again; a quality update restores it.
+    *too_large.lock().unwrap() = true;
+    session
+        .publish(&solid(64, 64, 300_000), &mut sink, 7)
+        .unwrap();
+    assert_eq!(*retunes.lock().unwrap(), vec![375_000, 281_250]);
+    session
+        .set_quality(Quality::new(600, 30, 64, 64).unwrap())
+        .unwrap();
+    assert_eq!(retunes.lock().unwrap().last(), Some(&600_000));
+}
+
+#[test]
+fn an_encoder_that_cannot_retune_is_opened_again() {
+    let opens = Arc::new(Mutex::new(0));
+    let mut session = session((64, 64), Quality::new(500, 30, 32, 32).unwrap(), &opens);
+    session
+        .set_quality(Quality::new(900, 30, 32, 32).unwrap())
+        .unwrap();
+    assert_eq!((*opens.lock().unwrap(), session.reopens()), (2, 1));
+}
+
+#[test]
 fn a_size_change_reopens_the_encoder_through_the_session() {
     let opens = Arc::new(Mutex::new(0));
     let mut session = session((64, 64), Quality::new(500, 30, 32, 32).unwrap(), &opens);
     session
-        .observe(&CoreEvent::QualityUpdated {
-            id: 7,
-            quality: Quality::new(500, 30, 16, 16).unwrap(),
-        })
+        .set_quality(Quality::new(500, 30, 16, 16).unwrap())
         .unwrap();
     assert_eq!(*opens.lock().unwrap(), 2);
     assert_eq!(session.encoded_size(), (16, 16));
+    assert_eq!(session.reopens(), 1, "a reopen is counted for diagnostics");
+    // The same settings again open nothing.
+    session
+        .set_quality(Quality::new(500, 30, 16, 16).unwrap())
+        .unwrap();
+    assert_eq!(session.reopens(), 1);
 }
 
 #[derive(Default)]
@@ -372,41 +507,4 @@ impl FrameSink for MemorySink {
         self.frames.push(frame);
         Ok(())
     }
-}
-
-#[test]
-fn only_matching_sessions_reach_the_serve_loop() {
-    use crate::host::event_session;
-
-    // Ownerless events are observed by every serve loop.
-    assert_eq!(
-        event_session(&CoreEvent::HostingChanged { hosting: true }),
-        None
-    );
-    assert_eq!(
-        event_session(&CoreEvent::DevicePaired {
-            endpoint_id: "peer".to_string(),
-        }),
-        None
-    );
-    // Owned events carry their session.
-    let quality = Quality::new(500, 30, 32, 32).unwrap();
-    assert_eq!(
-        event_session(&CoreEvent::QualityUpdated { id: 7, quality }),
-        Some(7)
-    );
-    assert_eq!(
-        event_session(&CoreEvent::KeyframeRequested { id: 9 }),
-        Some(9)
-    );
-    assert_eq!(
-        event_session(&CoreEvent::SessionChanged {
-            id: 3,
-            generation: 1,
-            role: vnilink::SessionRole::Host,
-            phase: vnilink::SessionPhase::Active,
-            peer_id: "peer".to_string(),
-        }),
-        Some(3)
-    );
 }

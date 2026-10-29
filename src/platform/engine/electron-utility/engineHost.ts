@@ -1,154 +1,247 @@
-import { isChannelRequest } from '../common/dataChannel.js';
-import { DataChannelHost } from './dataChannelHost.js';
-import type { NativeDataChannel } from './dataChannelHost.js';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { record } from '../common/engine.js';
+import { Emitter } from '../../../base/common/event.js';
+import type { IClientConnectionFilter } from '../../../base/parts/ipc/node/ipc.mp.js';
+import type { MessageEvent } from '../../../base/parts/sandbox/node/electronTypes.js';
+import { isChannelRequest } from '../common/dataChannel.js';
+import { engineErrorCategory, record } from '../common/engine.js';
+import type { EngineEvent } from '../common/engine.js';
+import type { EngineEventBatch } from '../common/engineService.js';
+import { DataChannelHost } from './dataChannelHost.js';
+import type { NativeDataChannel } from './dataChannelHost.js';
 
-interface NativeEngine { execute(command: string): Promise<string>; openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>; }
+interface NativeEngine {
+	execute(command: string): Promise<string>;
+	openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>;
+}
 
-interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(): Promise<NativeEngine>; }
+interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(capture?: boolean, screenGrant?: string): Promise<NativeEngine>; }
 
 function isAddon(value: unknown): value is Addon {
 	return record(value) && typeof value.openEngine === 'function' && typeof value.openTemporaryEngine === 'function';
 }
 
-export class EngineHost {
+/** The file a temporary engine that captures keeps its screen sharing grant in, from `--screen-grant <file>`. */
+function screenGrantArgument(argv: readonly string[]): string | undefined {
+	const index = argv.indexOf('--screen-grant');
+	return index >= 0 ? argv[index + 1] : undefined;
+}
+
+/** Engine events are read this often while the main process listens. */
+const eventPollInterval = 500;
+
+/** Each window may own at most this many native data channels. */
+const maxChannelsPerOwner = 8;
+
+/**
+ * Hosts the native engine in the utility process. Main reaches it through
+ * the `engineHost` IPC channel; data-channel ports arrive as separate
+ * parent-port messages, which this host handles before the IPC server.
+ */
+export class EngineHost implements IClientConnectionFilter {
 	private engine: NativeEngine | undefined;
 	private shuttingDown = false;
 	private readonly inputSessions = new Set<string>();
 	private readonly channels = new Map<string, Set<DataChannelHost>>();
+	private readonly eventsEmitter = new Emitter<EngineEventBatch>({
+		onWillAddFirstListener: () => {
+			this.startEvents();
+		},
+		onDidRemoveLastListener: () => {
+			this.stopEvents();
+		},
+	});
+	public readonly onDidReceiveEvents = this.eventsEmitter.event;
+	private subscription: string | undefined;
+	private eventTimer: ReturnType<typeof setTimeout> | undefined;
+	private eventsWanted = false;
+	private resyncPending = true;
 
-	constructor(private readonly port: Electron.ParentPort) { }
-
-	public listen(): void {
-		this.port.on('message', (event: { data: unknown; ports: Electron.MessagePortMain[] }) => {
-			if (record(event.data) && event.data.type === 'closeDataChannels' && typeof event.data.owner === 'string') {
-				for (const channel of this.channels.get(event.data.owner) ?? []) {
-					channel.close();
-				}
-				this.channels.delete(event.data.owner);
-				return;
-			}
-			if (record(event.data) && event.data.type === 'attachDataChannel') {
-				const request = event.data.request;
-				const owner = event.data.owner;
-				const port = event.ports[0];
-				if (!this.engine || this.shuttingDown || typeof owner !== 'string' || !isChannelRequest(request)) {
-					for (const port of event.ports) {
-						port.close();
-					}
-					return;
-				}
-				const channels = this.channels.get(owner) ?? new Set<DataChannelHost>();
-				if (channels.size >= 8) {
-					port.postMessage({ type: 'error' });
-					port.close();
-					return;
-				}
-				const inputKey = `${request.sessionId}:${request.generation}`;
-				if (request.kind === 'input' && this.inputSessions.has(inputKey)) {
-					port.postMessage({ type: 'error' });
-					port.close();
-					return;
-				}
-				if (request.kind === 'input') {
-					this.inputSessions.add(inputKey);
-				}
-				this.channels.set(owner, channels);
-				const channel = new DataChannelHost(port, request, () => {
-					channels.delete(channel);
-					if (request.kind === 'input') {
-						this.inputSessions.delete(inputKey);
-					}
-					if (channels.size === 0) {
-						this.channels.delete(owner);
-					}
-				});
-				channels.add(channel);
-				void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, request.media ? JSON.stringify(request.media) : undefined).then(native => {
-					channel.start(native);
-				}, () => {
-					channel.fail();
-				});
-				return;
-			}
-			this.onMessage(event.data);
-		});
-	}
+	constructor(
+		private readonly port: Pick<Electron.ParentPort, 'postMessage'>,
+		private readonly loadAddon: () => unknown = () => createRequire(__filename)(join(__dirname, 'native', 'vnilink.node')),
+		private readonly exit: (code: number) => void = code => process.exit(code),
+	) { }
 
 	public async open(): Promise<void> {
 		try {
-			const addon: unknown = createRequire(__filename)(join(__dirname, 'native', 'vnilink.node'));
+			const addon = this.loadAddon();
 			if (!isAddon(addon)) {
 				throw new Error('Invalid addon');
 			}
-			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine() : addon.openEngine());
+			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine(process.argv.includes('--capture'), screenGrantArgument(process.argv)) : addon.openEngine());
 			this.port.postMessage({ ready: true });
-		} catch {
-			this.port.postMessage({ ready: false });
-			process.exit(1);
+		} catch (error) {
+			// Native error strings name the reason only, never secrets, so the main process can log it.
+			const reason = error instanceof Error && error.message.length > 0 ? error.message : 'Engine could not open';
+			this.port.postMessage({ ready: false, error: reason });
+			this.exit(1);
 		}
 	}
 
-	private onMessage(message: unknown): void {
-		// Shape-checked only: command validation lives at the IPC boundary and in
-		// Rust, so this host never kills the process over a bad caller. Unknown
-		// ids are ignored; known ids get a per-operation error instead.
-		if (!record(message) || typeof message.id !== 'number' || !Number.isSafeInteger(message.id) || message.id <= 0) {
-			return;
-		}
-		const id = message.id;
-		const command = message.command;
-		const shutdown = record(command) && command.type === 'shutdown' && Object.keys(command).length === 1;
+	/**
+	 * Runs one engine command. Commands are shape-checked only: validation
+	 * lives at the window IPC boundary and in Rust, so a bad caller fails its
+	 * own request without taking the engine down.
+	 */
+	public async execute(command: unknown): Promise<unknown> {
 		if (!record(command)) {
-			this.port.postMessage({ id, error: 'Invalid engine command' });
-			return;
+			throw new Error('Invalid engine command');
 		}
-		void this.execute(id, command, shutdown);
-	}
-
-	private async execute(id: number, command: Record<string, unknown>, shutdown: boolean): Promise<void> {
+		if (!this.engine) {
+			throw new Error('Engine unavailable');
+		}
+		if (this.shuttingDown) {
+			throw new Error('Engine is shutting down');
+		}
+		if (command.type === 'shutdown' && Object.keys(command).length === 1) {
+			this.beginShutdown();
+		}
 		try {
-			if (!this.engine) {
-				throw new Error('Engine unavailable');
-			}
-			if (this.shuttingDown) {
-				throw new Error('Engine is shutting down');
-			}
-			if (shutdown) {
-				this.shuttingDown = true;
-				for (const channels of this.channels.values()) {
-					for (const channel of channels) {
-						channel.close();
-					}
-				}
-				this.channels.clear();
-				this.inputSessions.clear();
-			}
-			// The reply is validated by the main-process queue; forward it
-			// untouched so only one boundary parses its shape.
-			const reply: unknown = JSON.parse(await this.engine.execute(JSON.stringify(command)));
-			this.port.postMessage({ id, reply });
-			// The main-process owner terminates this utility after receiving the
-			// shutdown reply. Exiting here can discard the queued acknowledgement.
+			// Replies are validated by the main-process owner; forward them untouched.
+			return JSON.parse(await this.engine.execute(JSON.stringify(command)));
 		} catch (error) {
 			// Native error strings name the reason only, never secrets.
 			const reason = error instanceof Error && error.message.length > 0 ? error.message : 'Engine operation failed';
-			this.port.postMessage({ id, error: reason.slice(0, 512) });
+			throw new Error(reason.slice(0, 512));
+		}
+	}
+
+	public handledClientConnection(event: MessageEvent): boolean {
+		const data: unknown = event.data;
+		if (record(data) && data.type === 'closeDataChannels') {
+			if (typeof data.owner === 'string') {
+				this.closeChannels(data.owner);
+			}
+			return true;
+		}
+		if (record(data) && data.type === 'attachDataChannel') {
+			this.attachChannel(data.request, data.owner, event.ports);
+			return true;
+		}
+		return false;
+	}
+
+	private attachChannel(request: unknown, owner: unknown, ports: readonly Electron.MessagePortMain[]): void {
+		const port = ports.at(0);
+		if (!port || !this.engine || this.shuttingDown || typeof owner !== 'string' || !isChannelRequest(request)) {
+			for (const candidate of ports) {
+				candidate.close();
+			}
+			return;
+		}
+		const channels = this.channels.get(owner) ?? new Set<DataChannelHost>();
+		const inputKey = `${request.sessionId}:${request.generation}`;
+		if (channels.size >= maxChannelsPerOwner || (request.kind === 'input' && this.inputSessions.has(inputKey))) {
+			port.postMessage({ type: 'error' });
+			port.close();
+			return;
+		}
+		if (request.kind === 'input') {
+			this.inputSessions.add(inputKey);
+		}
+		this.channels.set(owner, channels);
+		const channel = new DataChannelHost(port, request, () => {
+			channels.delete(channel);
+			if (request.kind === 'input') {
+				this.inputSessions.delete(inputKey);
+			}
+			if (channels.size === 0) {
+				this.channels.delete(owner);
+			}
+		});
+		channels.add(channel);
+		const media = request.media ? JSON.stringify(request.media) : undefined;
+		void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, media).then(native => {
+			channel.start(native);
+		}, (error: unknown) => {
+			channel.fail(engineErrorCategory(error));
+		});
+	}
+
+	private closeChannels(owner: string): void {
+		for (const channel of this.channels.get(owner) ?? []) {
+			channel.close();
+		}
+		this.channels.delete(owner);
+	}
+
+	private beginShutdown(): void {
+		this.shuttingDown = true;
+		this.stopEvents();
+		for (const owner of [...this.channels.keys()]) {
+			this.closeChannels(owner);
+		}
+		this.inputSessions.clear();
+	}
+
+	private startEvents(): void {
+		this.eventsWanted = true;
+		this.resyncPending = true;
+		this.scheduleEvents(0);
+	}
+
+	private stopEvents(): void {
+		this.eventsWanted = false;
+		clearTimeout(this.eventTimer);
+		this.eventTimer = undefined;
+		this.releaseSubscription();
+	}
+
+	private scheduleEvents(delay: number): void {
+		clearTimeout(this.eventTimer);
+		this.eventTimer = setTimeout(() => {
+			void this.readEvents();
+		}, delay);
+	}
+
+	/** Reads one batch of events, subscribing first when needed, and reports gaps as a resync. */
+	private async readEvents(): Promise<void> {
+		if (!this.readingEvents()) {
+			return;
+		}
+		try {
+			if (!this.subscription) {
+				const reply = await this.execute({ type: 'subscribeEvents' });
+				if (!record(reply) || reply.type !== 'eventSubscription' || typeof reply.subscriptionId !== 'string') {
+					throw new Error('Invalid event subscription');
+				}
+				this.subscription = reply.subscriptionId;
+				if (!this.readingEvents()) {
+					this.releaseSubscription();
+					return;
+				}
+			}
+			const reply = await this.execute({ type: 'pollEvents', subscriptionId: this.subscription, maxEvents: 256 });
+			if (!record(reply) || reply.type !== 'events' || !Array.isArray(reply.events)) {
+				throw new Error('Invalid event reply');
+			}
+			const resync = this.resyncPending || reply.lagged !== '0';
+			this.resyncPending = false;
+			if (resync || reply.events.length) {
+				this.eventsEmitter.fire({ events: reply.events as EngineEvent[], resync });
+			}
+		} catch {
+			// The next successful read reports that events may have been missed.
+			this.releaseSubscription();
+			this.resyncPending = true;
+		} finally {
+			if (this.readingEvents()) {
+				this.scheduleEvents(eventPollInterval);
+			}
+		}
+	}
+
+	/** Re-read after every await: listeners and shutdown change while a read is in flight. */
+	private readingEvents(): boolean {
+		return this.eventsWanted && !this.shuttingDown;
+	}
+
+	private releaseSubscription(): void {
+		const subscriptionId = this.subscription;
+		this.subscription = undefined;
+		if (subscriptionId && this.engine && !this.shuttingDown) {
+			void this.execute({ type: 'releaseEvents', subscriptionId }).catch(() => undefined);
 		}
 	}
 }
-
-const port = process.parentPort;
-// Electron types assume a utility process; reject accidental launches in Node/main.
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-if (!port) {
-	throw new Error('Engine host requires a parent');
-}
-
-const host = new EngineHost(port);
-
-host.listen();
-
-void host.open();

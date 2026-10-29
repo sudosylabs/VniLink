@@ -16,6 +16,7 @@ crate-type = ["rlib"]
 test-support = ["vnilink/test-probes"]
 
 [dependencies]
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink = { path = "../vnilink" }
 vnilink-audio = { path = "../vnilink-audio", features = ["native"] }
 vnilink-media = { path = "../vnilink-media" }

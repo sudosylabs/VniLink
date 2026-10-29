@@ -19,14 +19,13 @@ test('control commands reject privileged methods, malformed IDs and extra author
 	assert.equal(isEngineCommand({ type: 'createInvitation', ttlSeconds: NaN }), false);
 	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false, transfer: false }), false);
 	assert.equal(isEngineCommand({ type: 'authorize', endpointId: 'peer', view: true, control: true, clipboard: false }), false);
-	assert.equal(isEngineCommand({ type: 'connect', endpointId: 'peer' }), true);
-	assert.equal(isEngineCommand({ type: 'beginConnect', endpointId: 'peer' }), true);
+	assert.equal(isEngineCommand({ type: 'connect', endpointId: 'peer' }), false, 'a desktop rides the services connection');
+	assert.equal(isEngineCommand({ type: 'beginConnect', endpointId: 'peer' }), false, 'a desktop rides the services connection');
 	assert.equal(isEngineCommand({ type: 'beginConnectServices', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'beginConnectServices' }), false);
 	assert.equal(isEngineCommand({ type: 'beginConnectServices', endpointId: 'peer', allowed: true }), false);
 	assert.equal(isEngineCommand({ type: 'setTerminalEnabled', enabled: true }), false);
 	assert.equal(isEngineCommand({ type: 'authorizeTerminal', endpointId: 'peer', allowed: true }), false);
-	assert.equal(isEngineCommand({ type: 'connect' }), false);
 	assert.equal(isEngineCommand({ type: 'disconnect' }), true);
 	assert.equal(isEngineCommand({ type: 'disconnectSession', sessionId: '1' }), true);
 	assert.equal(isEngineCommand({ type: 'disconnectSession', sessionId: '18446744073709551616' }), false);
@@ -39,9 +38,11 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'endpoint', extra: true }), false);
 	assert.equal(isEngineCommand({ type: 'capabilities' }), true);
 	assert.equal(isEngineCommand({ type: 'videoCodecs' }), true);
-	assert.equal(isEngineCommand({ type: 'clipboardOwnerSession' }), true);
+	assert.equal(isEngineCommand({ type: 'clipboardOwnerSession' }), false, 'no session owns the clipboard');
 	assert.equal(isEngineCommand({ type: 'subscribeEvents' }), true);
-	assert.equal(isEngineCommand({ type: 'subscribeVideo' }), true);
+	for (const type of ['subscribeVideo', 'subscribeSessionVideo', 'pollVideo', 'releaseVideo', 'publishVideo']) {
+		assert.equal(isEngineCommand({ type }), false, `${type}: pictures go on a desktop's data channel`);
+	}
 	const codecs = { encode_baseline: true, encode_high: false, decode_baseline: true, decode_high: false, max_width: 4096, max_height: 4096, hardware: true, device: 'test', chroma444: false };
 	assert.equal(isEngineCommand({ type: 'setVideoCodecs', codecs }), true);
 	assert.equal(isEngineCommand({ type: 'setVideoCodecs', codecs: { ...codecs, max_width: 65536 } }), false);
@@ -52,15 +53,9 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineCommand({ type: 'saveCustomRelays', relays: new Array(17).fill({ url: 'https://relay.example', authenticated: false, replacementToken: '' }) }), false);
 	assert.equal(isEngineCommand({ type: 'peerHostname', endpointId: 'peer' }), true);
 	assert.equal(isEngineCommand({ type: 'peerHostname' }), false);
-	assert.equal(isEngineCommand({ type: 'connectFiles', endpointId: 'peer' }), true);
-	assert.equal(isEngineCommand({ type: 'beginConnectFiles', endpointId: 'peer' }), true);
-	assert.equal(isEngineCommand({ type: 'connectFiles' }), false);
-	assert.equal(isEngineCommand({ type: 'sessionKeyboardMode', sessionId: '1', generation: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Map' }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Dvorak' }), false);
-	assert.equal(isEngineCommand({ type: 'sessionSwapControlAndCommand', sessionId: '1', generation: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionSwapControlAndCommand', sessionId: '1', generation: '2', enabled: true }), true);
-	assert.equal(isEngineCommand({ type: 'setSessionSwapControlAndCommand', sessionId: '1', generation: '2', enabled: 'yes' }), false);
+	assert.equal(isEngineCommand({ type: 'connectFiles', endpointId: 'peer' }), false, 'Files rides the services connection');
+	assert.equal(isEngineCommand({ type: 'setSessionKeyboardMode', sessionId: '1', generation: '2', mode: 'Map' }), false, 'a session carries no input to configure');
+	assert.equal(isEngineCommand({ type: 'setSessionPointerSettings', sessionId: '1', generation: '2', settings: { sensitivity_percent: 100, reverse_wheel: false, swap_buttons: false } }), false, 'a session carries no input to configure');
 	assert.equal(isEngineCommand({ type: 'controllerSessionPaths', sessionId: '1' }), true);
 	assert.equal(isEngineCommand({ type: 'controllerSessionPaths', sessionId: 'nope' }), false);
 	assert.equal(isEngineCommand({ type: 'pollEvents', subscriptionId: '1', maxEvents: 32 }), true);
@@ -72,7 +67,7 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 	assert.equal(isEngineReply({ type: 'videoCodecs', codecs }), true);
 	assert.equal(isEngineReply({ type: 'hostname', hostname: null }), true);
 	assert.equal(isEngineReply({ type: 'hostname', hostname: 'peer' }), true);
-	assert.equal(isEngineReply({ type: 'ownerSession', session: null }), true);
+	assert.equal(isEngineReply({ type: 'ownerSession', session: null }), false, 'no reply names a clipboard owner');
 	assert.equal(isEngineReply({ type: 'eventSubscription', subscriptionId: '3' }), true);
 	assert.equal(isEngineReply({ type: 'events', events: [], lagged: '0' }), true);
 	assert.equal(isEngineReply({ type: 'events', events: [{ type: 'hostingChanged', hosting: true }], lagged: '0' }), true);
@@ -81,6 +76,8 @@ test('identity, codecs, relays and session settings validate exactly', () => {
 
 test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'hostingChanged', hosting: false }), true);
+	assert.equal(isEngineEvent({ type: 'folderChanged', watch: '4' }), true);
+	assert.equal(isEngineEvent({ type: 'folderChanged', watch: 4 }), false, 'ids are decimal strings');
 	assert.equal(isEngineEvent({ type: 'devicePaired', endpoint_id: 'peer' }), true);
 	assert.equal(isEngineEvent({ type: 'controlRequested', endpoint_id: 'peer', check: '123' }), true);
 	assert.equal(isEngineEvent({ type: 'peerRenamed', endpoint_id: 'peer', hostname: null }), true);
@@ -92,7 +89,13 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, kind: 'Hologram' } }), false);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Revoked' } } } }), true);
 	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Abducted' } } } }), false);
-	assert.equal(isEngineEvent({ type: 'qualityUpdated', id: '1', quality: { max_bitrate_kbps: 1000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } }), true);
+	// A producer failure on this computer says what failed, and only it carries one.
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed', failure: 'encoder' } } } }), true);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed' } } } }), false);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Failed', failure: 'boredom' } } } }), false);
+	assert.equal(isEngineEvent({ type: 'serviceChanged', service: { ...service, phase: { Closed: { cause: 'Revoked', failure: 'encoder' } } } }), false);
+	assert.equal(isEngineEvent({ type: 'qualityUpdated', id: '1', quality: { max_bitrate_kbps: 1000, max_frame_rate: 30, max_width: 1920, max_height: 1080 } }), false, 'a session has no picture quality');
+	assert.equal(isEngineEvent({ type: 'keyframeRequested', id: '1' }), false, 'a session has no picture to refresh');
 	assert.equal(isEngineEvent({ type: 'inputFailed', id: '1', message: 'denied' }), true);
 	assert.equal(isEngineEvent({ type: 'topologyChanged', revision: '4' }), true);
 	assert.equal(isEngineEvent({ type: 'hostLocked', locked: true }), true);
@@ -106,31 +109,69 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 	assert.equal(isEngineCommand({ type: 'authorizeService', endpointId: 'peer', kind: 'Hologram', allowed: true }), false);
 	assert.equal(isEngineCommand({ type: 'authorizeRecording', endpointId: 'peer', allowed: false }), false);
 	assert.equal(isEngineCommand({ type: 'terminalPolicy' }), true);
-	const policy = { allow_persistence: true, max_sessions: 4, max_sessions_per_peer: 2, history_bytes: 65536, replay_bytes: 16384, detached_timeout_secs: 300 };
+	const policy = {
+		allow_persistence: true, max_sessions: 4, max_sessions_per_peer: 2, history_bytes: 65536, replay_bytes: 16384, detached_timeout_secs: 300,
+	};
 	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy }), true);
 	assert.equal(isEngineCommand({ type: 'setTerminalPolicy', policy: { ...policy, max_sessions: 65536 } }), false);
-	assert.equal(isEngineCommand({ type: 'enableNativeTerminal', program: '/bin/zsh', directory: '/tmp' }), true);
-	assert.equal(isEngineCommand({ type: 'enableDefaultNativeTerminal' }), true);
-	assert.equal(isEngineCommand({ type: 'disableTerminal' }), true);
+	// A window names a detected shell by id; it can no longer install a program as the host shell.
+	assert.equal(isEngineCommand({ type: 'terminalShells' }), true);
+	assert.equal(isEngineCommand({ type: 'setTerminalShell', shell: 'pwsh' }), true);
+	assert.equal(isEngineCommand({ type: 'setTerminalShell', shell: null }), true);
+	for (const shell of ['', 'x'.repeat(1025), 'a\0b', 7, undefined]) {
+		assert.equal(isEngineCommand({ type: 'setTerminalShell', shell }), false);
+	}
+	assert.equal(isEngineCommand({ type: 'setTerminalShell', shell: 'pwsh', program: 'C:\\evil.exe' }), false);
+	for (const type of ['enableNativeTerminal', 'enableDefaultNativeTerminal', 'disableTerminal']) {
+		assert.equal(isEngineCommand({ type, program: '/bin/zsh', directory: '/tmp' }), false);
+		assert.equal(isEngineCommand({ type }), false);
+	}
+	const shells = { type: 'terminalShells', shells: [{ id: '/bin/zsh', label: 'zsh' }, { id: '/bin/bash', label: 'bash' }], automatic: '/bin/zsh', current: null };
+	assert.equal(isEngineReply(shells), true);
+	assert.equal(isEngineReply({ ...shells, current: '/bin/bash' }), true);
+	assert.equal(isEngineReply({ ...shells, shells: [{ id: '/bin/zsh', label: 'zsh', program: '/bin/zsh' }] }), false);
+	assert.equal(isEngineReply({ ...shells, automatic: '' }), false);
 	assert.equal(isEngineCommand({ type: 'remoteTerminalSessions', connectionId: '1', generation: '2' }), true);
 	assert.equal(isEngineCommand({ type: 'closeRemoteTerminalSession', connectionId: '1', generation: '2', id: 'abc' }), true);
 	assert.equal(isEngineCommand({ type: 'hostedTerminalSessions' }), true);
 	assert.equal(isEngineCommand({ type: 'closeTerminalSession', id: 'abc' }), true);
-	assert.equal(isEngineCommand({ type: 'subscribeFilesJobs', sessionId: '1', generation: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'pollFilesJobs', subscriptionId: '1' }), true);
-	assert.equal(isEngineCommand({ type: 'releaseFilesJobs', subscriptionId: '1' }), true);
-	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'filesJobResume', subscriptionId: '1', jobId: '2' }), true);
-	assert.equal(isEngineCommand({ type: 'filesJobCancel', subscriptionId: '1', jobId: 'nope' }), false);
+	assert.equal(isEngineCommand({ type: 'subscribeFilesJobs', sessionId: '1', generation: '2' }), false, 'transfers report on the files channel');
+	assert.equal(isEngineCommand({ type: 'localPlaces' }), true);
+	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: 'Users/someone', offset: '0' }), true);
+	assert.equal(isEngineCommand({ type: 'listLocal', root: '0', path: '../etc', offset: '0' }), false);
+	assert.equal(isEngineCommand({ type: 'locateLocal', path: '/Users/someone/Desktop/a.txt' }), true);
+	assert.equal(isEngineCommand({ type: 'locateLocal', path: '' }), false, 'an empty path names nothing');
+	assert.equal(isEngineCommand({ type: 'watchLocal', root: '0', path: 'Users/someone' }), true);
+	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: '3' }), true);
+	assert.equal(isEngineCommand({ type: 'unwatchLocal', watch: 'three' }), false);
+	assert.equal(isEngineCommand({ type: 'createLocalDir', root: '0', path: '', name: 'New Folder' }), true);
+	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { kind: 'identity', dev: '1', ino: '2', born: '7', fingerprint: null }, newName: 'b' }), true);
+	assert.equal(isEngineCommand({ type: 'renameLocal', root: '0', path: 'Users', name: 'a', token: { dev: 1, ino: 2, born: 2 }, newName: 'b' }), false, 'token parts are decimal strings');
+	const rename = token => isEngineCommand({ type: 'renameLocal', root: '0', path: 'Volumes/STICK', name: 'a', token, newName: 'b' });
+	assert.equal(rename({ kind: 'fingerprint', dev: '4', ino: null, born: null, fingerprint: '18446744073709551615' }), true, 'a FAT listing names an entry by fingerprint');
+	assert.equal(rename({ kind: 'fingerprint', dev: '4', ino: '2', born: null, fingerprint: '9' }), false, 'a fingerprint carries no inode');
+	assert.equal(rename({ kind: 'fingerprint', dev: '4', ino: null, born: '7', fingerprint: '9' }), false, 'a fingerprint carries no creation time of its own');
+	assert.equal(rename({ kind: 'identity', dev: '1', ino: '2', born: null, fingerprint: '9' }), false, 'an identity carries no fingerprint');
+	assert.equal(rename({ kind: 'inode', dev: '1', ino: '2', born: null, fingerprint: null }), false, 'a token kind is identity or fingerprint');
+	assert.equal(rename({ dev: '1', ino: '2', born: null, fingerprint: null }), false, 'a token says its kind');
+	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null, trash: true }), true);
+	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a', token: null }), false, 'a delete says whether it goes to the Trash');
+	assert.equal(isEngineCommand({ type: 'deleteLocal', root: '0', path: 'Users', name: 'a' }), false);
 	assert.equal(isEngineReply({ type: 'servicePermissions', permissions: { desktop: true, files: true, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false } }), false);
 	assert.equal(isEngineReply({ type: 'terminalPolicy', policy }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [] }), true);
 	assert.equal(isEngineReply({ type: 'terminalSessions', sessions: [{ id: 'a', process_id: 42, shell: '/bin/zsh', rows: 24, columns: 80, persistent: true, attached: true }] }), true);
-	const job = { id: '7', peer: 'p', label: 'l', direction: 'Upload', sender: true, state: 'Transferring', total_bytes: '100', done_bytes: '10', files_total: '2', files_done: '0', resumed_files: '0', skipped_files: '0', skipped_symlinks: '0', waiting_file: null, error: null };
-	assert.equal(isEngineReply({ type: 'jobs', jobs: [job] }), true);
-	assert.equal(isEngineReply({ type: 'job', job }), true);
-	assert.equal(isEngineReply({ type: 'job', job: { ...job, state: 'Warping' } }), false);
-	assert.equal(isEngineReply({ type: 'fileJobsSubscription', subscriptionId: '5' }), true);
+	const places = { roots: [{ id: '2', name: 'C:' }], folders: [{ kind: 'home', root: '2', path: 'Users/someone' }] };
+	assert.equal(isEngineReply({ type: 'places', places }), true);
+	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: 'Users/someone', name: 'a.txt' } }), true);
+	assert.equal(isEngineReply({ type: 'location', location: null }), true, 'a path outside what is shared');
+	assert.equal(isEngineReply({ type: 'watching', watch: '3' }), true);
+	assert.equal(isEngineReply({ type: 'location', location: { root: '0', path: '/Users', name: 'a.txt' } }), false);
+	assert.equal(isEngineReply({ type: 'places', places: { ...places, folders: [{ kind: 'home', root: '2', path: '/Users' }] } }), false);
+	const entry = { name: 'a.txt', kind: 'file', size: '3', mtimeMs: '1700000000000', token: { kind: 'identity', dev: '1', ino: '9', born: '7', fingerprint: null } };
+	const page = { entries: [entry], total: '1', nextOffset: null, truncated: false, skipped: '0' };
+	assert.equal(isEngineReply({ type: 'dirPage', page }), true);
+	assert.equal(isEngineReply({ type: 'dirPage', page: { ...page, entries: [{ ...entry, name: '..' }] } }), false);
 });
 
 test('pairing handles cross the bridge as lossless decimal strings', () => {
@@ -141,11 +182,76 @@ test('pairing handles cross the bridge as lossless decimal strings', () => {
 });
 
 test('global sharing policy rejects missing fields, extras and peer-scoped writes', () => {
-	const policy = { view: false, control: false, clipboard: false, files: false, terminal: false, camera: false, system_audio: false, microphone: false, recording: false, system_actions: false };
+	const policy = {
+		view: false, control: false, clipboard: false, files: false, terminal: false,
+		camera: false, system_audio: false, microphone: false, recording: false, system_actions: false,
+	};
 	assert.equal(isEngineCommand({ type: 'sharingPolicy' }), true);
 	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy }), true);
 	assert.equal(isEngineReply({ type: 'sharingPolicy', policy }), true);
 	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy: { ...policy, camera: 'yes' } }), false);
 	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy, endpointId: 'peer' }), false);
 	assert.equal(isEngineCommand({ type: 'setSharingPolicy', policy: { ...policy, extra: true } }), false);
+});
+
+test('presence, peer availability and hosted services cross the bridge exactly', () => {
+	assert.equal(isEngineEvent({ type: 'presenceChanged', endpoint_id: 'peer', presence: 'notAccepting' }), true);
+	assert.equal(isEngineEvent({ type: 'presenceChanged', endpoint_id: 'peer', presence: 'asleep' }), false);
+	assert.equal(isEngineEvent({ type: 'peerAvailabilityChanged', endpoint_id: 'peer' }), true);
+	assert.equal(isEngineEvent({ type: 'peerAvailabilityChanged', endpoint_id: 'peer', extra: 1 }), false);
+	assert.equal(isEngineCommand({ type: 'peerAvailability', endpointId: 'peer' }), true);
+	assert.equal(isEngineCommand({ type: 'peerAvailability' }), false);
+	assert.equal(isEngineCommand({ type: 'hostedServices' }), true);
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: null }), true);
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'camera', status: 'turnedOff' }, { capability: 'files', status: 'available' }] }), true);
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'camera', status: 'off' }] }), false, 'Unknown status');
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'webcam', status: 'available' }] }), false, 'Unknown capability');
+	assert.equal(isEngineReply({ type: 'peerAvailability', report: [{ capability: 'camera', status: 'available' }, { capability: 'camera', status: 'turnedOff' }] }), false, 'Repeated capability');
+	assert.equal(isEngineReply({ type: 'services', services: [] }), true);
+	assert.equal(isEngineReply({ type: 'services', services: [{ id: '1' }] }), false);
+});
+
+test('the flight recorder is bounded JSON lines, each one object', () => {
+	assert.equal(isEngineCommand({ type: 'diagnosticRecorder' }), true);
+	assert.equal(isEngineCommand({ type: 'diagnosticRecorder', service: '4' }), false);
+	const events = `${JSON.stringify({ ms: 1, level: 'INFO', target: 'vnilink::session', message: 'desktop ended' })}\n`;
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events }), true);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: '' }), true);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: 'not json\n' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: '[1]\n' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events, extra: 1 }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticRecorder', events: `${JSON.stringify({ pad: 'x'.repeat(4 * 1024 * 1024) })}\n` }), false);
+});
+
+test('the engine log\'s filter and its file\'s tail cross the bridge exactly', () => {
+	assert.equal(isEngineCommand({ type: 'logFilter' }), true);
+	assert.equal(isEngineCommand({ type: 'engineLogTail' }), true);
+	assert.equal(isEngineCommand({ type: 'engineLogTail', path: '/tmp/engine.log' }), false);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: 'vnilink::files=debug' }), true);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: null }), true);
+	assert.equal(isEngineCommand({ type: 'setLogFilter' }), false);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: 3 }), false);
+	assert.equal(isEngineCommand({ type: 'setLogFilter', directives: 'x'.repeat(1025) }), false);
+	assert.equal(isEngineReply({ type: 'logFilter', directives: 'off', source: 'setting' }), true);
+	assert.equal(isEngineReply({ type: 'logFilter', directives: 'off', source: 'file' }), false);
+	assert.equal(isEngineReply({ type: 'logFilter', directives: 'off', source: 'default', extra: 1 }), false);
+	assert.equal(isEngineReply({ type: 'engineLogTail', path: '~/engine.log', text: '{"ms":1}\n' }), true);
+	assert.equal(isEngineReply({ type: 'engineLogTail', path: null, text: '' }), true);
+	assert.equal(isEngineReply({ type: 'engineLogTail', text: '' }), false);
+	assert.equal(isEngineReply({ type: 'engineLogTail', path: null, text: 'x'.repeat(256 * 1024 + 1) }), false);
+});
+
+test('the diagnostic snapshot is one bounded JSON object naming its version', () => {
+	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot' }), true);
+	assert.equal(isEngineCommand({ type: 'diagnosticSnapshot', path: '/tmp/x' }), false);
+	const snapshot = JSON.stringify({ version: 4, pipelines: [], last_end: null });
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot }), true);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot, extra: 1 }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '{not json' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: '[4]' }), false);
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: JSON.stringify({ pipelines: [] }) }), false);
+	// The cap counts bytes: 64 KiB of text is the most the engine exports.
+	const padded = JSON.stringify({ version: 4, pad: 'é'.repeat(33 * 1024) });
+	assert.equal(isEngineReply({ type: 'diagnosticSnapshot', snapshot: padded }), false);
 });

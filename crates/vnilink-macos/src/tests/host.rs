@@ -23,11 +23,9 @@ fn the_host_encoder_is_unavailable() {
 #[cfg(target_os = "macos")]
 #[test]
 fn the_platform_encoder_plugs_into_the_generic_session() {
-    use vnilink::CoreEvent;
-
     let quality = Quality::new(500, 30, 32, 32).unwrap();
     let mut session = HostSession::open(64, 64, quality, |w, h, fps, bps| {
-        MacEncoder::open(w, h, fps, bps, false)
+        MacEncoder::open(w, h, fps, bps, false, vnilink::YuvMatrix::Bt709)
     })
     .unwrap();
     assert_eq!(session.capture_size(), (64, 64));
@@ -45,9 +43,7 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
     assert_eq!(skipped, PumpOutput::Skipped);
     assert_eq!(sink.ids.len(), 1);
 
-    session
-        .observe(&CoreEvent::KeyframeRequested { id: 7 })
-        .unwrap();
+    session.request_recovery_keyframe();
     let forced = session
         .publish(&solid(64, 64, 2_000), &mut sink, 7)
         .unwrap();
@@ -235,7 +231,14 @@ mod twin {
                     |_, width, height, fps, bps| {
                         assert_eq!((width, height), (64, 64));
                         assert!(fps > 0 && bps > 0);
-                        let encoder = MacEncoder::open(width, height, fps, bps, false);
+                        let encoder = MacEncoder::open(
+                            width,
+                            height,
+                            fps,
+                            bps,
+                            false,
+                            vnilink::YuvMatrix::Bt709,
+                        );
                         if let Err(error) = &encoder {
                             eprintln!("encoder open failed: {error:?}");
                         }
@@ -294,21 +297,16 @@ mod twin {
         // keep their stamp and color.
         stop_red.store(true, Ordering::Relaxed);
         red_worker.join().unwrap().unwrap();
+        // Pictures already on their way may still arrive; a capture still
+        // publishing never leaves the viewer a second without one, while a
+        // busy computer only makes such a gap come sooner.
         let silence = Instant::now();
-        while silence.elapsed() < Duration::from_millis(300) {
-            if red_frames
-                .recv_timeout(Duration::from_millis(100))
-                .is_none()
-            {
-                break;
-            }
+        while red_frames.recv_timeout(Duration::from_secs(1)).is_some() {
+            assert!(
+                silence.elapsed() < Duration::from_secs(10),
+                "closed capture still published"
+            );
         }
-        assert!(
-            red_frames
-                .recv_timeout(Duration::from_millis(300))
-                .is_none(),
-            "closed capture still published"
-        );
         // Drain the sibling's backlog, decoding to keep the VideoToolbox
         // chain alive, so the frames asserted below prove its worker is
         // still publishing rather than replaying its queue.

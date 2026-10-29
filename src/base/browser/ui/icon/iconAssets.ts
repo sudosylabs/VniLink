@@ -55,6 +55,54 @@ import windowsOutlined from '@phosphor-icons/core/assets/regular/windows-logo.sv
 import windowsFilled from '@phosphor-icons/core/assets/fill/windows-logo-fill.svg';
 import linuxOutlined from '@phosphor-icons/core/assets/regular/linux-logo.svg';
 import linuxFilled from '@phosphor-icons/core/assets/fill/linux-logo-fill.svg';
+import importInvitationOutlined from '@phosphor-icons/core/assets/regular/download-simple.svg';
+import importInvitationFilled from '@phosphor-icons/core/assets/fill/download-simple-fill.svg';
+import createInvitationOutlined from '@phosphor-icons/core/assets/regular/export.svg';
+import createInvitationFilled from '@phosphor-icons/core/assets/fill/export-fill.svg';
+import viewOutlined from '@phosphor-icons/core/assets/regular/eye.svg';
+import viewFilled from '@phosphor-icons/core/assets/fill/eye-fill.svg';
+import cameraOutlined from '@phosphor-icons/core/assets/regular/camera.svg';
+import cameraFilled from '@phosphor-icons/core/assets/fill/camera-fill.svg';
+import lockOutlined from '@phosphor-icons/core/assets/regular/lock-simple.svg';
+import lockFilled from '@phosphor-icons/core/assets/fill/lock-simple-fill.svg';
+import fullScreenOutlined from '@phosphor-icons/core/assets/regular/corners-out.svg';
+import fullScreenFilled from '@phosphor-icons/core/assets/fill/corners-out-fill.svg';
+import warningOutlined from '@phosphor-icons/core/assets/regular/warning.svg';
+import warningFilled from '@phosphor-icons/core/assets/fill/warning-fill.svg';
+import infoOutlined from '@phosphor-icons/core/assets/regular/info.svg';
+import infoFilled from '@phosphor-icons/core/assets/fill/info-fill.svg';
+import errorOutlined from '@phosphor-icons/core/assets/regular/warning-octagon.svg';
+import errorFilled from '@phosphor-icons/core/assets/fill/warning-octagon-fill.svg';
+import exitFullScreenOutlined from '@phosphor-icons/core/assets/regular/corners-in.svg';
+import exitFullScreenFilled from '@phosphor-icons/core/assets/fill/corners-in-fill.svg';
+import fillViewOutlined from '@phosphor-icons/core/assets/regular/arrows-out-simple.svg';
+import fillViewFilled from '@phosphor-icons/core/assets/fill/arrows-out-simple-fill.svg';
+import fitToViewOutlined from '@phosphor-icons/core/assets/regular/arrows-in-simple.svg';
+import fitToViewFilled from '@phosphor-icons/core/assets/fill/arrows-in-simple-fill.svg';
+import diagnosticsOutlined from '@phosphor-icons/core/assets/regular/pulse.svg';
+import diagnosticsFilled from '@phosphor-icons/core/assets/fill/pulse-fill.svg';
+import stopOutlined from '@phosphor-icons/core/assets/regular/stop.svg';
+import stopFilled from '@phosphor-icons/core/assets/fill/stop-fill.svg';
+import checkOutlined from '@phosphor-icons/core/assets/regular/check.svg';
+import checkFilled from '@phosphor-icons/core/assets/fill/check-fill.svg';
+import fileOutlined from '@phosphor-icons/core/assets/regular/file.svg';
+import fileFilled from '@phosphor-icons/core/assets/fill/file-fill.svg';
+import newFolderOutlined from '@phosphor-icons/core/assets/regular/folder-plus.svg';
+import newFolderFilled from '@phosphor-icons/core/assets/fill/folder-plus-fill.svg';
+import trashOutlined from '@phosphor-icons/core/assets/regular/trash.svg';
+import trashFilled from '@phosphor-icons/core/assets/fill/trash-fill.svg';
+import renameOutlined from '@phosphor-icons/core/assets/regular/pencil-simple.svg';
+import renameFilled from '@phosphor-icons/core/assets/fill/pencil-simple-fill.svg';
+import driveOutlined from '@phosphor-icons/core/assets/regular/hard-drive.svg';
+import driveFilled from '@phosphor-icons/core/assets/fill/hard-drive-fill.svg';
+import upOutlined from '@phosphor-icons/core/assets/regular/arrow-up.svg';
+import upFilled from '@phosphor-icons/core/assets/fill/arrow-up-fill.svg';
+import searchOutlined from '@phosphor-icons/core/assets/regular/magnifying-glass.svg';
+import searchFilled from '@phosphor-icons/core/assets/fill/magnifying-glass-fill.svg';
+import moreOutlined from '@phosphor-icons/core/assets/regular/dots-three.svg';
+import moreFilled from '@phosphor-icons/core/assets/fill/dots-three-fill.svg';
+import transfersOutlined from '@phosphor-icons/core/assets/regular/arrows-left-right.svg';
+import transfersFilled from '@phosphor-icons/core/assets/fill/arrows-left-right-fill.svg';
 
 // The only place that knows the icon provider and its filenames.
 const assets: Record<IconId, Record<IconVariant, string>> = {
@@ -70,6 +118,31 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	audio: { outlined: audioOutlined, filled: audioFilled },
 	recording: { outlined: recordingOutlined, filled: recordingFilled },
 	power: { outlined: powerOutlined, filled: powerFilled },
+	importInvitation: { outlined: importInvitationOutlined, filled: importInvitationFilled },
+	createInvitation: { outlined: createInvitationOutlined, filled: createInvitationFilled },
+	view: { outlined: viewOutlined, filled: viewFilled },
+	camera: { outlined: cameraOutlined, filled: cameraFilled },
+	lock: { outlined: lockOutlined, filled: lockFilled },
+	copy: { outlined: restoreOutlined, filled: restoreFilled },
+	fullScreen: { outlined: fullScreenOutlined, filled: fullScreenFilled },
+	exitFullScreen: { outlined: exitFullScreenOutlined, filled: exitFullScreenFilled },
+	warning: { outlined: warningOutlined, filled: warningFilled },
+	info: { outlined: infoOutlined, filled: infoFilled },
+	error: { outlined: errorOutlined, filled: errorFilled },
+	fillView: { outlined: fillViewOutlined, filled: fillViewFilled },
+	fitToView: { outlined: fitToViewOutlined, filled: fitToViewFilled },
+	diagnostics: { outlined: diagnosticsOutlined, filled: diagnosticsFilled },
+	stop: { outlined: stopOutlined, filled: stopFilled },
+	check: { outlined: checkOutlined, filled: checkFilled },
+	file: { outlined: fileOutlined, filled: fileFilled },
+	newFolder: { outlined: newFolderOutlined, filled: newFolderFilled },
+	trash: { outlined: trashOutlined, filled: trashFilled },
+	rename: { outlined: renameOutlined, filled: renameFilled },
+	drive: { outlined: driveOutlined, filled: driveFilled },
+	up: { outlined: upOutlined, filled: upFilled },
+	search: { outlined: searchOutlined, filled: searchFilled },
+	more: { outlined: moreOutlined, filled: moreFilled },
+	transfers: { outlined: transfersOutlined, filled: transfersFilled },
 	devices: { outlined: devicesOutlined, filled: devicesFilled },
 	remoteDesktop: { outlined: remoteDesktopOutlined, filled: remoteDesktopFilled },
 	refresh: { outlined: refreshOutlined, filled: refreshFilled },

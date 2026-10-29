@@ -1,0 +1,123 @@
+//! Wire codec of `vnilink/files/1`.
+//!
+//! A stream starts with a fixed request: the sender's job id, the file's
+//! place among the manifest's files, the offset to start from, always a
+//! segment boundary (see `hash`), and how many bytes of the segment there
+//! the receiver already holds, unchecked. The sender answers with one
+//! status byte; when it sends, the rest of that segment and each segment
+//! after it to the manifest size follow, every segment ending with its
+//! 32-byte BLAKE3 chaining value, and the sender finishes the stream after
+//! the last one.
+
+use crate::error::Error;
+
+/// ALPN for file-bytes connections. Control stays on `vnilink/1`.
+pub const FILES_ALPN: &[u8] = b"vnilink/files/1";
+
+/// Encoded size of a [`FileRequest`].
+pub const REQUEST_LEN: usize = 28;
+
+/// Size of the chaining value after each segment.
+pub const VALUE_LEN: usize = 32;
+
+/// The sender sends the segments.
+pub const STATUS_SENDING: u8 = 0;
+/// The sender does not serve this file to this peer now: no such sending
+/// job, a revoked grant, a job that stopped, an offset off a segment
+/// boundary or more held bytes than its segment has. Retryable by resuming.
+pub const STATUS_DENIED: u8 = 1;
+/// The source is no longer the file the manifest describes.
+pub const STATUS_CHANGED: u8 = 2;
+/// The sender is serving as many files as it allows; ask again later.
+pub const STATUS_BUSY: u8 = 3;
+
+/// Stream reset code for a source that changed while it was being sent.
+pub const RESET_CHANGED: u32 = 2;
+/// Stream reset or stop code for a peer that made no progress in time.
+pub const RESET_STALLED: u32 = 3;
+
+/// One file of one sending job, from `offset + held` on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileRequest {
+    /// The sender's id for the job.
+    pub job: u64,
+    /// The file's place among the manifest's files, folders left out.
+    pub file: u32,
+    /// Where the receiver's checked bytes end: a segment boundary.
+    pub offset: u64,
+    /// Bytes of the segment at `offset` the receiver holds but has not
+    /// checked; the sender hashes them without sending them again.
+    pub held: u64,
+}
+
+impl FileRequest {
+    pub fn encode(&self) -> [u8; REQUEST_LEN] {
+        let mut bytes = [0u8; REQUEST_LEN];
+        bytes[..8].copy_from_slice(&self.job.to_be_bytes());
+        bytes[8..12].copy_from_slice(&self.file.to_be_bytes());
+        bytes[12..20].copy_from_slice(&self.offset.to_be_bytes());
+        bytes[20..].copy_from_slice(&self.held.to_be_bytes());
+        bytes
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let bytes: &[u8; REQUEST_LEN] = bytes.try_into().map_err(|_| Error::Malformed)?;
+        Ok(Self {
+            job: u64::from_be_bytes(bytes[..8].try_into().expect("8 bytes")),
+            file: u32::from_be_bytes(bytes[8..12].try_into().expect("4 bytes")),
+            offset: u64::from_be_bytes(bytes[12..20].try_into().expect("8 bytes")),
+            held: u64::from_be_bytes(bytes[20..].try_into().expect("8 bytes")),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_round_trips() {
+        let request = FileRequest {
+            job: u64::MAX - 3,
+            file: 70_000,
+            offset: 5 << 33,
+            held: (1 << 24) - 1,
+        };
+        assert_eq!(FileRequest::decode(&request.encode()).unwrap(), request);
+    }
+
+    #[test]
+    fn request_of_the_wrong_length_is_malformed() {
+        let bytes = FileRequest {
+            job: 1,
+            file: 2,
+            offset: 3,
+            held: 4,
+        }
+        .encode();
+        assert!(matches!(
+            FileRequest::decode(&bytes[..REQUEST_LEN - 1]),
+            Err(Error::Malformed)
+        ));
+        let mut long = bytes.to_vec();
+        long.push(0);
+        assert!(matches!(FileRequest::decode(&long), Err(Error::Malformed)));
+    }
+
+    /// Every 28 bytes decode to a request that encodes back to them, and no
+    /// other length decodes at all.
+    #[test]
+    fn any_request_bytes_round_trip_and_other_lengths_are_refused() {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+        let mut rng = StdRng::seed_from_u64(0x2e9);
+        for _ in 0..1000 {
+            let len = rng.random_range(0..=2 * REQUEST_LEN);
+            let bytes: Vec<u8> = (0..len).map(|_| rng.random::<u8>()).collect();
+            match FileRequest::decode(&bytes) {
+                Ok(request) => assert_eq!(request.encode().as_slice(), bytes.as_slice()),
+                Err(_) => assert_ne!(len, REQUEST_LEN),
+            }
+        }
+    }
+}

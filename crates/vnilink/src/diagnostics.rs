@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 /// Snapshot format version. Bump when fields change meaning.
-pub const SNAPSHOT_VERSION: u32 = 2;
+pub const SNAPSHOT_VERSION: u32 = 5;
 /// Hard cap on exported JSON bytes.
 pub const MAX_EXPORT_BYTES: usize = 64 * 1024;
 /// Per-list cap before `truncated` is set.
@@ -65,6 +65,13 @@ pub struct ConnectionSummary {
     /// Connection totals across all open paths.
     pub tx_bytes: u64,
     pub rx_bytes: u64,
+    /// The selected path's congestion window, and the congestion events,
+    /// lost packets and black holes this side saw on it: its sending
+    /// direction only.
+    pub cwnd: Option<u64>,
+    pub congestion_events: Option<u64>,
+    pub lost_packets: Option<u64>,
+    pub black_holes_detected: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -86,7 +93,6 @@ pub struct ResourceCounts {
     pub retained_operations: u32,
     pub privacy_held: bool,
     pub active_jobs: u32,
-    pub blob_offers: u32,
     pub paired_devices: u32,
     /// Connection id holding the input lease, if any live control exists.
     pub control_connection: Option<u64>,
@@ -117,9 +123,82 @@ pub struct PipelineSummary {
     pub in_dropped: u64,
     pub in_oldest_ms: u64,
     pub keyframe_pending: bool,
+    /// Frames the viewer lost on the way, by how: unfinished too long,
+    /// pushed out by newer frames, skipped, or completed too late.
+    pub lost_expired: u64,
+    pub lost_evicted: u64,
+    pub lost_gap: u64,
+    pub lost_stale: u64,
+    /// Keyframes the viewer asked for; keyframes the host sent, and their bytes.
+    pub keyframes_requested: u64,
+    pub keyframes_sent: u64,
+    pub keyframe_bytes: u64,
+    /// Times the host opened its encoder again for new settings.
+    pub encoder_reopens: u64,
+    /// Frames the host dropped rather than queue behind a slow link.
+    pub send_dropped: u64,
+    /// Host: still pictures sent and their bytes, and those left out while
+    /// the link or the stream was busy.
+    pub stills_sent: u64,
+    pub still_bytes: u64,
+    pub stills_dropped: u64,
+    /// Host: what its viewer last reported losing, smoothed, in thousandths
+    /// of the fragments sent and of the frames after any repair. None
+    /// before a fresh report.
+    pub viewer_fragment_loss_permille: Option<u32>,
+    pub viewer_frame_loss_permille: Option<u32>,
     pub selected_display: Option<u64>,
     /// Fixed display-fault label, if the selected source failed.
     pub fault: Option<String>,
+    /// Viewer: what is wrong with the live picture, from the most severe.
+    pub conditions: Vec<ConditionSummary>,
+    /// Why the picture stopped (`DesktopEnd::label`), once it did.
+    pub end: Option<String>,
+    /// Host: the encoder open for this viewer, whether it is hardware, and
+    /// what it reads pictures from (`EncoderInput::label`).
+    pub encoder: Option<String>,
+    pub encoder_hardware: Option<bool>,
+    pub encoder_input: Option<String>,
+    /// Viewer: whether the window decodes in hardware, once it said, and how
+    /// often its decoder restarted from a keyframe.
+    pub decoder_hardware: Option<bool>,
+    pub decoder_recoveries: u64,
+    /// Viewer: still pictures the window showed.
+    pub stills_shown: u64,
+}
+
+/// One held condition: its label, since when on [`monotonic_ms`], and the
+/// signal that set it with its value and the threshold it crossed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct ConditionSummary {
+    pub condition: String,
+    pub since_ms: u64,
+    pub signal: String,
+    pub value: u64,
+    pub threshold: u64,
+}
+
+impl From<crate::ConditionEntry> for ConditionSummary {
+    fn from(entry: crate::ConditionEntry) -> Self {
+        Self {
+            condition: entry.condition.label().into(),
+            since_ms: entry.since_ms,
+            signal: entry.evidence.signal.into(),
+            value: entry.evidence.value,
+            threshold: entry.evidence.threshold,
+        }
+    }
+}
+
+/// The last desktop picture that stopped on this computer, kept after its
+/// pipeline left the snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct EndSummary {
+    pub service_id: u64,
+    pub hosted: bool,
+    /// `DesktopEnd::label`.
+    pub reason: String,
+    pub at_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -127,7 +206,27 @@ pub struct QueueDepths {
     /// Bounded depths only; payload bytes are never included.
     pub input_queued: u32,
     pub terminal_startups_pending: u32,
-    pub blob_serving: u32,
+    /// Peers whose files connections this computer serves.
+    pub files_serving: u32,
+}
+
+/// File transfer since this core started: bytes and files each way,
+/// segment checks, and how often transfers resumed, retried, stalled or
+/// were refused, by refusal.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct TransferSummary {
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub files_served: u64,
+    pub files_fetched: u64,
+    pub files_resumed: u64,
+    pub segments_checked: u64,
+    pub segments_mismatched: u64,
+    pub retries: u64,
+    pub stalls: u64,
+    pub refused_denied: u64,
+    pub refused_changed: u64,
+    pub refused_busy: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -141,7 +240,20 @@ pub struct DiagnosticSnapshot {
     pub pipelines: Vec<PipelineSummary>,
     pub resources: ResourceCounts,
     pub queues: QueueDepths,
+    pub transfers: TransferSummary,
+    pub last_end: Option<EndSummary>,
+    /// Failures each area chose to ignore, by reason; see
+    /// [`crate::trace::ignored_counts`].
+    pub ignored: Vec<IgnoredCount>,
     pub truncated: bool,
+}
+
+/// How often one area ignored one kind of failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct IgnoredCount {
+    pub area: String,
+    pub why: String,
+    pub count: u64,
 }
 
 /// Facts the snapshot builder needs. The [`Core`](crate::Core) query maps
@@ -155,6 +267,9 @@ pub struct SnapshotInputs {
     pub pipelines: Vec<PipelineSummary>,
     pub resources: ResourceCounts,
     pub queues: QueueDepths,
+    pub transfers: TransferSummary,
+    pub last_end: Option<EndSummary>,
+    pub ignored: Vec<IgnoredCount>,
 }
 
 pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
@@ -171,6 +286,13 @@ pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
         inputs.pipelines.truncate(MAX_SNAPSHOT_LISTED);
         truncated = true;
     }
+    if inputs.ignored.len() > MAX_SNAPSHOT_LISTED {
+        inputs
+            .ignored
+            .sort_by(|left, right| right.count.cmp(&left.count));
+        inputs.ignored.truncate(MAX_SNAPSHOT_LISTED);
+        truncated = true;
+    }
     DiagnosticSnapshot {
         version: SNAPSHOT_VERSION,
         monotonic_ms: inputs.monotonic_ms,
@@ -180,6 +302,9 @@ pub fn build_snapshot(mut inputs: SnapshotInputs) -> DiagnosticSnapshot {
         pipelines: inputs.pipelines,
         resources: inputs.resources,
         queues: inputs.queues,
+        transfers: inputs.transfers,
+        last_end: inputs.last_end,
+        ignored: inputs.ignored,
         truncated,
     }
 }
@@ -217,4 +342,178 @@ pub fn export_json(snapshot: &DiagnosticSnapshot) -> Result<String, crate::Error
         ));
     }
     Ok(encoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection(id: u64) -> ConnectionSummary {
+        ConnectionSummary {
+            id,
+            role: "controller".into(),
+            phase: "active".into(),
+            generation: 1,
+            peer: fingerprint(&[id as u8; 32]),
+            services: 1,
+            path: "direct".into(),
+            rtt_ms: Some(3),
+            tx_bytes: 100,
+            rx_bytes: 200,
+            cwnd: Some(12_000),
+            congestion_events: Some(0),
+            lost_packets: Some(0),
+            black_holes_detected: Some(0),
+        }
+    }
+
+    fn service(id: u64) -> ServiceSummary {
+        ServiceSummary {
+            id,
+            connection_id: 1,
+            kind: "files".into(),
+            phase: "active".into(),
+            hosted: false,
+        }
+    }
+
+    fn pipeline(id: u64) -> PipelineSummary {
+        PipelineSummary {
+            service_id: id,
+            hosted: true,
+            codec: "h264".into(),
+            width: 1920,
+            height: 1080,
+            control: "controlling".into(),
+            ..Default::default()
+        }
+    }
+
+    fn inputs(connections: usize, services: usize) -> SnapshotInputs {
+        inputs_pipelines(connections, services, 0)
+    }
+
+    fn inputs_pipelines(connections: usize, services: usize, pipelines: usize) -> SnapshotInputs {
+        SnapshotInputs {
+            monotonic_ms: 7,
+            hosting: true,
+            connections: (0..connections as u64).map(connection).collect(),
+            services: (0..services as u64).map(service).collect(),
+            pipelines: (0..pipelines as u64).map(pipeline).collect(),
+            resources: ResourceCounts {
+                paired_devices: 2,
+                ..Default::default()
+            },
+            queues: QueueDepths::default(),
+            transfers: Default::default(),
+            last_end: None,
+            ignored: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_short_hex_and_never_the_key() {
+        let key = [0xABu8; 32];
+        assert_eq!(fingerprint(&key), "abababab");
+        assert_eq!(fingerprint(&[0u8; 32]), "00000000");
+        assert_ne!(fingerprint(&[1u8; 32]), fingerprint(&[2u8; 32]));
+    }
+
+    #[test]
+    fn file_name_only_strips_directories_and_bounds_length() {
+        assert_eq!(file_name_only("/Users/someone/Secret/file.txt"), "file.txt");
+        assert_eq!(file_name_only("C:\\Users\\someone\\doc.pdf"), "doc.pdf");
+        assert_eq!(file_name_only("bare"), "bare");
+        assert_eq!(file_name_only("/trailing/slash/"), "?");
+        assert_eq!(file_name_only(""), "?");
+        let long = format!("/tmp/{}.txt", "é".repeat(200));
+        let name = file_name_only(&long);
+        assert!(name.len() <= 128);
+        assert!(name.starts_with("é"));
+    }
+
+    #[test]
+    fn build_marks_truncation_at_the_list_cap() {
+        let small = build_snapshot(inputs(2, 3));
+        assert!(!small.truncated);
+        assert_eq!(small.connections.len(), 2);
+        assert_eq!(small.services.len(), 3);
+        assert_eq!(small.version, SNAPSHOT_VERSION);
+        let big = build_snapshot(inputs(MAX_SNAPSHOT_LISTED + 10, MAX_SNAPSHOT_LISTED + 1));
+        assert!(big.truncated);
+        assert_eq!(big.connections.len(), MAX_SNAPSHOT_LISTED);
+        assert_eq!(big.services.len(), MAX_SNAPSHOT_LISTED);
+        let piped = build_snapshot(inputs_pipelines(1, 1, MAX_SNAPSHOT_LISTED + 5));
+        assert!(piped.truncated);
+        assert_eq!(piped.pipelines.len(), MAX_SNAPSHOT_LISTED);
+        // Counts describe live state, not the truncated lists.
+        assert_eq!(big.resources.paired_devices, 2);
+    }
+
+    #[test]
+    fn export_round_trips_small_snapshots_as_expected_keys() {
+        let snapshot = build_snapshot(inputs(1, 1));
+        let json = export_json(&snapshot).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let keys: Vec<&str> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "connections",
+                "hosting",
+                "ignored",
+                "last_end",
+                "monotonic_ms",
+                "pipelines",
+                "queues",
+                "resources",
+                "services",
+                "transfers",
+                "truncated",
+                "version"
+            ]
+        );
+        // The exact key set is the schema: counts, labels and phases only.
+        // No screen, clipboard, terminal, token, secret or path field exists.
+        assert!(json.len() <= MAX_EXPORT_BYTES);
+    }
+
+    #[test]
+    fn export_sheds_lists_to_fit_the_cap_and_says_so() {
+        let mut snapshot = DiagnosticSnapshot {
+            version: SNAPSHOT_VERSION,
+            monotonic_ms: 9,
+            hosting: true,
+            connections: (0..2000u64).map(connection).collect(),
+            services: (0..2000u64).map(service).collect(),
+            pipelines: (0..2000u64).map(pipeline).collect(),
+            resources: ResourceCounts::default(),
+            queues: QueueDepths::default(),
+            transfers: Default::default(),
+            last_end: None,
+            ignored: Vec::new(),
+            truncated: false,
+        };
+        // Sanity: the untrimmed form really exceeds the cap.
+        assert!(serde_json::to_string(&snapshot).unwrap().len() > MAX_EXPORT_BYTES);
+        let json = export_json(&snapshot).unwrap();
+        assert!(json.len() <= MAX_EXPORT_BYTES);
+        snapshot = serde_json::from_str(&json).unwrap();
+        assert!(snapshot.truncated);
+        assert!(
+            snapshot.connections.len() + snapshot.services.len() + snapshot.pipelines.len() < 6000
+        );
+    }
+
+    #[test]
+    fn monotonic_clock_never_goes_backwards() {
+        let first = monotonic_ms();
+        let second = monotonic_ms();
+        assert!(second >= first);
+    }
 }

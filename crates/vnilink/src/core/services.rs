@@ -1,9 +1,7 @@
 //! Controller service records and cancellation. No service owns its peer link.
 
 use super::*;
-use crate::service::{
-    CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePhase, ServiceSupport,
-};
+use crate::service::{CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePhase};
 
 pub(super) struct ServiceRecord {
     pub(super) info: ServiceInfo,
@@ -11,6 +9,9 @@ pub(super) struct ServiceRecord {
     pub(super) stream_open: bool,
     pub(super) stop: tokio::sync::watch::Sender<bool>,
     pub(super) desktop: Option<Arc<super::desktop_stream::DesktopRuntime>>,
+    /// The engine that owns it, so its changes say so whichever thread
+    /// makes them.
+    pub(super) span: tracing::Span,
 }
 
 impl ServiceRecord {
@@ -20,6 +21,16 @@ impl ServiceRecord {
         {
             return false;
         }
+        let _engine = self.span.enter();
+        tracing::debug!(
+            target: crate::trace::SERVICE,
+            service = self.info.id,
+            kind = ?self.info.kind,
+            generation,
+            from = self.info.phase.label(),
+            to = phase.label(),
+            "service phase"
+        );
         // Every non-active transition and generation change fences old work.
         self.stop.send_replace(true);
         self.stream_open = false;
@@ -47,22 +58,28 @@ fn phase(session: &SessionPhase) -> ServicePhase {
     }
 }
 
-fn support(session: &LiveSession) -> ServiceSupport {
-    ServiceSupport {
-        desktop: session.services_only || (!session.files_only && !*session.desktop_stop.borrow()),
-        files: true,
-        terminal: session.services_only,
-        camera: session.services_only,
-        system_audio: session.services_only,
-        microphone: session.services_only,
-        system_actions: session.services_only,
-    }
-}
-
 fn publish(events: &EventHub, info: &ServiceInfo) {
     events.publish(CoreEvent::ServiceChanged {
         service: info.clone(),
     });
+}
+
+/// Whether this computer ended the controller service `id`'s stream: its
+/// owner closed it (the record still active, or closed by its owner) or the
+/// engine shut down. A lost, suspended or replaced connection cancels the
+/// lease too, and that end is the host's to name.
+pub(super) fn closed_here(shared: &Shared, id: u64, generation: u64) -> bool {
+    lock(&shared.state)
+        .services
+        .get(&id)
+        .filter(|record| record.info.generation == generation)
+        .is_none_or(|record| {
+            matches!(
+                record.info.phase,
+                ServicePhase::Active
+                    | ServicePhase::Closed(CloseCause::OwnerClose | CloseCause::Shutdown)
+            )
+        })
 }
 
 /// Called under the parent state lock, so events cannot reorder close/reopen.
@@ -132,16 +149,6 @@ pub(super) fn synchronize(state: &mut State, events: &EventHub) {
 }
 
 impl Core {
-    /// Support on this connection. This does not bypass remote authorization.
-    pub fn controller_service_support(&self, connection_id: u64) -> Result<ServiceSupport, Error> {
-        let state = self.alive_state()?;
-        let session = state.outgoing.get(&connection_id).ok_or(Error::NoSession)?;
-        if finished(&session.phase) || session.phase == SessionPhase::Stopping {
-            return Err(Error::NoSession);
-        }
-        Ok(support(session))
-    }
-
     /// Attaches a local service owner to an existing outgoing connection.
     /// Pending admission is allowed, but work leases require Active. One live
     /// owner per kind/connection, except Desktop which allows a bounded set
@@ -153,6 +160,7 @@ impl Core {
         generation: u64,
         kind: ServiceKind,
     ) -> Result<ServiceInfo, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let session = state.outgoing.get(&connection_id).ok_or(Error::NoSession)?;
@@ -161,18 +169,6 @@ impl Core {
         }
         if finished(&session.phase) || session.phase == SessionPhase::Stopping {
             return Err(Error::NoSession);
-        }
-        let services_only = session.services_only;
-        if !support(session).supports(kind) {
-            return Err(Error::Unsupported(match kind {
-                ServiceKind::Desktop => "desktop on a files-only connection",
-                ServiceKind::Terminal => "terminal service",
-                ServiceKind::Camera => "camera service",
-                ServiceKind::SystemAudio => "system audio service",
-                ServiceKind::Microphone => "microphone service",
-                ServiceKind::Files => "files service",
-                ServiceKind::System => "system service",
-            }));
         }
         if state.services.len() >= crate::MAX_SERVICE_RECORDS {
             return Err(Error::Busy);
@@ -186,14 +182,10 @@ impl Core {
                     && !r.info.phase.finished()
             })
             .count();
-        // Simultaneous monitor owners need the per-owner services
-        // transport; a legacy connection keeps the single-owner rule its
-        // shared session pipeline requires.
+        // Each monitor owner has its own Desktop stream.
         let allowed = match kind {
             ServiceKind::Terminal => usize::MAX,
-            ServiceKind::Desktop if services_only => {
-                super::desktop_stream::MAX_DESKTOP_OWNERS_PER_CONNECTION
-            }
+            ServiceKind::Desktop => super::desktop_stream::MAX_DESKTOP_OWNERS_PER_CONNECTION,
             _ => 1,
         };
         if live_same_kind >= allowed {
@@ -218,6 +210,7 @@ impl Core {
                 stream_open: false,
                 desktop: None,
                 stop,
+                span: self.shared.span.clone(),
             },
         );
         state.next_service_id = next_id;
@@ -226,6 +219,7 @@ impl Core {
     }
 
     pub fn controller_services(&self) -> Result<Vec<ServiceInfo>, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let mut records: Vec<_> = state.services.values().map(|r| r.info.clone()).collect();
@@ -234,6 +228,7 @@ impl Core {
     }
 
     pub fn controller_service(&self, id: u64) -> Result<ServiceInfo, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         Ok(state
@@ -248,6 +243,7 @@ impl Core {
     /// service generations. New adapters must use this and a cancellation lease
     /// rather than retaining an unchecked session id across asynchronous work.
     pub fn service_connection(&self, id: u64, generation: u64) -> Result<SessionInfo, Error> {
+        let _engine = self.engine();
         let lease = self.service_lease(id, generation)?;
         let state = self.alive_state()?;
         let session = live_session(&state, false, lease.info.connection_id)?;
@@ -258,6 +254,7 @@ impl Core {
     }
 
     pub fn service_lease(&self, id: u64, generation: u64) -> Result<ServiceLease, Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let record = state.services.get(&id).ok_or(Error::NoSession)?;
@@ -276,6 +273,7 @@ impl Core {
     /// Cancels only this owner/epoch. The peer connection and sibling services
     /// remain alive. Idempotent for a closed record of the same generation.
     pub fn close_controller_service(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let record = state.services.get_mut(&id).ok_or(Error::NoSession)?;
@@ -285,14 +283,14 @@ impl Core {
         if record.change(generation, ServicePhase::Closed(CloseCause::OwnerClose)) {
             publish(&self.shared.events, &record.info);
         }
-        super::desktop_service::retire_owner(&mut state, id, generation, false);
         drop(state);
-        super::service_jobs::cancel_orphaned(&self.shared);
+        super::service_jobs::interrupt_orphaned(&self.shared);
         Ok(())
     }
 
     /// Releases a finished record. Never cancels running work.
     pub fn forget_controller_service(&self, id: u64) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         synchronize(&mut state, &self.shared.events);
         let record = state.services.get(&id).ok_or(Error::NoSession)?;

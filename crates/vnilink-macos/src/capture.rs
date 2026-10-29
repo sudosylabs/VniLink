@@ -4,8 +4,12 @@
 //! lists shareable content and starts a stream, which asks for Screen Recording
 //! permission. The stream handler pushes each copied picture into a
 //! [`FrameChannel`]; [`ScreenCapture::poll_frame`] returns current pixels
-//! immediately, including a cached idle picture. Tests construct the plan and do not call `start`.
+//! immediately, including a cached idle picture. The stream delivers
+//! pictures at the size the host encodes ([`ScreenCapture::deliver_at`]):
+//! the system scales them as it captures, and each is compared with the one
+//! before at that size. Tests construct the plan and do not call `start`.
 //! FileVault preboot is not a logged-in display and is not captured.
+// trace: records every ignored failure
 
 use vnilink_media::{CapturePlan, ChannelSlot, CursorPolicy, Error, FrameChannel};
 
@@ -13,7 +17,7 @@ use vnilink_media::{CapturePlan, ChannelSlot, CursorPolicy, Error, FrameChannel}
 use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
-use screencapturekit::cm::{CMSampleBuffer, CMSampleBufferExt};
+use screencapturekit::cm::{CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt};
 #[cfg(target_os = "macos")]
 use screencapturekit::shareable_content::SCShareableContent;
 #[cfg(target_os = "macos")]
@@ -88,11 +92,34 @@ impl ScreenPlan {
         self.shows_cursor
     }
 
+    /// A short, cursor-free stream sized for one thumbnail. The caller picks
+    /// a fitted size so the output keeps the display's aspect ratio.
+    pub fn snapshot(width: u16, height: u16) -> Result<Self, Error> {
+        if width == 0
+            || height == 0
+            || width > vnilink::snapshot::MAX_SNAPSHOT_WIDTH
+            || height > vnilink::snapshot::MAX_SNAPSHOT_HEIGHT
+        {
+            return Err(Error::InvalidSetting("snapshot size is out of range"));
+        }
+        Ok(Self {
+            width,
+            height,
+            frame_rate: 5,
+            shows_cursor: false,
+        })
+    }
+
     /// BGRA, one monitor, cursor hidden unless the plan asks for it.
+    ///
+    /// Five buffers in the stream's queue: pictures are held in their
+    /// IOSurfaces (the newest in the channel, the shared capture's latest,
+    /// one being encoded), and the stream still needs free ones to fill.
     #[cfg(target_os = "macos")]
     pub fn configuration(&self) -> SCStreamConfiguration {
         let interval = CMTime::new(1, i32::from(self.frame_rate));
         SCStreamConfiguration::new()
+            .with_queue_depth(5)
             .with_width(u32::from(self.width))
             .with_height(u32::from(self.height))
             .with_pixel_format(PixelFormat::BGRA)
@@ -101,9 +128,27 @@ impl ScreenPlan {
     }
 }
 
+/// A picture size packed in one word, so the handler reads it without a lock.
+#[cfg(target_os = "macos")]
+fn pack((width, height): (u16, u16)) -> u32 {
+    u32::from(width) << 16 | u32::from(height)
+}
+
+#[cfg(target_os = "macos")]
+fn unpack(size: u32) -> (u16, u16) {
+    ((size >> 16) as u16, size as u16)
+}
+
 #[cfg(target_os = "macos")]
 struct Handler {
     channel: Arc<FrameChannel>,
+    /// The size the stream is configured for ([`pack`]): pictures of the
+    /// size before a change, still in flight, are not delivered.
+    size: Arc<std::sync::atomic::AtomicU32>,
+    /// The picture last pushed: a frame with the same pixels is not a new
+    /// one. Without this an unchanged screen would read as changing at the
+    /// frame rate (see `pixels::picture_change`).
+    previous: std::sync::Mutex<Option<apple_cf::cv::CVPixelBuffer>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -116,15 +161,55 @@ impl SCStreamOutputTrait for Handler {
             // Idle/status samples have no picture. They do not end capture.
             return;
         };
-        // Timestamp is applied by `poll_frame`; the handler only keeps pixels.
-        match crate::pixels::raw_frame_from_pixel_buffer(&pixel_buffer, 0) {
-            Ok(frame) => self.channel.push(ChannelSlot {
-                width: frame.width(),
-                height: frame.height(),
-                stride: usize::from(frame.width()) * 4,
-                bytes: frame.pixels().to_vec(),
-            }),
-            Err(Error::Unsupported(reason)) => self.channel.fail(reason),
+        let delivered = (
+            u16::try_from(pixel_buffer.width()).unwrap_or(0),
+            u16::try_from(pixel_buffer.height()).unwrap_or(0),
+        );
+        if pack(delivered) != self.size.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        // The same pixels again leave the channel as it is: its picture and
+        // when the source attested it do not change, so the shared capture
+        // sees an unchanged screen. Otherwise the comparison says how much
+        // of it changed.
+        let mut changed = None;
+        if let Some(kept) = sample.pixel_buffer() {
+            let mut previous = self
+                .previous
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            changed = previous
+                .as_ref()
+                .and_then(|previous| crate::pixels::picture_change(previous, &kept));
+            if changed.as_ref().is_some_and(|changes| changes.share == 0.0) {
+                return;
+            }
+            *previous = Some(kept);
+        }
+        // The stream timestamp is applied by `poll_frame`; the handler keeps
+        // the pixels and when the display showed them.
+        let captured_at = sample
+            .display_time()
+            .and_then(crate::clock::host_time_instant);
+        // The picture stays in its IOSurface: VideoToolbox encodes it there,
+        // and whatever else reads it copies it out once.
+        match crate::pixels::MacPicture::new(pixel_buffer) {
+            Ok(picture) => {
+                use vnilink_media::NativePicture;
+                let (width, height) = picture.size();
+                self.channel.push(ChannelSlot {
+                    width,
+                    height,
+                    stride: usize::from(width) * 4,
+                    bytes: vnilink_media::Pixels::native(Box::new(picture)),
+                    captured_at,
+                    changed,
+                });
+            }
+            Err(Error::Unsupported(reason)) => {
+                tracing::warn!(target: vnilink::trace::CAPTURE, reason, "ScreenCaptureKit capture failed");
+                self.channel.fail(reason)
+            }
             Err(_) => self
                 .channel
                 .fail("ScreenCaptureKit did not deliver a frame"),
@@ -187,10 +272,14 @@ fn display_coord(value: f64) -> Result<i32, Error> {
 #[cfg(target_os = "macos")]
 pub struct ScreenCapture {
     stream: SCStream,
-    plan: ScreenPlan,
-    width: u16,
-    height: u16,
+    /// The configuration now: its size follows [`Self::deliver_at`].
+    plan: std::sync::Mutex<ScreenPlan>,
+    /// The display's size, the plan's at start.
+    full: (u16, u16),
+    size: Arc<std::sync::atomic::AtomicU32>,
     channel: Arc<FrameChannel>,
+    /// The channel's generation when the picture last polled was read.
+    seen: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(target_os = "macos")]
@@ -200,8 +289,32 @@ impl ScreenCapture {
         Self::start_display(plan, None, startup)
     }
 
-    /// Capture the selected main display rather than assuming enumeration order.
+    /// Capture the selected main display rather than assuming enumeration
+    /// order; records whether capture started, and why not.
     pub fn start_display(
+        plan: &ScreenPlan,
+        display_id: Option<u32>,
+        startup: &vnilink::BackendStartup,
+    ) -> Result<Self, Error> {
+        let started = Self::open_display(plan, display_id, startup);
+        match &started {
+            Ok(capture) => tracing::info!(
+                target: vnilink::trace::CAPTURE,
+                width = capture.full.0,
+                height = capture.full.1,
+                "ScreenCaptureKit capture started"
+            ),
+            Err(error) => tracing::warn!(
+                target: vnilink::trace::CAPTURE,
+                failure = vnilink::trace::Failure::failure_name(error),
+                reason = vnilink::trace::Failure::failure_reason(error),
+                "ScreenCaptureKit capture did not start"
+            ),
+        }
+        started
+    }
+
+    fn open_display(
         plan: &ScreenPlan,
         display_id: Option<u32>,
         startup: &vnilink::BackendStartup,
@@ -226,6 +339,10 @@ impl ScreenCapture {
             .build()
             .map_err(|_| Error::CaptureRejected("the display filter could not be built"))?;
         let channel = Arc::new(FrameChannel::new());
+        let size = Arc::new(std::sync::atomic::AtomicU32::new(pack((
+            plan.width(),
+            plan.height(),
+        ))));
         let delegate = failure_delegate(&channel);
         let mut stream = SCStream::new_with_delegate(&filter, &plan.configuration(), delegate)
             .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
@@ -233,6 +350,8 @@ impl ScreenCapture {
             .add_output_handler(
                 Handler {
                     channel: Arc::clone(&channel),
+                    size: Arc::clone(&size),
+                    previous: std::sync::Mutex::new(None),
                 },
                 SCStreamOutputType::Screen,
             )
@@ -243,10 +362,11 @@ impl ScreenCapture {
             .map_err(|_| Error::CaptureRejected("ScreenCaptureKit did not start"))?;
         let capture = Self {
             stream,
-            plan: *plan,
-            width: plan.width(),
-            height: plan.height(),
+            plan: std::sync::Mutex::new(*plan),
+            full: (plan.width(), plan.height()),
+            size,
             channel,
+            seen: std::sync::atomic::AtomicU64::new(0),
         };
         // Own the stream before checking so late success runs stop_capture.
         check()?;
@@ -256,22 +376,118 @@ impl ScreenCapture {
     /// Switch only the cursor policy at session admission. Legacy viewers keep
     /// ScreenCaptureKit's embedded cursor; metadata-aware viewers draw locally.
     pub fn set_shows_cursor(&self, shows_cursor: bool) -> Result<(), Error> {
-        let mut plan = self.plan;
-        plan.shows_cursor = shows_cursor;
+        let mut plan = self.plan.lock().unwrap_or_else(|e| e.into_inner());
+        let mut next = *plan;
+        next.shows_cursor = shows_cursor;
         self.stream
-            .update_configuration(&plan.configuration())
-            .map_err(|_| Error::CaptureRejected("the cursor capture policy could not be updated"))
+            .update_configuration(&next.configuration())
+            .map_err(|_| {
+                Error::CaptureRejected("the cursor capture policy could not be updated")
+            })?;
+        *plan = next;
+        Ok(())
     }
 
+    /// The size pictures come at now.
     pub fn size(&self) -> (u16, u16) {
-        (self.width, self.height)
+        unpack(self.size.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    /// The display's size, the largest the stream delivers.
+    pub fn full_size(&self) -> (u16, u16) {
+        self.full
+    }
+
+    /// Reconfigures the stream to deliver pictures of `size`, which the
+    /// system scales from the display as it captures them: the host then
+    /// neither scales a 4K picture to the size it encodes nor compares
+    /// the larger picture with the one before. Pictures of the size before
+    /// are dropped from here on, and the stored one is forgotten, so the
+    /// next read waits for one of the new size. `false` when the size is
+    /// not one the display can give or ScreenCaptureKit refused it; the
+    /// stream goes on at its size.
+    pub fn deliver_at(&self, size: (u16, u16)) -> bool {
+        let (width, height) = size;
+        if width < 2 || height < 2 || width > self.full.0 || height > self.full.1 {
+            return false;
+        }
+        let mut plan = self.plan.lock().unwrap_or_else(|e| e.into_inner());
+        let mut next = *plan;
+        next.width = width;
+        next.height = height;
+        let before = self
+            .size
+            .swap(pack(size), std::sync::atomic::Ordering::AcqRel);
+        self.channel.clear();
+        if self
+            .stream
+            .update_configuration(&next.configuration())
+            .is_err()
+        {
+            self.size
+                .store(before, std::sync::atomic::Ordering::Release);
+            return false;
+        }
+        *plan = next;
+        true
+    }
+
+    /// When ScreenCaptureKit last delivered a picture whose pixels changed.
+    /// Idle polls and frames with the same pixels do not move this.
+    pub fn attested_at(&self) -> Option<std::time::Instant> {
+        self.channel.pushed_at()
     }
 
     /// Current pixels without waiting for screen damage. Failure is checked
     /// before cached pixels, so a stopped capture cannot look healthy forever.
     pub fn poll_frame(&self, timestamp_us: u64) -> Result<Option<vnilink_media::RawFrame>, Error> {
+        // Before the read, so a picture pushed during it still counts as new.
+        self.seen.store(
+            self.channel.generation(),
+            std::sync::atomic::Ordering::Release,
+        );
         poll_channel(&self.channel, timestamp_us)
     }
+
+    /// Waits for a picture newer than the last poll's, until `deadline`.
+    /// ScreenCaptureKit's callback wakes it as the picture is stored.
+    pub fn wait_frame(&self, deadline: std::time::Instant) -> bool {
+        let seen = self.seen.load(std::sync::atomic::Ordering::Acquire);
+        self.channel.wait_newer(seen, deadline) != seen
+    }
+
+    /// Opens the primary display at a fitted thumbnail size. The first polled
+    /// frame is a new acquisition; drop the capture to stop the stream.
+    pub fn open_snapshot(startup: &vnilink::BackendStartup) -> Result<(Self, String), Error> {
+        startup
+            .check()
+            .map_err(|_| Error::CaptureRejected("desktop capture startup cancelled or expired"))?;
+        let content = SCShareableContent::get()
+            .map_err(|_| Error::CaptureRejected("Screen Recording permission was not granted"))?;
+        startup
+            .check()
+            .map_err(|_| Error::CaptureRejected("desktop capture startup cancelled or expired"))?;
+        // SAFETY: CGMainDisplayID takes no pointer and returns the main display id.
+        let primary = unsafe { CGMainDisplayID() };
+        let displays = content.displays();
+        let display = displays
+            .iter()
+            .find(|display| display.display_id() == primary)
+            .or_else(|| displays.first())
+            .ok_or(Error::CaptureRejected("no display is available"))?;
+        let (width, height) = vnilink::snapshot::fitted_size(display.width(), display.height())
+            .ok_or(Error::CaptureRejected("no display is available"))?;
+        let plan = ScreenPlan::snapshot(width, height)?;
+        let display_id = display.display_id();
+        let capture = Self::start_display(&plan, Some(display_id), startup)?;
+        Ok((capture, display_id.to_string()))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGMainDisplayID() -> u32;
 }
 
 #[cfg(target_os = "macos")]
@@ -291,13 +507,18 @@ fn poll_channel(
     channel
         .try_latest()?
         .map(|slot| {
-            crate::pixels::raw_frame_from_bgra(
+            vnilink_media::RawFrame::shared(
                 slot.width,
                 slot.height,
                 slot.stride,
                 timestamp_us,
-                &slot.bytes,
+                slot.bytes,
             )
+            .map(|frame| {
+                frame
+                    .with_captured_at(slot.captured_at)
+                    .with_changed(channel.take_changed())
+            })
         })
         .transpose()
 }
@@ -309,16 +530,24 @@ mod idle_tests {
     fn idle_repeats_the_last_picture_without_waiting_but_failure_does_not() {
         let channel = Arc::new(FrameChannel::new());
         assert!(poll_channel(&channel, 1).unwrap().is_none());
+        let shown = std::time::Instant::now();
         channel.push(ChannelSlot {
             width: 2,
             height: 2,
             stride: 8,
-            bytes: vec![19; 16],
+            bytes: vec![19; 16].into(),
+            captured_at: Some(shown),
+            changed: None,
         });
         let first = poll_channel(&channel, 2).unwrap().unwrap();
         let repeated = poll_channel(&channel, 3).unwrap().unwrap();
         assert_eq!(first.pixels(), repeated.pixels());
+        // A repeat shares the picture the handler copied; it is not copied again.
+        assert_eq!(first.pixels().as_ptr(), repeated.pixels().as_ptr());
         assert_eq!(repeated.timestamp_us(), 3);
+        // A repeat is the same capture: it keeps when the display showed it.
+        assert_eq!(first.captured_at(), Some(shown));
+        assert_eq!(repeated.captured_at(), Some(shown));
         use screencapturekit::stream::delegate_trait::SCStreamDelegateTrait;
         failure_delegate(&channel)
             .did_stop_with_error(screencapturekit::error::SCError::internal_error("fixture"));
@@ -332,6 +561,10 @@ mod idle_tests {
 #[cfg(target_os = "macos")]
 impl Drop for ScreenCapture {
     fn drop(&mut self) {
-        let _ = self.stream.stop_capture();
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a stream that cannot stop ends with its capture",
+            self.stream.stop_capture()
+        );
     }
 }

@@ -220,6 +220,113 @@ impl VnilinkCore {
     }
 }
 
+/// A shell this computer can offer, by the id the local user picks it with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiShell {
+    pub id: String,
+    pub label: String,
+}
+/// The shells this computer can offer, what "automatic" resolves to, and the
+/// one paired computers get now (`None` when terminals are not offered).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiTerminalShells {
+    pub shells: Vec<FfiShell>,
+    pub automatic: String,
+    pub current: Option<String>,
+}
+
+fn host_shells() -> Result<
+    (
+        Vec<vnilink::terminal::ShellChoice>,
+        vnilink::terminal::ShellChoice,
+    ),
+    FfiError,
+> {
+    #[cfg(unix)]
+    {
+        Ok((
+            vnilink::terminal::available_shells(),
+            vnilink::terminal::automatic_shell().map_err(map_error)?,
+        ))
+    }
+    #[cfg(windows)]
+    {
+        let shells = vnilink_windows::available_shells();
+        let automatic = vnilink_windows::automatic_of(&shells)
+            .cloned()
+            .ok_or_else(|| map_error(vnilink::Error::Unsupported("host shell")))?;
+        Ok((shells, automatic))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(map_error(vnilink::Error::Unsupported(
+            "native terminal backend on this platform",
+        )))
+    }
+}
+
+impl VnilinkCore {
+    /// The shells the local user may offer to paired computers.
+    pub fn terminal_shells(&self) -> Result<FfiTerminalShells, FfiError> {
+        let (shells, automatic) = host_shells()?;
+        Ok(FfiTerminalShells {
+            shells: shells
+                .into_iter()
+                .map(|shell| FfiShell {
+                    id: shell.id,
+                    label: shell.label,
+                })
+                .collect(),
+            automatic: automatic.id,
+            current: self.inner.terminal_shell_id().map_err(map_error)?,
+        })
+    }
+    /// Offers the shell the local user chose, or the automatic one for `None`.
+    /// A peer never reaches this: it names a detected shell by id, and is
+    /// refused with Busy while any shell is alive or starting.
+    pub fn set_terminal_shell(&self, id: Option<String>) -> Result<(), FfiError> {
+        let (shells, automatic) = host_shells()?;
+        let shell = match id {
+            None => automatic,
+            Some(id) => shells
+                .into_iter()
+                .find(|shell| shell.id == id)
+                .ok_or_else(|| {
+                    map_error(vnilink::Error::InvalidSetting(
+                        "that shell is not installed on this computer",
+                    ))
+                })?,
+        };
+        self.inner
+            .replace_terminal_factory(factory_for(&shell)?)
+            .map_err(map_error)
+    }
+}
+
+fn factory_for(
+    shell: &vnilink::terminal::ShellChoice,
+) -> Result<Arc<dyn vnilink::terminal::HostTerminalFactory>, FfiError> {
+    #[cfg(unix)]
+    {
+        Ok(Arc::new(
+            vnilink::terminal::NativeTerminalFactory::for_shell(shell).map_err(map_error)?,
+        ))
+    }
+    #[cfg(windows)]
+    {
+        Ok(Arc::new(
+            vnilink_windows::WindowsTerminalFactory::for_shell(shell).map_err(map_error)?,
+        ))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = shell;
+        Err(map_error(vnilink::Error::Unsupported(
+            "native terminal backend on this platform",
+        )))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiTerminalPolicy {
     pub allow_persistence: bool,

@@ -8,6 +8,7 @@
 //! inject while blocked. Every `set_input_blocked` call runs on the shared
 //! input owner, and blocked-time injection joins it there, so no caller —
 //! Tokio worker, application thread or teardown path — can split the pair.
+// trace: records every ignored failure
 
 use vnilink::system::owner::{make_os_inject_backend, set_blocked, BlockBackend};
 use vnilink::system::{HostSessionState, HostSystemActions, SystemSupport};
@@ -64,7 +65,11 @@ impl WindowsSystemActions {
                 };
                 AdjustTokenPrivileges(token, false, Some(&privileges), 0, None, None).ok()
             })();
-            let _ = CloseHandle(token);
+            ignored_hr!(
+                vnilink::trace::SYSTEM,
+                "a token handle that cannot close ends with the process",
+                CloseHandle(token)
+            );
             result.ok_or(Error::Unsupported("shutdown privilege was refused"))
         }
     }

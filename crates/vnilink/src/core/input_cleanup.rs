@@ -1,20 +1,23 @@
 //! One bounded native cleanup worker per Core. Jobs retain their owner's
 //! admission slot until release completes, including after record removal.
+// trace: records every ignored failure
 use super::*;
 type Job = Box<dyn FnOnce() + Send>;
-const CAPACITY: usize = 32; // 16 scoped Desktop slots plus at most 4 legacy peers.
+const CAPACITY: usize = 32; // Above the 16 Desktop admission slots, each with one release at a time.
 pub(super) struct Executor(std::sync::mpsc::SyncSender<Job>);
 impl Executor {
-    pub(super) fn new() -> std::io::Result<Self> {
+    pub(super) fn new(span: tracing::Span) -> std::io::Result<Self> {
         let (send, receive) = std::sync::mpsc::sync_channel::<Job>(CAPACITY);
         std::thread::Builder::new()
             .name("vnilink-input-cleanup".into())
-            .spawn(move || {
+            .spawn(crate::trace::within(span, move || {
                 while let Ok(job) = receive.recv() {
                     // A backend panic must not kill the only cleanup executor.
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_err() {
+                        tracing::warn!(target: crate::trace::INPUT, "an input cleanup panicked");
+                    }
                 }
-            })?;
+            }))?;
         Ok(Self(send))
     }
     pub(super) fn submit(&self, job: impl FnOnce() + Send + 'static) {
@@ -34,13 +37,12 @@ impl Drop for AdmissionSlot {
 /// Settle bookkeeping even if a native backend panics during cleanup.
 pub(super) struct Reservation {
     pub(super) pending: Arc<AtomicUsize>,
-    pub(super) releasing: Option<Arc<AtomicBool>>,
+    pub(super) releasing: Arc<AtomicBool>,
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
-        if let Some(releasing) = &self.releasing {
-            releasing.store(false, std::sync::atomic::Ordering::Release);
-        }
+        self.releasing
+            .store(false, std::sync::atomic::Ordering::Release);
         self.pending
             .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }

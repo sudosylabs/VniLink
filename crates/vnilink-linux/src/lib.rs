@@ -1,14 +1,17 @@
-//! Linux capture and H.264 for VniLink.
+//! Linux capture and hardware video for VniLink.
 //!
 //! X11 and the Wayland portal are separate. [`X11Capture`] reads the current
 //! X session. [`PortalSession`] is the ScreenCast permission sequence, and
 //! [`PortalCapture`] reads BGRA or BGRx from the PipeWire node that sequence
-//! starts using shared-memory buffers. One started session is
-//! not universal unattended access. [`LinuxEncoder`] encodes H.264 with
-//! VA-API on the first DRM render node that offers the negotiated profile
-//! (High when the session agrees it, else Constrained Baseline),
-//! and [`LinuxDecoder`] decodes it back on the first node that offers
-//! variable-length decode. Tests do not connect to an X server or a session
+//! starts, in shared-memory buffers, or, when the encoder is VA-API on the
+//! GPU the compositor draws on, as DMA-BUFs that stay on the GPU
+//! (`gpu_picture`). One started session is not universal unattended access. [`LinuxEncoder`] encodes on the GPU the
+//! compositor draws the capture on when it offers the negotiated codec, else
+//! on another (`gpu`), with NVENC on an NVIDIA GPU or VA-API: H.264 (High
+//! when the session agrees it, else Constrained Baseline), H.265 and, on
+//! NVENC, AV1. [`video_codec_caps`] offers H.265 and AV1 only once a picture
+//! encoded on the GPU decodes. [`LinuxDecoder`] decodes H.264 on the first
+//! node in that order that offers variable-length decode. Tests do not connect to an X server or a session
 //! bus. The encoder test and the DMA-BUF test open a render node when one
 //! is present.
 
@@ -27,8 +30,18 @@ mod dmabuf;
 pub use camera::camera_devices;
 #[cfg(any(target_os = "linux", test))]
 pub use camera::LinuxCameraFactory;
+#[cfg(target_os = "linux")]
+mod codecs;
 mod encode;
+#[cfg(any(target_os = "linux", test))]
+mod gpu;
+#[cfg(target_os = "linux")]
+mod gpu_picture;
+#[cfg(any(target_os = "linux", test))]
+mod hevc_parameter_set;
 mod host;
+#[cfg(target_os = "linux")]
+mod nvenc;
 mod owners;
 mod parameter_set;
 #[cfg(target_os = "linux")]
@@ -44,19 +57,19 @@ mod wayland;
 mod x11;
 
 #[cfg(target_os = "linux")]
+pub use codecs::video_codec_caps;
+#[cfg(target_os = "linux")]
 pub use decode::LinuxDecoder;
 pub use encode::LinuxEncoder;
-#[cfg(target_os = "linux")]
-pub use vaapi::video_codec_caps;
 /// The caps probe reports nothing where VA-API cannot exist. The Linux build
 /// above replaces this with the render-node check.
 #[cfg(not(target_os = "linux"))]
 pub fn video_codec_caps() -> vnilink::VideoCodecCaps {
     vnilink::VideoCodecCaps::default()
 }
-pub use host::HostSession;
 #[cfg(target_os = "linux")]
-pub use host::{serve_desktop, serve_portal};
+pub use host::serve_desktop;
+pub use host::HostSession;
 pub use owners::{
     stale_owners, topology_signature, wanted_owners, GeometryFingerprint, SourceOwner, SourceOwners,
 };
@@ -64,8 +77,13 @@ pub use pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
 pub use pointer::{
     display_for_frame, display_for_frame_id, display_for_picture, place_on_display, pointer,
 };
+mod grant;
+mod session;
+pub use grant::{GrantedScreen, ScreenGrant};
 pub use portal::{PortalPhase, PortalSession, ONE_PORTAL_SESSION_IS_UNIVERSAL};
 pub use x11::{raw_frame_from_ximage, X11Capture, X11Image, X11Plan};
+mod snapshot;
+pub use snapshot::LinuxSnapshot;
 
 #[cfg(target_os = "linux")]
 pub use dbus::open_monitor;

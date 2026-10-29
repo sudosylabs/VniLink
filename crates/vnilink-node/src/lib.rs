@@ -3,8 +3,10 @@
 //! subscriptions instead of holding pollers in JavaScript.
 //! Management calls run on libuv workers. The separate data module uses
 //! bounded, nonblocking native drains and input queues outside this mutex.
+// trace: records every ignored failure
 mod native;
 mod storage;
+mod system;
 
 use native::{
     TransferCapability, TransferNativeBackend, TransferNativeDevice, TransferPowerPolicy,
@@ -14,17 +16,21 @@ use native::{
 #[cfg(feature = "reset-installation")]
 pub use storage::reset_installation_cli;
 mod data;
+mod files;
 
 use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use vnilink_app::{EventPoller, FfiError, FilesService, VideoPoller, VnilinkCore};
+use vnilink_app::{EventPoller, FfiError, VnilinkCore};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
 /// frames cross as base64, so this must clear a ~1 MiB frame plus JSON shape.
 const COMMAND_BYTES_MAX: usize = 2 * 1024 * 1024;
+
+/// Entries per local listing page: the core's largest page.
+const LIST_PAGE: u16 = 500;
 
 /// Bridge-local transfer shapes. The application `Ffi*` records behind these
 /// are not serde types, so the bridge owns the exact JSON field names.
@@ -49,6 +55,15 @@ struct TransferDisplay {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TransferWindowDecoder {
+    codec: String,
+    hardware: bool,
+    chroma444: bool,
+    bt601: bool,
+}
+
+#[derive(Deserialize, Serialize)]
 struct TransferQuality {
     max_bitrate_kbps: u32,
     max_frame_rate: u8,
@@ -63,16 +78,6 @@ struct TransferPath {
     rtt_ms: String,
     tx_bytes: String,
     rx_bytes: String,
-}
-
-#[derive(Serialize)]
-struct TransferFrame {
-    codec: String,
-    keyframe: bool,
-    timestamp_us: String,
-    data: String,
-    display_id: String,
-    revision: String,
 }
 
 #[derive(Serialize)]
@@ -94,6 +99,16 @@ struct TransferSystemSupport {
     shutdown: bool,
     privacy: bool,
 }
+
+/// A shell this computer can offer, as the window lists it.
+#[derive(Serialize)]
+struct TransferShell {
+    id: String,
+    label: String,
+}
+
+/// Longest shell id: a path on Unix, a name on Windows.
+const MAX_SHELL_ID: usize = 1024;
 
 #[derive(Deserialize, Serialize, Clone)]
 struct TransferTerminalPolicy {
@@ -117,7 +132,7 @@ struct TransferTerminalSession {
 }
 
 #[derive(Serialize)]
-struct TransferJob {
+pub(crate) struct TransferJob {
     id: String,
     peer: String,
     label: String,
@@ -132,10 +147,37 @@ struct TransferJob {
     skipped_files: String,
     skipped_symlinks: String,
     waiting_file: Option<String>,
+    current_file: Option<String>,
     error: Option<String>,
+    destination: Option<TransferDestination>,
 }
 
-fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
+/// Where a transfer lands, with its root as a decimal string like other ids.
+#[derive(Serialize)]
+pub(crate) struct TransferDestination {
+    root: String,
+    #[serde(rename = "path")]
+    folder: String,
+    items: Vec<TransferItem>,
+}
+
+/// A file or folder on this computer, by its root, its folder and its name.
+#[derive(Serialize)]
+pub(crate) struct TransferLocation {
+    root: String,
+    #[serde(rename = "path")]
+    folder: String,
+    name: String,
+}
+
+/// One file or folder a transfer lands, by name.
+#[derive(Serialize)]
+pub(crate) struct TransferItem {
+    name: String,
+    folder: bool,
+}
+
+pub(crate) fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
     fn direction_name(direction: &vnilink_app::FfiJobDirection) -> &'static str {
         match direction {
             vnilink_app::FfiJobDirection::Upload => "Upload",
@@ -169,7 +211,23 @@ fn transfer_job(snapshot: &vnilink_app::FfiJobSnapshot) -> TransferJob {
         skipped_files: snapshot.skipped_files.to_string(),
         skipped_symlinks: snapshot.skipped_symlinks.to_string(),
         waiting_file: snapshot.waiting_file.clone(),
+        current_file: snapshot.current_file.clone(),
         error: snapshot.error.clone(),
+        destination: snapshot
+            .destination
+            .as_ref()
+            .map(|destination| TransferDestination {
+                root: destination.root.to_string(),
+                folder: destination.folder.clone(),
+                items: destination
+                    .items
+                    .iter()
+                    .map(|item| TransferItem {
+                        name: item.name.clone(),
+                        folder: item.folder,
+                    })
+                    .collect(),
+            }),
     }
 }
 
@@ -221,6 +279,7 @@ impl EventTransfer {
             vnilink_app::FfiServiceKind::SystemAudio => "SystemAudio",
             vnilink_app::FfiServiceKind::Microphone => "Microphone",
             vnilink_app::FfiServiceKind::System => "System",
+            vnilink_app::FfiServiceKind::ScreenSnapshot => "ScreenSnapshot",
         }
     }
 
@@ -234,6 +293,16 @@ impl EventTransfer {
             vnilink_app::FfiCloseCause::Shutdown => "Shutdown",
             vnilink_app::FfiCloseCause::PeerClose => "PeerClose",
             vnilink_app::FfiCloseCause::IdleExpired => "IdleExpired",
+            vnilink_app::FfiCloseCause::Failed(_) => "Failed",
+        }
+    }
+
+    fn stream_failure(failure: &vnilink_app::FfiStreamFailure) -> &'static str {
+        match failure {
+            vnilink_app::FfiStreamFailure::Encoder => "encoder",
+            vnilink_app::FfiStreamFailure::Capture => "capture",
+            vnilink_app::FfiStreamFailure::Permission => "permission",
+            vnilink_app::FfiStreamFailure::DisplayGone => "displayGone",
         }
     }
 
@@ -243,6 +312,11 @@ impl EventTransfer {
             vnilink_app::FfiServicePhase::Active => serde_json::Value::String("Active".into()),
             vnilink_app::FfiServicePhase::Suspended => {
                 serde_json::Value::String("Suspended".into())
+            }
+            vnilink_app::FfiServicePhase::Closed {
+                cause: vnilink_app::FfiCloseCause::Failed(failure),
+            } => {
+                serde_json::json!({ "Closed": { "cause": "Failed", "failure": Self::stream_failure(failure) } })
             }
             vnilink_app::FfiServicePhase::Closed { cause } => {
                 serde_json::json!({ "Closed": { "cause": Self::close_cause(cause) } })
@@ -295,6 +369,29 @@ impl EventTransfer {
             vnilink_app::FfiEvent::HostingChanged { hosting } => {
                 serde_json::json!({ "type": "hostingChanged", "hosting": hosting })
             }
+            vnilink_app::FfiEvent::FolderChanged { watch } => {
+                serde_json::json!({ "type": "folderChanged", "watch": watch.to_string() })
+            }
+            vnilink_app::FfiEvent::SystemActionScheduled {
+                operation_id,
+                action,
+                endpoint_id,
+                remaining_ms,
+            } => serde_json::json!({
+                "type": "systemActionScheduled",
+                "id": operation_id.to_string(),
+                "action": system::action_name(*action),
+                "endpoint_id": endpoint_id,
+                "remainingMs": remaining_ms,
+            }),
+            vnilink_app::FfiEvent::SystemActionEnded {
+                operation_id,
+                state,
+            } => serde_json::json!({
+                "type": "systemActionEnded",
+                "id": operation_id.to_string(),
+                "state": system::state_name(*state),
+            }),
             vnilink_app::FfiEvent::DevicePaired { endpoint_id } => {
                 serde_json::json!({ "type": "devicePaired", "endpoint_id": endpoint_id })
             }
@@ -318,6 +415,15 @@ impl EventTransfer {
                 hostname,
             } => {
                 serde_json::json!({ "type": "peerRenamed", "endpoint_id": endpoint_id, "hostname": hostname })
+            }
+            vnilink_app::FfiEvent::PresenceChanged {
+                endpoint_id,
+                presence,
+            } => {
+                serde_json::json!({ "type": "presenceChanged", "endpoint_id": endpoint_id, "presence": presence })
+            }
+            vnilink_app::FfiEvent::PeerAvailabilityChanged { endpoint_id } => {
+                serde_json::json!({ "type": "peerAvailabilityChanged", "endpoint_id": endpoint_id })
             }
             vnilink_app::FfiEvent::SessionChanged {
                 id,
@@ -345,29 +451,8 @@ impl EventTransfer {
             vnilink_app::FfiEvent::HostedServiceChanged { service } => {
                 serde_json::json!({ "type": "hostedServiceChanged", "service": Self::service(service) })
             }
-            vnilink_app::FfiEvent::QualityUpdated { id, quality } => {
-                serde_json::json!({
-                    "type": "qualityUpdated",
-                    "id": id.to_string(),
-                    "quality": {
-                        "max_bitrate_kbps": quality.max_bitrate_kbps,
-                        "max_frame_rate": quality.max_frame_rate,
-                        "max_width": quality.max_width,
-                        "max_height": quality.max_height,
-                    },
-                })
-            }
             vnilink_app::FfiEvent::InputFailed { id, message } => {
                 serde_json::json!({ "type": "inputFailed", "id": id.to_string(), "message": message })
-            }
-            vnilink_app::FfiEvent::KeyframeRequested { id } => {
-                serde_json::json!({ "type": "keyframeRequested", "id": id.to_string() })
-            }
-            vnilink_app::FfiEvent::ClipboardReceived { id } => {
-                serde_json::json!({ "type": "clipboardReceived", "id": id.to_string() })
-            }
-            vnilink_app::FfiEvent::ClipboardFilesReceived { id } => {
-                serde_json::json!({ "type": "clipboardFilesReceived", "id": id.to_string() })
             }
             vnilink_app::FfiEvent::DesktopClipboardReceived { service } => {
                 serde_json::json!({ "type": "desktopClipboardReceived", "service": Self::service(service) })
@@ -416,14 +501,6 @@ fn keyboard_mode_name(mode: vnilink_app::FfiKeyboardMode) -> &'static str {
     }
 }
 
-fn session_role(name: &str) -> Result<vnilink_app::FfiSessionRole> {
-    match name {
-        "Controller" => Ok(vnilink_app::FfiSessionRole::Controller),
-        "Host" => Ok(vnilink_app::FfiSessionRole::Host),
-        _ => Err(Error::new(Status::InvalidArg, "Invalid session role")),
-    }
-}
-
 fn parse_id(value: &str, what: &str) -> Result<u64> {
     value
         .parse::<u64>()
@@ -458,6 +535,19 @@ enum Command {
         endpoint_id: String,
     },
     Snapshot,
+    /// The bounded diagnostic snapshot as JSON; see `vnilink::diagnostics`.
+    DiagnosticSnapshot,
+    /// The flight recorder's events as JSON lines; see `vnilink_log`.
+    DiagnosticRecorder,
+    /// The engine log's filter in force and where it came from.
+    LogFilter,
+    /// Applies the application's log filter setting, in `tracing`'s
+    /// directive syntax; `null` asks for the default.
+    SetLogFilter {
+        directives: Option<String>,
+    },
+    /// The end of this run's engine log file.
+    EngineLogTail,
     Endpoint,
     Capabilities,
     VideoCodecs,
@@ -470,29 +560,6 @@ enum Command {
     PeerHostname {
         #[serde(rename = "endpointId")]
         endpoint_id: String,
-    },
-    ClipboardOwnerSession,
-    SessionKeyboardMode {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    SetSessionKeyboardMode {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        mode: String,
-    },
-    SessionSwapControlAndCommand {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    SetSessionSwapControlAndCommand {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        enabled: bool,
     },
     ControllerSessionPaths {
         #[serde(rename = "sessionId")]
@@ -509,7 +576,6 @@ enum Command {
         #[serde(rename = "subscriptionId")]
         subscription_id: String,
     },
-    SubscribeVideo,
     SharingPolicy,
     SetSharingPolicy {
         policy: vnilink_app::FfiSharingPolicyUpdate,
@@ -518,16 +584,42 @@ enum Command {
     SetSystemPolicy {
         policy: TransferSystemPolicy,
     },
+    /// Asks a paired computer to lock, restart or shut down.
+    SystemAction {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        action: String,
+    },
+    SystemOperation {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        id: String,
+    },
+    CancelSystemAction {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        id: String,
+    },
+    /// Restarts and shutdowns counting down on this computer.
+    ScheduledSystemActions,
+    CancelHostedSystemAction {
+        id: String,
+    },
+    RunHostedSystemActionNow {
+        id: String,
+    },
     TerminalPolicy,
     SetTerminalPolicy {
         policy: TransferTerminalPolicy,
     },
-    EnableNativeTerminal {
-        program: String,
-        directory: String,
+    TerminalShells,
+    /// `null` offers the automatic shell; otherwise a detected shell's id.
+    SetTerminalShell {
+        shell: Option<String>,
     },
-    EnableDefaultNativeTerminal,
-    DisableTerminal,
     RemoteTerminalSessions {
         #[serde(rename = "connectionId")]
         connection_id: String,
@@ -542,31 +634,6 @@ enum Command {
     HostedTerminalSessions,
     CloseTerminalSession {
         id: String,
-    },
-    SubscribeFilesJobs {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    PollFilesJobs {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    ReleaseFilesJobs {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    FilesJobCancel {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-        #[serde(rename = "jobId")]
-        job_id: String,
-    },
-    FilesJobResume {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-        #[serde(rename = "jobId")]
-        job_id: String,
     },
     CreateInvitation {
         #[serde(rename = "ttlSeconds")]
@@ -606,27 +673,14 @@ enum Command {
         endpoint_id: String,
         name: String,
     },
-    Connect {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
-    ConnectFiles {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
-    BeginConnectFiles {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
-    BeginConnect {
-        #[serde(rename = "endpointId")]
-        endpoint_id: String,
-    },
     Disconnect,
     DisconnectSession {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
+    /// Desktop input, from `SubmitKey` to `ReleaseSessionInput`: decoded on
+    /// a desktop's data channel only (`data.rs`), naming the desktop's
+    /// connection and generation.
     SubmitKey {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -677,12 +731,6 @@ enum Command {
         generation: String,
         text: String,
     },
-    SubmitClipboard {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        text: String,
-    },
     SubmitLocalKey {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -690,11 +738,21 @@ enum Command {
         usage: u16,
         down: bool,
         text: String,
+        /// A dead key or an input-method step that has not typed a character yet.
+        composing: bool,
     },
     ReleaseSessionInput {
         #[serde(rename = "sessionId")]
         session_id: String,
         generation: String,
+    },
+    /// The display a desktop shows and its pointer lands on, sent on the
+    /// desktop's data channel in order with its input.
+    SelectDisplays {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        ids: Vec<String>,
     },
     StartNativeScreenSharing {
         #[serde(rename = "displayId")]
@@ -718,6 +776,8 @@ enum Command {
         #[serde(rename = "maxDurationMs")]
         max_duration_ms: String,
         retention: Option<TransferRecordingRetention>,
+        /// `camera` records the connection's open camera; otherwise its desktop.
+        source: Option<RecordingSource>,
     },
     RecordingStatus {
         id: String,
@@ -768,8 +828,48 @@ enum Command {
         pointer: TransferPointerSettings,
     },
     EnableFilesystemAccess,
-    SetFileRoots {
-        paths: Vec<String>,
+    SetTransferDirectory {
+        path: String,
+    },
+    /// This computer's roots, home folder and usual folders.
+    LocalPlaces,
+    /// Names a path on this computer, such as one dropped from the system's file manager.
+    LocateLocal {
+        path: String,
+    },
+    /// Watches one folder on this computer; its changes arrive as `folderChanged` events.
+    WatchLocal {
+        root: String,
+        path: String,
+    },
+    UnwatchLocal {
+        watch: String,
+    },
+    ListLocal {
+        root: String,
+        path: String,
+        offset: String,
+    },
+    CreateLocalDir {
+        root: String,
+        path: String,
+        name: String,
+    },
+    RenameLocal {
+        root: String,
+        path: String,
+        name: String,
+        token: Option<files::TransferToken>,
+        #[serde(rename = "newName")]
+        new_name: String,
+    },
+    /// To this computer's Trash when `trash`, else permanently.
+    DeleteLocal {
+        root: String,
+        path: String,
+        name: String,
+        token: Option<files::TransferToken>,
+        trash: bool,
     },
     KeyboardMode,
     SetKeyboardMode {
@@ -779,26 +879,13 @@ enum Command {
     SetSwapControlAndCommand {
         enabled: bool,
     },
-    SessionPointerSettings {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    SetSessionPointerSettings {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        settings: TransferPointerSettings,
-    },
-    SessionClipboardText {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    ClipboardText,
     StartHosting,
     StopHosting,
     StopHostedSession,
+    StopHostedPeer {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
     ResetIdentity,
     SetRelayPublic,
     SetRelayCustom {
@@ -814,6 +901,11 @@ enum Command {
     RejectControlRequest,
     ControllerSessions,
     HostedSessions,
+    HostedServices,
+    PeerAvailability {
+        #[serde(rename = "endpointId")]
+        endpoint_id: String,
+    },
     ControllerSession {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -832,12 +924,6 @@ enum Command {
         session_id: String,
         generation: String,
     },
-    SelectDisplays {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        ids: Vec<String>,
-    },
     CaptureDisplays,
     SetTopology {
         revision: String,
@@ -846,55 +932,13 @@ enum Command {
     SetDesktopCodecDefault {
         codec: String,
     },
+    SetWindowDecoders {
+        decoders: Vec<TransferWindowDecoder>,
+    },
     SetDesktopQualityDefaults {
         quality: TransferQuality,
     },
-    UpdateSessionQuality {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-        role: String,
-        quality: TransferQuality,
-    },
-    SubscribeSessionVideo {
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        generation: String,
-    },
-    PollVideo {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    ReleaseVideo {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    PublishVideo {
-        #[serde(deserialize_with = "frame_codec")]
-        codec: vnilink_app::FfiVideoCodec,
-        #[serde(rename = "sessionId")]
-        session_id: String,
-        keyframe: bool,
-        #[serde(rename = "timestampUs")]
-        timestamp_us: String,
-        data: String,
-    },
     Shutdown,
-}
-
-fn frame_codec<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<vnilink_app::FfiVideoCodec, D::Error> {
-    use serde::de::Error;
-    let value = String::deserialize(deserializer)?;
-    match value.as_str() {
-        "h264" => Ok(vnilink_app::FfiVideoCodec::H264),
-        "h265" => Ok(vnilink_app::FfiVideoCodec::H265),
-        "vp8" => Ok(vnilink_app::FfiVideoCodec::Vp8),
-        "vp9" => Ok(vnilink_app::FfiVideoCodec::Vp9),
-        "av1" => Ok(vnilink_app::FfiVideoCodec::Av1),
-        _ => Err(D::Error::custom("unsupported video codec")),
-    }
 }
 
 #[derive(Serialize)]
@@ -905,6 +949,27 @@ enum Reply {
     },
     Snapshot {
         snapshot: vnilink_app::FfiSnapshot,
+    },
+    /// At most `vnilink::diagnostics::MAX_EXPORT_BYTES` of JSON, carried as
+    /// a string so the window saves exactly what the engine exported.
+    DiagnosticSnapshot {
+        snapshot: String,
+    },
+    /// At most `vnilink_log::MAX_EXPORT_BYTES` of JSON lines.
+    DiagnosticRecorder {
+        events: String,
+    },
+    LogFilter {
+        directives: String,
+        /// `environment`, `setting` or `default`.
+        source: &'static str,
+    },
+    /// At most [`MAX_LOG_TAIL`] bytes of JSON lines, and the file's path
+    /// with the home folder written `~`; no path when the engine writes no
+    /// log file.
+    EngineLogTail {
+        path: Option<String>,
+        text: String,
     },
     Invitation {
         token: String,
@@ -924,8 +989,12 @@ enum Reply {
     Sessions {
         sessions: Vec<vnilink_app::FfiSessionInfo>,
     },
-    Text {
-        text: Option<String>,
+    Services {
+        services: Vec<serde_json::Value>,
+    },
+    PeerAvailability {
+        /// `null` until the paired computer's link has delivered a report.
+        report: Option<Vec<serde_json::Value>>,
     },
     Check {
         check: String,
@@ -939,9 +1008,6 @@ enum Reply {
     Swap {
         enabled: bool,
     },
-    PointerSettings {
-        settings: TransferPointerSettings,
-    },
     Displays {
         displays: Vec<TransferDisplay>,
     },
@@ -953,13 +1019,6 @@ enum Reply {
     },
     Relays {
         relays: Vec<TransferRelay>,
-    },
-    VideoSubscription {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
-    },
-    VideoFrame {
-        frame: Option<TransferFrame>,
     },
     Endpoint {
         #[serde(rename = "endpointId")]
@@ -973,9 +1032,6 @@ enum Reply {
     },
     Hostname {
         hostname: Option<String>,
-    },
-    OwnerSession {
-        session: Option<vnilink_app::FfiSessionInfo>,
     },
     EventSubscription {
         #[serde(rename = "subscriptionId")]
@@ -992,21 +1048,34 @@ enum Reply {
         policy: TransferSystemPolicy,
         support: TransferSystemSupport,
     },
+    SystemOperation {
+        operation: system::TransferSystemOperation,
+    },
+    ScheduledSystemActions {
+        actions: Vec<system::TransferScheduledSystemAction>,
+    },
     TerminalPolicy {
         policy: TransferTerminalPolicy,
     },
     TerminalSessions {
         sessions: Vec<TransferTerminalSession>,
     },
-    Jobs {
-        jobs: Vec<TransferJob>,
+    TerminalShells {
+        shells: Vec<TransferShell>,
+        automatic: String,
+        current: Option<String>,
     },
-    Job {
-        job: TransferJob,
+    Places {
+        places: files::TransferPlaces,
     },
-    FileJobsSubscription {
-        #[serde(rename = "subscriptionId")]
-        subscription_id: String,
+    Location {
+        location: Option<TransferLocation>,
+    },
+    Watching {
+        watch: String,
+    },
+    DirPage {
+        page: files::TransferDirPage,
     },
     NativeSharingStatus {
         displays: Vec<TransferSharingStatus>,
@@ -1032,84 +1101,182 @@ enum Reply {
 
 // Commands serialize state mutations and installation saves. Shutdown marks the
 // instance closed; no later task can restart or mutate the old installation.
-// Video pollers stay here behind subscription ids because pollers cannot
+// Event pollers stay here behind subscription ids because pollers cannot
 // cross the JSON bridge; callers poll and release them by id.
 struct State {
     core: Arc<VnilinkCore>,
     closed: bool,
     native: native::NativeRuntimeState,
-    video: HashMap<u64, VideoPoller>,
     events: HashMap<u64, EventPoller>,
-    files: HashMap<u64, Arc<FilesService>>,
+    /// The System service held on each connection this computer asked.
+    systems: HashMap<(u64, u64), Arc<vnilink_app::SystemServiceHandle>>,
     next_subscription: u64,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum RecordingSource {
+    Desktop,
+    Camera,
 }
 #[napi]
 pub struct Engine {
     core: Arc<VnilinkCore>,
     desktops: Arc<data::DesktopChannels>,
+    cameras: Arc<data::CameraChannels>,
     state: Arc<Mutex<State>>,
 }
 
 pub struct OpenedEngine {
     core: VnilinkCore,
     backends: Vec<TransferNativeBackend>,
+    screen_grant: Option<std::path::PathBuf>,
 }
 pub struct OpenTask {
     temporary: bool,
+    /// A temporary engine that may host this computer's screen, for the
+    /// latency measurement. Only video is prepared: no input, files or shell.
+    capture: bool,
+    /// Where a temporary engine that captures keeps its screen sharing
+    /// grant, so a measurement asks once; a persistent engine keeps it in
+    /// its installation's private directory.
+    screen_grant: Option<std::path::PathBuf>,
 }
 impl Task for OpenTask {
     type Output = OpenedEngine;
     type JsValue = Engine;
     fn compute(&mut self) -> Result<Self::Output> {
-        let result = if self.temporary {
-            VnilinkCore::create(true, vec![])
+        let (result, screen_grant, screenshot_grant) = if self.temporary {
+            start_log_file(None);
+            (
+                VnilinkCore::create(true, vec![]),
+                self.screen_grant.clone().filter(|_| self.capture),
+                None,
+            )
         } else {
-            VnilinkCore::open_persistent(Box::new(
-                storage::EncryptedInstallationStore::open_production().map_err(core_error)?,
-            ))
+            let store =
+                storage::EncryptedInstallationStore::open_production().map_err(core_error)?;
+            start_log_file(Some(&store.log_folder()));
+            let (screen_grant, screenshot_grant) = (store.screen_grant(), store.screenshot_grant());
+            (
+                VnilinkCore::open_persistent(Box::new(store)),
+                Some(screen_grant),
+                Some(screenshot_grant),
+            )
         };
         let core = result.map_err(core_error)?;
-        let backends = if self.temporary {
+        let backends = if self.temporary && self.capture {
+            let video = core.prepare_native_video();
+            vec![vnilink_app::FfiNativeBackend {
+                name: "video".into(),
+                ready: video.is_ok(),
+                error: video
+                    .err()
+                    .map(|_| "The native video backend could not be initialized".into()),
+            }
+            .into()]
+        } else if self.temporary {
             vec![]
         } else {
-            core.initialize_native_backends()
+            core.initialize_native_backends(screenshot_grant)
                 .into_iter()
                 .map(Into::into)
                 .collect()
         };
         core.start_file_job_driver();
-        Ok(OpenedEngine { core, backends })
+        // Paired computers show as connected only while they are reachable.
+        core.set_presence_links(true).map_err(core_error)?;
+        Ok(OpenedEngine {
+            core,
+            backends,
+            screen_grant,
+        })
     }
     fn resolve(&mut self, _: Env, opened: Self::Output) -> Result<Engine> {
         let core = Arc::new(opened.core);
         let desktops = Arc::new(data::DesktopChannels::default());
+        let cameras = Arc::new(data::CameraChannels::default());
         Ok(Engine {
             core: core.clone(),
             desktops: desktops.clone(),
+            cameras: cameras.clone(),
             state: Arc::new(Mutex::new(State {
                 core,
                 closed: false,
-                native: native::NativeRuntimeState::new(opened.backends, desktops),
-                video: HashMap::new(),
+                native: native::NativeRuntimeState::new(
+                    opened.backends,
+                    desktops,
+                    cameras,
+                    opened.screen_grant,
+                ),
                 events: HashMap::new(),
-                files: HashMap::new(),
+                systems: HashMap::new(),
                 next_subscription: 1,
             })),
         })
     }
 }
+/// The most of the engine log file one reply carries.
+const MAX_LOG_TAIL: usize = 256 * 1024;
+
+fn log_filter_reply(state: vnilink_log::FilterState) -> Reply {
+    Reply::LogFilter {
+        directives: state.directives,
+        source: state.source.as_str(),
+    }
+}
+
+/// `path` with the home folder written `~`, so a reply names no account.
+fn without_home(path: &std::path::Path) -> String {
+    let home = dirs::home_dir();
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(inside) => std::path::Path::new("~").join(inside).display().to_string(),
+        None => path.display().to_string(),
+    }
+}
+
+/// Starts this run's engine log file: a persistent engine's in its own
+/// private folder, a temporary engine's only where `VNILINK_LOG_DIR` asks.
+/// An engine that cannot write one still runs, with its recorder.
+fn start_log_file(folder: Option<&std::path::Path>) {
+    let configured = std::env::var_os(vnilink_log::LOG_DIR_ENV).filter(|value| !value.is_empty());
+    let Some(folder) = folder.or(configured.as_deref().map(std::path::Path::new)) else {
+        return;
+    };
+    if vnilink_log::write_to(folder).is_err() {
+        tracing::warn!(target: "vnilink::storage", "the engine log file could not be opened");
+    }
+}
+
 #[napi]
 pub fn open_engine() -> AsyncTask<OpenTask> {
-    AsyncTask::new(OpenTask { temporary: false })
+    vnilink_log::install();
+    AsyncTask::new(OpenTask {
+        temporary: false,
+        capture: false,
+        screen_grant: None,
+    })
 }
 // Explicit isolated test/preview mode; never a fallback for unavailable storage.
+// `capture` lets it host this computer's screen, for the latency measurement,
+// keeping its screen sharing grant in `screen_grant`.
 #[napi]
-pub fn open_temporary_engine() -> AsyncTask<OpenTask> {
-    AsyncTask::new(OpenTask { temporary: true })
+pub fn open_temporary_engine(
+    capture: Option<bool>,
+    screen_grant: Option<String>,
+) -> AsyncTask<OpenTask> {
+    vnilink_log::install();
+    AsyncTask::new(OpenTask {
+        temporary: true,
+        capture: capture.unwrap_or(false),
+        screen_grant: screen_grant.map(std::path::PathBuf::from),
+    })
 }
 
 impl EngineBridge {
-    /// Commands that describe displays, tune quality, and move video frames.
+    /// Commands that describe displays and set desktop codec and quality defaults.
     fn media(state: &mut State, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
             Command::Topology => Reply::Displays {
@@ -1135,22 +1302,6 @@ impl EngineBridge {
                         .map(transfer_display)
                         .collect(),
                 }
-            }
-            Command::SelectDisplays {
-                session_id,
-                generation,
-                ids,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let selected = ids
-                    .iter()
-                    .map(|value| parse_id(value, "Invalid display ID"))
-                    .collect::<Result<Vec<_>>>()?;
-                state
-                    .core
-                    .select_displays(id, gen, selected)
-                    .map_err(core_error)?;
-                Reply::Done
             }
             Command::CaptureDisplays => Reply::DisplayIds {
                 displays: state
@@ -1181,6 +1332,37 @@ impl EngineBridge {
                 state
                     .core
                     .set_topology(revision, displays)
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::SetWindowDecoders { decoders } => {
+                use vnilink_app::FfiVideoCodec as C;
+                let decoders = decoders
+                    .iter()
+                    .map(|decoder| {
+                        let codec = match decoder.codec.as_str() {
+                            "h264" => C::H264,
+                            "h265" => C::H265,
+                            "vp8" => C::Vp8,
+                            "vp9" => C::Vp9,
+                            "av1" => C::Av1,
+                            _ => {
+                                return Err(core_error(FfiError::InvalidSetting {
+                                    message: "invalid window decoder".into(),
+                                }))
+                            }
+                        };
+                        Ok(vnilink_app::FfiWindowDecoder {
+                            codec,
+                            hardware: decoder.hardware,
+                            chroma444: decoder.chroma444,
+                            bt601: decoder.bt601,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                state
+                    .core
+                    .set_window_decoders(decoders)
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1219,99 +1401,6 @@ impl EngineBridge {
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::UpdateSessionQuality {
-                session_id,
-                generation,
-                role,
-                quality,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let quality = vnilink_app::new_quality(
-                    quality.max_bitrate_kbps,
-                    quality.max_frame_rate,
-                    quality.max_width,
-                    quality.max_height,
-                )
-                .map_err(core_error)?;
-                state
-                    .core
-                    .update_session_quality_for_generation(id, gen, session_role(role)?, quality)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubscribeSessionVideo {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let poller = state
-                    .core
-                    .subscribe_session_video(id, gen)
-                    .map_err(core_error)?;
-                let subscription = state.next_subscription;
-                state.next_subscription = subscription.saturating_add(1);
-                state.video.insert(subscription, poller);
-                Reply::VideoSubscription {
-                    subscription_id: subscription.to_string(),
-                }
-            }
-            Command::SubscribeVideo => {
-                let poller = state.core.subscribe_video().map_err(core_error)?;
-                let subscription = state.next_subscription;
-                state.next_subscription = subscription.saturating_add(1);
-                state.video.insert(subscription, poller);
-                Reply::VideoSubscription {
-                    subscription_id: subscription.to_string(),
-                }
-            }
-            Command::PollVideo { subscription_id } => {
-                let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                let poller = state
-                    .video
-                    .get(&subscription)
-                    .ok_or_else(|| Error::new(Status::InvalidArg, "Unknown video subscription"))?;
-                Reply::VideoFrame {
-                    frame: poller.try_recv().map(|frame| {
-                        use base64::Engine as _;
-                        TransferFrame {
-                            codec: frame.codec.label().into(),
-                            keyframe: frame.keyframe,
-                            timestamp_us: frame.timestamp_us.to_string(),
-                            data: base64::engine::general_purpose::STANDARD.encode(&frame.payload),
-                            display_id: frame.display_id.to_string(),
-                            revision: frame.revision.to_string(),
-                        }
-                    }),
-                }
-            }
-            Command::ReleaseVideo { subscription_id } => {
-                let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                state.video.remove(&subscription);
-                Reply::Done
-            }
-            Command::PublishVideo {
-                codec,
-                session_id,
-                keyframe,
-                timestamp_us,
-                data,
-            } => {
-                use base64::Engine as _;
-                let id = parse_id(session_id, "Invalid session ID")?;
-                let timestamp = parse_id(timestamp_us, "Invalid timestamp")?;
-                let payload = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .map_err(|_| Error::new(Status::InvalidArg, "Invalid video data"))?;
-                state
-                    .core
-                    .publish_video_frame(
-                        id,
-                        vnilink_app::FfiEncodedFrame::new(*codec, *keyframe, timestamp, payload)
-                            .map_err(|_| Error::new(Status::InvalidArg, "Invalid video frame"))?,
-                    )
-                    .map_err(core_error)?;
-                Reply::Done
-            }
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
         };
         Ok(reply)
@@ -1332,6 +1421,11 @@ impl EngineBridge {
             }
             Command::StopHostedSession => {
                 core.stop_hosted_session().map_err(core_error)?;
+                Reply::Done
+            }
+            Command::StopHostedPeer { session_id } => {
+                let id = parse_id(session_id, "Invalid session ID")?;
+                core.stop_hosted_peer(id).map_err(core_error)?;
                 Reply::Done
             }
             Command::ResetIdentity => {
@@ -1379,165 +1473,10 @@ impl EngineBridge {
 }
 
 impl EngineBridge {
-    /// Commands that inject input and read per-session input state.
+    /// The input defaults the controller's desktops open with, and this
+    /// computer's own files.
     fn input(core: &VnilinkCore, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::SessionKeyboardMode {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                Reply::KeyboardMode {
-                    mode: keyboard_mode_name(
-                        core.session_keyboard_mode(id, gen).map_err(core_error)?,
-                    )
-                    .to_string(),
-                }
-            }
-            Command::SetSessionKeyboardMode {
-                session_id,
-                generation,
-                mode,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.set_session_keyboard_mode(id, gen, keyboard_mode(mode)?)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SessionSwapControlAndCommand {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                Reply::Swap {
-                    enabled: core
-                        .session_swap_control_and_command(id, gen)
-                        .map_err(core_error)?,
-                }
-            }
-            Command::SetSessionSwapControlAndCommand {
-                session_id,
-                generation,
-                enabled,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.set_session_swap_control_and_command(id, gen, *enabled)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitKey {
-                session_id,
-                generation,
-                usage,
-                down,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_key(id, gen, *usage, *down)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitPointer {
-                session_id,
-                generation,
-                x,
-                y,
-                display,
-                revision,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_pointer(
-                    id,
-                    gen,
-                    *x,
-                    *y,
-                    parse_id(display, "Invalid display ID")?,
-                    parse_id(revision, "Invalid topology revision")?,
-                )
-                .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitButton {
-                session_id,
-                generation,
-                button,
-                down,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_button(id, gen, pointer_button(button)?, *down)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitWheel {
-                session_id,
-                generation,
-                dx,
-                dy,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_wheel(id, gen, *dx, *dy).map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitMotion {
-                session_id,
-                generation,
-                dx,
-                dy,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_motion(id, gen, *dx, *dy).map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitPreciseWheel {
-                session_id,
-                generation,
-                dx,
-                dy,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_precise_wheel(id, gen, *dx, *dy)
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitText {
-                session_id,
-                generation,
-                text,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_text(id, gen, text.clone())
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitClipboard {
-                session_id,
-                generation,
-                text,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_clipboard(id, gen, text.clone())
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SubmitLocalKey {
-                session_id,
-                generation,
-                usage,
-                down,
-                text,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.submit_local_key(id, gen, *usage, *down, text.clone())
-                    .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::ReleaseSessionInput {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.release_session_input(id, gen).map_err(core_error)?;
-                Reply::Done
-            }
             Command::SetInputDefaults {
                 mode,
                 swap,
@@ -1559,8 +1498,81 @@ impl EngineBridge {
                 core.enable_filesystem_access().map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetFileRoots { paths } => {
-                core.set_file_roots(paths.clone()).map_err(core_error)?;
+            Command::SetTransferDirectory { path } => {
+                core.set_transfer_directory(path.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::LocalPlaces => Reply::Places {
+                places: files::transfer_places(core.places().map_err(core_error)?),
+            },
+            Command::WatchLocal { root, path } => Reply::Watching {
+                watch: core
+                    .watch_folder(parse_id(root, "Invalid root")?, path.clone())
+                    .map_err(core_error)?
+                    .to_string(),
+            },
+            Command::UnwatchLocal { watch } => {
+                core.unwatch_folder(parse_id(watch, "Invalid watch")?);
+                Reply::Done
+            }
+            Command::LocateLocal { path } => Reply::Location {
+                location: core.locate(path.clone()).map_err(core_error)?.map(|found| {
+                    TransferLocation {
+                        root: found.root.to_string(),
+                        folder: found.path,
+                        name: found.name,
+                    }
+                }),
+            },
+            Command::ListLocal { root, path, offset } => Reply::DirPage {
+                page: files::transfer_page(
+                    core.list_dir(
+                        parse_id(root, "Invalid root")?,
+                        path.clone(),
+                        parse_id(offset, "Invalid offset")?,
+                        LIST_PAGE,
+                    )
+                    .map_err(core_error)?,
+                ),
+            },
+            Command::CreateLocalDir { root, path, name } => {
+                core.create_dir(parse_id(root, "Invalid root")?, path.clone(), name.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::RenameLocal {
+                root,
+                path,
+                name,
+                token,
+                new_name,
+            } => {
+                core.rename_entry(
+                    parse_id(root, "Invalid root")?,
+                    path.clone(),
+                    name.clone(),
+                    token.as_ref().map(files::entry_token).transpose()?,
+                    new_name.clone(),
+                )
+                .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::DeleteLocal {
+                root,
+                path,
+                name,
+                token,
+                trash,
+            } => {
+                core.delete_entry(
+                    parse_id(root, "Invalid root")?,
+                    path.clone(),
+                    name.clone(),
+                    token.as_ref().map(files::entry_token).transpose()?,
+                    *trash,
+                )
+                .map_err(core_error)?;
                 Reply::Done
             }
             Command::KeyboardMode => Reply::KeyboardMode {
@@ -1579,50 +1591,6 @@ impl EngineBridge {
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::SessionPointerSettings {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                let settings = core.session_pointer_settings(id, gen).map_err(core_error)?;
-                Reply::PointerSettings {
-                    settings: TransferPointerSettings {
-                        sensitivity_percent: settings.sensitivity_percent,
-                        reverse_wheel: settings.reverse_wheel,
-                        swap_buttons: settings.swap_buttons,
-                    },
-                }
-            }
-            Command::SetSessionPointerSettings {
-                session_id,
-                generation,
-                settings,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                core.set_session_pointer_settings(
-                    id,
-                    gen,
-                    vnilink_app::FfiPointerSettings {
-                        sensitivity_percent: settings.sensitivity_percent,
-                        reverse_wheel: settings.reverse_wheel,
-                        swap_buttons: settings.swap_buttons,
-                    },
-                )
-                .map_err(core_error)?;
-                Reply::Done
-            }
-            Command::SessionClipboardText {
-                session_id,
-                generation,
-            } => {
-                let (id, gen) = session_target(session_id, generation)?;
-                Reply::Text {
-                    text: core.session_clipboard_text(id, gen).map_err(core_error)?,
-                }
-            }
-            Command::ClipboardText => Reply::Text {
-                text: core.clipboard_text().map_err(core_error)?,
-            },
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
         };
         Ok(reply)
@@ -1636,24 +1604,6 @@ impl EngineBridge {
             Command::BeginConnectServices { endpoint_id } => Reply::Session {
                 session: core
                     .begin_connect_services(endpoint_id.clone())
-                    .map_err(core_error)?,
-            },
-            Command::Connect { endpoint_id } => Reply::Session {
-                session: core.connect(endpoint_id.clone()).map_err(core_error)?,
-            },
-            Command::ConnectFiles { endpoint_id } => Reply::Session {
-                session: core
-                    .connect_files(endpoint_id.clone())
-                    .map_err(core_error)?,
-            },
-            Command::BeginConnectFiles { endpoint_id } => Reply::Session {
-                session: core
-                    .begin_connect_files(endpoint_id.clone())
-                    .map_err(core_error)?,
-            },
-            Command::BeginConnect { endpoint_id } => Reply::Session {
-                session: core
-                    .begin_connect(endpoint_id.clone())
                     .map_err(core_error)?,
             },
             Command::Disconnect => {
@@ -1670,6 +1620,27 @@ impl EngineBridge {
             },
             Command::HostedSessions => Reply::Sessions {
                 sessions: core.hosted_sessions().map_err(core_error)?,
+            },
+            Command::HostedServices => Reply::Services {
+                services: core
+                    .hosted_services()
+                    .map_err(core_error)?
+                    .iter()
+                    .map(EventTransfer::service)
+                    .collect(),
+            },
+            Command::PeerAvailability { endpoint_id } => Reply::PeerAvailability {
+                report: core
+                    .peer_availability(endpoint_id.clone())
+                    .map_err(core_error)?
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .map(|entry| {
+                                serde_json::json!({ "capability": entry.capability, "status": entry.status })
+                            })
+                            .collect()
+                    }),
             },
             Command::ControllerSession { session_id } => Reply::Session {
                 session: core
@@ -1708,9 +1679,6 @@ impl EngineBridge {
                         rx_bytes: path.rx_bytes.to_string(),
                     })
                     .collect(),
-            },
-            Command::ClipboardOwnerSession => Reply::OwnerSession {
-                session: core.clipboard_owner_session().map_err(core_error)?,
             },
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
         };
@@ -1819,6 +1787,22 @@ impl EngineBridge {
             Command::Snapshot => Reply::Snapshot {
                 snapshot: core.snapshot().map_err(core_error)?,
             },
+            Command::DiagnosticSnapshot => Reply::DiagnosticSnapshot {
+                snapshot: core.diagnostic_snapshot_json().map_err(core_error)?,
+            },
+            Command::DiagnosticRecorder => Reply::DiagnosticRecorder {
+                events: vnilink_log::export(),
+            },
+            Command::LogFilter => log_filter_reply(vnilink_log::filter()),
+            Command::SetLogFilter { directives } => log_filter_reply(
+                vnilink_log::set_filter(directives.as_deref())
+                    .map_err(|error| Error::new(Status::InvalidArg, error.to_string()))?,
+            ),
+            Command::EngineLogTail => Reply::EngineLogTail {
+                path: vnilink_log::log_file().map(|path| without_home(&path)),
+                text: vnilink_log::tail(MAX_LOG_TAIL)
+                    .map_err(|_| Error::from_reason("The engine log could not be read"))?,
+            },
             Command::Endpoint => Reply::Endpoint {
                 endpoint_id: core.endpoint_id(),
             },
@@ -1840,103 +1824,81 @@ impl EngineBridge {
 
     /// Commands that grant service permissions and inspect terminal and file jobs.
     fn services(state: &mut State, command: &Command) -> Result<Reply> {
-        let reply: Reply =
-            match command {
-                Command::SharingPolicy => Reply::SharingPolicy {
-                    policy: state.core.sharing_policy().map_err(core_error)?,
-                },
-                Command::SetSharingPolicy { policy } => {
-                    state.core.set_sharing_policy(*policy).map_err(core_error)?;
-                    Reply::Done
+        let reply: Reply = match command {
+            Command::SharingPolicy => Reply::SharingPolicy {
+                policy: state.core.sharing_policy().map_err(core_error)?,
+            },
+            Command::SetSharingPolicy { policy } => {
+                state.core.set_sharing_policy(*policy).map_err(core_error)?;
+                Reply::Done
+            }
+            Command::SystemPolicy => {
+                let policy = state.core.system_policy().map_err(core_error)?;
+                let support = state.core.system_support().map_err(core_error)?.support;
+                Reply::SystemPolicy {
+                    policy,
+                    support: TransferSystemSupport {
+                        lock: support.lock,
+                        restart: support.restart,
+                        shutdown: support.shutdown,
+                        privacy: support.privacy,
+                    },
                 }
-                Command::SystemPolicy => {
-                    let policy = state.core.system_policy().map_err(core_error)?;
-                    let support = state.core.system_support().map_err(core_error)?.support;
-                    Reply::SystemPolicy {
-                        policy,
-                        support: TransferSystemSupport {
-                            lock: support.lock,
-                            restart: support.restart,
-                            shutdown: support.shutdown,
-                            privacy: support.privacy,
-                        },
-                    }
+            }
+            Command::SetSystemPolicy { policy } => {
+                state.core.set_system_policy(*policy).map_err(core_error)?;
+                Reply::Done
+            }
+            Command::TerminalPolicy => Reply::TerminalPolicy {
+                policy: TransferTerminalPolicy::from(
+                    state.core.terminal_policy().map_err(core_error)?,
+                ),
+            },
+            Command::SetTerminalPolicy { policy } => {
+                state
+                    .core
+                    .set_terminal_policy(policy.clone().into())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::TerminalShells => {
+                let shells = state.core.terminal_shells().map_err(core_error)?;
+                Reply::TerminalShells {
+                    shells: shells
+                        .shells
+                        .into_iter()
+                        .map(|shell| TransferShell {
+                            id: shell.id,
+                            label: shell.label,
+                        })
+                        .collect(),
+                    automatic: shells.automatic,
+                    current: shells.current,
                 }
-                Command::SetSystemPolicy { policy } => {
-                    state.core.set_system_policy(*policy).map_err(core_error)?;
-                    Reply::Done
+            }
+            Command::SetTerminalShell { shell } => {
+                if shell
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.len() > MAX_SHELL_ID)
+                {
+                    return Err(Error::from_reason("Invalid shell"));
                 }
-                Command::TerminalPolicy => Reply::TerminalPolicy {
-                    policy: TransferTerminalPolicy::from(
-                        state.core.terminal_policy().map_err(core_error)?,
-                    ),
-                },
-                Command::SetTerminalPolicy { policy } => {
-                    state
-                        .core
-                        .set_terminal_policy(policy.clone().into())
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::EnableNativeTerminal { program, directory } => {
-                    state
-                        .core
-                        .enable_native_terminal(program.clone(), directory.clone())
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::EnableDefaultNativeTerminal => {
-                    state
-                        .core
-                        .enable_default_native_terminal()
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::DisableTerminal => {
-                    state.core.disable_terminal().map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::RemoteTerminalSessions {
-                    connection_id,
-                    generation,
-                } => {
-                    let connection = parse_id(connection_id, "Invalid connection ID")?;
-                    let generation = parse_id(generation, "Invalid generation")?;
-                    Reply::TerminalSessions {
-                        sessions: state
-                            .core
-                            .remote_terminal_sessions(connection, generation)
-                            .map_err(core_error)?
-                            .into_iter()
-                            .map(|session| TransferTerminalSession {
-                                id: session.id,
-                                process_id: session.process_id,
-                                shell: session.shell,
-                                rows: session.rows,
-                                columns: session.columns,
-                                persistent: session.persistent,
-                                attached: session.attached,
-                            })
-                            .collect(),
-                    }
-                }
-                Command::CloseRemoteTerminalSession {
-                    connection_id,
-                    generation,
-                    id,
-                } => {
-                    let connection = parse_id(connection_id, "Invalid connection ID")?;
-                    let generation = parse_id(generation, "Invalid generation")?;
-                    state
-                        .core
-                        .close_remote_terminal_session(connection, generation, id.clone())
-                        .map_err(core_error)?;
-                    Reply::Done
-                }
-                Command::HostedTerminalSessions => Reply::TerminalSessions {
+                state
+                    .core
+                    .set_terminal_shell(shell.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::RemoteTerminalSessions {
+                connection_id,
+                generation,
+            } => {
+                let connection = parse_id(connection_id, "Invalid connection ID")?;
+                let generation = parse_id(generation, "Invalid generation")?;
+                Reply::TerminalSessions {
                     sessions: state
                         .core
-                        .hosted_terminal_sessions()
+                        .remote_terminal_sessions(connection, generation)
                         .map_err(core_error)?
                         .into_iter()
                         .map(|session| TransferTerminalSession {
@@ -1949,80 +1911,47 @@ impl EngineBridge {
                             attached: session.attached,
                         })
                         .collect(),
-                },
-                Command::CloseTerminalSession { id } => {
-                    state
-                        .core
-                        .close_terminal_session(id.clone())
-                        .map_err(core_error)?;
-                    Reply::Done
                 }
-                Command::SubscribeFilesJobs {
-                    session_id,
-                    generation,
-                } => {
-                    let (id, gen) = session_target(session_id, generation)?;
-                    let handle = state.core.open_files_service(id, gen).map_err(core_error)?;
-                    let subscription = state.next_subscription;
-                    state.next_subscription = subscription.saturating_add(1);
-                    state.files.insert(subscription, handle);
-                    Reply::FileJobsSubscription {
-                        subscription_id: subscription.to_string(),
-                    }
-                }
-                Command::PollFilesJobs { subscription_id } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    let handle = state.files.get(&subscription).ok_or_else(|| {
-                        Error::new(Status::InvalidArg, "Unknown files subscription")
-                    })?;
-                    Reply::Jobs {
-                        jobs: handle
-                            .jobs()
-                            .map_err(core_error)?
-                            .iter()
-                            .map(transfer_job)
-                            .collect(),
-                    }
-                }
-                Command::ReleaseFilesJobs { subscription_id } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    state.files.remove(&subscription);
-                    Reply::Done
-                }
-                Command::FilesJobCancel {
-                    subscription_id,
-                    job_id,
-                } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    let handle = state.files.get(&subscription).ok_or_else(|| {
-                        Error::new(Status::InvalidArg, "Unknown files subscription")
-                    })?;
-                    Reply::Job {
-                        job: transfer_job(
-                            &handle
-                                .job_cancel(parse_id(job_id, "Invalid job ID")?)
-                                .map_err(core_error)?,
-                        ),
-                    }
-                }
-                Command::FilesJobResume {
-                    subscription_id,
-                    job_id,
-                } => {
-                    let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                    let handle = state.files.get(&subscription).ok_or_else(|| {
-                        Error::new(Status::InvalidArg, "Unknown files subscription")
-                    })?;
-                    Reply::Job {
-                        job: transfer_job(
-                            &handle
-                                .job_resume(parse_id(job_id, "Invalid job ID")?)
-                                .map_err(core_error)?,
-                        ),
-                    }
-                }
-                _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
-            };
+            }
+            Command::CloseRemoteTerminalSession {
+                connection_id,
+                generation,
+                id,
+            } => {
+                let connection = parse_id(connection_id, "Invalid connection ID")?;
+                let generation = parse_id(generation, "Invalid generation")?;
+                state
+                    .core
+                    .close_remote_terminal_session(connection, generation, id.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            Command::HostedTerminalSessions => Reply::TerminalSessions {
+                sessions: state
+                    .core
+                    .hosted_terminal_sessions()
+                    .map_err(core_error)?
+                    .into_iter()
+                    .map(|session| TransferTerminalSession {
+                        id: session.id,
+                        process_id: session.process_id,
+                        shell: session.shell,
+                        rows: session.rows,
+                        columns: session.columns,
+                        persistent: session.persistent,
+                        attached: session.attached,
+                    })
+                    .collect(),
+            },
+            Command::CloseTerminalSession { id } => {
+                state
+                    .core
+                    .close_terminal_session(id.clone())
+                    .map_err(core_error)?;
+                Reply::Done
+            }
+            _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
+        };
         Ok(reply)
     }
 
@@ -2095,6 +2024,11 @@ impl EngineBridge {
     fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
         match command {
             Command::Snapshot
+            | Command::DiagnosticSnapshot
+            | Command::DiagnosticRecorder
+            | Command::LogFilter
+            | Command::SetLogFilter { .. }
+            | Command::EngineLogTail
             | Command::Endpoint
             | Command::Capabilities
             | Command::VideoCodecs
@@ -2123,54 +2057,57 @@ impl EngineBridge {
                 Self::access(core, command)
             }
             Command::BeginConnectServices { .. }
-            | Command::Connect { .. }
-            | Command::ConnectFiles { .. }
-            | Command::BeginConnect { .. }
-            | Command::BeginConnectFiles { .. }
             | Command::Disconnect
             | Command::DisconnectSession { .. }
             | Command::ControllerSessions
+            | Command::HostedServices
+            | Command::PeerAvailability { .. }
             | Command::HostedSessions
             | Command::ControllerSession { .. }
             | Command::ForgetControllerSession { .. }
             | Command::SessionPaths { .. }
-            | Command::ControllerSessionPaths { .. }
-            | Command::ClipboardOwnerSession => {
+            | Command::ControllerSessionPaths { .. } => {
                 let core = &state.core;
                 Self::sessions(core, command)
             }
-            Command::SessionKeyboardMode { .. }
-            | Command::SetSessionKeyboardMode { .. }
-            | Command::SessionSwapControlAndCommand { .. }
-            | Command::SetSessionSwapControlAndCommand { .. }
-            | Command::SubmitKey { .. }
+            Command::SetInputDefaults { .. }
+            | Command::EnableFilesystemAccess
+            | Command::SetTransferDirectory { .. }
+            | Command::LocalPlaces
+            | Command::LocateLocal { .. }
+            | Command::WatchLocal { .. }
+            | Command::UnwatchLocal { .. }
+            | Command::ListLocal { .. }
+            | Command::CreateLocalDir { .. }
+            | Command::RenameLocal { .. }
+            | Command::DeleteLocal { .. }
+            | Command::KeyboardMode
+            | Command::SetKeyboardMode { .. }
+            | Command::SwapControlAndCommand
+            | Command::SetSwapControlAndCommand { .. } => {
+                let core = &state.core;
+                Self::input(core, command)
+            }
+            // Desktop input goes on its desktop's data channel (`data.rs`),
+            // which decodes these shapes; no command carries it.
+            Command::SubmitKey { .. }
             | Command::SubmitPointer { .. }
             | Command::SubmitButton { .. }
             | Command::SubmitWheel { .. }
             | Command::SubmitMotion { .. }
             | Command::SubmitPreciseWheel { .. }
             | Command::SubmitText { .. }
-            | Command::SubmitClipboard { .. }
             | Command::SubmitLocalKey { .. }
             | Command::ReleaseSessionInput { .. }
-            | Command::SetInputDefaults { .. }
-            | Command::EnableFilesystemAccess
-            | Command::SetFileRoots { .. }
-            | Command::KeyboardMode
-            | Command::SetKeyboardMode { .. }
-            | Command::SwapControlAndCommand
-            | Command::SetSwapControlAndCommand { .. }
-            | Command::SessionPointerSettings { .. }
-            | Command::SetSessionPointerSettings { .. }
-            | Command::SessionClipboardText { .. }
-            | Command::ClipboardText => {
-                let core = &state.core;
-                Self::input(core, command)
-            }
+            | Command::SelectDisplays { .. } => Err(Error::new(
+                Status::InvalidArg,
+                "Desktop input goes on its data channel",
+            )),
             Command::SaveCustomRelays { .. }
             | Command::StartHosting
             | Command::StopHosting
             | Command::StopHostedSession
+            | Command::StopHostedPeer { .. }
             | Command::ResetIdentity
             | Command::SetRelayPublic
             | Command::SetRelayCustom { .. }
@@ -2201,17 +2138,11 @@ impl EngineBridge {
             | Command::EnableNativeInput => native::dispatch(state, command),
             Command::Topology
             | Command::SessionTopology { .. }
-            | Command::SelectDisplays { .. }
             | Command::CaptureDisplays
             | Command::SetTopology { .. }
             | Command::SetDesktopCodecDefault { .. }
-            | Command::SetDesktopQualityDefaults { .. }
-            | Command::UpdateSessionQuality { .. }
-            | Command::PublishVideo { .. }
-            | Command::SubscribeSessionVideo { .. }
-            | Command::PollVideo { .. }
-            | Command::ReleaseVideo { .. }
-            | Command::SubscribeVideo => Self::media(state, command),
+            | Command::SetWindowDecoders { .. }
+            | Command::SetDesktopQualityDefaults { .. } => Self::media(state, command),
             Command::SubscribeEvents
             | Command::PollEvents { .. }
             | Command::ReleaseEvents { .. } => Self::events(state, command),
@@ -2221,18 +2152,18 @@ impl EngineBridge {
             | Command::SetSystemPolicy { .. }
             | Command::TerminalPolicy
             | Command::SetTerminalPolicy { .. }
-            | Command::EnableNativeTerminal { .. }
-            | Command::EnableDefaultNativeTerminal
-            | Command::DisableTerminal
+            | Command::TerminalShells
+            | Command::SetTerminalShell { .. }
             | Command::RemoteTerminalSessions { .. }
             | Command::CloseRemoteTerminalSession { .. }
             | Command::HostedTerminalSessions
-            | Command::CloseTerminalSession { .. }
-            | Command::SubscribeFilesJobs { .. }
-            | Command::PollFilesJobs { .. }
-            | Command::ReleaseFilesJobs { .. }
-            | Command::FilesJobCancel { .. }
-            | Command::FilesJobResume { .. } => Self::services(state, command),
+            | Command::CloseTerminalSession { .. } => Self::services(state, command),
+            Command::SystemAction { .. }
+            | Command::SystemOperation { .. }
+            | Command::CancelSystemAction { .. }
+            | Command::ScheduledSystemActions
+            | Command::CancelHostedSystemAction { .. }
+            | Command::RunHostedSystemActionNow { .. } => system::dispatch(state, command),
             Command::Shutdown => {
                 state.closed = true;
                 native::shutdown(state)?;
@@ -2245,6 +2176,8 @@ impl EngineBridge {
 pub struct CommandTask {
     bridge: EngineBridge,
     command: Command,
+    /// Its type, which the shape check admitted from the known ones.
+    kind: String,
 }
 #[napi]
 impl Engine {
@@ -2259,23 +2192,44 @@ impl Engine {
         let raw: serde_json::Value = serde_json::from_str(&command)
             .map_err(|_| Error::new(Status::InvalidArg, "Invalid engine command"))?;
         if !CommandShape::check(&raw) {
+            // Its type may be anything the caller sent: not recorded.
+            tracing::info!(target: vnilink::trace::BRIDGE, "a command of an unknown shape was refused");
             return Err(Error::new(Status::InvalidArg, "Invalid engine command"));
         }
-        let decoded: Command = serde_json::from_value(raw)
-            .map_err(|_| Error::new(Status::InvalidArg, "Invalid engine command"))?;
+        let kind = raw["type"].as_str().unwrap_or_default().to_owned();
+        let decoded: Command = serde_json::from_value(raw).map_err(|_| {
+            tracing::info!(target: vnilink::trace::BRIDGE, command = kind.as_str(), "a command's fields were refused");
+            Error::new(Status::InvalidArg, "Invalid engine command")
+        })?;
         Ok(AsyncTask::new(CommandTask {
             bridge: EngineBridge {
                 state: self.state.clone(),
             },
             command: decoded,
+            kind,
         }))
     }
 }
 impl Task for CommandTask {
     type Output = String;
     type JsValue = String;
+    /// Runs the command inside a `command` span, so what it records says
+    /// which command it served; a failure is recorded by name.
     fn compute(&mut self) -> Result<String> {
-        self.bridge.run(&self.command)
+        let span =
+            tracing::info_span!(target: "vnilink::bridge", "command", name = self.kind.as_str());
+        let _command = span.enter();
+        let started = std::time::Instant::now();
+        let reply = self.bridge.run(&self.command);
+        if let Err(error) = &reply {
+            tracing::info!(
+                target: vnilink::trace::BRIDGE,
+                status = ?error.status,
+                took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "command failed"
+            );
+        }
+        reply
     }
     fn resolve(&mut self, _: Env, output: String) -> Result<String> {
         Ok(output)
@@ -2305,13 +2259,10 @@ impl CommandShape {
             return false;
         }
         let expected: &[&str] = match kind {
-            "snapshot" | "disconnect" | "shutdown" => &["type"],
-            "endpoint"
-            | "capabilities"
-            | "videoCodecs"
-            | "clipboardOwnerSession"
-            | "subscribeEvents"
-            | "subscribeVideo" => &["type"],
+            "snapshot" | "diagnosticSnapshot" | "disconnect" | "shutdown" => &["type"],
+            "diagnosticRecorder" | "logFilter" | "engineLogTail" => &["type"],
+            "setLogFilter" => &["type", "directives"],
+            "endpoint" | "capabilities" | "videoCodecs" | "subscribeEvents" => &["type"],
             "beginConnectServices" => &["type", "endpointId"],
             "setVideoCodecs" => &["type", "codecs"],
             "saveCustomRelays" => &["type", "relays"],
@@ -2324,10 +2275,8 @@ impl CommandShape {
             "confirmPairing" => &["type", "previewId", "digits"],
             "revoke" | "unpair" => &["type", "endpointId"],
             "setPeerName" => &["type", "endpointId", "name"],
-            "connect" | "beginConnect" | "connectFiles" | "beginConnectFiles" => {
-                &["type", "endpointId"]
-            }
-            "disconnectSession" => &["type", "sessionId"],
+            "disconnectSession" | "stopHostedPeer" => &["type", "sessionId"],
+            "peerAvailability" => &["type", "endpointId"],
             "submitKey" => &["type", "sessionId", "generation", "usage", "down"],
             "submitPointer" => &[
                 "type",
@@ -2342,16 +2291,20 @@ impl CommandShape {
             "submitWheel" | "submitMotion" | "submitPreciseWheel" => {
                 &["type", "sessionId", "generation", "dx", "dy"]
             }
-            "submitText" | "submitClipboard" => &["type", "sessionId", "generation", "text"],
-            "submitLocalKey" => &["type", "sessionId", "generation", "usage", "down", "text"],
+            "submitText" => &["type", "sessionId", "generation", "text"],
+            "submitLocalKey" => &[
+                "type",
+                "sessionId",
+                "generation",
+                "usage",
+                "down",
+                "text",
+                "composing",
+            ],
             "releaseSessionInput"
             | "sessionPointerSettings"
-            | "sessionClipboardText"
-            | "subscribeSessionVideo"
             | "sessionKeyboardMode"
             | "sessionSwapControlAndCommand" => &["type", "sessionId", "generation"],
-            "setSessionKeyboardMode" => &["type", "sessionId", "generation", "mode"],
-            "setSessionSwapControlAndCommand" => &["type", "sessionId", "generation", "enabled"],
             "reportNativePermissions" => &["type", "screen", "input", "camera", "microphone"],
             "startNativeScreenSharing" => &[
                 "type",
@@ -2382,6 +2335,7 @@ impl CommandShape {
                                 "maxBytes",
                                 "maxDurationMs",
                                 "retention",
+                                "source",
                             ]
                             .contains(&k.as_str())
                         })
@@ -2404,7 +2358,6 @@ impl CommandShape {
             | "enableNativeInput"
             | "keyboardMode"
             | "swapControlAndCommand"
-            | "clipboardText"
             | "startHosting"
             | "stopHosting"
             | "stopHostedSession"
@@ -2417,14 +2370,22 @@ impl CommandShape {
             | "rejectControlRequest"
             | "controllerSessions"
             | "hostedSessions"
+            | "hostedServices"
             | "topology"
             | "captureDisplays" => &["type"],
             "setInputDefaults" => &["type", "mode", "swap", "pointer"],
             "enableFilesystemAccess" => &["type"],
-            "setFileRoots" => &["type", "paths"],
+            "setTransferDirectory" => &["type", "path"],
+            "localPlaces" => &["type"],
+            "locateLocal" => &["type", "path"],
+            "watchLocal" => &["type", "root", "path"],
+            "unwatchLocal" => &["type", "watch"],
+            "listLocal" => &["type", "root", "path", "offset"],
+            "createLocalDir" => &["type", "root", "path", "name"],
+            "renameLocal" => &["type", "root", "path", "name", "token", "newName"],
+            "deleteLocal" => &["type", "root", "path", "name", "token", "trash"],
             "setKeyboardMode" => &["type", "mode"],
             "setSwapControlAndCommand" => &["type", "enabled"],
-            "setSessionPointerSettings" => &["type", "sessionId", "generation", "settings"],
             "setRelayCustom" => &["type", "urls"],
             "confirmControlRequest" => &["type", "digits"],
             "controllerSession"
@@ -2437,26 +2398,23 @@ impl CommandShape {
             "setSharingPolicy" => &["type", "policy"],
             "systemPolicy" => &["type"],
             "setSystemPolicy" => &["type", "policy"],
+            "systemAction" => &["type", "sessionId", "generation", "action"],
+            "systemOperation" | "cancelSystemAction" => &["type", "sessionId", "generation", "id"],
+            "scheduledSystemActions" => &["type"],
+            "cancelHostedSystemAction" | "runHostedSystemActionNow" => &["type", "id"],
             "terminalPolicy" => &["type"],
             "setTerminalPolicy" => &["type", "policy"],
-            "enableNativeTerminal" => &["type", "program", "directory"],
-            "enableDefaultNativeTerminal" | "disableTerminal" | "hostedTerminalSessions" => {
-                &["type"]
-            }
+            "terminalShells" | "hostedTerminalSessions" => &["type"],
+            "setTerminalShell" => &["type", "shell"],
             "remoteTerminalSessions" => &["type", "connectionId", "generation"],
             "closeRemoteTerminalSession" => &["type", "connectionId", "generation", "id"],
             "closeTerminalSession" => &["type", "id"],
-            "subscribeFilesJobs" => &["type", "sessionId", "generation"],
-            "pollFilesJobs" | "releaseFilesJobs" => &["type", "subscriptionId"],
-            "filesJobCancel" | "filesJobResume" => &["type", "subscriptionId", "jobId"],
             "sessionTopology" => &["type", "sessionId", "generation"],
             "selectDisplays" => &["type", "sessionId", "generation", "ids"],
             "setTopology" => &["type", "revision", "displays"],
             "setDesktopCodecDefault" => &["type", "codec"],
+            "setWindowDecoders" => &["type", "decoders"],
             "setDesktopQualityDefaults" => &["type", "quality"],
-            "updateSessionQuality" => &["type", "sessionId", "generation", "role", "quality"],
-            "pollVideo" | "releaseVideo" => &["type", "subscriptionId"],
-            "publishVideo" => &["type", "sessionId", "keyframe", "timestampUs", "data"],
             _ => return false,
         };
         object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
@@ -2480,6 +2438,7 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
         FfiError::ClipboardDenied => "ClipboardDenied",
         FfiError::TransferDenied => "TransferDenied",
         FfiError::FileExists => "FileExists",
+        FfiError::UnprovenEntry => "UnprovenEntry",
         FfiError::NoSession => "NoSession",
         FfiError::StaleSession => "StaleSession",
         FfiError::Unsupported { .. } => "Unsupported",
@@ -2499,6 +2458,7 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
 }
 
 fn core_error(error: FfiError) -> Error {
+    tracing::debug!(target: vnilink::trace::BRIDGE, failure = ffi_error_name(&error), "an engine call failed");
     Error::from_reason(format!("{}: {error}", ffi_error_name(&error)))
 }
 

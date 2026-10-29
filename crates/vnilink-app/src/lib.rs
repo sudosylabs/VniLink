@@ -39,58 +39,71 @@ pub use availability::{
 };
 pub use camera::{
     BackendStartup, CameraProvider, CameraService, CameraSource, FfiCameraConfig, FfiCameraDevice,
+    FfiCameraEnd, ALL_CAMERAS,
 };
 mod clipboard;
-pub use clipboard::{
-    ClipboardFileSource, ClipboardWriter, FfiClipboardFileEntry, FfiFileSelection, FfiPreparedFile,
-    FfiPreparedPaste, FfiStoredFileSelection,
-};
+pub use clipboard::ClipboardWriter;
 mod error;
 mod events;
 mod files;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 mod power;
 mod recording;
+#[cfg(windows)]
+mod windows;
 pub use power::{FfiPowerKind, FfiPowerPhase, FfiPowerPolicy, FfiPowerStatus};
 pub use recording::{
     recover_desktop_recording, FfiRecordingFailure, FfiRecordingLimits, FfiRecordingPhase,
     FfiRecordingRecovery, FfiRecordingRetention, FfiRecordingStatus, RecordingHandle,
 };
 mod services;
+mod snapshot;
+pub use snapshot::{snapshot_error_outcome, FfiScreenAccess, FfiScreenSnapshot};
 mod system;
 mod terminal;
 pub use services::{
-    DesktopService, FfiAdaptationReason, FfiCloseCause, FfiDesktopControlState, FfiDesktopCursor,
-    FfiDesktopCursorImage, FfiDesktopInfo, FfiDesktopMediaStatus, FfiServiceInfo, FfiServiceKind,
-    FfiServicePermissions, FfiServicePhase, FfiServiceSupport, FfiSharingPolicy,
-    FfiSharingPolicyUpdate, FilesService, ServiceLeasePoller,
+    DesktopService, FfiAdaptationReason, FfiCloseCause, FfiCondition, FfiDesktopControlState,
+    FfiDesktopCursor, FfiDesktopCursorImage, FfiDesktopEnd, FfiDesktopInfo, FfiDesktopMediaStatus,
+    FfiRateLimit, FfiServiceInfo, FfiServiceKind, FfiServicePermissions, FfiServicePhase,
+    FfiServiceSupport, FfiSharingPolicy, FfiSharingPolicyUpdate, FfiStreamFailure, FilesService,
+    ServiceLeasePoller,
 };
 pub use system::{
-    FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiSessionState, FfiSystemAction,
-    FfiSystemOperation, FfiSystemPolicy, FfiSystemSupport, SystemServiceHandle,
+    FfiHostSystemReport, FfiOperationState, FfiPrivacyState, FfiScheduledSystemAction,
+    FfiSessionState, FfiSystemAction, FfiSystemOperation, FfiSystemPolicy, FfiSystemSupport,
+    SystemServiceHandle,
 };
 pub use terminal::{
-    FfiTerminalEvent, FfiTerminalPolicy, FfiTerminalSessionInfo, FfiTerminalSize, TerminalService,
+    FfiShell, FfiTerminalEvent, FfiTerminalPolicy, FfiTerminalSessionInfo, FfiTerminalShells,
+    FfiTerminalSize, TerminalService,
 };
 mod storage;
 mod types;
+#[cfg(target_os = "linux")]
+pub use linux::LinuxHost;
 #[cfg(target_os = "macos")]
 pub use macos::{MacFrame, MacHost, MacViewer};
 pub use storage::{CredentialStore, FfiRelay, FfiRelayInput};
+#[cfg(windows)]
+pub use windows::WindowsHost;
 
 pub use error::FfiError;
 pub use events::{EventPoller, VideoPoller};
 pub use files::{
     FfiConflictChoice, FfiDirPage, FfiEntryKind, FfiEntryToken, FfiFileResourcePolicy,
-    FfiFileRetentionPolicy, FfiFileRoot, FfiFsEntry, FfiJobDirection, FfiJobSnapshot, FfiJobState,
+    FfiFileRetentionPolicy, FfiFileRoot, FfiFolderKind, FfiFsEntry, FfiJobDirection,
+    FfiJobSnapshot, FfiJobState, FfiPlace, FfiPlaceRoot, FfiPlaces, FfiTokenKind,
 };
 pub use types::{
-    new_quality, FfiCapabilities, FfiCodecPreference, FfiCodecSupport, FfiControlRequest,
-    FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiGrants, FfiKeyboardMode,
-    FfiPairingFile, FfiPairingPreview, FfiPointerButton, FfiPointerSettings, FfiQuality,
-    FfiSessionInfo, FfiSessionPath, FfiSessionPhase, FfiSessionRole, FfiSnapshot, FfiVideoCodec,
-    FfiVideoCodecCaps,
+    new_quality, FfiCapabilities, FfiCapabilityStatus, FfiCodecPreference, FfiCodecSupport,
+    FfiControlRequest, FfiDeviceInfo, FfiDisplay, FfiEncodedFrame, FfiEvent, FfiFrameRole,
+    FfiFrameTiming, FfiGrants, FfiKeyboardMode, FfiPairingFile, FfiPairingPreview,
+    FfiPointerButton, FfiPointerSettings, FfiQuality, FfiSessionInfo, FfiSessionPath,
+    FfiSessionPhase, FfiSessionRole, FfiSnapshot, FfiVideoCodec, FfiVideoCodecCaps,
+    FfiWindowDecoder,
 };
 
 use std::collections::HashMap;
@@ -99,7 +112,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use std::sync::Arc;
-use vnilink::{Core, CoreConfig, CustomRelay, Listen, LocalKey, RelaySettings};
+use vnilink::{Core, CoreConfig, CustomRelay, Listen, RelaySettings};
 
 use error::map_error;
 
@@ -311,6 +324,37 @@ impl VnilinkCore {
         self.inner.stop_hosted_session().map_err(map_error)
     }
 
+    /// Keeps a link to every paired computer so presence means reachability.
+    pub fn set_presence_links(&self, enabled: bool) -> Result<(), FfiError> {
+        self.inner.set_presence_links(enabled).map_err(map_error)
+    }
+
+    /// What a paired computer last reported it allows; `None` before its
+    /// link has delivered a report.
+    pub fn peer_availability(
+        &self,
+        endpoint_id: String,
+    ) -> Result<Option<Vec<FfiCapabilityStatus>>, FfiError> {
+        Ok(self
+            .inner
+            .peer_availability(&endpoint_id)
+            .map_err(map_error)?
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(capability, status)| FfiCapabilityStatus {
+                        capability: types::capability_name(capability).to_string(),
+                        status: status.label().to_string(),
+                    })
+                    .collect()
+            }))
+    }
+
+    /// Ends one hosted peer; other peers and hosting itself stay up.
+    pub fn stop_hosted_peer(&self, session_id: u64) -> Result<(), FfiError> {
+        self.inner.stop_hosted_peer(session_id).map_err(map_error)
+    }
+
     pub fn reset_identity(&self) -> Result<(), FfiError> {
         self.inner.reset_identity().map_err(map_error)
     }
@@ -452,39 +496,6 @@ impl VnilinkCore {
         self.inner.reject_control_request().map_err(map_error)
     }
 
-    /// Dials a paired device. Blocks up to 75 seconds; call off the UI thread.
-    pub fn connect(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .connect(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
-    /// Dials for file roots/listings/transfers only, without requiring a
-    /// video decoder or host screen sharing. Host admission needs Transfer
-    /// (Control not required).
-    pub fn connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .connect_files(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
-    /// Nonblocking start for a tab. Its local id exists before peer approval.
-    pub fn begin_connect(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .begin_connect(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
-    pub fn begin_connect_files(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
-        self.inner
-            .begin_connect_files(&endpoint_id)
-            .map(types::session_info)
-            .map_err(map_error)
-    }
-
     pub fn controller_sessions(&self) -> Result<Vec<FfiSessionInfo>, FfiError> {
         self.inner
             .controller_sessions()
@@ -496,13 +507,6 @@ impl VnilinkCore {
         self.inner
             .hosted_sessions()
             .map(|sessions| sessions.into_iter().map(types::session_info).collect())
-            .map_err(map_error)
-    }
-
-    pub fn clipboard_owner_session(&self) -> Result<Option<FfiSessionInfo>, FfiError> {
-        self.inner
-            .clipboard_owner_session()
-            .map(|session| session.map(types::session_info))
             .map_err(map_error)
     }
 
@@ -520,76 +524,6 @@ impl VnilinkCore {
     pub fn forget_controller_session(&self, session_id: u64) -> Result<(), FfiError> {
         self.inner
             .forget_controller_session(session_id)
-            .map_err(map_error)
-    }
-
-    pub fn session_clipboard_text(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<Option<String>, FfiError> {
-        self.inner
-            .session_clipboard_text(session_id, generation)
-            .map_err(map_error)
-    }
-
-    pub fn subscribe_session_video(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<VideoPoller, FfiError> {
-        self.inner
-            .subscribe_session_video(session_id, generation)
-            .map(VideoPoller::new)
-            .map_err(map_error)
-    }
-
-    pub fn release_session_input(&self, session_id: u64, generation: u64) -> Result<(), FfiError> {
-        self.inner
-            .release_session_input(session_id, generation)
-            .map_err(map_error)
-    }
-
-    pub fn session_keyboard_mode(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<FfiKeyboardMode, FfiError> {
-        self.inner
-            .session_keyboard_mode(session_id, generation)
-            .map(types::keyboard_mode)
-            .map_err(map_error)
-    }
-
-    pub fn session_swap_control_and_command(
-        &self,
-        session_id: u64,
-        generation: u64,
-    ) -> Result<bool, FfiError> {
-        self.inner
-            .session_swap_control_and_command(session_id, generation)
-            .map_err(map_error)
-    }
-
-    pub fn set_session_keyboard_mode(
-        &self,
-        session_id: u64,
-        generation: u64,
-        mode: FfiKeyboardMode,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .set_session_keyboard_mode(session_id, generation, types::to_keyboard_mode(mode))
-            .map_err(map_error)
-    }
-
-    pub fn set_session_swap_control_and_command(
-        &self,
-        session_id: u64,
-        generation: u64,
-        enabled: bool,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .set_session_swap_control_and_command(session_id, generation, enabled)
             .map_err(map_error)
     }
 
@@ -611,40 +545,6 @@ impl VnilinkCore {
         self.inner
             .session_paths(session_id)
             .map(|paths| paths.iter().map(types::session_path).collect())
-            .map_err(map_error)
-    }
-
-    pub fn submit_key(
-        &self,
-        session_id: u64,
-        generation: u64,
-        usage: u16,
-        down: bool,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::Key { usage, down },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn submit_pointer(
-        &self,
-        session_id: u64,
-        generation: u64,
-        x: i32,
-        y: i32,
-        display: u64,
-        revision: u64,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::pointer(x, y, display, revision),
-            )
             .map_err(map_error)
     }
 
@@ -683,142 +583,8 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    pub fn select_displays(
-        &self,
-        session_id: u64,
-        generation: u64,
-        ids: Vec<u64>,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .select_displays(session_id, generation, &ids)
-            .map_err(map_error)
-    }
-
     pub fn capture_displays(&self) -> Result<Vec<u64>, FfiError> {
         self.inner.capture_displays().map_err(map_error)
-    }
-
-    pub fn submit_button(
-        &self,
-        session_id: u64,
-        generation: u64,
-        button: FfiPointerButton,
-        down: bool,
-    ) -> Result<(), FfiError> {
-        let button = match button {
-            FfiPointerButton::Left => vnilink::PointerButton::Left,
-            FfiPointerButton::Right => vnilink::PointerButton::Right,
-            FfiPointerButton::Middle => vnilink::PointerButton::Middle,
-            FfiPointerButton::Back => vnilink::PointerButton::Back,
-            FfiPointerButton::Forward => vnilink::PointerButton::Forward,
-        };
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::Button { button, down },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn submit_wheel(
-        &self,
-        session_id: u64,
-        generation: u64,
-        dx: i16,
-        dy: i16,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::Wheel { dx, dy },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn session_pointer_settings(
-        &self,
-        id: u64,
-        generation: u64,
-    ) -> Result<FfiPointerSettings, FfiError> {
-        self.inner
-            .session_pointer_settings(id, generation)
-            .map(Into::into)
-            .map_err(map_error)
-    }
-    pub fn set_session_pointer_settings(
-        &self,
-        id: u64,
-        generation: u64,
-        settings: FfiPointerSettings,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .set_session_pointer_settings(id, generation, settings.into())
-            .map_err(map_error)
-    }
-
-    /// Fractional wheel units: 120 per detent; positive down/right.
-    pub fn submit_precise_wheel(
-        &self,
-        session_id: u64,
-        generation: u64,
-        dx: i32,
-        dy: i32,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(
-                session_id,
-                generation,
-                vnilink::InputEvent::precise_wheel(dx, dy),
-            )
-            .map_err(map_error)
-    }
-
-    /// Relative device counts, not absolute screen coordinates.
-    pub fn submit_motion(
-        &self,
-        session_id: u64,
-        generation: u64,
-        dx: i16,
-        dy: i16,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_input(session_id, generation, vnilink::InputEvent::motion(dx, dy))
-            .map_err(map_error)
-    }
-
-    pub fn submit_local_key(
-        &self,
-        session_id: u64,
-        generation: u64,
-        usage: u16,
-        down: bool,
-        text: String,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_local_key(
-                session_id,
-                generation,
-                LocalKey {
-                    usage,
-                    down,
-                    text: &text,
-                    composing: false,
-                },
-            )
-            .map_err(map_error)
-    }
-
-    pub fn submit_text(
-        &self,
-        session_id: u64,
-        generation: u64,
-        text: String,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_text(session_id, generation, &text)
-            .map_err(map_error)
     }
 
     pub fn keyboard_mode(&self) -> Result<FfiKeyboardMode, FfiError> {
@@ -855,6 +621,13 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    /// The codecs the window decodes; future Desktop owners offer only these.
+    pub fn set_window_decoders(&self, decoders: Vec<FfiWindowDecoder>) -> Result<(), FfiError> {
+        self.inner
+            .set_window_decoders(decoders.into_iter().map(Into::into).collect())
+            .map_err(map_error)
+    }
+
     /// Selects the codec for future outgoing Desktop owners.
     pub fn set_desktop_codec_default(&self, codec: FfiCodecPreference) -> Result<(), FfiError> {
         self.inner
@@ -868,95 +641,15 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
-    pub fn update_session_quality_for_generation(
-        &self,
-        session_id: u64,
-        generation: u64,
-        role: FfiSessionRole,
-        quality: FfiQuality,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .update_session_quality_for_generation(
-                session_id,
-                generation,
-                types::to_session_role(role),
-                types::to_quality(quality)?,
-            )
-            .map_err(map_error)
-    }
-
-    pub fn update_session_quality(
-        &self,
-        session_id: u64,
-        role: FfiSessionRole,
-        quality: FfiQuality,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .update_session_quality(
-                session_id,
-                types::to_session_role(role),
-                types::to_quality(quality)?,
-            )
-            .map_err(map_error)
-    }
-
-    pub fn submit_clipboard(
-        &self,
-        session_id: u64,
-        generation: u64,
-        text: String,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .submit_clipboard(session_id, generation, &text)
-            .map_err(map_error)
-    }
-
-    pub fn clipboard_text(&self) -> Result<Option<String>, FfiError> {
-        self.inner.clipboard_text().map_err(map_error)
-    }
-
-    pub fn publish_video(
-        &self,
-        session_id: u64,
-        keyframe: bool,
-        timestamp_us: u64,
-        payload: Vec<u8>,
-    ) -> Result<(), FfiError> {
-        let frame =
-            vnilink::EncodedFrame::h264(keyframe, timestamp_us, payload).map_err(map_error)?;
-        self.inner
-            .publish_video(session_id, frame)
-            .map_err(map_error)
-    }
-
-    /// Publish a typed packet without assuming the negotiated codec is H.264.
-    pub fn publish_video_frame(
-        &self,
-        session_id: u64,
-        frame: FfiEncodedFrame,
-    ) -> Result<(), FfiError> {
-        self.inner
-            .publish_video(session_id, frame.into_core()?)
-            .map_err(map_error)
-    }
-
     pub fn subscribe_events(&self) -> Result<EventPoller, FfiError> {
         self.inner
             .subscribe()
             .map(EventPoller::new)
             .map_err(map_error)
     }
-
-    pub fn subscribe_video(&self) -> Result<VideoPoller, FfiError> {
-        self.inner
-            .subscribe_video()
-            .map(VideoPoller::new)
-            .map_err(map_error)
-    }
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
 
 #[cfg(test)]

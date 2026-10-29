@@ -1,16 +1,23 @@
 //! Locally approved Media Foundation camera capture. OS samples are copied in
 //! asynchronous callbacks; no COM sample or borrowed native buffer crosses threads.
-use crate::{camera_format::Format, WindowsEncoder};
+// trace: records every ignored failure
+use crate::{
+    camera_format::{choose_mode, Format},
+    WindowsEncoder,
+};
 use std::sync::{
     mpsc::{self, SyncSender},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
 use vnilink::{
-    camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory},
+    camera::{
+        CameraApproval, CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory,
+    },
     BackendStartup, Error,
 };
 use vnilink_media::{EncodeParams, RawFrame, VideoEncoder};
+use windows::core::Interface;
 use windows::core::{implement, Ref, GUID, HRESULT, PWSTR};
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{
@@ -35,7 +42,11 @@ impl Foundation {
 impl Drop for Foundation {
     fn drop(&mut self) {
         unsafe {
-            let _ = MFShutdown();
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "Media Foundation that cannot shut down ends with the process",
+                MFShutdown()
+            );
             CoUninitialize();
         }
     }
@@ -132,13 +143,11 @@ pub fn camera_devices() -> Result<Vec<CameraDevice>, Error> {
         .map_err(|_| Error::Unsupported("camera enumeration failed"))?
 }
 pub struct WindowsCameraFactory {
-    approved: Vec<String>,
+    approved: CameraApproval,
 }
 impl WindowsCameraFactory {
-    pub fn new(approved: Vec<String>) -> Result<Self, Error> {
-        if approved.len() > 32 || approved.iter().any(|id| id.is_empty() || id.len() > 256) {
-            return Err(Error::InvalidSetting("invalid approved camera IDs"));
-        }
+    pub fn new(approved: CameraApproval) -> Result<Self, Error> {
+        approved.validate()?;
         Ok(Self { approved })
     }
 }
@@ -146,13 +155,13 @@ impl HostCameraFactory for WindowsCameraFactory {
     fn devices(&self) -> Result<Vec<CameraDevice>, Error> {
         Ok(camera_devices()?
             .into_iter()
-            .filter(|device| self.approved.contains(&device.id))
+            .filter(|device| self.approved.allows(&device.id))
             .collect())
     }
     fn open(&self, config: CameraConfig, startup: BackendStartup) -> Result<CameraBackend, Error> {
         startup.check()?;
         config.validate()?;
-        if !self.approved.contains(&config.device_id) {
+        if !self.approved.allows(&config.device_id) {
             return Err(Error::Unauthorized);
         }
         let source = CameraSource::new();
@@ -237,6 +246,39 @@ unsafe fn copy_sample(
     timestamp: u64,
 ) -> Result<RawFrame, Error> {
     let format = format.ok_or(Error::Unsupported("camera format is not ready"))?;
+    // A 2D buffer says where its top row is and which way rows run; the
+    // media type's stride is only a fallback, and its default for RGB
+    // (bottom-up) turned pictures upside down.
+    if native(sample.GetBufferCount())? == 1 {
+        if let Ok(buffer) = native(sample.GetBufferByIndex(0))?.cast::<IMF2DBuffer2>() {
+            let mut scan0 = std::ptr::null_mut();
+            let mut pitch = 0;
+            let mut start = std::ptr::null_mut();
+            let mut length = 0;
+            native(buffer.Lock2DSize(
+                MF2DBuffer_LockFlags_Read,
+                &mut scan0,
+                &mut pitch,
+                &mut start,
+                &mut length,
+            ))?;
+            let copied = if start.is_null() || scan0 < start || length > 64 * 1024 * 1024 {
+                Err(Error::Unsupported("camera buffer size"))
+            } else {
+                format
+                    .copy_pitched(
+                        std::slice::from_raw_parts(start, length as usize),
+                        scan0.offset_from(start) as usize,
+                        pitch as isize,
+                        timestamp,
+                    )
+                    .map_err(|_| Error::Unsupported("camera RGB32 sample"))
+            };
+            let unlocked = native(buffer.Unlock2D());
+            unlocked?;
+            return copied;
+        }
+    }
     let buffer = native(sample.ConvertToContiguousBuffer())?;
     let mut pointer = std::ptr::null_mut();
     let mut length = 0;
@@ -259,8 +301,16 @@ struct OwnedSource(IMFMediaSource, IMFActivate);
 impl Drop for OwnedSource {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.0.Shutdown();
-            let _ = self.1.ShutdownObject();
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "a camera source that cannot shut down is released anyway",
+                self.0.Shutdown()
+            );
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "a camera source that cannot shut down is released anyway",
+                self.1.ShutdownObject()
+            );
         }
     }
 }
@@ -271,9 +321,12 @@ struct Capture {
 impl Drop for Capture {
     fn drop(&mut self) {
         unsafe {
-            let _ = self
-                .reader
-                .Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32);
+            ignored_hr!(
+                vnilink::trace::CAMERA,
+                "a reader that cannot flush is released anyway",
+                self.reader
+                    .Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+            );
             drop(self.source.take());
         }
     }
@@ -317,6 +370,49 @@ fn run(
     };
     startup.check()?;
     unsafe {
+        // Open one of the camera's own modes in its sensor's shape and ask
+        // for that shape: other sizes come scaled and letterboxed.
+        let stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        let mut formats = Vec::new();
+        for index in 0..256 {
+            let Ok(native_type) = capture.reader.GetNativeMediaType(stream, index) else {
+                break;
+            };
+            // One entry per native index, so the choice names the mode to open.
+            let (Ok(size), Ok(rate)) = (
+                native_type.GetUINT64(&MF_MT_FRAME_SIZE),
+                native_type.GetUINT64(&MF_MT_FRAME_RATE),
+            ) else {
+                formats.push((0, 0, 0));
+                continue;
+            };
+            let denominator = u64::from(rate as u32).max(1);
+            let fps = ((rate >> 32) + denominator / 2) / denominator;
+            formats.push((
+                (size >> 32) as u32,
+                size as u32,
+                if rate as u32 == 0 {
+                    0
+                } else {
+                    u32::try_from(fps).unwrap_or(0)
+                },
+            ));
+        }
+        if let Some(mode) = choose_mode(&formats, config.width, config.fps) {
+            let native_type = native(
+                capture
+                    .reader
+                    .GetNativeMediaType(stream, mode.native as u32),
+            )?;
+            native(
+                capture
+                    .reader
+                    .SetCurrentMediaType(stream, None, &native_type),
+            )?;
+            config.width = mode.width;
+            config.height = mode.height;
+            config.fps = mode.fps;
+        }
         let mt = native(MFCreateMediaType())?;
         native(mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video))?;
         native(mt.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32))?;
@@ -418,6 +514,7 @@ fn run(
                     bitrate_bps: 4_000_000,
                     frame_rate: config.fps as u8,
                     force_keyframe: keyframe,
+                    recovery: false,
                 },
             )
             .map_err(|_| Error::Unsupported("Windows camera encoding"))?;
@@ -500,7 +597,7 @@ mod tests {
     fn approved_physical_camera_starts_after_first_keyframe_and_closes() {
         let id = std::env::var("VNILINK_TEST_CAMERA_ID")
             .expect("select an enumerated camera explicitly; no automatic camera activation");
-        let factory = WindowsCameraFactory::new(vec![id.clone()]).unwrap();
+        let factory = WindowsCameraFactory::new(CameraApproval::Only(vec![id.clone()])).unwrap();
         assert!(factory
             .devices()
             .unwrap()

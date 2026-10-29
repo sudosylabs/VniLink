@@ -15,7 +15,7 @@ impl PowerKind {
     }
     pub(crate) const ALL: [Self; 2] = [Self::Display, Self::System];
 }
-/// Opt-in installation policy. Files-only connections, detached shells,
+/// Opt-in installation policy. Connections carrying only Files, detached shells,
 /// keepalives and ordinary frame traffic do not acquire these assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,7 +31,10 @@ pub struct PowerPolicy {
     /// explicit owner close with a live parent locks at once; an end with
     /// no live parent waits out the reconnect grace so temporary network
     /// loss does not lock a session that is about to resume. Yielding and
-    /// grant-narrowing count as control ends. Viewing alone never arms it.
+    /// grant-narrowing count as control ends. Only control that was used
+    /// arms it: input applied here, or a picture delivered while
+    /// controlling. Viewing alone, or control ended before it was used,
+    /// never arms it.
     pub lock_after_control: bool,
 }
 impl PowerPolicy {
@@ -81,6 +84,9 @@ pub(crate) const LOCK_GRACE: std::time::Duration = std::time::Duration::from_sec
 /// power tick; pure over its inputs so the policy is unit-testable.
 #[derive(Debug, Default)]
 pub(crate) struct LockAfterControl {
+    /// Control was used: input from it was applied, or a picture reached
+    /// it. A grant that was never used, such as a viewer cancelled while
+    /// still connecting, does not lock this computer when it ends.
     armed: bool,
     grace_until: Option<std::time::Instant>,
 }
@@ -96,22 +102,16 @@ pub(crate) enum LockDecision {
 }
 
 impl LockAfterControl {
-    /// Arms synchronously on a control grant. Grant sites call this with
-    /// the state lock held so a grant-and-end cycle briefer than a tick
-    /// still locks; ends are observed by [`Self::tick`].
-    pub(crate) fn note_controlling(&mut self) {
-        self.armed = true;
-        self.grace_until = None;
-    }
-
-    /// `controlling` is any live remote-control owner (hosted Controlling
-    /// or legacy control session); `parent_live` is any Active incoming
-    /// session. Disabling the policy disarms immediately.
+    /// `controlling` is whether a hosted desktop holds control; `used` is whether control was used since
+    /// the last tick, which arms even when control already ended within
+    /// it; `parent_live` is any Active incoming session. Disabling the
+    /// policy disarms immediately.
     pub(crate) fn tick(
         &mut self,
         now: std::time::Instant,
         enabled: bool,
         controlling: bool,
+        used: bool,
         parent_live: bool,
     ) -> LockDecision {
         if !enabled {
@@ -119,8 +119,10 @@ impl LockAfterControl {
             self.grace_until = None;
             return LockDecision::Idle;
         }
-        if controlling {
+        if used {
             self.armed = true;
+        }
+        if controlling {
             self.grace_until = None;
             return LockDecision::Idle;
         }
@@ -181,5 +183,138 @@ impl PowerStatus {
             owners: 0,
             phase: PowerPhase::Idle,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Every policy of the five known bits round-trips its record byte, and
+    /// a byte with any other bit set is a corrupt record.
+    #[test]
+    fn a_power_policy_is_its_five_bits_and_no_other() {
+        for bits in 0..=31 {
+            assert_eq!(
+                PowerPolicy::from_bits(bits).unwrap().bits(),
+                bits,
+                "a known policy round-trips"
+            );
+        }
+        for bits in 32..=255 {
+            assert!(
+                matches!(
+                    PowerPolicy::from_bits(bits),
+                    Err(crate::Error::CorruptRecord)
+                ),
+                "an unknown bit is a corrupt record"
+            );
+        }
+    }
+
+    /// Pure policy, no network: the machine never fires unused, fires once on
+    /// an explicit end with a live parent, waits out the grace without one, and
+    /// a redial inside the window resumes instead of locking.
+    #[test]
+    fn lock_machine_fires_once_and_graces_parent_loss() {
+        let start = Instant::now();
+        let mut machine = LockAfterControl::default();
+        // tick(now, enabled, controlling, used, parent_live)
+        assert_eq!(
+            machine.tick(start, true, false, false, false),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, true, true, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, false, false, false, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, true, true, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, false, false, true),
+            LockDecision::Fire
+        );
+        assert_eq!(
+            machine.tick(start, true, false, false, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, true, true, false),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, false, false, false),
+            LockDecision::Wait
+        );
+        assert_eq!(
+            machine.tick(start + Duration::from_secs(29), true, false, false, false),
+            LockDecision::Wait
+        );
+        assert_eq!(
+            machine.tick(start + Duration::from_secs(30), true, false, false, false),
+            LockDecision::Fire
+        );
+        assert_eq!(
+            machine.tick(start, true, true, true, false),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, false, false, false),
+            LockDecision::Wait
+        );
+        assert_eq!(
+            machine.tick(start + Duration::from_secs(5), true, true, false, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start + Duration::from_secs(31), true, false, false, true),
+            LockDecision::Fire
+        );
+        // A use and an end within one tick still fire on the next sample.
+        let mut quick = LockAfterControl::default();
+        assert_eq!(
+            quick.tick(start, true, false, true, true),
+            LockDecision::Fire
+        );
+    }
+
+    /// Control granted but never used, such as a viewer cancelled while still
+    /// connecting, ends without locking; using it once arms the lock until
+    /// control ends.
+    #[test]
+    fn lock_machine_ignores_control_that_was_never_used() {
+        let start = Instant::now();
+        let mut machine = LockAfterControl::default();
+        assert_eq!(
+            machine.tick(start, true, true, false, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, false, false, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, false, false, false),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, true, true, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, true, false, true),
+            LockDecision::Idle
+        );
+        assert_eq!(
+            machine.tick(start, true, false, false, true),
+            LockDecision::Fire
+        );
     }
 }

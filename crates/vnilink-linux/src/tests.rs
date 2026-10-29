@@ -2,8 +2,20 @@
 mod decode_tests;
 #[path = "tests/encode.rs"]
 mod encode_tests;
+#[cfg(target_os = "linux")]
+#[path = "tests/gpu_picture.rs"]
+mod gpu_picture_tests;
+#[path = "tests/gpu.rs"]
+mod gpu_tests;
+#[path = "tests/grant.rs"]
+mod grant_tests;
+#[path = "tests/hevc_parameter_set.rs"]
+mod hevc_parameter_set_tests;
 #[path = "tests/host.rs"]
 mod host_tests;
+#[cfg(target_os = "linux")]
+#[path = "tests/nvenc.rs"]
+mod nvenc_tests;
 #[path = "tests/owners.rs"]
 mod owners_tests;
 #[path = "tests/parameter_set.rs"]

@@ -1,4 +1,5 @@
 //! Handle-scoped Power Requests, independent from the worker thread's lifetime.
+// trace: records every ignored failure
 use vnilink::power::{HostPowerFactory, PowerInhibitor, PowerKind};
 use vnilink::{BackendStartup, Error};
 use windows::core::PWSTR;
@@ -21,9 +22,17 @@ impl Drop for Inhibitor {
         let handle = HANDLE(self.handle as *mut std::ffi::c_void);
         unsafe {
             if self.active {
-                let _ = PowerClearRequest(handle, self.kind);
+                ignored_hr!(
+                    vnilink::trace::POWER,
+                    "a request that cannot be cleared ends with its handle",
+                    PowerClearRequest(handle, self.kind)
+                );
             }
-            let _ = CloseHandle(handle);
+            ignored_hr!(
+                vnilink::trace::POWER,
+                "a handle that cannot close ends with the process",
+                CloseHandle(handle)
+            );
         }
     }
 }

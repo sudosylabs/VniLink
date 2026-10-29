@@ -4,6 +4,7 @@
 //! the fixed statements in this file. A commit whose durable outcome is not
 //! known is [`WriteResult::Uncertain`] even when a later rollback looks successful.
 //! The same rule applies to the schema commit during creation.
+// trace: records every ignored failure
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -89,7 +90,8 @@ impl InstallationDatabase {
         }
         #[cfg(test)]
         if take_schema_fault(SchemaFault::Statement) {
-            let _ = conn.execute_batch("SELECT * FROM vnilink_absent_relation");
+            // The injected fault is the point.
+            drop(conn.execute_batch("SELECT * FROM vnilink_absent_relation"));
             return Err(abandon_uncommitted(&conn));
         }
         if conn.execute_batch(CREATE_SQL).is_err() {
@@ -104,17 +106,21 @@ impl InstallationDatabase {
         #[cfg(test)]
         if take_schema_fault(SchemaFault::Commit) {
             // `true` asks SQLite to turn this COMMIT into a rollback.
-            let _ = conn.commit_hook(Some(|| true));
+            drop(conn.commit_hook(Some(|| true)));
         }
         let committed = conn.execute_batch("COMMIT");
         #[cfg(test)]
         {
-            let _ = conn.commit_hook(None::<fn() -> bool>);
+            drop(conn.commit_hook(None::<fn() -> bool>));
         }
         match committed {
             Ok(()) => {
                 if !conn.is_autocommit() {
-                    let _ = conn.execute_batch("ROLLBACK");
+                    vnilink::ignored!(
+                        vnilink::trace::STORAGE,
+                        "a rollback that fails is rolled back by SQLite when the connection closes",
+                        conn.execute_batch("ROLLBACK")
+                    );
                     return Err(StoreFailure::RecoveryRequired);
                 }
             }
@@ -124,7 +130,11 @@ impl InstallationDatabase {
                 if is_busy(&error) && rollback_ended(&conn) {
                     return Err(StoreFailure::Unavailable);
                 }
-                let _ = conn.execute_batch("ROLLBACK");
+                vnilink::ignored!(
+                    vnilink::trace::STORAGE,
+                    "a rollback that fails is rolled back by SQLite when the connection closes",
+                    conn.execute_batch("ROLLBACK")
+                );
                 return Err(StoreFailure::RecoveryRequired);
             }
         }
@@ -231,7 +241,7 @@ impl InstallationDatabase {
             if self.hooks.fail_commit {
                 self.hooks.fail_commit = false;
                 // `true` asks SQLite to turn this COMMIT into a rollback.
-                let _ = self.conn.commit_hook(Some(|| true));
+                drop(self.conn.commit_hook(Some(|| true)));
             }
         }
         match self.conn.execute_batch("COMMIT") {
@@ -325,7 +335,13 @@ impl InstallationDatabase {
     }
 
     fn abandon_uncertain(&mut self, code: i32) -> WriteResult {
-        let _ = self.rollback_confirmed();
+        let rolled_back = self.rollback_confirmed();
+        tracing::warn!(
+            target: vnilink::trace::STORAGE,
+            code,
+            rolled_back,
+            "an installation write's outcome is uncertain: VniLink must restart before writing again"
+        );
         WriteResult::Uncertain { code }
     }
 
@@ -364,7 +380,7 @@ impl InstallationDatabase {
     fn clear_commit_hook(&self) {
         #[cfg(test)]
         {
-            let _ = self.conn.commit_hook(None::<fn() -> bool>);
+            drop(self.conn.commit_hook(None::<fn() -> bool>));
         }
     }
 
@@ -668,7 +684,7 @@ fn sqlite_code(error: &rusqlite::Error) -> i32 {
 
 #[cfg(test)]
 fn wait_for_barrier(dir: &Path) {
-    let _ = std::fs::write(dir.join("after-write"), b"1");
+    drop(std::fs::write(dir.join("after-write"), b"1"));
     let continue_at = dir.join("continue");
     let started = std::time::Instant::now();
     while !continue_at.exists() {

@@ -1,6 +1,6 @@
 # Keyboard
 
-`submit_local_key` is the key path. It takes the physical HID usage and the text the controller operating system produced for that press. The mode decides what the host receives. The choice belongs to this process and is not saved. Release held keys before changing it. A new session starts with nothing held.
+A Desktop service's `submit_local_key` (`RemoteDesktopService`) is the key path. It takes the physical HID usage and the text the controller operating system produced for that press. The mode decides what the host receives. The choice belongs to this process and is not saved. Release held keys before changing it. A new desktop starts with nothing held.
 
 ## Modes
 
@@ -14,12 +14,12 @@
 
 ## What a physical key does
 
-1. The controller sends a USB HID usage on the control stream. The host calls `enigo.raw` with the code for this operating system. macOS uses a Core Graphics keycode. Windows uses a set-1 scan code, with `0xE000` added when the key is extended. Linux uses an X11 keycode, which is the evdev code plus 8. Left and right modifiers stay distinct.
+1. The controller sends a USB HID usage on the Desktop service's stream. The host calls `enigo.raw` with the code for this operating system. macOS uses a Core Graphics keycode. Windows uses a set-1 scan code, with `0xE000` added when the key is extended. Linux uses an X11 keycode, which is the evdev code plus 8. Left and right modifiers stay distinct.
 2. HID `0x32` (Non-US `#`, the ISO key next to Enter) uses the same position as backslash. HID `0x64` (Non-US `\`, the ISO key next to Left Shift) is a different key. An unknown usage is refused and the session stays up.
 3. `set_swap_control_and_command` exchanges Control and Command before the event is queued. It is off by default, it belongs to this process, and it is not saved. The host injects the usage it receives and releases that same usage when the session ends. Release a held modifier before changing the setting.
-4. `submit_text` sends finished characters, tag 8, at most 128 bytes (`MAX_KEY_TEXT`). The host inserts them. This is not a clipboard paste and does not use the clipboard grant. Empty text, a null byte, and a longer string are rejected before they are sent. A refusal does not end the control session. The text is not logged and is not put on an event.
-5. Translate uses tag 9. The payload has the same limit and is not logged. A refusal does not end the control session.
-6. A dropped session does not send the old text or the old chord again. The new generation needs a new `submit_local_key` or `submit_text`. Queued text is dropped with the rest of the input queue.
+4. `submit_text` sends finished characters, tag 8, at most 128 bytes (`MAX_KEY_TEXT`). The host inserts them. This is not a clipboard paste and does not use the clipboard grant. Empty text, a null byte, and a longer string are rejected before they are sent. A refusal does not end the desktop. The text is not logged and is not put on an event.
+5. Translate uses tag 9. The payload has the same limit and is not logged. A refusal does not end the desktop.
+6. A desktop whose connection dropped does not send the old text or the old chord again. A desktop on the new generation needs a new `submit_local_key` or `submit_text`. Queued text is dropped with the rest of the input queue.
 
 ## Files
 
@@ -28,7 +28,8 @@
 | `src/keyboard/plan.rs` | Character, Map, and Translate for one local key |
 | `src/keyboard/chord.rs` | Group-1 chord lookup |
 | `src/tests/keyboard.rs` | Plan and chord unit tests. They build the map and do not open a display |
-| `src/core/keys.rs` | `submit_local_key`, `submit_text`, and the mode switch |
+| `src/core/desktop_stream.rs` | A Desktop service's `submit_local_key` and `submit_text`, and the host applying them |
+| `src/core/keys.rs` | The engine's mode and swap defaults |
 | `src/os_input/chord.rs` | Pressing that chord on Linux |
 | `src/tests/keyboard_mode.rs` | Loopback tests of the three modes |
 | `src/tests/keyboard_text.rs` | The Control/Command swap and finished text |

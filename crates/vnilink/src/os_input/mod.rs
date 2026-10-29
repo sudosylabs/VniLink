@@ -1,3 +1,4 @@
+// trace: records every ignored failure
 use enigo::{Axis, Coordinate, Direction, Enigo, Keyboard, Mouse, NewConError, Settings};
 
 use crate::error::Error;
@@ -210,8 +211,6 @@ mod codes;
 
 use codes::enigo_button;
 
-#[cfg(test)]
-pub(crate) use codes::KeyCodes;
 pub(crate) use codes::{clamp_extent, clamp_point, key_for_usage, platform_code};
 
 fn setup_error(error: NewConError) -> Error {

@@ -1,0 +1,22 @@
+/* VS Code's dialog in VniLink's theme: the tokens it reads, and VniLink's icons in its icon slot. */
+.monaco-dialog-modal-block {
+	/* stylelint-disable custom-property-pattern -- the names dialog.css reads upstream */
+	--vscode-cornerRadius-xLarge: 10px;
+	--vscode-shadow-xl: 0 12px 40px rgb(0 0 0 / 35%);
+	--vscode-focusBorder: var(--accent);
+	/* stylelint-enable custom-property-pattern */
+}
+
+.monaco-dialog-box .dialog-message-row > .codicon > .vnilink-icon {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.monaco-dialog-box .dialog-checkbox-row .monaco-checkbox > .vnilink-icon {
+	--icon-size: 14px;
+}
+
+.monaco-dialog-box .dialog-checkbox-row .monaco-checkbox:not(.checked) > .vnilink-icon {
+	visibility: hidden;
+}

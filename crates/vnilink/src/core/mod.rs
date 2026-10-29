@@ -5,12 +5,12 @@
 //! - [`host`] — hosting and the accept loop
 //! - [`pairing`] — invitations, pairing files, control approval
 //! - [`connect`] — authorize, connect, disconnect, redial
-//! - [`keys`] — key, pointer, and keyboard mode
+//! - [`keys`] — the input adapter, input defaults, and a session's control stream on the host
 //! - [`link`] — the live link and the address refresh both roles share
-//! - [`clipboard`] — clipboard stream
-//! - [`files`] — file transfer stream
-//! - [`video`] — encoded frames
+//! - [`clipboard`] — the host's clipboard adapter
+//! - [`video`] — capture consumers and codec settings
 //! - [`wire`] — control frame read and write
+// trace: records every ignored failure
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -22,59 +22,83 @@ use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr, PublicKey, SecretKey};
 
-use crate::clipboard::{ClipboardSender, HostClipboard};
+use crate::clipboard::HostClipboard;
 use crate::error::Error;
 use crate::events::{CoreEvent, EventHub};
 use crate::input::{HostDesktop, InputOutbox};
 use crate::installation::{self, InstallationStore};
 use crate::invitation::ReplayCache;
-use crate::keyboard::{self};
 use crate::protocol::{Capabilities, Quality};
 use crate::relay::RelaySettings;
 use crate::session::{Grants, SessionInfo, SessionPhase, SessionRole};
 use crate::trust::{Device, Trust};
-use crate::video::{HostCapture, VideoInbox, VideoOutbox};
+use crate::video::HostCapture;
 
 mod activity;
+#[cfg(feature = "test-probes")]
+mod agent;
+#[cfg(feature = "test-probes")]
+pub use agent::{AgentChannel, AgentListener, AGENT_ALPN, MAX_AGENT_FRAME};
 mod audio_stream;
 mod availability;
-pub(crate) mod blob;
 mod camera_stream;
 mod clipboard;
 mod connect;
-mod cursor;
 mod desktop_clipboard;
 mod desktop_service;
 mod desktop_stream;
+mod drops;
+#[cfg(any(test, feature = "test-probes"))]
+pub use drops::{DropPoint, Drops};
 mod diagnostics;
 mod file_resources;
 mod fs;
+#[cfg(test)]
+pub(crate) use fs::LIST_DELAY;
 mod host;
+mod host_input;
+mod job_journal;
 mod jobs;
-#[cfg(unix)]
-pub(crate) use jobs::PrestageHooks;
+#[cfg(all(any(unix, windows), any(test, feature = "test-probes")))]
+pub use jobs::PrestageHooks;
+#[cfg(test)]
+pub(crate) use jobs::PREPARE_SCAN_HOOKS;
+#[cfg(any(test, feature = "test-probes"))]
+pub use jobs::{MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
 mod input_cleanup;
 mod keys;
 mod lifecycle;
 mod link;
 mod pairing;
 mod power;
+mod presence;
 mod service_jobs;
 mod service_permissions;
 pub(crate) mod service_stream;
 mod services;
 mod sharing;
+pub(crate) mod snapshot;
 pub use audio_stream::RemoteAudioService;
 pub use camera_stream::RemoteCameraService;
 pub use system_stream::RemoteSystemService;
 mod system_stream;
 mod terminal_runtime;
 mod terminal_stream;
+/// The service streams' private codecs, for `crate::fuzzing`.
+#[cfg(feature = "fuzzing")]
+pub(crate) mod codecs {
+    pub(crate) use super::system_stream::{
+        decode_operation, decode_privacy, decode_support, encode_operation, encode_privacy,
+        encode_support,
+    };
+    pub(crate) use super::terminal_stream::{decode_event, encode_event};
+}
 mod topology;
+mod transfer;
 mod video;
+mod watch;
 mod wire;
 
-pub use blob::{BLOB_ALPN, BLOB_MAX_BYTES};
 pub use desktop_service::RemoteDesktopService;
 pub use desktop_stream::{DesktopControlState, DesktopInfo};
 pub use terminal_stream::RemoteTerminalService;
@@ -89,6 +113,10 @@ pub enum Listen {
     Default,
     /// IPv4 loopback only. Same-machine tests use this.
     Loopback,
+    /// No direct address at all: the configured relay is the only way in or
+    /// out, so tests on one computer exercise a relayed connection.
+    #[cfg(any(test, feature = "test-probes"))]
+    RelayOnly,
 }
 
 /// Per-installation settings. Nothing here is compiled in for a particular person.
@@ -186,6 +214,13 @@ pub struct SessionPath {
     pub tx_bytes: u64,
     /// UDP payload bytes received on this path, cumulative.
     pub rx_bytes: u64,
+    /// This side's congestion window on the path, in bytes.
+    pub cwnd: u64,
+    /// Congestion events, lost packets and black holes this side detected
+    /// on the path, cumulative: its sending direction only.
+    pub congestion_events: u64,
+    pub lost_packets: u64,
+    pub black_holes_detected: u64,
 }
 
 struct LiveSession {
@@ -193,108 +228,61 @@ struct LiveSession {
     id: u64,
     /// Peer-assigned protocol identity, never used for local controller lookup.
     wire_stamp: crate::protocol::SessionStamp,
-    controller: Option<Arc<ControllerState>>,
     generation: u64,
     role: SessionRole,
     phase: SessionPhase,
     peer_id: String,
     peer_key: [u8; 32],
-    quality: Option<Quality>,
-    /// Agreed H.264 codec id (`CODEC_H264` or `CODEC_H264_HIGH`). Decided in
-    /// Hello/Accept; the serve path opens the matching encoder profile.
-    /// `None` for files-only sessions (no video).
-    codec: u8,
-    separate_cursor: bool,
-    /// Files-only session (Transfer grant, no Control): suppresses desktop
-    /// video, cursor, input and automatic clipboard transport. File roots,
-    /// listings and transfers enforce Transfer per operation.
-    files_only: bool,
-    services_only: bool,
-    /// A desktop may retire without ending its parent connection.
-    desktop_stop: tokio::sync::watch::Sender<bool>,
-    host_held: Arc<Mutex<crate::input::HeldInput>>,
-    /// Native workers and cleanup retain admission after parent closure.
-    incoming_slot: Option<Arc<input_cleanup::AdmissionSlot>>,
-    /// One latest sample for this exact owner generation, never another peer.
-    cursor_outbox: tokio::sync::watch::Sender<
-        Option<(crate::protocol::SessionStamp, Arc<crate::CursorState>)>,
-    >,
-    /// Fences legacy native work across revoke/regrant and retirement.
-    input_epoch: Arc<AtomicU64>,
-    desktop_owner: Option<u64>,
-    monitor_width: u16,
-    monitor_height: u16,
     /// Topology last received from the host. Empty until the first snapshot.
     peer_topology: Vec<crate::input::DisplayInfo>,
-    /// Display this hosted session is allowed to control. Empty until selected.
-    selected_displays: Vec<u64>,
-    /// Set when a selected display disappears. Not cleared by a later pointer.
-    display_fault: Option<&'static str>,
     stop: tokio::sync::watch::Sender<bool>,
-    outbox: Option<Arc<InputOutbox>>,
-    video: Option<Arc<VideoOutbox>>,
     /// Live connection. A test can close it without asking the session to stop.
     link: Option<iroh::endpoint::Connection>,
-    clipboard: Option<ClipboardSender>,
-    /// Latest file selection this session's peer offered. Revisioned so a
-    /// paste prepared earlier is stale, and cleared on revoke because a
-    /// selection is a live capability, unlike inert text.
-    clipboard_files: Option<crate::clipboard::StoredFileSelection>,
-    /// This core's own file offers on this hosted session. Revisioned:
-    /// paste preparation serves only the revision it was asked for, so a
-    /// same-path re-offer cannot satisfy an older preparation. An empty
-    /// offer stores an empty selection at a fresh revision instead of
-    /// dropping the chain.
-    published_files: Option<crate::clipboard::StoredFileSelection>,
-    /// Next own-offer revision minus one. Monotonic across clears and
-    /// revokes so a revision is never reused within the session.
-    published_rev: AtomicU64,
+    /// On a controller's link: the host's latest report of what it allows.
+    remote_availability: Option<Vec<(crate::Capability, crate::RemoteStatus)>>,
 }
 
-/// All mutable controller channels belong to one session, including reconnects.
-struct ControllerState {
-    inbox: Arc<VideoInbox>,
-    subscriber: Mutex<Weak<()>>,
-    cursor: cursor::CursorInbox,
-    clipboard: Mutex<Option<String>>,
-    clipboard_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
-    /// This core's own file offers on this session, for binding pastes to
-    /// offers. Revisioned: a prepare naming an older revision is refused
-    /// even when its paths match, and the Transfer grant alone never
-    /// authorizes a fetch.
-    published_files: Mutex<Option<crate::clipboard::StoredFileSelection>>,
-    /// Next own-offer revision minus one. Monotonic across clears and
-    /// revokes so a revision is never reused within the session.
-    published_rev: AtomicU64,
-    keyboard: Mutex<keyboard::KeyPlan>,
-    held: Mutex<crate::input::HeldInput>,
-    pointer: Mutex<crate::input::PointerPlan>,
-    mode: AtomicU8,
-    swap: AtomicBool,
-    auto: Mutex<AutoState>,
-}
-impl ControllerState {
-    fn new(inbox: Arc<VideoInbox>, mode: u8, swap: bool, pointer: crate::PointerSettings) -> Self {
-        Self {
-            inbox,
-            subscriber: Mutex::new(Weak::new()),
-            cursor: Arc::new(Mutex::new(None)),
-            clipboard: Mutex::new(None),
-            clipboard_files: Mutex::new(None),
-            published_files: Mutex::new(None),
-            published_rev: AtomicU64::new(0),
-            keyboard: Mutex::new(keyboard::KeyPlan::new()),
-            held: Mutex::new(crate::input::HeldInput::default()),
-            pointer: Mutex::new(crate::input::PointerPlan::with_settings(pointer)),
-            mode: AtomicU8::new(mode),
-            swap: AtomicBool::new(swap),
-            auto: Mutex::new(AutoState::default()),
+impl LiveSession {
+    /// Moves to `phase`, recording the change: each session's life reads
+    /// from its records, as each service's and job's does. A failure's text
+    /// is not recorded, since it may name addresses; its caller records the
+    /// failure by name.
+    fn enter(&mut self, phase: SessionPhase) {
+        if self.phase == phase {
+            return;
         }
+        tracing::info!(
+            target: crate::trace::SESSION,
+            session = self.id,
+            generation = self.generation,
+            role = ?self.role,
+            peer = crate::diagnostics::fingerprint(&self.peer_key),
+            from = diagnostics::session_phase(&self.phase),
+            to = diagnostics::session_phase(&phase),
+            "session phase"
+        );
+        self.phase = phase;
+    }
+
+    /// Active, on a link still open. A stream that ends on such a session
+    /// was ended by its peer; a lost link ends streams too, before the
+    /// session's phase learns of it, which its link already says.
+    fn connected(&self) -> bool {
+        self.phase == SessionPhase::Active && self.link_open()
+    }
+
+    /// Its link still carries streams, whatever its phase: a session this
+    /// computer is stopping can still tell its peer why.
+    fn link_open(&self) -> bool {
+        self.link
+            .as_ref()
+            .is_some_and(|link| link.close_reason().is_none())
     }
 }
 
 impl State {
-    /// Legacy APIs may address only an unambiguous outgoing session.
+    /// The one outgoing link, for calls that name none: only when it is
+    /// unambiguous.
     fn single_outgoing(&self) -> Option<&LiveSession> {
         if self.outgoing.len() == 1 {
             return self.outgoing.values().next();
@@ -309,30 +297,8 @@ impl State {
             None
         }
     }
-    fn outgoing_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
-        self.outgoing
-            .values()
-            .find(|s| s.peer_key == *peer && !finished(&s.phase))
-    }
-    /// Live hosted session for one peer, if any. Peers are looked up by
-    /// identity, never by assuming a single hosted connection.
-    fn incoming_peer(&self, peer: &[u8; 32]) -> Option<&LiveSession> {
-        self.incoming
-            .values()
-            .find(|s| s.peer_key == *peer && !finished(&s.phase))
-    }
-    /// Live hosted session for one peer and wire generation. Job control
-    /// frames carry no host session id, so they fence on peer identity plus
-    /// the generation inside the message.
-    fn incoming_live_for(&self, peer: &[u8; 32], generation: u64) -> Option<&LiveSession> {
-        self.incoming.values().find(|s| {
-            s.peer_key == *peer
-                && s.wire_stamp.generation == generation
-                && s.phase == SessionPhase::Active
-        })
-    }
-    /// Explicit service input ownership precedes legacy desktop admission.
-    /// A retiring service keeps its reservation until held input is released.
+    /// The connection whose desktop holds control. A retiring desktop keeps
+    /// its reservation until its held input is released.
     fn input_holder(&self) -> Option<u64> {
         if self
             .input_cleanup
@@ -348,26 +314,11 @@ impl State {
                 }
             }
         }
-        let mut holder: Option<u64> = None;
-        let mut consider = |id: u64| {
-            holder = Some(holder.map_or(id, |current| current.min(id)));
-        };
-        for session in self.incoming.values() {
-            if session.phase == SessionPhase::Active
-                && !session.files_only
-                && !session.services_only
-                && !*session.desktop_stop.borrow()
-                && self
-                    .trust
-                    .granted(&session.peer_key, crate::session::Grant::Control)
-            {
-                consider(session.id);
-            }
-        }
-        holder
+        None
     }
-    /// A live hosted session, for legacy single-view callers. New code that
-    /// already knows the session id must use `incoming.get(&id)` instead.
+    /// A live hosted session, for tests that host one. Code that knows the
+    /// session id uses `incoming.get(&id)` instead.
+    #[cfg(any(test, feature = "test-probes"))]
     fn incoming_live(&self) -> Option<&LiveSession> {
         self.incoming.values().find(|s| !finished(&s.phase))
     }
@@ -378,18 +329,6 @@ impl State {
     }
     fn incoming_live_mut(&mut self) -> Option<&mut LiveSession> {
         self.incoming.values_mut().find(|s| !finished(&s.phase))
-    }
-    fn live_incoming_count(&self) -> usize {
-        self.incoming
-            .values()
-            .filter(|s| !finished(&s.phase))
-            .count()
-    }
-    fn incoming_admission_count(&self) -> usize {
-        self.live_incoming_count().max(
-            self.incoming_slots
-                .load(std::sync::atomic::Ordering::Acquire),
-        )
     }
     fn live_outgoing_count(&self) -> usize {
         self.outgoing
@@ -408,6 +347,8 @@ struct State {
     system_policy: crate::system::SystemPolicy,
     desktop_quality_default: crate::protocol::Quality,
     desktop_codec_default: Option<crate::VideoCodec>,
+    /// Codecs the app's window decodes, when it said; offers keep to them.
+    window_decoders: Option<Vec<crate::video_caps::WindowDecoder>>,
     system_operations: HashMap<u64, crate::system::SystemOperationRecord>,
     next_operation_id: u64,
     privacy: Option<crate::system::PrivacyLease>,
@@ -420,17 +361,9 @@ struct State {
     record_relay: RelaySettings,
     /// Hosted peer connections by local session id. Connection-scoped: every
     /// lookup carries the session id, never a global current session.
-    /// Capacity is enforced at admission (`MAX_LIVE_INCOMING`).
+    /// One link per paired peer, bounded by the paired devices at admission.
     incoming: HashMap<u64, LiveSession>,
-    /// Live parents plus reservations retained by uncancellable native work.
-    incoming_slots: Arc<AtomicUsize>,
     outgoing: HashMap<u64, LiveSession>,
-    /// Hosted session selected for legacy session-clipboard sync. Host OS
-    /// clipboard changes publish only to this session, and peer text applies
-    /// to the OS clipboard only from it, so one peer's selection is never
-    /// broadcast to another. Admission selects the new session; closing it
-    /// hands selection to the lowest remaining live hosted session, if any.
-    clipboard_owner: Option<u64>,
     /// Host-local Desktop service identity plus parent generation.
     desktop_control: Option<crate::protocol::SessionStamp>,
     /// Lock-after-control edge state. Grant sites arm it synchronously so
@@ -449,6 +382,14 @@ struct State {
     pairing_window: Option<PairingWindow>,
     control_request: Option<PendingControl>,
     next_control_request: u64,
+    /// Last admitted screenshot per peer. Entries expire after a minute.
+    snapshot_recent: HashMap<[u8; 32], std::time::Instant>,
+    /// Whether the application asked for presence links (`set_presence_links`).
+    presence_links: bool,
+    /// Reachability per paired computer while presence links run, by display id.
+    presence: HashMap<String, crate::DevicePresence>,
+    /// Paired computers whose last link was refused because they stopped hosting.
+    link_refused: std::collections::HashSet<[u8; 32]>,
 }
 
 struct PairingWindow {
@@ -475,6 +416,8 @@ pub struct ControlRequest {
 }
 
 struct Shared {
+    /// Wakes one paired computer's link supervisor so it dials now.
+    presence_wake: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Notify>>>,
     /// Serializes persisted sharing changes and their native revocation cleanup.
     sharing_serial: Mutex<()>,
     power_factory: Mutex<power::Factory>,
@@ -486,6 +429,8 @@ struct Shared {
     store: Option<Arc<dyn InstallationStore>>,
     /// Closes the endpoint after a storage fence without borrowing `Core`.
     runtime_handle: tokio::runtime::Handle,
+    /// Names this engine in what it records; see `crate::trace`.
+    span: tracing::Span,
     self_weak: Weak<Shared>,
     /// 0 idle, 1 closing, 2 finished. A claim that does not finish the close
     /// returns to 0 so a later shutdown can retry. The core stays fenced.
@@ -494,12 +439,16 @@ struct Shared {
     teardown_cv: Condvar,
     #[cfg(any(test, feature = "test-probes"))]
     close_count: AtomicUsize,
-    /// Non-zero test budget, in milliseconds, for a blocked blob or endpoint
+    /// What a test asks this engine to lose on its desktops' streams.
+    #[cfg(any(test, feature = "test-probes"))]
+    drops: Mutex<Option<Arc<dyn drops::Drops>>>,
+    /// Where channels to the test agent go while it listens (`agent`).
+    #[cfg(feature = "test-probes")]
+    agent: Mutex<Option<std::sync::mpsc::Sender<agent::AgentChannel>>>,
+    /// Non-zero test budget, in milliseconds, for a blocked endpoint
     /// close. A real close keeps the production limit.
     #[cfg(test)]
     teardown_budget_ms: AtomicU64,
-    #[cfg(test)]
-    block_blob_shutdown: AtomicBool,
     #[cfg(test)]
     block_endpoint_close: AtomicBool,
     events: EventHub,
@@ -512,22 +461,18 @@ struct Shared {
     input_cleanup: Arc<AtomicUsize>,
     capture: Mutex<Option<Box<dyn HostCapture>>>,
     clipboard: Mutex<Option<Box<dyn HostClipboard>>>,
-    clipboard_file_source: Mutex<Option<std::sync::Arc<dyn crate::clipboard::HostClipboardFiles>>>,
-    /// One in-flight paste preparation per session side, keyed
-    /// `(incoming, session id)`. A second concurrent prepare is Busy.
-    paste_waiters: Mutex<HashMap<(bool, u64), clipboard::PasteWaiter>>,
-    /// Serving-side twin of `paste_waiters`: one worker per session side
-    /// at a time, so repeated wire Prepares cannot spawn unbounded
-    /// detached threads. Released by RAII when the worker settles.
-    paste_preparing: Mutex<HashSet<(bool, u64)>>,
-    /// Request nonce source for paste preparation. Each prepare binds its
-    /// waiter and its wire answer to one value, so a late answer for a
-    /// replaced selection cannot satisfy the live waiter.
-    paste_nonce: AtomicU64,
     // A native write can wait for the UI thread while holding the adapter
     // lock. UI snapshots must never acquire that lock to query availability.
     clipboard_available: AtomicBool,
     camera_factory: Mutex<Option<Arc<dyn crate::camera::HostCameraFactory>>>,
+    /// The host's user turned the camera off; it has a backend it could offer.
+    camera_turned_off: std::sync::atomic::AtomicBool,
+    /// Control was used since the lock watch last looked; see
+    /// [`power::note_control_used`].
+    control_used: AtomicBool,
+    snapshot_factory: Mutex<Option<Arc<dyn crate::snapshot::HostSnapshotFactory>>>,
+    /// One attested desktop picture, replaced at most once a second.
+    snapshot_tap: Mutex<Option<Arc<snapshot::AttestedShot>>>,
     /// Camera device ids with a live host serve. One opener per device;
     /// a second concurrent open is refused with structured Busy.
     camera_open: Mutex<HashSet<String>>,
@@ -537,17 +482,25 @@ struct Shared {
     /// Serializes native privacy/input transitions so a revoke restore can
     /// never interleave with an in-flight enable. Never held across network.
     privacy_serial: Mutex<()>,
+    /// [`crate::system::SYSTEM_ACTION_NOTICE`], shortened by tests.
+    system_notice: Mutex<Duration>,
+    /// The name other computers are told, when a test gives this engine
+    /// one; otherwise the operating system's.
+    hostname: Mutex<Option<String>>,
     terminal_sessions: Mutex<HashMap<String, Arc<terminal_runtime::HostedTerminal>>>,
-    /// Latest text published by the controlled computer. Not logged.
-    video_inbox: Mutex<Option<Arc<VideoInbox>>>,
-    video_subscriber: Mutex<Weak<()>>,
-    /// One admitted host session at a time, including the release of held keys.
+    /// One host admission at a time: two Hellos cannot both pass the checks
+    /// that count live sessions.
     session_gate: tokio::sync::Mutex<()>,
     /// Held only while capture, input or the clipboard adapter is replaced.
     /// Live Desktop streams are counted separately so viewers do not exclude
     /// each other.
     desktop_gate: tokio::sync::Mutex<()>,
     desktop_streams: AtomicUsize,
+    /// Host-only. The screen is on a desktop the capture cannot read, such
+    /// as a sign-in or elevation prompt; reported by the platform backend.
+    secure_desktop: std::sync::atomic::AtomicBool,
+    /// The last desktop picture that stopped, for diagnostics.
+    last_desktop_end: Mutex<Option<crate::diagnostics::EndSummary>>,
     /// Controller-only. Connections with a live desktop datagram router,
     /// keyed `(connection id, generation)`. One router per key owns
     /// `read_datagram`, so sibling owners never split each other's fragments.
@@ -566,54 +519,62 @@ struct Shared {
     /// Controller-only. How a local key becomes host input. Not saved.
     keyboard_mode: AtomicU8,
     pointer_defaults: Mutex<crate::PointerSettings>,
+    /// Controller-only. Whether Desktop owners ask for the cursor as its
+    /// own stream; see [`Core::set_cursor_receiver`].
     cursor_receiver: AtomicBool,
-    /// Managed blob directory for the transfer manager. Empty until set.
-    blob_dir: Mutex<Option<PathBuf>>,
-    /// Owner-approved filesystem roots for the file manager. Empty until
-    /// the owner sets them; pairing and grants never populate this.
+    /// Managed transfer directory: job journals and the partial files of
+    /// arriving jobs. Empty until set.
+    transfer_dir: Mutex<Option<PathBuf>>,
+    /// The shared disk's roots for the file manager. Empty until the owner
+    /// enables filesystem access; pairing and grants never populate this.
     file_roots: Mutex<crate::fs::RootSet>,
-    /// Persistent blob store shared by serving and fetching. Opened lazily
-    /// inside the core runtime once the directory is set.
-    blob_store: Mutex<Option<iroh_blobs::store::fs::FsStore>>,
-    /// Serializes store opens: concurrent loads of one directory hang.
-    blob_open: tokio::sync::Mutex<()>,
-    /// Fetch authorizations: (peer, hash) pairs this installation serves.
-    /// Legacy (non-job) blob API (`blob_offer`): pairing only, no active-job
-    /// check (used by spike tests and legacy single-file paths).
-    /// Job blob API uses `blob_job_offers` plus an active `Serving` job
-    /// needing the hash, so completed/cancelled jobs never authorize.
-    /// A hash is content, not capability; the grant is re-checked per
-    /// connection on the receiver side.
-    blob_offers: Arc<Mutex<blob::OfferSet>>,
-    blob_job_offers: Mutex<blob::OfferSet>,
-    /// Temporary import pins bridge preparation until durable job ownership.
-    blob_recent_fetches: Arc<Mutex<HashMap<[u8; 32], (std::time::Instant, u64)>>>,
-    blob_import_pins: Arc<Mutex<HashMap<[u8; 32], (std::time::Instant, iroh_blobs::api::TempTag)>>>,
-    /// In-flight blob serving connections by peer, closed on revoke/unpair
-    /// so an accepted request cannot finish after its offers are removed.
-    blob_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
+    /// Incoming files connections by peer, closed on revoke and unpair so
+    /// a file being served stops mid-way.
+    files_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
+    /// One files connection per peer, kept for the files that follow so a
+    /// small file does not pay for a handshake; dropped on revoke/unpair.
+    files_fetching: Mutex<HashMap<[u8; 32], transfer::Fetching>>,
+    /// Held while a files connection is dialed, so fetches that start
+    /// together dial once.
+    files_dialing: tokio::sync::Mutex<()>,
+    /// Bounds the files served at once, per peer and in all.
+    files_gate: transfer::ServeGate,
+    transfer_counters: crate::transfer::TransferCounters,
+    /// Small files of receiving jobs fetched ahead of their turn, by job.
+    job_prefetch: Mutex<HashMap<u64, jobs::Prefetch>>,
+    /// Set by tests that stop a job between two files.
+    #[cfg(any(test, feature = "test-probes"))]
+    prefetch_off: AtomicBool,
+    /// This computer's folders watched for the window, by watch id.
+    folder_watches: Mutex<HashMap<u64, notify::RecommendedWatcher>>,
+    watch_next: AtomicU64,
     /// Transfer job records. Polled by each side; senders learn
     /// completion by asking the receiver.
     jobs: Arc<Mutex<HashMap<u64, jobs::JobRecord>>>,
     /// Next local job id. Adopted peer ids bump it past collisions.
     job_next: AtomicU64,
-    job_save: Mutex<()>,
+    /// What each job's journal holds; its lock orders the writers.
+    job_journal: Mutex<job_journal::JobJournal>,
     job_owner_gate: Mutex<()>,
     /// Cancel watches for in-flight job fetches, one per active poll.
     job_cancel: Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>,
     /// Job ids currently being advanced, preventing concurrent polls for
     /// the same job from both the background driver and window ticks.
     job_driving: Mutex<std::collections::HashSet<u64>>,
+    /// Advances whenever a job changes: its state, its decision or its
+    /// bytes. Watchers compare it to the last value they saw instead of
+    /// polling every job.
+    job_revision: AtomicU64,
+    /// Signalled with each job change, so the background driver and job
+    /// workers take the next step at once instead of at their next tick.
+    job_wake: (Mutex<()>, std::sync::Condvar),
+    /// Jobs a driver worker is taking steps for.
+    job_workers: Mutex<std::collections::HashSet<u64>>,
     file_resources: Arc<Mutex<file_resources::Resources>>,
     /// Last-known backend facts per capability, published by adapters and
     /// serve loops. Read by the availability query; never guessed.
     backend_state:
         Mutex<HashMap<crate::availability::Capability, crate::availability::BackendState>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct AutoState {
-    manual_session: Option<(u64, u64)>,
 }
 
 /// Owns the Iroh endpoint and the session rules.
@@ -641,6 +602,36 @@ impl Core {
         }
     }
 
+    /// Enters this engine's span on the caller's thread, so what a public
+    /// call records there says which engine recorded it; see `crate::trace`.
+    fn engine(&self) -> tracing::span::Entered<'_> {
+        self.shared.span.enter()
+    }
+
+    /// The span naming this engine. Work a caller runs on its threads for
+    /// this engine, such as a capture and encoding pipeline, enters it so
+    /// what that work records says which engine it served.
+    pub fn trace_span(&self) -> tracing::Span {
+        self.shared.span.clone()
+    }
+
+    /// Names this engine in what it records: `host` and `controller` when a
+    /// test runs two in one process. The application keeps `engine`.
+    pub fn set_trace_name(&self, name: &str) {
+        self.shared.span.record("name", name);
+    }
+
+    /// Tells other computers `name` rather than this computer's own, for
+    /// tests: what engines exchange then does not depend on where they run.
+    #[cfg(any(test, feature = "test-probes"))]
+    pub fn set_hostname(&self, name: &str) -> Result<(), Error> {
+        let _engine = self.engine();
+        let name =
+            crate::clean_hostname(name).ok_or(Error::InvalidSetting("invalid computer name"))?;
+        *lock(&self.shared.hostname) = Some(name);
+        Ok(())
+    }
+
     fn alive_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Error> {
         let state = lock(&self.shared.state);
         if state.shut_down {
@@ -648,23 +639,6 @@ impl Core {
         } else {
             Ok(state)
         }
-    }
-
-    fn emit_session(
-        &self,
-        id: u64,
-        generation: u64,
-        role: SessionRole,
-        phase: SessionPhase,
-        peer_id: &str,
-    ) {
-        self.shared.events.publish(CoreEvent::SessionChanged {
-            id,
-            generation,
-            role,
-            phase,
-            peer_id: peer_id.to_owned(),
-        });
     }
 }
 
@@ -674,8 +648,11 @@ impl Drop for Core {
     }
 }
 
-const CONNECT_WAIT: Duration = Duration::from_secs(75);
 const CONTROL_APPROVAL_WAIT: Duration = Duration::from_secs(60);
+/// How long a controller waits for the answer to its Hello. The host may park
+/// an unpaired Hello for [`CONTROL_APPROVAL_WAIT`] while its owner types the
+/// digits, so the controller outlasts that instead of hanging up first.
+const HELLO_ANSWER_WAIT: Duration = CONTROL_APPROVAL_WAIT.saturating_add(Duration::from_secs(5));
 
 fn load_device(shared: &Shared, peer_key: &[u8; 32]) -> Result<Device, Error> {
     lock(&shared.state)
@@ -713,9 +690,6 @@ fn session_info(session: &LiveSession) -> SessionInfo {
         role: session.role,
         phase: session.phase.clone(),
         peer_id: session.peer_id.clone(),
-        quality: session.quality,
-        monitor_width: session.monitor_width,
-        monitor_height: session.monitor_height,
     }
 }
 
@@ -753,20 +727,17 @@ fn desktop_capabilities(shared: &Shared) -> Capabilities {
     }
 }
 
-/// True when this host captures but has no usable H.264 encoder. The caller
-/// maps this to `Error::Unsupported` so the controller sees an explicit
-/// unsupported-desktop reject instead of an admitted session with no video.
-pub(super) fn video_unsupported(shared: &Shared) -> bool {
-    lock(&shared.capture).is_some() && !lock(&shared.video_caps).can_encode()
-}
-
 fn finished(phase: &SessionPhase) -> bool {
     matches!(phase, SessionPhase::Closed | SessionPhase::Failed(_))
 }
 
 fn signal_stop(session: Option<&mut LiveSession>) {
     if let Some(session) = session {
-        let _ = session.stop.send(true);
+        crate::ignored!(
+            crate::trace::SESSION,
+            "work that already ended needs no stop",
+            session.stop.send(true)
+        );
     }
 }
 
@@ -853,7 +824,11 @@ fn stop_owned_work(state: &mut State, shared: &Shared) {
     }
     let jobs: Vec<_> = lock(&shared.job_cancel).values().cloned().collect();
     for stop in jobs {
-        let _ = stop.send(true);
+        crate::ignored!(
+            crate::trace::SESSION,
+            "work that already ended needs no stop",
+            stop.send(true)
+        );
     }
     for terminal in lock(&shared.terminal_sessions).values() {
         terminal.stop.store(true, Ordering::Release);
@@ -872,9 +847,8 @@ fn fence_unrecoverable(shared: &Shared, state: &mut State) {
 /// Claims endpoint close and runs it after `state` is free. Safe to call
 /// while the caller still holds `state`: the task waits for that lock.
 ///
-/// Blob shutdown and endpoint close each get the teardown budget. A blob
-/// timeout still closes the endpoint. A close that does not finish releases
-/// the claim so a later shutdown can retry. The core stays fenced.
+/// Endpoint close gets the teardown budget. A close that does not finish
+/// releases the claim so a later shutdown can retry. The core stays fenced.
 fn schedule_endpoint_close(shared: &Shared) {
     if !claim_endpoint_close(shared) {
         return;
@@ -889,31 +863,10 @@ fn schedule_endpoint_close(shared: &Shared) {
             release_teardown_claim(&arc);
             return;
         }
-        let blob = {
-            let mut blobs = lock(&arc.blob_store);
-            blobs.take()
-        };
-        let block_blob = take_blob_block(&arc);
-        if blob.is_some() || block_blob {
-            let limit = teardown_limit(&arc, block_blob);
-            let stalled = tokio::time::timeout(limit, async move {
-                if let Some(blob) = blob {
-                    let _ = blob.shutdown().await;
-                }
-                if block_blob {
-                    std::future::pending::<()>().await;
-                }
-            })
-            .await
-            .is_err();
-            if stalled {
-                eprintln!("vnilink: installation blob close exceeded 5s; restart required");
-            }
-        }
         if close_endpoint(&arc).await {
             mark_teardown_finished(&arc);
         } else {
-            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
             release_teardown_claim(&arc);
         }
     });
@@ -944,18 +897,6 @@ fn teardown_limit(shared: &Shared, shortened: bool) -> Duration {
     Duration::from_secs(5)
 }
 
-fn take_blob_block(shared: &Shared) -> bool {
-    #[cfg(test)]
-    {
-        shared.block_blob_shutdown.swap(false, Ordering::AcqRel)
-    }
-    #[cfg(not(test))]
-    {
-        let _ = shared;
-        false
-    }
-}
-
 fn take_close_block(shared: &Shared) -> bool {
     #[cfg(test)]
     {
@@ -978,14 +919,55 @@ async fn wait_until_state_unlocked(shared: &Arc<Shared>) -> bool {
             Err(std::sync::TryLockError::WouldBlock) => {}
         }
         if started.elapsed() >= budget {
-            eprintln!("vnilink: installation shutdown did not start within 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "shutting down did not start within 5 s: restart required");
             return false;
         }
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
 }
 
+/// Closes a link this engine ends with `code` and `reason`, or, while the
+/// engine shuts down, with [`CLOSE_SHUT_DOWN`](crate::protocol::CLOSE_SHUT_DOWN):
+/// a session the shutdown stops may close its link before
+/// [`close_links_for_shutdown`] does, and the first close is what the peer
+/// reads, so it must say the other computer shut down.
+fn close_link(link: &iroh::endpoint::Connection, shutting_down: bool, code: u8, reason: &[u8]) {
+    if shutting_down {
+        link.close(crate::protocol::CLOSE_SHUT_DOWN.into(), b"shut down");
+    } else {
+        link.close(code.into(), reason);
+    }
+}
+
+/// Closes this engine's session links and files connections with
+/// [`CLOSE_SHUT_DOWN`](crate::protocol::CLOSE_SHUT_DOWN), so peers end
+/// their sessions and fetches instead of redialing. A session's own close
+/// frame may still be unsent when the endpoint closes, which drops it.
+/// Connections not yet a session are closed by the endpoint.
+fn close_links_for_shutdown(shared: &Shared) {
+    let code = crate::protocol::CLOSE_SHUT_DOWN.into();
+    let mut links: Vec<iroh::endpoint::Connection> = {
+        let state = lock(&shared.state);
+        state
+            .incoming
+            .values()
+            .chain(state.outgoing.values())
+            .filter_map(|session| session.link.clone())
+            .collect()
+    };
+    links.extend(lock(&shared.files_serving).values().flatten().cloned());
+    links.extend(
+        lock(&shared.files_fetching)
+            .values()
+            .map(transfer::Fetching::connection),
+    );
+    for link in links {
+        link.close(code, b"shut down");
+    }
+}
+
 async fn close_endpoint(shared: &Arc<Shared>) -> bool {
+    close_links_for_shutdown(shared);
     let blocked = take_close_block(shared);
     let limit = teardown_limit(shared, blocked);
     let endpoint = shared.endpoint.clone();
@@ -1034,7 +1016,7 @@ fn wait_for_endpoint_close(shared: &Shared) {
         }
         let left = Duration::from_secs(5).saturating_sub(started.elapsed());
         if left.is_zero() {
-            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
             return;
         }
         let (next, wait) = shared
@@ -1043,7 +1025,7 @@ fn wait_for_endpoint_close(shared: &Shared) {
             .unwrap_or_else(|poison| poison.into_inner());
         guard = next;
         if wait.timed_out() && shared.teardown_phase.load(Ordering::Acquire) == 1 {
-            eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+            tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
             return;
         }
     }
@@ -1068,23 +1050,11 @@ fn live_session(state: &State, incoming: bool, session_id: u64) -> Result<&LiveS
     Ok(session)
 }
 
-/// Sends one side-stream request and waits for its reply. A full queue is
-/// busy; a gone stream and a silent one end the wait.
-fn round_trip<R>(
-    tx: &tokio::sync::mpsc::Sender<R>,
-    closed: &'static str,
-    request: impl FnOnce(std::sync::mpsc::SyncSender<Result<(), Error>>) -> R,
-) -> Result<(), Error> {
-    let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
-    match tx.try_send(request(reply_tx)) {
-        Ok(()) => {}
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => return Err(Error::Busy),
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            return Err(Error::Unsupported(closed));
-        }
-    }
-    match reply_rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(result) => result,
-        Err(_) => Err(Error::Timeout),
+impl Shared {
+    /// The name other computers are told: a test's, or this computer's.
+    fn local_hostname(&self) -> Option<String> {
+        lock(&self.hostname)
+            .clone()
+            .or_else(crate::hostname::local_hostname)
     }
 }

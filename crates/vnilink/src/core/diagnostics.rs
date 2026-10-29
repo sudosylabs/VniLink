@@ -9,7 +9,7 @@ use crate::diagnostics::{
 };
 use crate::{ServiceKind, ServicePhase, SessionPhase, SessionRole};
 
-fn session_phase(phase: &SessionPhase) -> &'static str {
+pub(super) fn session_phase(phase: &SessionPhase) -> &'static str {
     match phase {
         SessionPhase::Connecting => "connecting",
         SessionPhase::Authenticated => "authenticated",
@@ -42,6 +42,7 @@ fn service_kind(kind: ServiceKind) -> &'static str {
         ServiceKind::SystemAudio => "system-audio",
         ServiceKind::Microphone => "microphone",
         ServiceKind::System => "system",
+        ServiceKind::ScreenSnapshot => "screen-snapshot",
     }
 }
 
@@ -51,6 +52,13 @@ impl Core {
     /// path payload. Export with
     /// [`export_json`](crate::diagnostics::export_json).
     pub fn diagnostic_snapshot(&self) -> Result<DiagnosticSnapshot, Error> {
+        let _engine = self.engine();
+        // Jobs come before state in the lock order (`interrupt_orphaned`),
+        // so they are counted before the state lock is taken.
+        let active_jobs = lock(&self.shared.jobs)
+            .values()
+            .filter(|record| super::jobs::ACTIVE_STATES.contains(&record.state))
+            .count() as u32;
         let state = self.alive_state()?;
         let mut connections = Vec::with_capacity(state.incoming.len() + state.outgoing.len());
         for session in state.incoming.values().chain(state.outgoing.values()) {
@@ -79,6 +87,10 @@ impl Core {
                 rtt_ms: None,
                 tx_bytes: 0,
                 rx_bytes: 0,
+                cwnd: None,
+                congestion_events: None,
+                lost_packets: None,
+                black_holes_detected: None,
             });
         }
         connections.sort_by_key(|summary| summary.id);
@@ -109,11 +121,11 @@ impl Core {
             }
         }
         services.sort_by_key(|summary| (summary.connection_id, summary.id));
-        let input_queued: usize = state
-            .outgoing
-            .values()
-            .filter_map(|session| session.outbox.as_ref())
-            .map(|outbox| outbox.depth())
+        // Input waits only in the viewer's desktops; a session carries none.
+        let input_queued: usize = runtimes
+            .iter()
+            .filter(|(_, hosted, _)| !hosted)
+            .map(|(_, _, desktop)| desktop.input_queued())
             .sum();
         let resources = ResourceCounts {
             incoming_connections: state.incoming.len() as u32,
@@ -123,15 +135,14 @@ impl Core {
             terminal_sessions: lock(&self.shared.terminal_sessions).len() as u32,
             retained_operations: state.system_operations.len() as u32,
             privacy_held: state.privacy.is_some(),
-            active_jobs: lock(&self.shared.jobs).len() as u32,
-            blob_offers: lock(&self.shared.blob_offers).len() as u32,
+            active_jobs,
             paired_devices: state.trust.devices().count() as u32,
             control_connection: state.input_holder(),
         };
         let queues = QueueDepths {
             input_queued: u32::try_from(input_queued).unwrap_or(u32::MAX),
             terminal_startups_pending: state.terminal_pending.values().sum::<usize>() as u32,
-            blob_serving: lock(&self.shared.blob_serving).len() as u32,
+            files_serving: lock(&self.shared.files_serving).len() as u32,
         };
         let hosting = state.hosting;
         drop(state);
@@ -147,6 +158,10 @@ impl Core {
             }
             .into();
             summary.rtt_ms = selected.map(|path| path.rtt_ms);
+            summary.cwnd = selected.map(|path| path.cwnd);
+            summary.congestion_events = selected.map(|path| path.congestion_events);
+            summary.lost_packets = selected.map(|path| path.lost_packets);
+            summary.black_holes_detected = selected.map(|path| path.black_holes_detected);
             summary.tx_bytes = paths.iter().map(|path| path.tx_bytes).sum();
             summary.rx_bytes = paths.iter().map(|path| path.rx_bytes).sum();
         }
@@ -164,7 +179,49 @@ impl Core {
             pipelines,
             resources,
             queues,
+            transfers: self.shared.transfer_counters.summary(),
+            last_end: lock(&self.shared.last_desktop_end).clone(),
+            ignored: crate::trace::ignored_counts()
+                .into_iter()
+                .map(|(area, why, count)| crate::diagnostics::IgnoredCount {
+                    area: area.into(),
+                    why: why.into(),
+                    count,
+                })
+                .collect(),
         });
         Ok(snapshot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A snapshot waiting for the jobs lock holds no state lock, so a job
+    /// poll that holds jobs and then takes state cannot deadlock with it.
+    #[test]
+    fn a_snapshot_waits_for_jobs_without_holding_state() {
+        let core = crate::test_support::loopback_core();
+        let jobs = lock(&core.shared.jobs);
+        std::thread::scope(|scope| {
+            let snapshot = scope.spawn(|| core.diagnostic_snapshot().map(|_| ()));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            // Other engine tasks take state briefly; a snapshot holding it
+            // while it waits would keep it taken throughout.
+            let state_free = (0..100).any(|_| {
+                let free = core.shared.state.try_lock().is_ok();
+                if !free {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                free
+            });
+            drop(jobs);
+            snapshot.join().unwrap().unwrap();
+            assert!(
+                state_free,
+                "the snapshot holds state while it waits for jobs"
+            );
+        });
     }
 }

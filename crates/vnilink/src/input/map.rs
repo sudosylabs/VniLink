@@ -185,3 +185,207 @@ fn map_range_to_len(value: u16, from: u16, len: u32) -> u32 {
     let scaled = (u64::from(value) * u64::from(len) + u64::from(from) / 2) / u64::from(from);
     scaled.min(u64::from(len).saturating_sub(1)) as u32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_positions_scale_between_window_and_monitor() {
+        // Identity and origin.
+        assert_eq!(map_point(0, 0, (1920, 1080), (1920, 1080)), (0, 0));
+        assert_eq!(
+            map_point(1919, 1079, (1920, 1080), (1920, 1080)),
+            (1919, 1079)
+        );
+        // Downscale by exactly two rounds to the nearest host pixel.
+        assert_eq!(map_point(0, 0, (1920, 1080), (960, 540)), (0, 0));
+        assert_eq!(map_point(960, 540, (1920, 1080), (960, 540)), (480, 270));
+        assert_eq!(map_point(1, 1, (1920, 1080), (960, 540)), (1, 1));
+        // Upscale and the far edge clamps onto the host instead of past it.
+        assert_eq!(
+            map_point(960, 540, (960, 540), (1920, 1080)),
+            (1920 - 1, 1080 - 1)
+        );
+        assert_eq!(
+            map_point(u16::MAX, u16::MAX, (960, 540), (1920, 1080)),
+            (1919, 1079)
+        );
+        // A zero side has no scale to read or no pixels to name; axes are
+        // independent, so only the zero side collapses.
+        assert_eq!(map_point(50, 60, (0, 1080), (1920, 1080)), (0, 60));
+        assert_eq!(map_point(50, 60, (1920, 1080), (0, 0)), (0, 0));
+    }
+
+    #[test]
+    fn topology_ids_origins_and_revisions_are_validated() {
+        use crate::input::{DisplayInfo, MAX_DESKTOP_ORIGIN, MAX_DISPLAY_EDGE};
+        let valid = |display: DisplayInfo| display;
+        let base = DisplayInfo {
+            id: 7,
+            origin_x: 0,
+            origin_y: 0,
+            width: 1920,
+            height: 1080,
+            rotation_deg: 0,
+            scale_percent: 100,
+            revision: 3,
+        };
+        assert_eq!(crate::input::validate_topology(&[base]).unwrap(), 3);
+        // Empty and oversized snapshots are refused.
+        assert!(crate::input::validate_topology(&[]).is_err());
+        assert!(crate::input::validate_topology(&vec![base; 17]).is_err());
+        // Zero and duplicate ids are refused; a monitor index alone is not an id.
+        assert!(crate::input::validate_topology(&[valid(DisplayInfo { id: 0, ..base })]).is_err());
+        assert!(crate::input::validate_topology(&[base, base]).is_err());
+        // Zero and oversized dimensions are refused.
+        assert!(
+            crate::input::validate_topology(&[valid(DisplayInfo { width: 0, ..base })]).is_err()
+        );
+        assert!(crate::input::validate_topology(&[valid(DisplayInfo {
+            width: MAX_DISPLAY_EDGE + 1,
+            ..base
+        })])
+        .is_err());
+        // Origins are bounded; unknown rotations and scales are refused.
+        assert!(crate::input::validate_topology(&[valid(DisplayInfo {
+            origin_x: MAX_DESKTOP_ORIGIN + 1,
+            ..base
+        })])
+        .is_err());
+        assert!(crate::input::validate_topology(&[valid(DisplayInfo {
+            rotation_deg: 45,
+            ..base
+        })])
+        .is_err());
+        assert!(crate::input::validate_topology(&[valid(DisplayInfo {
+            scale_percent: 24,
+            ..base
+        })])
+        .is_err());
+        assert!(crate::input::validate_topology(&[valid(DisplayInfo {
+            scale_percent: 801,
+            ..base
+        })])
+        .is_err());
+        // Mixed revisions are refused.
+        assert!(crate::input::validate_topology(&[
+            base,
+            DisplayInfo {
+                id: 8,
+                revision: 4,
+                ..base
+            }
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn topology_lookup_and_window_mapping_cover_negative_origins() {
+        use crate::input::{desktop_bounds, display_for_point, map_window_to_desktop, DisplayInfo};
+        let left = DisplayInfo {
+            id: 11,
+            origin_x: -1280,
+            origin_y: 0,
+            width: 1280,
+            height: 1024,
+            rotation_deg: 0,
+            scale_percent: 100,
+            revision: 9,
+        };
+        let right = DisplayInfo {
+            id: 12,
+            origin_x: 0,
+            origin_y: -200,
+            width: 1920,
+            height: 1080,
+            rotation_deg: 90,
+            scale_percent: 200,
+            revision: 9,
+        };
+        let topology = [left, right];
+        assert_eq!(desktop_bounds(&topology), Some((-1280, -200, 3200, 1224)));
+        // Points land on the intended display; the gap between them is empty.
+        assert_eq!(display_for_point(-1280, 0, &topology), Some(left));
+        assert_eq!(display_for_point(-1, 1023, &topology), Some(left));
+        assert_eq!(display_for_point(0, -200, &topology), Some(right));
+        assert_eq!(display_for_point(1919, 879, &topology), Some(right));
+        assert_eq!(display_for_point(-1, 1024, &topology), None);
+        assert_eq!(display_for_point(0, -201, &topology), None);
+        assert_eq!(display_for_point(1920, 0, &topology), None);
+        // Far edges are exclusive.
+        assert_eq!(display_for_point(0, 880, &topology), None);
+
+        // Window corners map onto the matching display through the negative origin.
+        // The window matches the desktop size here, so mapping is a direct offset.
+        let window = (3200, 1224);
+        assert_eq!(
+            map_window_to_desktop(0, 200, window, &topology, 9).unwrap(),
+            (-1280, 0, 11)
+        );
+        let (x, y, id) = map_window_to_desktop(639, 640, window, &topology, 9).unwrap();
+        assert_eq!((x, y, id), (-641, 440, 11));
+        let (x, y, id) = map_window_to_desktop(1280, 0, window, &topology, 9).unwrap();
+        assert_eq!((x, y, id), (0, -200, 12));
+        let (x, y, id) = map_window_to_desktop(3199, 1079, window, &topology, 9).unwrap();
+        assert_eq!((x, y, id), (1919, 879, 12));
+        // The far edge is exclusive: the bottom row of the window maps past the
+        // right display.
+        assert!(map_window_to_desktop(1280, 1080, window, &topology, 9).is_err());
+        // Outdated geometry is stale; zero window sides and bad topologies fail.
+        assert!(matches!(
+            map_window_to_desktop(0, 0, window, &topology, 8),
+            Err(Error::StaleSession)
+        ));
+        assert!(map_window_to_desktop(0, 0, (0, 1280), &topology, 9).is_err());
+        assert!(map_window_to_desktop(0, 0, window, &[], 9).is_err());
+    }
+
+    #[test]
+    fn signed_origin_extremes_are_refused_on_both_axes() {
+        for origin in [i32::MIN, i32::MAX, -32769, 32769] {
+            assert!(
+                crate::input::validate_topology(&[screen(1, origin, 0, 1920, 1080, 0, 100)])
+                    .is_err(),
+                "origin_x {origin} accepted"
+            );
+            assert!(
+                crate::input::validate_topology(&[screen(1, 0, origin, 1920, 1080, 0, 100)])
+                    .is_err(),
+                "origin_y {origin} accepted"
+            );
+        }
+        for origin in [-32768, 32768, 0] {
+            assert!(
+                crate::input::validate_topology(&[screen(1, origin, 0, 1920, 1080, 0, 100)])
+                    .is_ok(),
+                "origin_x {origin} refused"
+            );
+            assert!(
+                crate::input::validate_topology(&[screen(1, 0, origin, 1920, 1080, 0, 100)])
+                    .is_ok(),
+                "origin_y {origin} refused"
+            );
+        }
+    }
+    fn screen(
+        id: u64,
+        x: i32,
+        y: i32,
+        width: u16,
+        height: u16,
+        rotation: u16,
+        scale: u16,
+    ) -> DisplayInfo {
+        DisplayInfo {
+            id,
+            origin_x: x,
+            origin_y: y,
+            width,
+            height,
+            rotation_deg: rotation,
+            scale_percent: scale,
+            revision: 1,
+        }
+    }
+}

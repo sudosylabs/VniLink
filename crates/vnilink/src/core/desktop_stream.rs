@@ -1,9 +1,14 @@
 //! Desktop instances on a neutral parent. Every instance owns its stream,
 //! queues and datagram epoch; session APIs cannot publish into this backend.
+// trace: records every ignored failure
+use super::drops::{dropped, input_dropped, DropPoint};
+use super::host_input::{Facts, Holder, HostInputSession, InFlight, InputOutcome, Lease, Refusal};
 use super::*;
 use crate::input::{HeldInput, Outbound};
 use crate::protocol::{ControlMessage, SessionStamp};
-use crate::video::{EncodedFrame, KeyframeFlag, VideoPush, VideoSubscription};
+use crate::video::{
+    EncodedFrame, KeyframeFlag, VideoInbox, VideoOutbox, VideoPush, VideoSubscription,
+};
 use crate::{CloseCause, CursorState, ServiceInfo, ServiceKind, ServicePhase};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 
@@ -24,6 +29,13 @@ const YIELD_CONTROL: u8 = 7;
 const CONTROL_STATE: u8 = 8;
 const MEDIA_FEEDBACK: u8 = 9;
 const RECORDING_STATE: u8 = 10;
+/// The host's last message before it finishes the stream: one byte of
+/// [`crate::StreamEnd`]. A stream finished without it ended for no reason
+/// the host could give.
+const END: u8 = 11;
+/// How long a host waits to say why before finishing anyway: the link
+/// may be the reason.
+const END_PATIENCE: Duration = Duration::from_secs(1);
 
 /// Host-confirmed input ownership. Contention never closes the video stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +69,10 @@ impl DesktopControlState {
     }
 }
 const MAGIC: &[u8; 4] = b"DSK1";
+/// Desktop Open request flags (byte 25): the viewer takes a separate cursor,
+/// and its window shows still pictures.
+const OPEN_CURSOR: u8 = 1;
+const OPEN_STILLS: u8 = 2;
 const PREFIX: usize = 20;
 const MAX: usize = crate::cursor::MAX_BODY + 64;
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -69,6 +85,13 @@ pub struct DesktopInfo {
     pub codec: u8,
     pub quality: Quality,
     pub separate_cursor: bool,
+    /// The host sends AV1 4:4:4 still pictures of a still screen: the
+    /// viewer's window shows them and the host's capture sends them. Agreed
+    /// at Open for the owner's lifetime.
+    pub stills: bool,
+    /// The matrix the stream is converted and declared in, agreed at Open
+    /// from the viewer's window and fixed for the owner's lifetime.
+    pub matrix: crate::YuvMatrix,
 }
 
 pub(super) struct DesktopRuntime {
@@ -78,10 +101,30 @@ pub(super) struct DesktopRuntime {
     pub(super) info: DesktopInfo,
     stamp: SessionStamp,
     quality: Mutex<Quality>,
+    /// Viewer: the most bandwidth its user allows, whatever `info.quality`
+    /// started the stream at.
+    bitrate_limit: u32,
+    /// What the link carries now, to size still pictures by.
+    link_rate: Mutex<crate::video::LinkRate>,
+    /// Host: the largest datagram the link last took, less its prefix; 0
+    /// until the first, or while video goes on a stream.
+    datagram: std::sync::atomic::AtomicUsize,
     adaptive: Mutex<crate::adaptation::Adaptive>,
     decode_duration: Mutex<Option<(u64, std::time::Instant)>>,
     producer_duration: Mutex<Option<(u64, u64, std::time::Instant)>>,
     host_feedback: Mutex<Option<(crate::adaptation::HostFeedback, std::time::Instant)>>,
+    /// Viewer: what is wrong with the picture now; see [`crate::Condition`].
+    conditions: Mutex<crate::video::Conditions>,
+    /// Viewer: what the window's decoder reports of itself.
+    decoder: Mutex<DecoderState>,
+    /// Host: the encoder open for this viewer, once the producer said.
+    encoder: Mutex<Option<crate::EncoderImplementation>>,
+    /// Why the picture stopped: on the viewer what it concluded, on the
+    /// host what it told the viewer. The first answer stands.
+    end: Mutex<Option<crate::DesktopEnd>>,
+    /// Viewer: whether the selected path went through a relay at the last
+    /// sample, so a lost connection can say which.
+    relayed: std::sync::atomic::AtomicBool,
     input: Arc<InputOutbox>,
     inbox: Arc<VideoInbox>,
     subscriber: Mutex<Weak<()>>,
@@ -89,14 +132,21 @@ pub(super) struct DesktopRuntime {
     cursor: tokio::sync::watch::Sender<Option<Arc<CursorState>>>,
     pub(super) keyframe: KeyframeFlag,
     release: KeyframeFlag,
+    /// Losses, keyframes and encoder reopens, for diagnostics.
+    pub(super) counters: crate::video::VideoCounters,
+    /// Viewer: what it has lost since its last report to the host.
+    report: crate::video::ReportTally,
+    /// Host: what its viewer reports losing, smoothed.
+    viewer_loss: Mutex<crate::video::ViewerLoss>,
+    /// Viewer: its datagrams' reassembly and its outstanding keyframe
+    /// request, so losses while one is coming do not ask again.
+    pictures: Mutex<crate::video::ViewerPictures>,
     control_state: tokio::sync::watch::Sender<(DesktopControlState, u64)>,
     control_commands: Mutex<std::collections::VecDeque<(u8, u64)>>,
     control_notify: tokio::sync::Notify,
-    /// Actual host-applied input, separate from controller queue state.
-    host_held: Arc<Mutex<HeldInput>>,
-    releasing: Arc<std::sync::atomic::AtomicBool>,
-    in_flight: AtomicUsize,
-    cleanup_slot: Mutex<Option<Arc<super::input_cleanup::AdmissionSlot>>>,
+    /// Host: the input it applied under this desktop's leases and has not
+    /// released, apart from the viewer's own plan.
+    pub(super) host_input: HostInputSession,
     retired: std::sync::atomic::AtomicBool,
     /// The one display this owner shows. Empty means none, never a substitute.
     pub(super) selected: Mutex<Vec<u64>>,
@@ -105,8 +155,18 @@ pub(super) struct DesktopRuntime {
     topology: Mutex<Vec<crate::DisplayInfo>>,
     pub(super) keyboard: Mutex<DesktopKeyboard>,
     pub(super) clipboard: super::desktop_clipboard::ClipboardState,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-probes"))]
     force_stream: std::sync::atomic::AtomicBool,
+}
+/// The window decoder's own report: whether it decodes in software, and
+/// how often it restarted from a keyframe after an error.
+#[derive(Debug, Clone, Copy, Default)]
+struct DecoderState {
+    /// `None` until the window said.
+    software: Option<bool>,
+    recoveries: u64,
+    /// Still pictures the window showed.
+    stills_shown: u64,
 }
 pub(super) struct DesktopKeyboard {
     pub(super) pointer: crate::input::PointerPlan,
@@ -144,16 +204,24 @@ impl DesktopRuntime {
         self.recording_allowed.send_replace((allowed, epoch));
         Ok(())
     }
-    fn new(info: DesktopInfo, stamp: SessionStamp) -> Arc<Self> {
+    fn new(info: DesktopInfo, stamp: SessionStamp, bitrate_limit: u32) -> Arc<Self> {
         Arc::new(Self {
             recording_allowed: tokio::sync::watch::channel((false, 0)).0,
             recording_gate: Mutex::new(()),
             activity: Mutex::new(super::activity::Activity::new(std::time::Instant::now())),
             quality: Mutex::new(info.quality),
+            bitrate_limit,
+            link_rate: Mutex::new(crate::video::LinkRate::default()),
+            datagram: std::sync::atomic::AtomicUsize::new(0),
             adaptive: Mutex::new(crate::adaptation::Adaptive::default()),
             decode_duration: Mutex::new(None),
             producer_duration: Mutex::new(None),
             host_feedback: Mutex::new(None),
+            conditions: Mutex::new(Default::default()),
+            decoder: Mutex::new(DecoderState::default()),
+            encoder: Mutex::new(None),
+            end: Mutex::new(None),
+            relayed: std::sync::atomic::AtomicBool::new(false),
             info,
             stamp,
             input: Arc::new(InputOutbox::new()),
@@ -163,13 +231,14 @@ impl DesktopRuntime {
             cursor: tokio::sync::watch::channel(None).0,
             keyframe: KeyframeFlag::new(),
             release: KeyframeFlag::new(),
+            counters: crate::video::VideoCounters::default(),
+            report: Default::default(),
+            viewer_loss: Mutex::new(Default::default()),
+            pictures: Mutex::new(crate::video::ViewerPictures::new()),
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
             control_notify: tokio::sync::Notify::new(),
-            host_held: Arc::new(Mutex::new(HeldInput::default())),
-            releasing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            in_flight: AtomicUsize::new(0),
-            cleanup_slot: Mutex::new(None),
+            host_input: HostInputSession::new(),
             retired: std::sync::atomic::AtomicBool::new(false),
             selected: Mutex::new(Vec::new()),
             display_fault: Mutex::new(None),
@@ -182,9 +251,40 @@ impl DesktopRuntime {
                 swap: false,
             }),
             clipboard: super::desktop_clipboard::ClipboardState::new(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-probes"))]
             force_stream: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+    /// Records why the picture stopped, unless an earlier answer stands.
+    /// The first answer is also the computer's last end, for diagnostics.
+    fn ended(&self, shared: &Shared, hosted: bool, end: crate::DesktopEnd) {
+        let mut slot = lock(&self.end);
+        if slot.is_none() {
+            tracing::info!(
+                target: crate::trace::SESSION,
+                service = self.info.service.id,
+                hosted,
+                reason = end.label(),
+                "desktop ended"
+            );
+            *slot = Some(end);
+            *lock(&shared.last_desktop_end) = Some(crate::diagnostics::EndSummary {
+                service_id: self.info.service.id,
+                hosted,
+                reason: end.label().into(),
+                at_ms: crate::diagnostics::monotonic_ms(),
+            });
+        }
+    }
+    /// Whether the host said it ended the whole connection, so the
+    /// desktop went with its parent rather than by itself.
+    fn host_ended_connection(&self) -> bool {
+        matches!(
+            *lock(&self.end),
+            Some(crate::DesktopEnd::Host(
+                crate::StreamEnd::Disconnected | crate::StreamEnd::Shutdown
+            ))
+        )
     }
     pub(super) fn close(&self) {
         self.retired
@@ -224,7 +324,16 @@ impl DesktopRuntime {
     }
     fn release_input(&self) {
         let mut keyboard = lock(&self.keyboard);
-        self.input.clear_pending_input();
+        let dropped = self.input.clear_pending_input();
+        if dropped > 0 {
+            tracing::debug!(
+                target: crate::trace::INPUT,
+                service = self.info.service.id,
+                dropped,
+                why = "input was released",
+                "input discarded"
+            );
+        }
         keyboard.plan.clear();
         keyboard.pointer.reset();
         keyboard.held = HeldInput::default();
@@ -249,7 +358,24 @@ impl DesktopRuntime {
         let mut keyboard = lock(&self.keyboard);
         let previous = *self.control_state.borrow();
         if previous != (status, epoch) {
-            self.input.clear_pending_input();
+            tracing::info!(
+                target: crate::trace::INPUT,
+                service = self.info.service.id,
+                state = ?status,
+                epoch,
+                "control changed"
+            );
+            // Input queued under the old control is not sent under the new.
+            let dropped = self.input.clear_pending_input();
+            if dropped > 0 {
+                tracing::debug!(
+                    target: crate::trace::INPUT,
+                    service = self.info.service.id,
+                    dropped,
+                    why = "control changed before it was sent",
+                    "input discarded"
+                );
+            }
             self.release.take();
             keyboard.plan.clear();
             keyboard.pointer.reset();
@@ -257,10 +383,61 @@ impl DesktopRuntime {
             self.control_state.send_replace((status, epoch));
         }
     }
+    /// What a still picture, and anything queued ahead of it, may take on
+    /// the wire now: what the link carries, capped at the agreed bitrate,
+    /// within [`crate::STILL_DRAIN`]. The send gate holds a still to this.
+    fn still_drain(&self) -> usize {
+        let agreed = u64::from(lock(&self.quality).max_bitrate_kbps) * 1000;
+        let carried = lock(&self.link_rate).bits_per_second().unwrap_or(agreed);
+        crate::video::still_drain(agreed.min(carried))
+    }
+    /// The largest still picture the link takes now, in encoded bytes: the
+    /// drain less what the gate's datagrams and parity add to it, so a still
+    /// made to this size is not refused for its own framing.
+    fn still_budget(&self) -> usize {
+        let wire = self.still_drain();
+        match self.datagram.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => wire
+                .saturating_sub(crate::video::VIDEO_HEADER)
+                .min(crate::MAX_VIDEO_FRAME),
+            max => {
+                let protection =
+                    lock(&self.viewer_loss).protection(true, false, std::time::Instant::now());
+                crate::video::still_payload(wire, max, PREFIX, protection)
+            }
+        }
+    }
+    /// Viewer: input queued to send, for diagnostics.
+    pub(super) fn input_queued(&self) -> usize {
+        self.input.depth()
+    }
     pub(super) fn metadata(&self) -> DesktopInfo {
         let mut info = self.info.clone();
         info.quality = *lock(&self.quality);
         info
+    }
+    /// A picture arrived for the viewer, by datagrams or on the stream.
+    /// Pictures its number says are missing or late are counted lost and
+    /// reported to the host; see [`crate::video::ViewerPictures::picture`].
+    fn receive_video(&self, shared: &Shared, body: crate::video::VideoBody) {
+        if dropped(shared, DropPoint::Inbox) {
+            return;
+        }
+        let order =
+            lock(&self.pictures).picture(body.sequence, body.frame, &self.inbox, &self.keyframe);
+        let lost = match order {
+            crate::video::Order::Next => return,
+            crate::video::Order::Gap(missing) => crate::video::Losses {
+                gap: u64::from(missing),
+                ..Default::default()
+            },
+            crate::video::Order::Stale => crate::video::Losses {
+                stale: 1,
+                ..Default::default()
+            },
+        };
+        self.report.frames_lost(lost.total());
+        self.counters.lost(lost);
     }
     /// Point-in-time pipeline facts for diagnostics: labels, stage
     /// durations, queue depths and drops. Never frame bytes. Durations
@@ -287,6 +464,12 @@ impl DesktopRuntime {
             .map(|(us, _)| *us);
         let out = self.video.telemetry();
         let inbound = self.inbox.telemetry();
+        let counts = self.counters.read();
+        let viewer = *lock(&self.viewer_loss);
+        let decoder = *lock(&self.decoder);
+        let encoder = *lock(&self.encoder);
+        let reported = viewer.heard.filter(|at| fresh(at)).map(|_| viewer);
+        let permille = |share: f64| (share * 1000.0).round() as u32;
         crate::diagnostics::PipelineSummary {
             service_id,
             hosted,
@@ -311,8 +494,36 @@ impl DesktopRuntime {
             in_dropped: inbound.dropped,
             in_oldest_ms: inbound.oldest_ms,
             keyframe_pending: self.keyframe.pending(),
+            lost_expired: counts.lost.expired,
+            lost_evicted: counts.lost.evicted,
+            lost_gap: counts.lost.gap,
+            lost_stale: counts.lost.stale,
+            keyframes_requested: counts.keyframes_requested,
+            keyframes_sent: counts.keyframes_sent,
+            keyframe_bytes: counts.keyframe_bytes,
+            encoder_reopens: counts.encoder_reopens,
+            send_dropped: counts.send_dropped,
+            stills_sent: counts.stills_sent,
+            still_bytes: counts.still_bytes,
+            stills_dropped: counts.stills_dropped,
+            viewer_fragment_loss_permille: reported.map(|loss| permille(loss.fragment_loss)),
+            viewer_frame_loss_permille: reported.map(|loss| permille(loss.frame_loss)),
             selected_display: lock(&self.selected).first().copied(),
             fault: lock(&self.display_fault).map(str::to_string),
+            conditions: lock(&self.conditions)
+                .entries()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            end: lock(&self.end).map(|end| end.label().into()),
+            encoder: encoder.map(|encoder| encoder.name.into()),
+            encoder_hardware: encoder.and_then(|encoder| encoder.hardware),
+            encoder_input: encoder
+                .and_then(|encoder| encoder.input)
+                .map(|input| input.label().into()),
+            decoder_hardware: decoder.software.map(|software| !software),
+            decoder_recoveries: decoder.recoveries,
+            stills_shown: decoder.stills_shown,
         }
     }
 }
@@ -353,7 +564,7 @@ fn epoch(stamp: SessionStamp) -> [u8; PREFIX] {
 }
 
 /// Splits the 20-byte owner prefix (magic + stamp) from a datagram body.
-/// Unprefixed traffic belongs to the legacy session path, never an owner.
+/// Unprefixed traffic belongs to no owner and is dropped.
 fn split_datagram(bytes: &[u8]) -> Option<(SessionStamp, &[u8])> {
     if bytes.len() <= PREFIX || bytes[..4] != *MAGIC {
         return None;
@@ -389,16 +600,29 @@ fn ensure_datagram_router(
     });
 }
 
+/// How often a viewer tells its host what it lost.
+const REPORT_EVERY: Duration = Duration::from_millis(250);
+
+/// How often the router checks its connection is still the live one; between
+/// checks a closed owner is noticed by its own retired flag.
+const ROUTER_LIVENESS: Duration = Duration::from_millis(100);
+/// Datagrams taken from the connection at once.
+const ROUTER_BATCH: usize = 32;
+
 async fn route_desktop_datagrams(
     shared: &Arc<Shared>,
     link: &Connection,
     connection_id: u64,
     generation: u64,
 ) {
-    let mut fragments: std::collections::HashMap<(u64, u64), crate::video::Reassembler> =
+    // Each owner's runtime, found once under the state lock and kept until
+    // it retires, so a datagram takes no shared lock.
+    let mut owners: std::collections::HashMap<(u64, u64), Arc<DesktopRuntime>> =
         std::collections::HashMap::new();
+    let mut checked: Option<std::time::Instant> = None;
+    let mut batch = vec![bytes::Bytes::new(); ROUTER_BATCH];
     loop {
-        {
+        if checked.is_none_or(|at| at.elapsed() >= ROUTER_LIVENESS) {
             let state = lock(&shared.state);
             let live = !state.shut_down
                 && state.outgoing.get(&connection_id).is_some_and(|session| {
@@ -407,48 +631,71 @@ async fn route_desktop_datagrams(
             if !live {
                 return;
             }
+            checked = Some(std::time::Instant::now());
         }
-        let bytes = match link.read_datagram().await {
-            Ok(bytes) => bytes,
+        let count = match link.read_many_datagrams(&mut batch).await {
+            Ok(count) => count,
             Err(_) => return,
         };
-        let Some((stamp, fragment)) = split_datagram(&bytes) else {
-            continue;
-        };
-        let target: Option<Arc<DesktopRuntime>> = {
-            let state = lock(&shared.state);
-            state.services.values().find_map(|record| {
-                record
-                    .desktop
-                    .as_ref()
-                    .filter(|desktop| {
-                        record.info.connection_id == connection_id
-                            && record.info.generation == generation
-                            && !record.info.phase.finished()
-                            && desktop.stamp == stamp
-                    })
-                    .map(Arc::clone)
-            })
-        };
-        let Some(desktop) = target else {
-            continue;
-        };
-        // One reassembly context per owner stamp; stale contexts expire
-        // inside the reassembler, and the map cannot outgrow the owner
-        // bound plus one transient entry for a closing sibling.
-        if fragments.len() > MAX_DESKTOP_OWNERS_PER_CONNECTION + 1 {
-            fragments.clear();
-        }
-        let reassembly = fragments
-            .entry((stamp.id, stamp.generation))
-            .or_insert_with(crate::video::Reassembler::new);
-        if let Some(body) = reassembly.push(fragment) {
-            if let Ok(frame) = crate::video::decode_video_body(&body) {
-                if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
-                    continue;
-                }
-                if matches!(desktop.inbox.push(frame), VideoPush::KeyframeNeeded) {
-                    desktop.keyframe.request();
+        for bytes in &batch[..count] {
+            let Some((stamp, fragment)) = split_datagram(bytes) else {
+                continue;
+            };
+            let key = (stamp.id, stamp.generation);
+            let cached = owners
+                .get(&key)
+                .filter(|desktop| !desktop.retired.load(std::sync::atomic::Ordering::Acquire))
+                .cloned();
+            let target = cached.or_else(|| {
+                let state = lock(&shared.state);
+                state.services.values().find_map(|record| {
+                    record
+                        .desktop
+                        .as_ref()
+                        .filter(|desktop| {
+                            record.info.connection_id == connection_id
+                                && record.info.generation == generation
+                                && !record.info.phase.finished()
+                                && desktop.stamp == stamp
+                        })
+                        .map(Arc::clone)
+                })
+            });
+            let Some(desktop) = target else {
+                owners.remove(&key);
+                continue;
+            };
+            // One cached owner per stamp, which reassembles its own
+            // pictures; the map cannot outgrow the owner bound plus one
+            // transient entry for a closing sibling.
+            if owners.len() > MAX_DESKTOP_OWNERS_PER_CONNECTION + 1 {
+                owners.clear();
+            }
+            owners.insert(key, Arc::clone(&desktop));
+            if dropped(shared, DropPoint::Datagram) {
+                continue;
+            }
+            let arrival = lock(&desktop.pictures).datagram(fragment, std::time::Instant::now());
+            desktop.report.fragments(arrival.fragments);
+            if arrival.body.is_some() {
+                desktop.report.frame_completed();
+            }
+            if arrival.unfinished.any() {
+                desktop.counters.lost(crate::video::Losses {
+                    expired: arrival.unfinished.expired,
+                    evicted: arrival.unfinished.evicted,
+                    ..Default::default()
+                });
+            }
+            if let Some(body) = arrival.body {
+                if let Ok(body) = crate::video::decode_video_body(&body) {
+                    if !body
+                        .frame
+                        .belongs_to(desktop.info.codec, desktop.info.stills)
+                    {
+                        continue;
+                    }
+                    desktop.receive_video(shared, body);
                 }
             }
         }
@@ -494,6 +741,7 @@ impl Core {
         to_id: u64,
         to_generation: u64,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         let from = runtime(&state, from_id, from_generation, true)?;
         let to = runtime(&state, to_id, to_generation, true)?;
@@ -520,7 +768,6 @@ impl Core {
             .ok_or(Error::Busy)?;
         release_desktop_input(&self.shared, &from);
         state.desktop_control = Some(to.stamp);
-        state.lock_watch.note_controlling();
         let old_epoch = from.control_state.borrow().1.saturating_add(1);
         from.control_state
             .send_replace((DesktopControlState::Viewing, old_epoch));
@@ -543,7 +790,15 @@ impl Core {
         Ok(())
     }
     pub fn hosted_desktop_info(&self, id: u64, generation: u64) -> Result<DesktopInfo, Error> {
+        let _engine = self.engine();
         Ok(runtime(&*self.alive_state()?, id, generation, true)?.metadata())
+    }
+    /// The largest still picture, in encoded bytes, this hosted owner's link
+    /// takes now within [`crate::STILL_DRAIN`]: what the link carries,
+    /// capped at the agreed bitrate. A larger one is not sent.
+    pub fn desktop_still_budget(&self, id: u64, generation: u64) -> Result<usize, Error> {
+        let _engine = self.engine();
+        Ok(runtime(&*self.alive_state()?, id, generation, true)?.still_budget())
     }
     /// Measured successful encode/preparation and native capture read costs.
     /// Capture read may include waiting for a frame; it is diagnostic, not a
@@ -555,6 +810,7 @@ impl Core {
         capture_us: u64,
         encode_us: u64,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         if capture_us > 5_000_000 || encode_us > 5_000_000 {
             return Err(Error::InvalidSetting("producer duration is out of range"));
         }
@@ -569,18 +825,59 @@ impl Core {
         *measured = Some((average.0, average.1, now));
         Ok(())
     }
+    /// The encoder the producer opened for this viewer, at open and at every
+    /// reopen; the viewer learns whether it is hardware.
+    pub fn report_desktop_encoder(
+        &self,
+        id: u64,
+        generation: u64,
+        encoder: crate::EncoderImplementation,
+    ) -> Result<(), Error> {
+        let _engine = self.engine();
+        *lock(&runtime(&*self.alive_state()?, id, generation, true)?.encoder) = Some(encoder);
+        tracing::info!(
+            target: crate::trace::STREAM,
+            service = id,
+            generation,
+            encoder = ?encoder,
+            "encoder opened"
+        );
+        Ok(())
+    }
+    /// The platform backend's view of whether the screen is on a desktop
+    /// it cannot capture. Every viewer learns it with its next feedback.
+    pub fn report_secure_desktop(&self, active: bool) -> Result<(), Error> {
+        let _engine = self.engine();
+        self.ensure_alive()?;
+        self.shared
+            .secure_desktop
+            .store(active, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+    /// The host opened its encoder again for this viewer's new settings.
+    pub fn report_desktop_encoder_reopen(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
+        runtime(&*self.alive_state()?, id, generation, true)?
+            .counters
+            .encoder_reopened();
+        Ok(())
+    }
     pub fn publish_desktop_video(
         &self,
         id: u64,
         generation: u64,
         mut frame: EncodedFrame,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         frame.check()?;
         let desktop = {
             let state = self.alive_state()?;
             runtime(&state, id, generation, true)?
         };
-        if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+        if frame.role == crate::FrameRole::Still && !desktop.info.stills {
+            return Err(Error::Unsupported("still pictures for this viewer"));
+        }
+        if !frame.belongs_to(desktop.info.codec, desktop.info.stills) {
             return Err(Error::InvalidSetting(
                 "frame codec does not match Desktop owner",
             ));
@@ -603,6 +900,7 @@ impl Core {
         generation: u64,
         cursor: CursorState,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let desktop = runtime(&state, id, generation, true)?;
         if !desktop.info.separate_cursor {
@@ -612,6 +910,7 @@ impl Core {
         Ok(())
     }
     pub fn take_desktop_keyframe_request(&self, id: u64, generation: u64) -> Result<bool, Error> {
+        let _engine = self.engine();
         Ok(runtime(&*self.alive_state()?, id, generation, true)?
             .keyframe
             .take())
@@ -619,7 +918,7 @@ impl Core {
 }
 
 /// Reconcile a durable grant change while holding the same state lock used
-/// for input application. Release held keys before another owner can acquire.
+/// for input admission. Release held keys before another owner can acquire.
 pub(super) fn reconcile_grants(
     shared: &Shared,
     state: &mut State,
@@ -665,64 +964,13 @@ pub(super) fn reconcile_grants(
             }
         }
     }
-    if !grants.view || !grants.control {
-        for id in incoming {
-            if let Some(session) = state.incoming.get_mut(&id) {
-                // Fence an in-flight native operation even when it has not
-                // yet recorded its key-down in the held set.
-                session
-                    .input_epoch
-                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                if lock(&session.host_held).release_events().is_empty() {
-                    if !grants.view && !session.services_only && !session.files_only {
-                        session.desktop_stop.send_replace(true);
-                    }
-                    continue;
-                }
-                // The worker owns this snapshot; late native work settles its
-                // own newly held input under the same adapter guard.
-                let slot = session.incoming_slot.clone();
-                let held = std::mem::take(&mut *lock(&session.host_held));
-                let adapter = shared.desktop.clone();
-                let pending = shared.input_cleanup.clone();
-                let events = shared.events.clone();
-                pending.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                let reservation = super::input_cleanup::Reservation {
-                    pending,
-                    releasing: None,
-                };
-                shared.cleanup_executor.submit(move || {
-                    let _slot = slot;
-                    let mut adapter = lock(&adapter);
-                    if let Some(adapter) = adapter.as_mut() {
-                        for event in held.release_events() {
-                            if adapter.apply(event).is_err() {
-                                events.publish(CoreEvent::InputFailed {
-                                    id,
-                                    message: "a held key or button could not be released",
-                                });
-                            }
-                        }
-                    }
-                    drop(reservation);
-                });
-                if !session.services_only && !session.files_only {
-                    if !grants.view {
-                        session.desktop_stop.send_replace(true);
-                    }
-                }
-            }
-        }
-    }
 }
 impl RemoteDesktopService {
     pub(super) fn active_desktop(&self) -> Result<&Arc<DesktopRuntime>, Error> {
         if self.lease.is_cancelled() {
             return Err(Error::NoSession);
         }
-        self.desktop.as_ref().ok_or(Error::Unsupported(
-            "scoped operations on a legacy Desktop bridge",
-        ))
+        Ok(&self.desktop)
     }
     /// Returns the latest host-confirmed state, not an optimistic local grant.
     pub fn control_state(&self) -> Result<DesktopControlState, Error> {
@@ -767,8 +1015,41 @@ impl RemoteDesktopService {
         *measured = Some((average, now));
         Ok(())
     }
+    /// The window's decoder reports whether it decodes in software and how
+    /// many times it restarted from a keyframe after an error, in total.
+    /// A count that goes back is refused: it belongs to another decoder.
+    pub fn report_decoder(
+        &self,
+        software: bool,
+        recoveries: u64,
+        stills_shown: u64,
+    ) -> Result<(), Error> {
+        let desktop = self.active_desktop()?;
+        let mut decoder = lock(&desktop.decoder);
+        if recoveries < decoder.recoveries || stills_shown < decoder.stills_shown {
+            return Err(Error::InvalidSetting("decoder counts went back"));
+        }
+        *decoder = DecoderState {
+            software: Some(software),
+            recoveries,
+            stills_shown,
+        };
+        Ok(())
+    }
     pub fn media_status(&self) -> Result<crate::DesktopMediaStatus, Error> {
-        Ok(lock(&self.active_desktop()?.adaptive).status)
+        let desktop = self.active_desktop()?;
+        let mut status = lock(&desktop.adaptive).status;
+        status.conditions = lock(&desktop.conditions).active();
+        Ok(status)
+    }
+    /// Why the picture stopped, once it did; `None` while it lives, or when
+    /// this computer closed it. Readable after the service closed.
+    pub fn end(&self) -> Option<crate::DesktopEnd> {
+        *lock(&self.desktop.end)
+    }
+    /// The conditions held now, with since when and their evidence.
+    pub fn conditions(&self) -> Result<Vec<crate::ConditionEntry>, Error> {
+        Ok(lock(&self.active_desktop()?.conditions).entries())
     }
     /// The one display this desktop stream will show and control.
     pub fn select_displays(&self, ids: &[u64]) -> Result<(), Error> {
@@ -848,6 +1129,9 @@ impl RemoteDesktopService {
         Ok(())
     }
     pub fn release_input(&self) -> Result<(), Error> {
+        // What the release discards is recorded as this engine's.
+        let span = self.shared.upgrade().map(|shared| shared.span.clone());
+        let _engine = span.as_ref().map(tracing::Span::enter);
         self.active_desktop()?.release_input();
         Ok(())
     }
@@ -900,9 +1184,6 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         if session.generation != generation {
             return Err(Error::StaleSession);
         }
-        if !session.services_only {
-            return Err(Error::Unsupported("neutral Desktop transport"));
-        }
         let record = state.services.get(&id).ok_or(Error::NoSession)?;
         if record.desktop.is_some() {
             return Err(Error::Busy);
@@ -913,10 +1194,16 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             record.stop.clone(),
         )
     };
-    let offer = core.desktop_quality_defaults()?;
-    let decoder_caps = core.video_codecs()?;
+    let limits = core.desktop_quality_defaults()?;
+    let offer = crate::session::dial_quality(limits);
+    let decoder_caps = {
+        let caps = core.video_codecs()?;
+        caps.for_window(core.alive_state()?.window_decoders.as_deref())
+    };
     let codec_preference = core.desktop_codec_default()?;
     let codec_offer = decoder_caps.preferred_offer(codec_preference)?;
+    let window_decoders = core.alive_state()?.window_decoders.clone();
+    let bt601 = crate::video_caps::VideoCodecCaps::bt601_mask(window_decoders.as_deref());
     // Reserve once per owner, including while Open awaits a reply.
     let reservation = DesktopRuntime::new(
         DesktopInfo {
@@ -926,8 +1213,11 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
             codec: 1,
             quality: offer,
             separate_cursor: false,
+            stills: false,
+            matrix: crate::YuvMatrix::Bt709,
         },
         SessionStamp::new(0, 0),
+        limits.max_bitrate_kbps,
     );
     {
         let mut state = core.alive_state()?;
@@ -944,6 +1234,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         .shared
         .cursor_receiver
         .load(std::sync::atomic::Ordering::Relaxed);
+    let stills = decoder_caps.chroma444;
     let shared = core.shared.clone();
     let owner_info = lease.info().clone();
     let (ready, result) = std::sync::mpsc::sync_channel(1);
@@ -955,21 +1246,22 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     request.extend_from_slice(&stamp.id.to_be_bytes());
                     request.extend_from_slice(&stamp.generation.to_be_bytes());
                     request.extend_from_slice(&id.to_be_bytes());
-                    request.push(u8::from(cursor));
+                    request.push(
+                        if cursor { OPEN_CURSOR } else { 0 } | if stills { OPEN_STILLS } else { 0 },
+                    );
                     request.extend_from_slice(
                         &ControlMessage::Hello {
                             version: crate::protocol::PROTOCOL_VERSION,
                             codec: codec_offer,
                             quality: offer,
                             decode: true,
-                            files_only: false,
-                            services_only: false,
+                            separate_cursor: cursor,
+                            bt601,
                             hostname: None,
                             os: crate::OperatingSystem::local(),
                         }
                         .encode(),
                     );
-                    let mut legacy = false;
                     loop {
                         let (mut send, mut recv) =
                             link.open_bi().await.map_err(Error::network_debug)?;
@@ -982,33 +1274,6 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             0 => {}
                             4 => {
                                 tokio::time::sleep(Duration::from_millis(20)).await;
-                                continue;
-                            }
-                            5 if !legacy
-                                && (codec_preference.is_none()
-                                    || codec_preference == Some(crate::VideoCodec::H264))
-                                && (decoder_caps.decode_high || decoder_caps.decode_baseline) =>
-                            {
-                                legacy = true;
-                                request.truncate(27);
-                                request.extend_from_slice(
-                                    &ControlMessage::Hello {
-                                        version: 5,
-                                        codec: if decoder_caps.decode_high {
-                                            crate::protocol::CODEC_H264_HIGH
-                                        } else {
-                                            crate::protocol::CODEC_H264
-                                        },
-                                        quality: offer,
-                                        decode: decoder_caps.decode_high
-                                            || decoder_caps.decode_baseline,
-                                        files_only: false,
-                                        services_only: false,
-                                        hostname: None,
-                                        os: crate::OperatingSystem::local(),
-                                    }
-                                    .encode(),
-                                );
                                 continue;
                             }
                             6 => return Err(Error::Unauthorized),
@@ -1039,10 +1304,13 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         {
                             return Err(Error::Malformed);
                         }
+                        let flags = crate::protocol::SEPARATE_CURSOR | crate::protocol::STILLS;
+                        // Stills the window cannot show were never asked for.
+                        if codec & crate::protocol::STILLS != 0 && !stills {
+                            return Err(Error::Malformed);
+                        }
                         if codec_preference.is_some_and(|c| {
-                            crate::VideoCodec::from_wire_id(
-                                codec & !crate::protocol::SEPARATE_CURSOR,
-                            ) != Some(c)
+                            crate::VideoCodec::from_wire_id(codec & !flags) != Some(c)
                         }) {
                             return Err(Error::IncompatibleVersion);
                         }
@@ -1050,9 +1318,14 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             service: owner_info.clone(),
                             monitor_width,
                             monitor_height,
-                            codec: codec & !crate::protocol::SEPARATE_CURSOR,
+                            codec: codec & !flags,
                             quality,
                             separate_cursor: codec & crate::protocol::SEPARATE_CURSOR != 0,
+                            stills: codec & crate::protocol::STILLS != 0,
+                            matrix: crate::VideoCodec::from_wire_id(codec & !flags)
+                                .map_or(crate::YuvMatrix::Bt709, |agreed| {
+                                    crate::YuvMatrix::of_codec(bt601, agreed)
+                                }),
                         };
                         if !decoder_caps.supports_decode(
                             crate::VideoCodec::from_wire_id(info.codec)
@@ -1060,7 +1333,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         ) {
                             return Err(Error::IncompatibleVersion);
                         }
-                        let desktop = DesktopRuntime::new(info, epoch);
+                        let desktop = DesktopRuntime::new(info, epoch, limits.max_bitrate_kbps);
                         desktop
                             .control_state
                             .send_replace((control_status, control_epoch));
@@ -1108,14 +1381,19 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     }
                 };
                 if installed {
-                    let _ = ready.send(Ok(desktop.clone()));
+                    crate::ignored!(
+                        crate::trace::STREAM,
+                        "the opener stopped waiting for the desktop",
+                        ready.send(Ok(desktop.clone()))
+                    );
                     ensure_datagram_router(
                         &shared,
                         link.clone(),
                         owner_info.connection_id,
                         generation,
                     );
-                    let _ = lease
+                    // The desktop's end is recorded below, whichever way it went.
+                    let _ended = lease
                         .run(async {
                             let mut clipboard = tokio::task::JoinSet::new();
                             clipboard.spawn(super::desktop_clipboard::client(
@@ -1125,10 +1403,33 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                                 desktop.stamp,
                             ));
                             let control = async {
-                                tokio::select! {
-                                    result = client_send(&link, &desktop, &mut send) => result,
-                                    result = client_receive(&shared, &desktop, &mut recv) => result,
+                                let sent = tokio::select! {
+                                    result = client_send(&shared, &link, &desktop, &mut send) => result,
+                                    result = client_receive(&shared, &desktop, &mut recv) => return result,
+                                };
+                                // A host ending the stream stops reading it before
+                                // its `END` arrives here, so sending can fail first:
+                                // the `END` is still worth a moment's wait.
+                                match tokio::time::timeout(
+                                    END_PATIENCE,
+                                    client_receive(&shared, &desktop, &mut recv),
+                                )
+                                .await
+                                {
+                                    Ok(received) => {
+                                        crate::ignored!(
+                                            crate::trace::STREAM,
+                                            "the stream is ending; an END read here said why",
+                                            received
+                                        );
+                                    }
+                                    Err(_) => tracing::debug!(
+                                        target: crate::trace::STREAM,
+                                        service = id,
+                                        "the host said nothing more after sending stopped"
+                                    ),
                                 }
+                                sent
                             };
                             tokio::pin!(control);
                             loop {
@@ -1139,10 +1440,33 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                             }
                         })
                         .await;
+                    // An `END` already said why. Otherwise the symptoms do:
+                    // a lost connection, or a stream finished in silence.
+                    if !lease.is_cancelled() {
+                        desktop.ended(
+                            &shared,
+                            false,
+                            if link.close_reason().is_none() {
+                                crate::DesktopEnd::PeerClosed
+                            } else if desktop.relayed.load(std::sync::atomic::Ordering::Acquire) {
+                                crate::DesktopEnd::RelayUnreachable
+                            } else {
+                                crate::DesktopEnd::LinkLost
+                            },
+                        );
+                    }
                 } else {
-                    let _ = ready.send(Err(Error::NoSession));
+                    crate::ignored!(
+                        crate::trace::STREAM,
+                        "the opener stopped waiting for the desktop",
+                        ready.send(Err(Error::NoSession))
+                    );
                 }
-                let _ = send.finish();
+                crate::ignored!(
+                    crate::trace::STREAM,
+                    "a closing stream that cannot finish is closed by the link",
+                    send.finish()
+                );
                 desktop.close();
                 super::desktop_service::finish_controller(
                     &shared,
@@ -1151,6 +1475,8 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                     link.close_reason().is_none(),
                     if lease.is_cancelled() {
                         CloseCause::OwnerClose
+                    } else if desktop.host_ended_connection() {
+                        CloseCause::ParentLoss
                     } else {
                         CloseCause::PeerClose
                     },
@@ -1183,7 +1509,11 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                         },
                     );
                 }
-                let _ = ready.send(Err(error));
+                crate::ignored!(
+                    crate::trace::STREAM,
+                    "the opener stopped waiting for the desktop",
+                    ready.send(Err(error))
+                );
             }
         }
     });
@@ -1194,17 +1524,20 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         lease: core.service_lease(id, generation)?,
         stop,
         shared: Arc::downgrade(&core.shared),
-        desktop: Some(desktop),
+        desktop,
     })
 }
 
 async fn client_send(
+    shared: &Shared,
     link: &Connection,
     desktop: &DesktopRuntime,
     send: &mut SendStream,
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut reports = tokio::time::interval(REPORT_EVERY);
+    reports.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sampled_at = std::time::Instant::now();
     let mut last_path = None;
     loop {
@@ -1222,7 +1555,24 @@ async fn client_send(
             bytes.extend_from_slice(&lease_epoch.to_be_bytes());
             write(send, &bytes).await?;
         }
-        if desktop.keyframe.take() {
+        let path_rtt = link
+            .paths()
+            .iter()
+            .find(|path| path.is_selected())
+            .map_or(Duration::ZERO, |path| path.rtt());
+        let frame_period = frame_period(desktop);
+        let (ask, retry) = {
+            let mut pictures = lock(&desktop.pictures);
+            let ask = pictures.should_ask(
+                &desktop.keyframe,
+                std::time::Instant::now(),
+                path_rtt,
+                frame_period,
+            );
+            (ask, pictures.retry_at(path_rtt, frame_period))
+        };
+        if ask {
+            desktop.counters.keyframe_requested();
             let mut bytes = vec![COMMAND];
             bytes.extend_from_slice(&lease_epoch.to_be_bytes());
             bytes.extend_from_slice(
@@ -1236,6 +1586,15 @@ async fn client_send(
         let notified = desktop.input.notified();
         tokio::pin!(notified);
         for command in commands {
+            let kind = match &command {
+                Outbound::Event(event) => Some(event.kind()),
+                Outbound::Text(_) | Outbound::Chord(_) => Some("typed text"),
+                Outbound::Quality(_) | Outbound::Displays(_) => None,
+            };
+            if let Some(kind) = kind.filter(|_| dropped(shared, DropPoint::Outbox)) {
+                input_dropped(desktop.info.service.id, kind, DropPoint::Outbox);
+                continue;
+            }
             let message = match command {
                 Outbound::Event(event) => ControlMessage::Input {
                     stamp: desktop.stamp,
@@ -1265,11 +1624,30 @@ async fn client_send(
         }
         tokio::select! {
             _ = &mut notified => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
+            _ = reports.tick() => {
+                let report = desktop.report.take();
+                if !report.is_empty() {
+                    let mut bytes = vec![COMMAND];
+                    bytes.extend_from_slice(&lease_epoch.to_be_bytes());
+                    bytes.extend_from_slice(
+                        &ControlMessage::VideoReport { stamp: desktop.stamp, report }.encode(),
+                    );
+                    write(send, &bytes).await?;
+                }
+            },
+            // An unanswered keyframe request is asked again when its patience runs out.
+            _ = async {
+                match retry {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {},
             _ = interval.tick() => {
                 if let Some(path) = link.paths().iter().find(|p| p.is_selected()) {
                     let now = std::time::Instant::now();
                     let elapsed = now.saturating_duration_since(sampled_at).as_millis().min(u64::MAX as u128) as u64;
                     sampled_at = now;
+                    desktop.relayed.store(path.is_relay(), std::sync::atomic::Ordering::Release);
                     let path_changed = last_path.is_some_and(|previous| previous != path.id());
                     last_path = Some(path.id());
                     let host = lock(&desktop.host_feedback).as_ref()
@@ -1278,14 +1656,42 @@ async fn client_send(
                     let current = *lock(&desktop.quality);
                     let feedback = crate::adaptation::Feedback {
                         receiver: desktop.inbox.telemetry(), host,
+                        frames_lost: desktop.counters.read().lost.total(),
                         rtt_ms: path.rtt().as_millis().min(u64::MAX as u128) as u64,
                         path_changed,
                         decode_us: lock(&desktop.decode_duration).as_ref()
                             .filter(|(_, at)| now.saturating_duration_since(*at) <= Duration::from_secs(3))
                             .map(|(us, _)| *us),
                     };
-                    let next = lock(&desktop.adaptive).step(current,
-                        (desktop.info.monitor_width, desktop.info.monitor_height), elapsed, feedback);
+                    let (next, signals) = {
+                        let mut adaptive = lock(&desktop.adaptive);
+                        // The quality the host agreed at Accept is what
+                        // the viewer chose, within the host's limits.
+                        let limits = crate::adaptation::Limits {
+                            ceiling: Quality {
+                                max_bitrate_kbps: desktop.bitrate_limit,
+                                ..desktop.info.quality
+                            },
+                            codec: crate::VideoCodec::from_wire_id(desktop.info.codec)
+                                .unwrap_or(crate::VideoCodec::H264),
+                            monitor: (desktop.info.monitor_width, desktop.info.monitor_height),
+                            relayed: path.is_relay(),
+                        };
+                        let next = adaptive.step(current, limits, elapsed, feedback);
+                        (next, adaptive.signals)
+                    };
+                    let decoder = *lock(&desktop.decoder);
+                    let observation = crate::video::Observation {
+                        elapsed_ms: elapsed,
+                        signals,
+                        relay: path.is_relay(),
+                        received_frames: feedback.receiver.received_frames,
+                        keyframe_pending: lock(&desktop.pictures).keyframe_pending(),
+                        host: host.map(|host| host.host_state()),
+                        decoder_software: decoder.software == Some(true),
+                        decoder_recoveries: decoder.recoveries,
+                    };
+                    lock(&desktop.conditions).observe(crate::diagnostics::monotonic_ms(), &observation);
                     if let Some(next) = next {
                         // Controller-side step: monitor clamp only. The host
                         // applies its encoder caps when the update arrives.
@@ -1294,7 +1700,18 @@ async fn client_send(
                             (desktop.info.monitor_width, desktop.info.monitor_height),
                             &crate::video_caps::VideoCodecCaps::default(),
                         );
-                        desktop.input.push_quality(next)?; *lock(&desktop.quality) = next;
+                        tracing::info!(
+                            target: crate::trace::STREAM,
+                            service = desktop.info.service.id,
+                            bitrate_kbps = next.max_bitrate_kbps,
+                            frame_rate = next.max_frame_rate,
+                            width = next.max_width,
+                            height = next.max_height,
+                            reason = ?lock(&desktop.adaptive).status.reason,
+                            "quality changed"
+                        );
+                        desktop.input.push_quality(next)?;
+                        *lock(&desktop.quality) = next;
                     }
                 }
             }
@@ -1324,18 +1741,30 @@ async fn client_receive(
                         u64::from_be_bytes(body[2..10].try_into().unwrap()),
                     )?;
                 }
+                END => {
+                    if body.len() != 2 {
+                        return Err(Error::Malformed);
+                    }
+                    desktop.ended(
+                        shared,
+                        false,
+                        crate::DesktopEnd::Host(crate::StreamEnd::decode(body[1])?),
+                    );
+                    return Ok(());
+                }
                 MEDIA_FEEDBACK => {
                     let feedback = crate::adaptation::HostFeedback::decode(&body[1..])?;
                     *lock(&desktop.host_feedback) = Some((feedback, std::time::Instant::now()));
                 }
                 VIDEO => {
-                    let frame = crate::video::decode_video_body(&body[1..])?;
-                    if Some(frame.codec) != crate::VideoCodec::from_wire_id(desktop.info.codec) {
+                    let body = crate::video::decode_video_body(&body[1..])?;
+                    if !body
+                        .frame
+                        .belongs_to(desktop.info.codec, desktop.info.stills)
+                    {
                         return Err(Error::Malformed);
                     }
-                    if matches!(desktop.inbox.push(frame), VideoPush::KeyframeNeeded) {
-                        desktop.keyframe.request();
-                    }
+                    desktop.receive_video(shared, body);
                 }
                 TOPOLOGY => {
                     let ControlMessage::Topology {
@@ -1407,9 +1836,10 @@ impl Drop for HostedDesktopGuard {
                     CloseCause::Shutdown
                 } else {
                     match state.incoming.get(&record.info.connection_id) {
-                        Some(session) if session.phase == SessionPhase::Active => {
-                            CloseCause::DeviceLoss
-                        }
+                        // A live connection on an open link: the backend or
+                        // loop itself died. A link already closed is a lost
+                        // parent, whatever the session's phase says yet.
+                        Some(session) if session.connected() => CloseCause::DeviceLoss,
                         _ => CloseCause::ParentLoss,
                     }
                 };
@@ -1430,47 +1860,9 @@ impl Drop for StreamCount<'_> {
 }
 
 fn release_desktop_input(shared: &Shared, desktop: &DesktopRuntime) {
-    use std::sync::atomic::Ordering;
-    // Called under state, which also admits native work. Do not block on a
-    // held-set lock that a late native release might currently own.
-    if desktop.in_flight.load(Ordering::Acquire) == 0
-        && desktop
-            .host_held
-            .try_lock()
-            .is_ok_and(|held| held.release_events().is_empty())
-    {
-        return;
-    }
-    if desktop.releasing.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    shared.input_cleanup.fetch_add(1, Ordering::AcqRel);
-    let reservation = super::input_cleanup::Reservation {
-        pending: shared.input_cleanup.clone(),
-        releasing: Some(desktop.releasing.clone()),
-    };
-    let slot = lock(&desktop.cleanup_slot).clone();
-    let adapter = shared.desktop.clone();
-    let held = desktop.host_held.clone();
-    let events = shared.events.clone();
-    let id = desktop.info.service.connection_id;
-    shared.cleanup_executor.submit(move || {
-        let mut adapter = lock(&adapter);
-        let releases = std::mem::take(&mut *lock(&held));
-        if let Some(adapter) = adapter.as_mut() {
-            for event in releases.release_events() {
-                if adapter.apply(event).is_err() {
-                    events.publish(CoreEvent::InputFailed {
-                        id,
-                        message: "a held key or button could not be released",
-                    });
-                }
-            }
-        }
-        // Both reservation and owner slot settle before the adapter is yielded.
-        drop(reservation);
-        drop(slot);
-    });
+    desktop
+        .host_input
+        .release(shared, desktop.info.service.connection_id);
 }
 
 pub(super) async fn serve(
@@ -1482,7 +1874,7 @@ pub(super) async fn serve(
     body: &[u8],
     mut parent_stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), Error> {
-    if body.len() < 27 || body[0] != VERSION || body[25] > 1 {
+    if body.len() < 27 || body[0] != VERSION || body[25] & !(OPEN_CURSOR | OPEN_STILLS) != 0 {
         write(&mut send, &[VERSION, 5]).await?;
         return Ok(());
     }
@@ -1496,14 +1888,13 @@ pub(super) async fn serve(
         codec,
         quality,
         decode,
-        files_only: false,
-        services_only: false,
+        bt601,
         ..
     } = ControlMessage::decode(&body[26..])?
     else {
         return Err(Error::Malformed);
     };
-    if remote_id == 0 || !(5..=crate::protocol::PROTOCOL_VERSION).contains(&version) {
+    if remote_id == 0 || version != crate::protocol::PROTOCOL_VERSION {
         write(&mut send, &[VERSION, 5]).await?;
         return Ok(());
     }
@@ -1514,7 +1905,7 @@ pub(super) async fn serve(
     let outcome = {
         let mut state = lock(&shared.state);
         let session = live_session(&state, true, connection_id)?;
-        if !session.services_only || session.peer_key != peer || session.wire_stamp != parent {
+        if session.peer_key != peer || session.wire_stamp != parent {
             Err(3)
         } else if !state.trust.service_granted(&peer, ServiceKind::Desktop) {
             Err(6)
@@ -1542,8 +1933,12 @@ pub(super) async fn serve(
             let caps = lock(&shared.video_caps).clone();
             if monitor.0 == 0 || monitor.1 == 0 {
                 Err(1)
-            } else if let Some(agreed) = crate::video_caps::negotiate(codec, &caps, true) {
+            } else if let Some(agreed) = crate::video_caps::negotiate(codec, &caps) {
                 let codec = agreed.codec;
+                let matrix = crate::VideoCodec::from_wire_id(codec)
+                    .map_or(crate::YuvMatrix::Bt709, |agreed| {
+                        crate::YuvMatrix::of_codec(bt601, agreed)
+                    });
                 let peer_id = session.peer_id.clone();
                 let id = state.next_service_id;
                 state.next_service_id = id.checked_add(1).ok_or(Error::Busy)?;
@@ -1555,27 +1950,35 @@ pub(super) async fn serve(
                     kind: ServiceKind::Desktop,
                     phase: ServicePhase::Active,
                 };
-                let separate = body[25] == 1
-                    && lock(&shared.capture)
-                        .as_ref()
-                        .is_some_and(|c| c.separate_cursor());
+                let (separate, stills) =
+                    lock(&shared.capture).as_ref().map_or((false, false), |c| {
+                        (
+                            body[25] & OPEN_CURSOR != 0 && c.separate_cursor(),
+                            body[25] & OPEN_STILLS != 0 && c.stills(),
+                        )
+                    });
                 let desktop = DesktopRuntime::new(
                     DesktopInfo {
                         service: info.clone(),
                         monitor_width: monitor.0,
                         monitor_height: monitor.1,
                         codec,
-                        quality: crate::session::agree_quality(&quality, monitor, &caps),
+                        quality: crate::session::start_quality(&quality, monitor, &caps, codec),
                         separate_cursor: separate,
+                        stills,
+                        matrix,
                     },
                     SessionStamp::new(id, parent.generation),
+                    quality.max_bitrate_kbps,
                 );
                 shared
                     .desktop_owners
                     .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                *lock(&desktop.cleanup_slot) = Some(Arc::new(super::input_cleanup::AdmissionSlot(
-                    shared.desktop_owners.clone(),
-                )));
+                desktop
+                    .host_input
+                    .keep_slot(Arc::new(super::input_cleanup::AdmissionSlot(
+                        shared.desktop_owners.clone(),
+                    )));
                 desktop.set_recording_allowed(
                     state.trust.get(&peer).is_some() && state.trust.sharing.recording,
                 );
@@ -1588,7 +1991,6 @@ pub(super) async fn serve(
                         .send_replace((DesktopControlState::Viewing, 0));
                 } else if state.input_holder().is_none() {
                     state.desktop_control = Some(desktop.stamp);
-                    state.lock_watch.note_controlling();
                     desktop
                         .control_state
                         .send_replace((DesktopControlState::Controlling, 1));
@@ -1605,6 +2007,7 @@ pub(super) async fn serve(
                         stream_open: false,
                         stop,
                         desktop: Some(desktop.clone()),
+                        span: shared.span.clone(),
                     },
                 );
                 shared
@@ -1649,6 +2052,11 @@ pub(super) async fn serve(
                     crate::protocol::SEPARATE_CURSOR
                 } else {
                     0
+                }
+                | if desktop.info.stills {
+                    crate::protocol::STILLS
+                } else {
+                    0
                 },
             quality: desktop.info.quality,
             hostname: None,
@@ -1658,16 +2066,81 @@ pub(super) async fn serve(
     );
     write(&mut send, &response).await?;
     if !*parent_stop.borrow() && !*service_stop.borrow() {
-        tokio::select! {
+        let stream_ended = tokio::select! {
             biased;
-            _ = parent_stop.changed() => {}, _ = service_stop.changed() => {},
-            _ = host_receive(&shared, &desktop, &mut recv) => {},
-            _ = host_send(&shared, &desktop, &mut send) => {},
+            _ = parent_stop.changed() => false, _ = service_stop.changed() => false,
+            _ = host_receive(&shared, &desktop, &mut recv) => true,
+            _ = host_send(&shared, &desktop, &mut send) => true,
+        };
+        // The stream ended while its connection lives: the viewer finished
+        // its side or stopped reading ours, so it closed the desktop. A lost
+        // connection is the backstop's to name, and a cause this computer
+        // set first, as a failed capture, stays.
+        if stream_ended {
+            let mut state = lock(&shared.state);
+            let connected = state
+                .incoming
+                .get(&desktop.info.service.connection_id)
+                .is_some_and(LiveSession::connected);
+            if let Some(record) = state
+                .hosted_services
+                .get_mut(&desktop.info.service.id)
+                .filter(|record| connected && record.info.generation == parent.generation)
+            {
+                record.change(
+                    parent.generation,
+                    ServicePhase::Closed(CloseCause::PeerClose),
+                );
+            }
         }
     }
+    let parent_stopped = *parent_stop.borrow();
+    // A parent stopped because its link was lost: nobody is left to tell.
+    let link_lost = parent_stopped
+        && !lock(&shared.state)
+            .incoming
+            .get(&desktop.info.service.connection_id)
+            .is_some_and(LiveSession::link_open);
+    if link_lost {
+        desktop.ended(&shared, true, crate::DesktopEnd::LinkLost);
+    } else if let Some(end) = host_end(&shared, &desktop, parent_stopped) {
+        desktop.ended(&shared, true, crate::DesktopEnd::Host(end));
+        crate::ignored!(
+            crate::trace::STREAM,
+            "the viewer may be gone before it hears why the desktop ended",
+            tokio::time::timeout(END_PATIENCE, write(&mut send, &[END, end.encode()])).await
+        );
+    }
     desktop.close();
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::STREAM,
+        "a closing stream that cannot finish is closed by the link",
+        send.finish()
+    );
     Ok(())
+}
+
+/// What a host tells its viewer as its stream stops: why its record
+/// closed, or that its user stopped the connection. Nothing when the
+/// stream itself failed, as when the viewer left or the link broke.
+fn host_end(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    parent_stopped: bool,
+) -> Option<crate::StreamEnd> {
+    let state = lock(&shared.state);
+    let service = &desktop.info.service;
+    let phase = state
+        .hosted_services
+        .get(&service.id)
+        .filter(|record| record.info.generation == service.generation)
+        .map(|record| record.info.phase.clone());
+    match phase {
+        Some(ServicePhase::Closed(cause)) => crate::StreamEnd::for_close(cause),
+        _ if state.shut_down => Some(crate::StreamEnd::Shutdown),
+        _ if parent_stopped => Some(crate::StreamEnd::Disconnected),
+        _ => None,
+    }
 }
 
 async fn host_receive(
@@ -1710,12 +2183,38 @@ fn wait_input_cleanup(shared: &Shared) {
     }
 }
 
-/// Wait for the adapter and old cleanup on a blocking worker. Never wait for
-/// Core state while holding the adapter: state transactions may inspect held
-/// input and must remain responsive. Recheck exact owner, permission and epoch at native admission.
+/// What admission reads of `state` and `desktop` for input sent under
+/// `sent_under`.
+fn input_facts(state: &State, desktop: &DesktopRuntime, sent_under: u64) -> Result<Facts, Error> {
+    let peer = parse_endpoint_id(&desktop.info.service.peer_id)?;
+    Ok(Facts {
+        permitted: state.trust.service_granted(&peer, ServiceKind::Desktop)
+            && state.trust.granted(&peer, crate::session::Grant::Control),
+        holder: match state.desktop_control {
+            Some(holder) if holder == desktop.stamp => Holder::This,
+            Some(_) => Holder::Another,
+            None => Holder::Nobody,
+        },
+        sent_under,
+        lease: *desktop.control_state.borrow(),
+        retired: desktop.retired.load(std::sync::atomic::Ordering::Acquire),
+    })
+}
+
+/// Whether `lease` is still `desktop`'s.
+fn holds(desktop: &DesktopRuntime, lease: Lease) -> bool {
+    lease.holds(
+        *desktop.control_state.borrow(),
+        desktop.retired.load(std::sync::atomic::Ordering::Acquire),
+    )
+}
+
+/// The adapter, taken for one native call. Waiting for it and for old
+/// cleanup happens on a blocking worker, never while holding Core state:
+/// state transactions may inspect held input and must remain responsive.
 struct NativeInputGuard<'a> {
     adapter: std::sync::MutexGuard<'a, Option<Box<dyn crate::HostDesktop>>>,
-    in_flight: &'a AtomicUsize,
+    _call: InFlight<'a>,
 }
 impl std::ops::Deref for NativeInputGuard<'_> {
     type Target = Option<Box<dyn crate::HostDesktop>>;
@@ -1728,19 +2227,16 @@ impl std::ops::DerefMut for NativeInputGuard<'_> {
         &mut self.adapter
     }
 }
-impl Drop for NativeInputGuard<'_> {
-    fn drop(&mut self) {
-        self.in_flight
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-    }
-}
 
+/// Takes the adapter once old cleanup has finished, readmitting the input
+/// sent under `epoch` (and rechecking a `pointer` against the topology)
+/// while holding the adapter and Core state together.
 fn native_input_adapter<'a>(
     shared: &'a Shared,
     desktop: &'a DesktopRuntime,
     epoch: u64,
     pointer: Option<crate::InputEvent>,
-) -> Result<Option<NativeInputGuard<'a>>, Error> {
+) -> Result<Result<(NativeInputGuard<'a>, Lease), Refusal>, Error> {
     loop {
         #[cfg(test)]
         if std::thread::current().name() == Some("v9-pointer-probe") {
@@ -1762,15 +2258,10 @@ fn native_input_adapter<'a>(
             desktop.info.service.generation,
             true,
         )?;
-        let peer = parse_endpoint_id(&desktop.info.service.peer_id)?;
-        if !state.trust.service_granted(&peer, ServiceKind::Desktop)
-            || !state.trust.granted(&peer, crate::session::Grant::Control)
-            || state.desktop_control != Some(desktop.stamp)
-            || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            || desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-        {
-            return Ok(None);
-        }
+        let lease = match super::host_input::readmit(input_facts(&state, desktop, epoch)?) {
+            Ok(lease) => lease,
+            Err(reason) => return Ok(Err(reason)),
+        };
         if shared
             .input_cleanup
             .load(std::sync::atomic::Ordering::Acquire)
@@ -1779,22 +2270,18 @@ fn native_input_adapter<'a>(
             if let Some(event) = pointer {
                 let selected = lock(&desktop.selected);
                 if let Err(error) = super::topology::accept_pointer(shared, event, &selected) {
-                    super::keys::note_input_failure(
-                        shared,
-                        desktop.info.service.connection_id,
-                        &error,
-                    );
-                    return Ok(None);
+                    return Ok(Err(pointer_refusal(&error)));
                 }
             }
-            desktop
-                .in_flight
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            let call = desktop.host_input.enter();
             drop(state);
-            return Ok(Some(NativeInputGuard {
-                adapter,
-                in_flight: &desktop.in_flight,
-            }));
+            return Ok(Ok((
+                NativeInputGuard {
+                    adapter,
+                    _call: call,
+                },
+                lease,
+            )));
         }
         drop(state);
         drop(adapter);
@@ -1802,24 +2289,121 @@ fn native_input_adapter<'a>(
     }
 }
 
-fn release_late_input(
+/// A pointer the host's topology does not take, as one on a display it does
+/// not show.
+fn pointer_refusal(error: &Error) -> Refusal {
+    Refusal::PointerOutside(crate::input::InputFault::from_error(error).message())
+}
+
+/// One input a viewer sent on its desktop stream.
+enum HostInput {
+    Event(crate::InputEvent),
+    Text(String),
+    Chord(String),
+}
+
+impl HostInput {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Event(event) => event.kind(),
+            Self::Text(_) | Self::Chord(_) => "typed text",
+        }
+    }
+}
+
+/// Admits one input under Core state: under the lease it was sent with,
+/// a pointer on a display the host shows, text a viewer may send. Gives
+/// the pointer to recheck once the backend is free, or why not.
+/// Input refused here is discarded without applying or observing held
+/// state; viewers stay connected and ask for control once the current
+/// controller yields.
+fn admit_host_input(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    state: &State,
+    epoch: u64,
+    input: &HostInput,
+) -> Result<Result<Option<crate::InputEvent>, Refusal>, Error> {
+    if let Err(reason) = super::host_input::admit(input_facts(state, desktop, epoch)?) {
+        return Ok(Err(reason));
+    }
+    Ok(match input {
+        HostInput::Event(event) => {
+            let selected = lock(&desktop.selected).clone();
+            match super::topology::accept_pointer(shared, *event, &selected) {
+                Ok(()) => Ok(Some(*event)),
+                Err(error) => Err(pointer_refusal(&error)),
+            }
+        }
+        HostInput::Text(text) | HostInput::Chord(text) => {
+            // A viewer never sends empty text; one that does has nothing typed.
+            match crate::input::key_text_problem(text) {
+                Some(problem) => Err(Refusal::InvalidText(problem)),
+                None if text.is_empty() => Err(Refusal::InvalidText("text entry is empty")),
+                None => Ok(None),
+            }
+        }
+    })
+}
+
+/// Applies one admitted input, Core state released: the adapter is taken
+/// with the lease rechecked, and input applied as that lease ended is
+/// released under the same adapter guard.
+fn apply_host_input(
     shared: &Shared,
     desktop: &DesktopRuntime,
     epoch: u64,
-    adapter: &mut dyn crate::HostDesktop,
-) -> bool {
-    let stale = desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-        || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch);
-    if stale {
-        let mut held = lock(&desktop.host_held);
-        for event in held.release_events() {
-            if let Err(error) = adapter.apply(event) {
-                super::keys::note_input_failure(shared, desktop.info.service.connection_id, &error);
+    pointer: Option<crate::InputEvent>,
+    input: &HostInput,
+) -> Result<InputOutcome, Error> {
+    let refused = |reason| Ok(InputOutcome::Refused { reason });
+    let (mut adapter, lease) = match native_input_adapter(shared, desktop, epoch, pointer)? {
+        Ok(taken) => taken,
+        Err(reason) => return refused(reason),
+    };
+    if !holds(desktop, lease) {
+        return refused(
+            if desktop.retired.load(std::sync::atomic::Ordering::Acquire) {
+                Refusal::Ended
+            } else {
+                Refusal::ControlChanged
+            },
+        );
+    }
+    let Some(adapter) = adapter.as_mut() else {
+        return refused(Refusal::Unavailable("no desktop adapter is installed"));
+    };
+    let session = &desktop.host_input;
+    let failed = |error: &Error| {
+        super::keys::note_input_failure(shared, desktop.info.service.connection_id, error)
+    };
+    match input {
+        HostInput::Event(event) => {
+            if let Err(error) = adapter.apply(*event) {
+                session.settle(holds(desktop, lease), adapter.as_mut(), failed);
+                return refused(Refusal::of_backend(error)?);
+            }
+            if session.applied(*event, holds(desktop, lease), adapter.as_mut(), failed) {
+                lock(&desktop.activity).input(*event, std::time::Instant::now());
+                super::power::note_control_used(shared);
             }
         }
-        *held = HeldInput::default();
+        HostInput::Text(text) | HostInput::Chord(text) => {
+            let typed = match input {
+                HostInput::Chord(_) => adapter.type_chord(text),
+                _ => adapter.type_text(text),
+            };
+            let ended = session.settle(holds(desktop, lease), adapter.as_mut(), failed);
+            if let Err(error) = typed {
+                return refused(Refusal::of_backend(error)?);
+            }
+            if !ended {
+                lock(&desktop.activity).touch(std::time::Instant::now());
+                super::power::note_control_used(shared);
+            }
+        }
     }
-    stale
+    Ok(InputOutcome::Applied)
 }
 
 /// Validate under Core state, take the adapter without waiting, then release
@@ -1872,6 +2456,11 @@ fn process_host_command(
             return process_host_command(shared, desktop, body);
         }
         if !input_allowed {
+            tracing::info!(
+                target: crate::trace::INPUT,
+                service = desktop.info.service.id,
+                "control refused: the peer may not control this computer"
+            );
             desktop
                 .control_state
                 .send_replace((DesktopControlState::Viewing, current_epoch));
@@ -1883,6 +2472,13 @@ fn process_host_command(
             } else {
                 DesktopControlState::Contended
             };
+        tracing::info!(
+            target: crate::trace::INPUT,
+            service = desktop.info.service.id,
+            state = ?status,
+            epoch = current_epoch,
+            "control asked for"
+        );
         let next_epoch = if status == DesktopControlState::Controlling
             && desktop.control_state.borrow().0 != status
         {
@@ -1892,12 +2488,17 @@ fn process_host_command(
         };
         if status == DesktopControlState::Controlling {
             state.desktop_control = Some(desktop.stamp);
-            state.lock_watch.note_controlling();
         }
         desktop.control_state.send_replace((status, next_epoch));
         return Ok(());
     }
     if body.len() == 9 && body[0] == YIELD_CONTROL {
+        tracing::info!(
+            target: crate::trace::INPUT,
+            service = desktop.info.service.id,
+            current = epoch == current_epoch,
+            "control yielded"
+        );
         if epoch == current_epoch {
             release_desktop_input(shared, desktop);
             if state.desktop_control == Some(desktop.stamp) {
@@ -1927,63 +2528,52 @@ fn process_host_command(
         desktop.info.service.generation,
         true,
     )?;
-    // Contended input is discarded without applying or observing held
-    // state; viewers stay connected and request acquisition after the
-    // current controller yields. Release/keyframe/quality are unaffected.
-    let contended =
-        !input_allowed || state.desktop_control != Some(desktop.stamp) || epoch != current_epoch;
-    match command {
+    let input = match command {
         ControlMessage::Input { stamp, event } if stamp == desktop.stamp => {
-            if contended {
-                return Ok(());
-            }
-            let selected = lock(&desktop.selected).clone();
-            if let Err(error) = super::topology::accept_pointer(shared, event, &selected) {
-                super::keys::note_input_failure(shared, desktop.info.service.connection_id, &error);
-                return Ok(());
-            }
-            drop(state);
-            let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, Some(event))?
-            else {
-                return Ok(());
-            };
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                return Ok(());
-            }
-            match adapter.as_mut() {
-                None => return Err(Error::Unsupported("desktop input adapter")),
-                Some(adapter) => {
-                    if let Err(error) = adapter.apply(event) {
-                        release_late_input(shared, desktop, epoch, adapter.as_mut());
-                        super::keys::note_input_failure(
-                            shared,
-                            desktop.info.service.connection_id,
-                            &error,
-                        );
-                        if matches!(error, Error::InputFailed(_)) {
-                            return Ok(());
-                        }
-                        return Err(error);
-                    }
-                }
-            }
-            let mut held = lock(&desktop.host_held);
-            held.observe(event);
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                if let Some(adapter) = adapter.as_mut() {
-                    for release in held.release_events() {
-                        let _ = adapter.apply(release);
-                    }
-                }
-                *held = HeldInput::default();
-            } else {
-                lock(&desktop.activity).input(event, std::time::Instant::now());
-            }
+            Some(HostInput::Event(event))
         }
+        ControlMessage::Text { stamp, ref text } if stamp == desktop.stamp => {
+            Some(HostInput::Text(text.0.clone()))
+        }
+        ControlMessage::Chord { stamp, ref text } if stamp == desktop.stamp => {
+            Some(HostInput::Chord(text.0.clone()))
+        }
+        _ => None,
+    };
+    if let Some(input) = input {
+        if dropped(shared, DropPoint::BeforeAdmission) {
+            input_dropped(
+                desktop.info.service.id,
+                input.kind(),
+                DropPoint::BeforeAdmission,
+            );
+            return Ok(());
+        }
+        let outcome = match admit_host_input(shared, desktop, &state, epoch, &input)? {
+            Err(reason) => InputOutcome::Refused { reason },
+            Ok(_) if dropped(shared, DropPoint::AfterAdmission) => {
+                input_dropped(
+                    desktop.info.service.id,
+                    input.kind(),
+                    DropPoint::AfterAdmission,
+                );
+                return Ok(());
+            }
+            Ok(pointer) => {
+                drop(state);
+                apply_host_input(shared, desktop, epoch, pointer, &input)?
+            }
+        };
+        super::host_input::record(
+            shared,
+            &desktop.info.service,
+            &desktop.host_input,
+            input.kind(),
+            outcome,
+        );
+        return Ok(());
+    }
+    match command {
         ControlMessage::SelectDisplays { stamp, displays } if stamp == desktop.stamp => {
             let snapshot = lock(&shared.topology).clone();
             match super::topology::apply_selection(&snapshot.displays, &displays) {
@@ -2006,75 +2596,19 @@ fn process_host_command(
                 ),
             }
         }
-        ControlMessage::Text { stamp, text } if stamp == desktop.stamp => {
-            if contended {
-                return Ok(());
-            }
-            if let Some(problem) = crate::input::key_text_problem(&text.0) {
-                return Err(Error::InputFailed(problem));
-            }
-            drop(state);
-            let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, None)? else {
-                return Ok(());
-            };
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                return Ok(());
-            }
-            let adapter = adapter
-                .as_mut()
-                .ok_or(Error::Unsupported("desktop input adapter"))?;
-            let result = if text.0.is_empty() {
-                Ok(())
-            } else {
-                adapter.type_text(&text.0)
-            };
-            let stale = release_late_input(shared, desktop, epoch, adapter.as_mut());
-            result?;
-            if !stale && !text.0.is_empty() {
-                lock(&desktop.activity).touch(std::time::Instant::now());
-            }
-        }
-        ControlMessage::Chord { stamp, text } if stamp == desktop.stamp => {
-            if contended {
-                return Ok(());
-            }
-            if let Some(problem) = crate::input::key_text_problem(&text.0) {
-                return Err(Error::InputFailed(problem));
-            }
-            drop(state);
-            let Some(mut adapter) = native_input_adapter(shared, desktop, epoch, None)? else {
-                return Ok(());
-            };
-            if desktop.retired.load(std::sync::atomic::Ordering::Acquire)
-                || *desktop.control_state.borrow() != (DesktopControlState::Controlling, epoch)
-            {
-                return Ok(());
-            }
-            let adapter = adapter
-                .as_mut()
-                .ok_or(Error::Unsupported("desktop input adapter"))?;
-            let result = if text.0.is_empty() {
-                Ok(())
-            } else {
-                adapter.type_chord(&text.0)
-            };
-            let stale = release_late_input(shared, desktop, epoch, adapter.as_mut());
-            result?;
-            if !stale && !text.0.is_empty() {
-                lock(&desktop.activity).touch(std::time::Instant::now());
-            }
-        }
         ControlMessage::Keyframe { stamp } if stamp == desktop.stamp => desktop.keyframe.request(),
+        ControlMessage::VideoReport { stamp, report } if stamp == desktop.stamp => {
+            lock(&desktop.viewer_loss).observe(&report, std::time::Instant::now());
+        }
         ControlMessage::Quality { stamp, quality } if stamp == desktop.stamp => {
             let caps = lock(&shared.video_caps).clone();
+            // No keyframe here: the encoder takes a new rate as it runs, and
+            // a new size opens it again, which starts from a keyframe.
             *lock(&desktop.quality) = crate::session::agree_quality(
                 &quality,
                 (desktop.info.monitor_width, desktop.info.monitor_height),
                 &caps,
             );
-            desktop.keyframe.request();
         }
         _ => return Err(Error::StaleSession),
     }
@@ -2089,6 +2623,150 @@ async fn write_control_state(
     write(send, &bytes).await
 }
 
+/// Bytes of video a desktop may have waiting in the transport: three
+/// frames at the agreed bitrate, and never under 64 KiB. Beyond it a new
+/// frame would only add latency.
+fn backlog_budget(bitrate_kbps: u32, frame_rate: u8) -> usize {
+    let per_frame = u64::from(bitrate_kbps) * 1000 / 8 / u64::from(frame_rate.max(1));
+    usize::try_from(per_frame * 3)
+        .unwrap_or(usize::MAX)
+        .max(64 * 1024)
+}
+
+/// Whether a frame of `wire` bytes goes out now. It must fit the space the
+/// transport has without dropping older datagrams, and, unless nothing is
+/// waiting, keep the backlog within `budget`: a keyframe larger than the
+/// budget still goes once the link has caught up.
+fn admits_frame(space: usize, wire: usize, budget: usize) -> bool {
+    let queued = super::host::DATAGRAM_SEND_BUFFER.saturating_sub(space);
+    wire <= space && (queued == 0 || queued + wire <= budget)
+}
+
+/// Which frames go out, and the keyframe owed after video is dropped.
+///
+/// The predicted frames after a dropped frame reference it, so they are
+/// dropped too until a keyframe goes out. Every drop therefore costs a
+/// keyframe, the largest frame. The owed keyframe is asked for once, and
+/// only when the link could take it. Asked for while the backlog that
+/// caused the drop remains, it would be dropped in turn and ask for
+/// another: the encoder would make keyframe after keyframe, and the link
+/// would carry few of them.
+#[derive(Debug, Default)]
+struct SendGate {
+    /// Frames are dropped until a keyframe goes out.
+    awaiting: bool,
+    /// The owed keyframe was asked for, and has not been sent or dropped.
+    asked: bool,
+    /// Wire size of the keyframe the next ask would bring, to judge when it
+    /// would fit: the latest that answered an ask. A larger keyframe nobody
+    /// asked for, a full-quality refresh or a periodic one, does not raise
+    /// it: the one asked for is a recovery keyframe.
+    keyframe_wire: usize,
+    /// Backlog a keyframe just sent may hold on top of the budget, until
+    /// the link drains back within it.
+    draining: usize,
+}
+
+impl SendGate {
+    /// Whether a frame is dropped without reaching the gate: a predicted
+    /// frame while a keyframe is owed.
+    fn skips(&self, keyframe: bool) -> bool {
+        self.awaiting && !keyframe
+    }
+
+    /// Whether a frame of `wire` bytes goes out now. The frames behind a
+    /// keyframe larger than the budget wait for it whatever the gate does,
+    /// and dropping one would only cost another keyframe: so they may add
+    /// to its backlog until it drains back within the budget.
+    fn admits(&mut self, space: usize, wire: usize, budget: usize) -> bool {
+        if super::host::DATAGRAM_SEND_BUFFER.saturating_sub(space) <= budget {
+            self.draining = 0;
+        }
+        admits_frame(space, wire, budget.saturating_add(self.draining))
+    }
+
+    /// The gate dropped a frame. A dropped keyframe leaves the one owed
+    /// still to ask for.
+    fn dropped(&mut self, keyframe: bool, wire: usize) {
+        if keyframe {
+            self.learn_keyframe(wire);
+        }
+        self.awaiting = true;
+        self.asked = false;
+    }
+
+    /// Learns the size of a keyframe sent or dropped: as it is when it
+    /// answered an ask or nothing is known yet, otherwise only if smaller.
+    fn learn_keyframe(&mut self, wire: usize) {
+        self.keyframe_wire = if self.asked || self.keyframe_wire == 0 {
+            wire
+        } else {
+            self.keyframe_wire.min(wire)
+        };
+    }
+
+    /// A still picture went out. The frames behind it may wait for it as for
+    /// a large keyframe; nothing owed changes.
+    fn still_sent(&mut self, wire: usize) {
+        self.draining = self.draining.max(wire);
+    }
+
+    /// A frame went out; a keyframe pays what was owed.
+    fn sent(&mut self, keyframe: bool, wire: usize) {
+        if keyframe {
+            self.learn_keyframe(wire);
+            self.awaiting = false;
+            self.asked = false;
+            self.draining = wire;
+        }
+    }
+
+    /// Whether a keyframe is owed and not yet asked for.
+    fn owed(&self) -> bool {
+        self.awaiting && !self.asked
+    }
+
+    /// Whether to ask the encoder for the owed keyframe now: the link has
+    /// room for one as large as the latest.
+    fn should_ask(&mut self, space: usize, budget: usize) -> bool {
+        if !self.owed() || !admits_frame(space, self.keyframe_wire, budget) {
+            return false;
+        }
+        self.asked = true;
+        true
+    }
+}
+
+/// The video send backlog allowed at the agreed quality.
+/// What the host says of itself in its feedback: its encoder, and whether
+/// its screen is on a desktop it cannot capture.
+fn host_flags(shared: &Shared, desktop: &DesktopRuntime) -> u8 {
+    use crate::adaptation::{ENCODER_HARDWARE, ENCODER_KNOWN, SECURE_DESKTOP};
+    let encoder = match lock(&desktop.encoder).and_then(|encoder| encoder.hardware) {
+        Some(true) => ENCODER_KNOWN | ENCODER_HARDWARE,
+        Some(false) => ENCODER_KNOWN,
+        None => 0,
+    };
+    let secure = if shared
+        .secure_desktop
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        SECURE_DESKTOP
+    } else {
+        0
+    };
+    encoder | secure
+}
+fn send_budget(desktop: &DesktopRuntime) -> usize {
+    let quality = *lock(&desktop.quality);
+    backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate)
+}
+
+/// The interval between frames at the agreed frame rate.
+fn frame_period(desktop: &DesktopRuntime) -> Duration {
+    Duration::from_secs(1) / u32::from(lock(&desktop.quality).max_frame_rate.max(1))
+}
+
 async fn host_send(
     shared: &Shared,
     desktop: &DesktopRuntime,
@@ -2099,7 +2777,16 @@ async fn host_send(
         .get(&desktop.info.service.connection_id)
         .and_then(|s| s.link.clone())
         .ok_or(Error::NoSession)?;
+    // Groups each datagram picture's fragments, stills among them.
     let mut seq = 0u32;
+    // The number the next stream picture takes, on either transport; a
+    // still repeats the one before, and a picture dropped here takes none.
+    let mut picture = 0u32;
+    let mut gate = SendGate::default();
+    let mut congestion = crate::video::Congestion::default();
+    let mut path = None;
+    // The least backlog the gate saw since the last feedback.
+    let mut least_backlog: Option<usize> = None;
     let mut metrics = tokio::time::interval(Duration::from_secs(1));
     metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = desktop.cursor.subscribe();
@@ -2115,10 +2802,52 @@ async fn host_send(
     loop {
         let notified = desktop.video.notified();
         tokio::pin!(notified);
-        for frame in desktop.video.drain() {
-            let body = crate::video::encode_video_body(&frame);
+        let frames = desktop.video.drain();
+        let mut pictured = false;
+        let last_change = frames
+            .iter()
+            .rposition(|frame| frame.role == crate::FrameRole::Changed);
+        for (index, frame) in frames.into_iter().enumerate() {
+            // A still picture is stale once a changed picture follows it,
+            // and never goes while the stream owes a keyframe.
+            let still = frame.role == crate::FrameRole::Still;
+            let changed_after = last_change.is_some_and(|at| at > index);
+            if still && (changed_after || gate.awaiting) {
+                desktop.counters.still_dropped();
+                continue;
+            }
+            // After a frame was dropped, the predicted frames that follow
+            // reference it: they go too, until the keyframe owed for it.
+            if gate.skips(frame.keyframe) {
+                desktop.counters.send_dropped();
+                continue;
+            }
+            // A new path starts its round trip floor afresh.
+            let selected = link
+                .paths()
+                .iter()
+                .find(|candidate| candidate.is_selected())
+                .map(|selected| (selected.id(), selected.stats()));
+            let rtt = selected
+                .as_ref()
+                .map_or(Duration::ZERO, |(_, stats)| stats.rtt);
+            if selected.as_ref().map(|(id, _)| *id) != path {
+                path = selected.as_ref().map(|(id, _)| *id);
+                congestion = crate::video::Congestion::default();
+                lock(&desktop.link_rate).reset();
+            }
+            if let Some((_, stats)) = &selected {
+                lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
+            }
+            congestion.rtt(rtt);
+            let number = if still {
+                picture.wrapping_sub(1)
+            } else {
+                picture
+            };
+            let body = crate::video::encode_video_body(&frame, number);
             let max = link.max_datagram_size();
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-probes"))]
             let max = if desktop
                 .force_stream
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -2128,7 +2857,16 @@ async fn host_send(
                 max
             };
             if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
-                let datagrams = crate::video::fragment(&body, seq, max - PREFIX)
+                desktop
+                    .datagram
+                    .store(max - PREFIX, std::sync::atomic::Ordering::Relaxed);
+                let now = std::time::Instant::now();
+                let protection = lock(&desktop.viewer_loss).protection(
+                    frame.keyframe,
+                    congestion.congested(rtt),
+                    now,
+                );
+                let datagrams = crate::video::fragment(&body, seq, max - PREFIX, protection)
                     .into_iter()
                     .map(|fragment| {
                         let mut bytes = Vec::with_capacity(PREFIX + fragment.len());
@@ -2137,15 +2875,82 @@ async fn host_send(
                         bytes::Bytes::from(bytes)
                     })
                     .collect::<Vec<_>>();
+                let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
+                let backlog = super::host::DATAGRAM_SEND_BUFFER
+                    .saturating_sub(link.datagram_send_buffer_space());
+                least_backlog = Some(least_backlog.map_or(backlog, |least| least.min(backlog)));
+                if still {
+                    // A change behind it waits for what is queued and for
+                    // it: both must drain within the moment a still may
+                    // hold the link.
+                    let space = link.datagram_send_buffer_space();
+                    if wire > space || backlog + wire > desktop.still_drain() {
+                        desktop.counters.still_dropped();
+                        continue;
+                    }
+                    link.send_many_datagrams(&datagrams)
+                        .map_err(Error::network_debug)?;
+                    seq = seq.wrapping_add(1);
+                    gate.still_sent(wire);
+                    desktop.counters.still_sent(frame.payload.len());
+                    pictured = true;
+                    continue;
+                }
+                if dropped(shared, DropPoint::Gate)
+                    || !gate.admits(
+                        link.datagram_send_buffer_space(),
+                        wire,
+                        send_budget(desktop),
+                    )
+                {
+                    // The link is behind: sending would queue stale video, or
+                    // make the transport drop older fragments and so split
+                    // frames. Drop this one whole and start again from a
+                    // keyframe once the backlog drains.
+                    desktop.counters.send_dropped();
+                    gate.dropped(frame.keyframe, wire);
+                    continue;
+                }
                 link.send_many_datagrams(&datagrams)
                     .map_err(Error::network_debug)?;
                 seq = seq.wrapping_add(1);
+                picture = picture.wrapping_add(1);
+                gate.sent(frame.keyframe, wire);
+                pictured = true;
+                if frame.keyframe {
+                    desktop.counters.keyframe_sent(frame.payload.len());
+                }
+            } else if still {
+                if body.len() > desktop.still_drain() {
+                    desktop.counters.still_dropped();
+                    continue;
+                }
+                let mut bytes = vec![VIDEO];
+                bytes.extend_from_slice(&body);
+                write(send, &bytes).await?;
+                desktop.counters.still_sent(frame.payload.len());
+                pictured = true;
             } else {
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
+                picture = picture.wrapping_add(1);
+                gate.sent(frame.keyframe, bytes.len());
+                pictured = true;
+                if frame.keyframe {
+                    desktop.counters.keyframe_sent(frame.payload.len());
+                }
             }
         }
+        if pictured && control_rx.borrow().0 == DesktopControlState::Controlling {
+            super::power::note_control_used(shared);
+        }
+        if gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop)) {
+            desktop.keyframe.request();
+        }
+        // While a keyframe is owed, look at the backlog again each frame
+        // period: a still screen may bring no frame to wake on.
+        let owed_check = gate.owed().then(|| frame_period(desktop));
         let current = cursor.borrow_and_update().clone();
         if current != previous {
             if let Some(current) = &current {
@@ -2168,16 +2973,36 @@ async fn host_send(
                 let timing = lock(&desktop.producer_duration).as_ref()
                     .filter(|(_, _, at)| at.elapsed() <= Duration::from_secs(3))
                     .map(|(capture, encode, _)| (*capture, *encode)).unwrap_or_default();
+                // Read before the feedback is built: a guard held through its
+                // fields would meet the one taken below.
+                let link_kbps = lock(&desktop.link_rate)
+                    .bits_per_second()
+                    .map_or(0, |bits| (bits / 1000).min(u64::from(u32::MAX)) as u32);
                 let feedback = crate::adaptation::HostFeedback {
                     sent_bytes: stats.udp_tx.bytes, lost_bytes: stats.lost_bytes,
                     dropped: queue.dropped, queued: queue.queued, oldest_ms: queue.oldest_ms,
+                    send_dropped: desktop.counters.read().send_dropped,
+                    backlog_ms: (least_backlog.take().unwrap_or(0) as u64 * 8)
+                        .checked_div(u64::from(lock(&desktop.quality).max_bitrate_kbps))
+                        .unwrap_or(0)
+                        .min(600_000),
                     capture_us: timing.0, encode_us: timing.1,
+                    link_kbps,
+                    congestion_events: link.paths().iter().find(|path| path.is_selected())
+                        .map_or(0, |path| {
+                            let stats = path.stats();
+                            // A still screen sends little: read the link here too.
+                            lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
+                            stats.congestion_events
+                        }),
+                    flags: host_flags(shared, desktop),
                 };
                 let mut bytes = vec![MEDIA_FEEDBACK];
                 bytes.extend(feedback.encode());
                 write(send, &bytes).await?;
             }
             _ = &mut notified => {},
+            () = tokio::time::sleep(owed_check.unwrap_or_default()), if owed_check.is_some() => {},
             _ = cursor.changed() => {},
             changed = recording_rx.changed() => {
                 changed.map_err(|_|Error::NoSession)?;
@@ -2218,19 +3043,138 @@ fn topology_bytes(shared: &Shared, desktop: &DesktopRuntime) -> Option<Vec<u8>> 
     Some(bytes)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-probes"))]
 impl Core {
-    pub(crate) fn force_desktop_stream(&self, id: u64, generation: u64) {
-        runtime(&*self.alive_state().unwrap(), id, generation, true)
-            .unwrap()
+    /// Sends hosted Desktop `id`'s pictures on its stream rather than as
+    /// datagrams, for tests of the stream path a link without datagrams
+    /// takes.
+    pub fn force_desktop_stream(&self, id: u64, generation: u64) -> Result<(), Error> {
+        let _engine = self.engine();
+        runtime(&*self.alive_state()?, id, generation, true)?
             .force_stream
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_waits_behind_at_most_three_frames_of_video() {
+        // 8 Mb/s at 50 fps is 20 kB a frame: the floor of 64 KiB applies.
+        assert_eq!(backlog_budget(8_000, 50), 64 * 1024);
+        // 24 Mb/s at 30 fps is 100 kB a frame.
+        assert_eq!(backlog_budget(24_000, 30), 300_000);
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        // Nothing waiting: any frame that fits goes, a large keyframe too.
+        assert!(admits_frame(buffer, 500_000, 64 * 1024));
+        // Something waiting: only while the backlog stays within budget.
+        assert!(admits_frame(buffer - 40_000, 20_000, 64 * 1024));
+        assert!(!admits_frame(buffer - 60_000, 20_000, 64 * 1024));
+        // Never a frame the transport would make room for by dropping.
+        assert!(!admits_frame(10_000, 20_000, usize::MAX));
+    }
+
+    #[test]
+    fn a_dropped_keyframe_asks_for_one_more_only_once_the_link_could_take_it() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let backlog = buffer - 40_000;
+        let mut gate = SendGate::default();
+        gate.sent(true, 83_000);
+        assert!(!gate.should_ask(buffer, budget), "nothing is owed");
+        // A predicted frame is dropped behind a backlog: the keyframe owed
+        // for it is not asked for while the backlog would drop it too.
+        gate.dropped(false, 5_000);
+        assert!(gate.skips(false));
+        assert!(!gate.skips(true));
+        assert!(!gate.should_ask(backlog, budget));
+        assert!(gate.owed());
+        // Drained: asked for once, however many frames pass before it comes.
+        assert!(gate.should_ask(buffer, budget));
+        assert!(!gate.owed());
+        assert!(!gate.should_ask(buffer, budget));
+        // The keyframe met a new backlog and was dropped: one more is owed,
+        // again only once the link has room for it.
+        gate.dropped(true, 83_000);
+        assert!(!gate.should_ask(backlog, budget));
+        assert!(gate.should_ask(buffer, budget));
+        // It went out: predicted frames flow again.
+        gate.sent(true, 83_000);
+        assert!(!gate.skips(false));
+        assert!(!gate.owed());
+    }
+
+    #[test]
+    fn the_frames_behind_a_large_keyframe_go_while_it_drains() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let mut gate = SendGate::default();
+        assert!(gate.admits(buffer, 92_000, budget));
+        gate.sent(true, 92_000);
+        // Most of the keyframe still waits: a predicted frame goes behind it.
+        assert!(gate.admits(buffer - 72_000, 8_000, budget));
+        gate.sent(false, 8_000);
+        // Drained back within the budget: the budget alone applies again.
+        assert!(gate.admits(buffer - 30_000, 8_000, budget));
+        assert!(!gate.admits(buffer - 60_000, 8_000, budget));
+        // Nor does a predicted frame's backlog earn the allowance.
+        let mut gate = SendGate::default();
+        gate.sent(false, 8_000);
+        assert!(!gate.admits(buffer - 72_000, 8_000, budget));
+    }
+
+    /// A full-quality refresh larger than the budget, sent without being
+    /// asked for, does not make the gate wait for an empty queue before
+    /// asking for the small recovery keyframe it owes next.
+    #[test]
+    fn a_large_unasked_keyframe_does_not_hold_back_the_next_ask() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let mut gate = SendGate::default();
+        // A recovery keyframe answers an ask.
+        gate.dropped(false, 5_000);
+        assert!(gate.should_ask(buffer, budget));
+        gate.sent(true, 30_000);
+        // A full-quality refresh goes out unasked.
+        gate.sent(true, 90_000);
+        // A drop behind a backlog: the recovery keyframe owed would fit.
+        gate.dropped(false, 5_000);
+        assert!(gate.should_ask(buffer - 30_000, budget));
+        // A recovery keyframe that grew is learnt when it answers.
+        gate.sent(true, 60_000);
+        gate.dropped(false, 5_000);
+        assert!(!gate.should_ask(buffer - 30_000, budget));
+    }
+
+    /// The frames behind a still wait for it rather than drop, and it
+    /// neither pays nor teaches the keyframe owed.
+    #[test]
+    fn the_frames_behind_a_still_go_while_it_drains_and_nothing_owed_changes() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let budget = 64 * 1024;
+        let mut gate = SendGate::default();
+        gate.sent(true, 20_000);
+        gate.still_sent(200_000);
+        assert!(gate.admits(buffer - 190_000, 8_000, budget));
+        assert!(!gate.owed() && !gate.skips(false));
+        gate.dropped(false, 5_000);
+        gate.still_sent(200_000);
+        assert!(gate.skips(false), "a still is not the keyframe owed");
+        assert!(gate.should_ask(buffer - 40_000, budget), "nor its size");
+    }
+
+    #[test]
+    fn a_small_keyframe_is_asked_for_behind_a_backlog_it_fits_within() {
+        let buffer = crate::core::host::DATAGRAM_SEND_BUFFER;
+        let mut gate = SendGate::default();
+        gate.sent(true, 20_000);
+        gate.dropped(false, 5_000);
+        assert!(gate.should_ask(buffer - 40_000, 64 * 1024));
+    }
+
     fn desktop() -> Arc<DesktopRuntime> {
         DesktopRuntime::new(
             DesktopInfo {
@@ -2247,8 +3191,11 @@ mod tests {
                 codec: crate::CODEC_H264,
                 quality: crate::session::controller_offer(),
                 separate_cursor: false,
+                stills: false,
+                matrix: crate::YuvMatrix::Bt709,
             },
             SessionStamp::new(1, 3),
+            crate::protocol::MAX_BITRATE_KBPS,
         )
     }
     #[test]
@@ -2277,9 +3224,9 @@ mod tests {
     }
     #[test]
     fn delayed_input_release_and_yield_cannot_touch_a_reacquired_grant() {
-        use crate::tests::support::{pair_for_control, start_direct, RecordingDesktop};
-        let host = start_direct();
-        let peer = start_direct();
+        use crate::test_support::{loopback_core, pair_for_control, RecordingDesktop};
+        let host = loopback_core();
+        let peer = loopback_core();
         let applied = Arc::new(Mutex::new(Vec::new()));
         host.set_desktop(Box::new(RecordingDesktop {
             events: applied.clone(),
@@ -2508,9 +3455,9 @@ mod v8_native_input_lock_probe {
         parked_input(true);
     }
     fn parked_input(stream: bool) {
-        use crate::tests::support::{pair_for_control, start_direct};
-        let host = start_direct();
-        let peer = start_direct();
+        use crate::test_support::{loopback_core, pair_for_control};
+        let host = loopback_core();
+        let peer = loopback_core();
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
         let applied = Arc::new(Mutex::new(Vec::new()));
@@ -2626,10 +3573,10 @@ mod v9_pointer_wait_probe {
         }
     }
     fn queued_pointer(change: u8) {
-        use crate::tests::support::{pair_for_control, start_direct, RecordingDesktop};
+        use crate::test_support::{loopback_core, pair_for_control, RecordingDesktop};
         use std::sync::atomic::Ordering;
-        let host = start_direct();
-        let peer = start_direct();
+        let host = loopback_core();
+        let peer = loopback_core();
         let applied = Arc::new(Mutex::new(Vec::new()));
         host.set_desktop(Box::new(RecordingDesktop {
             events: applied.clone(),
@@ -2757,10 +3704,10 @@ mod v10_cleanup_churn_probe {
     }
     #[test]
     fn v10_empty_desktop_churn_must_bound_retired_cleanup() {
-        use crate::tests::support::{pair_for_control, start_direct, RecordingDesktop};
+        use crate::test_support::{loopback_core, pair_for_control, RecordingDesktop};
         use std::sync::atomic::Ordering;
-        let host = start_direct();
-        let peer = start_direct();
+        let host = loopback_core();
+        let peer = loopback_core();
         host.set_desktop(Box::new(RecordingDesktop {
             events: Arc::new(Mutex::new(Vec::new())),
         }))
@@ -2815,10 +3762,10 @@ mod v10_cleanup_churn_probe {
     }
     #[test]
     fn v10_nonempty_retired_owners_keep_admission_slots() {
-        use crate::tests::support::{pair_for_control, start_direct};
+        use crate::test_support::{loopback_core, pair_for_control};
         use std::sync::atomic::Ordering;
-        let host = start_direct();
-        let peer = start_direct();
+        let host = loopback_core();
+        let peer = loopback_core();
         let calls = Arc::new(Mutex::new(Vec::new()));
         host.set_desktop(Box::new(CleanupDesktop(calls.clone())))
             .unwrap();
@@ -2854,7 +3801,9 @@ mod v10_cleanup_churn_probe {
                 true,
             )
             .unwrap();
-            lock(&desktop.host_held).observe(crate::InputEvent::key_down(crate::input::usage::A));
+            desktop
+                .host_input
+                .hold(crate::InputEvent::key_down(crate::input::usage::A));
             drop(desktop);
             peer.close_controller_service(owner.id, owner.generation)
                 .unwrap();

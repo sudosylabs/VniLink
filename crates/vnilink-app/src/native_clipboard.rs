@@ -1,4 +1,5 @@
 //! One native clipboard owner thread. Linux selection ownership survives individual writes.
+// trace: records every ignored failure
 use crate::{ClipboardWriter, FfiError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -19,6 +20,18 @@ pub(crate) struct NativeClipboard {
     sender: mpsc::SyncSender<Request>,
     stopped: Arc<AtomicBool>,
 }
+/// What the operating system said when the clipboard failed, by kind only:
+/// an unknown failure's description is the system's text and is not kept.
+fn failure(error: &arboard::Error) -> &'static str {
+    match error {
+        arboard::Error::ContentNotAvailable => "content not available",
+        arboard::Error::ClipboardNotSupported => "clipboard not supported",
+        arboard::Error::ClipboardOccupied => "clipboard occupied",
+        arboard::Error::ConversionFailure => "conversion failure",
+        _ => "unknown",
+    }
+}
+
 fn unavailable() -> FfiError {
     FfiError::Unsupported {
         message: "The operating system clipboard is unavailable".into(),
@@ -27,8 +40,26 @@ fn unavailable() -> FfiError {
 impl NativeClipboard {
     pub(crate) fn open() -> Result<Self, FfiError> {
         Self::start(|| {
-            let mut clipboard = arboard::Clipboard::new().map_err(|_| unavailable())?;
-            Ok(move |text: String| clipboard.set_text(text).map_err(|_| unavailable()))
+            let mut clipboard = arboard::Clipboard::new().map_err(|error| {
+                tracing::warn!(
+                    target: vnilink::trace::CLIPBOARD,
+                    failure = failure(&error),
+                    "this computer's clipboard could not be opened"
+                );
+                unavailable()
+            })?;
+            Ok(move |text: String| {
+                let bytes = text.len();
+                clipboard.set_text(text).map_err(|error| {
+                    tracing::warn!(
+                        target: vnilink::trace::CLIPBOARD,
+                        bytes,
+                        failure = failure(&error),
+                        "this computer's clipboard refused the text"
+                    );
+                    unavailable()
+                })
+            })
         })
     }
     fn start<F, W>(factory: F) -> Result<Self, FfiError>
@@ -42,45 +73,68 @@ impl NativeClipboard {
         let worker_stop = stopped.clone();
         std::thread::Builder::new()
             .name("vnilink-clipboard".into())
-            .spawn(move || {
-                let mut write = match factory() {
-                    Ok(write) => {
-                        if ready.send(Ok(())).is_err() {
+            .spawn(vnilink::trace::within(
+                tracing::Span::current(),
+                move || {
+                    let mut write = match factory() {
+                        Ok(write) => {
+                            if ready.send(Ok(())).is_err() {
+                                return;
+                            }
+                            write
+                        }
+                        Err(error) => {
+                            vnilink::ignored!(
+                                vnilink::trace::CLIPBOARD,
+                                "the opener stopped waiting for the clipboard",
+                                ready.send(Err(error))
+                            );
                             return;
                         }
-                        write
-                    }
-                    Err(error) => {
-                        let _ = ready.send(Err(error));
-                        return;
-                    }
-                };
-                while let Ok(request) = receiver.recv() {
-                    match request {
-                        Request::Stop => break,
-                        Request::Write {
-                            text,
-                            reply,
-                            cancelled,
-                        } => {
-                            if worker_stop.load(Ordering::Acquire)
-                                || cancelled.load(Ordering::Acquire)
-                            {
-                                let _ = reply.send(Err(unavailable()));
-                                continue;
+                    };
+                    while let Ok(request) = receiver.recv() {
+                        match request {
+                            Request::Stop => break,
+                            Request::Write {
+                                text,
+                                reply,
+                                cancelled,
+                            } => {
+                                if worker_stop.load(Ordering::Acquire)
+                                    || cancelled.load(Ordering::Acquire)
+                                {
+                                    tracing::debug!(
+                                        target: vnilink::trace::CLIPBOARD,
+                                        "a clipboard write was given up before it ran"
+                                    );
+                                    vnilink::ignored!(
+                                        vnilink::trace::CLIPBOARD,
+                                        "the writer stopped waiting for its answer",
+                                        reply.send(Err(unavailable()))
+                                    );
+                                    continue;
+                                }
+                                // Success is acknowledged only after the OS has accepted the write.
+                                let result = write(text);
+                                vnilink::ignored!(
+                                    vnilink::trace::CLIPBOARD,
+                                    "the writer stopped waiting for its answer",
+                                    reply.send(result)
+                                );
                             }
-                            // Success is acknowledged only after the OS has accepted the write.
-                            let result = write(text);
-                            let _ = reply.send(result);
                         }
                     }
-                }
-            })
+                },
+            ))
             .map_err(|_| unavailable())?;
         match initialized.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => Ok(Self { sender, stopped }),
             Ok(Err(error)) => Err(error),
             Err(_) => {
+                tracing::warn!(
+                    target: vnilink::trace::CLIPBOARD,
+                    "this computer's clipboard did not open within 5 s"
+                );
                 stopped.store(true, Ordering::Release);
                 Err(unavailable())
             }
@@ -97,10 +151,20 @@ impl ClipboardWriter for NativeClipboard {
                 reply,
                 cancelled: cancelled.clone(),
             })
-            .map_err(|_| unavailable())?;
+            .map_err(|_| {
+                tracing::warn!(
+                    target: vnilink::trace::CLIPBOARD,
+                    "a clipboard write was refused: eight are already waiting"
+                );
+                unavailable()
+            })?;
         match completion.recv_timeout(Duration::from_secs(5)) {
             Ok(result) => result,
             Err(_) => {
+                tracing::warn!(
+                    target: vnilink::trace::CLIPBOARD,
+                    "this computer's clipboard did not answer within 5 s"
+                );
                 cancelled.store(true, Ordering::Release);
                 Err(unavailable())
             }
@@ -110,7 +174,11 @@ impl ClipboardWriter for NativeClipboard {
 impl Drop for NativeClipboard {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
-        let _ = self.sender.try_send(Request::Stop);
+        vnilink::ignored!(
+            vnilink::trace::CLIPBOARD,
+            "a full or stopped writer ends with its last sender",
+            self.sender.try_send(Request::Stop)
+        );
         // The last sender is dropped next; no destructor waits on an OS operation.
     }
 }

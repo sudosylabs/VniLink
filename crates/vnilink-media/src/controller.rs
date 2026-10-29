@@ -9,6 +9,7 @@
 //! The loop takes a `next` closure rather than a
 //! [`vnilink::VideoSubscription`] directly so tests can feed vectors. UI
 //! callers pass `|timeout| subscription.recv_timeout(timeout)`.
+// trace: records every ignored failure
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -64,8 +65,15 @@ impl<D: VideoDecoder> ControllerVideo<D> {
                     revision: frame.revision,
                 }))
             }
-            Err(Error::DecodeRejected(_)) => {
+            Err(Error::DecodeRejected(reason)) => {
                 self.skipped += 1;
+                tracing::debug!(
+                    target: vnilink::trace::DECODE,
+                    reason,
+                    keyframe = frame.keyframe,
+                    skipped = self.skipped,
+                    "a picture could not be decoded and was skipped"
+                );
                 Ok(ControllerOutput::Skipped)
             }
             Err(error) => Err(error),
@@ -103,7 +111,15 @@ where
         let Some(frame) = next(Duration::from_millis(200)) else {
             continue;
         };
-        match controller.push(&frame)? {
+        let output = controller.push(&frame).inspect_err(|error| {
+            tracing::warn!(
+                target: vnilink::trace::DECODE,
+                failure = vnilink::trace::Failure::failure_name(error),
+                reason = vnilink::trace::Failure::failure_reason(error),
+                "the decoder failed: the picture stops"
+            );
+        })?;
+        match output {
             ControllerOutput::Decoded(decoded) => paint(&decoded),
             ControllerOutput::Skipped => {}
         }

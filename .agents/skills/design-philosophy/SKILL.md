@@ -27,4 +27,4 @@ Validation appears only in its relevant mode and preserves drafts on failure. Sa
 
 Describe the intended feeling, diagnose the hierarchy/continuity/interaction issue, then choose a concrete move grounded in the reference and shared components. Existing UI is not the design ceiling. Evaluate loading, empty, error and unavailable states as part of the design.
 
-Use `ux-css-layout`, `ux-theming` and `accessibility` for implementation; validate relevant visual and behavioral states with `validate-ui-scenario`, including narrow/wide and supported platform presentations. Passing a code check does not establish design quality.
+Use `ux-css-layout`, `ux-theming` and `accessibility` for implementation; validate relevant visual and behavioral states with `smoke-tests`, including narrow/wide and supported platform presentations. Passing a code check does not establish design quality.

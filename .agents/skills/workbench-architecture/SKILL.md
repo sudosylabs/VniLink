@@ -1,37 +1,102 @@
 ---
 name: workbench-architecture
-description: "Design or change TypeScript application/workbench architecture using VS Code class ownership, service composition, lifecycle and contribution patterns."
+description: "Write or review Electron/TypeScript workbench code (views, services, contributions, commands, IPC) in VS Code's style, using the devices feature as the in-repo reference."
 ---
 
 # Workbench Architecture
 
-## Reference before design
+## Two references
 
-Read the user's supplied files. Locate the analogous subsystem in the local VS Code checkout (normally `/Users/hammed/Projects/vscode`) and inspect its owning classes, interfaces, registration and lifecycle, including relevant dependencies. Verify the reference revision against its Git state and `build/vscode-source.json`; a newer local checkout is architectural evidence, not automatically the pinned copy source. If that checkout is unavailable, use a verified upstream revision or available imported sources and state the limitation.
+1. **VS Code** at the pinned commit in `build/vscode-source.json` (a VS Code checkout of the contributor's, with a worktree at that commit). Read the analogous upstream class before designing: `workbench/browser/workbench.ts`, `workbench/common/contributions.ts`, `platform/actions/common/actions.ts`, `base/browser/ui/list/listWidget.ts`.
+2. **`src/workbench/contrib/devices`**, the VniLink feature written to this standard. New code should read like it. If it can't, say why.
 
-Useful entry points relative to the upstream checkout:
+## Shape of a feature
 
-- `src/vs/workbench/browser/workbench.ts` — Workbench startup, services, listeners, rendering and restoration.
-- `src/vs/workbench/browser/layout.ts` — shared layout ownership and parts.
-- `src/vs/workbench/electron-browser/desktop.main.ts` — DesktopMain composition.
-- `src/vs/code/electron-main/app.ts` — CodeApplication main-process lifecycle.
+```
+src/workbench/contrib/<feature>/
+  <feature>.contribution.ts   registers pages, Action2 commands and workbench contributions
+  <view>.ts                   views and their child widgets
+  media/<feature>.css         its styles
+src/workbench/services/<area>/
+  <area>Service.ts            interface + createDecorator
+  <area>ServiceImpl.ts        implementation, ending with registerSingleton(...)
+```
 
-Explain which responsibilities transfer to VniLink and which are editor-specific. Keep scope aligned with the requested product behavior; reading dependencies does not authorize importing an entire editor.
+Every new contribution or service implementation is imported from `src/workbench/workbench.desktop.main.ts`. Features never import each other's views. Home finds pages through `HomePagesRegistry`, and toolbars find actions through menus.
 
-## Class ownership
+## Views
 
-VniLink TypeScript is strongly object-oriented. Workbench composition, application bootstrap, feature controllers and stateful services belong to cohesive classes with explicit dependencies, lifecycle methods and disposable ownership. A long initializer moved unchanged into `start()` is still tangled composition.
+```ts
+export class DeviceDetails extends Disposable {
+	public readonly element: HTMLElement;
 
-Separate startup/composition, service registration, listener wiring, layout/rendering, restoration and shutdown where they have distinct responsibilities. Views consume injected service contracts rather than creating backend services. Shared services register through the existing instantiation infrastructure. Small widgets may receive explicit values or narrow interfaces; isolation does not require abandoning DI.
+	constructor(
+		id: string,                                            // plain arguments first
+		@IDeviceService private readonly devices: IDeviceService, // then injected services
+		@IInstantiationService instantiationService: IInstantiationService,
+	) {
+		super();
+		const panel = h('aside.device-panel', [h('h2@title'), h('p.device-panel-state@state', { role: 'status' })]);
+		this.element = panel.root;
+		this.screen = this._register(instantiationService.createInstance(DeviceScreenSnapshot));
+		this.connect = this._register(new Button(this.element, { ...defaultButtonStyles, title: false }));
+		this._register(this.connect.onDidClick(() => this.run(id => this.devices.connect(id))));
+	}
+}
+```
 
-Functions remain suitable for pure transformations, type guards, small callbacks and task combinators, including where upstream uses them. Avoid turning this exception into procedural stateful orchestration. Split responsibilities rather than creating shallow manager classes or a service for every helper.
+- **DOM:** build it with `h`, `$` and `append` from `base/browser/dom.ts`. `document.createElement` and `element.click()` fail lint (`vnilink/workbench-dom`). Use `triggerUpload` and `triggerDownload` for file pickers and downloads.
+- **Widgets:** use VS Code's widgets for controls:
+  - `List` (`deviceList.ts`)
+  - `Button` and `InputBox` (`deviceDetails.ts`, `devicePairing.ts`)
+  - `ActionBar` (`viewActionsToolbar.ts`)
 
-Use `Disposable`, stores and registered listeners to make ownership visible. Account for failed startup, disposal during an await, window reload and repeated initialization. See `async-cancellation` and `memory-leak-audit`.
+  Pass styles from `platform/theme/browser/defaultStyles.ts` and adjust appearance in the feature CSS. Lists use a CSS style controller (see `deviceList.ts`), so no inline `<style>` element breaks the CSP.
+- **Children:** create them with `instantiationService.createInstance`, never `new` with services passed by hand.
+- **Ownership:** register every listener, child and timer (`IntervalTimer`, `RunOnceScheduler`). After an `await`, re-read disposal through a method (`isDisposed()`), and fence late results by id or revision (`DeviceDetails.run`).
+- **Constructors:** split long ones into `registerListeners()` and `render()`/`update()`.
 
-## Provenance and placement
+## Services and processes
 
-`src/AGENTS.md` owns placement. Preserve copied upstream infrastructure at full fidelity, retaining license headers. `build/vscode-source.json` identifies pinned copies and explicitly adapted modules. Check its verification tool before edits; adaptations must be intentional, declared and reviewed. Do not refresh hashes simply to bless an unexplained change. Explicit product adaptations may remove unrelated editor behavior while retaining architectural quality.
+- **Renderer services** inject other services. They never touch Electron or the preload. Engine work goes through `IEngineService`, and window and OS work through `INativeHostService`.
+- **Main-process services** live in `platform/<area>/electron-main`. Each is exposed through a channel facade registered in `VniLinkApplication.initChannels` (`src/code/electron-main/app.ts`). The facade validates arguments with the `common` guards and takes window identity from the IPC context (`windowIdFromContext`). See `engine-bridge` for engine commands.
+- **Remote stubs:** a renderer service that is only a main-process proxy uses `registerMainProcessRemoteService` (`platform/recording/electron-browser/recordingService.ts`).
+
+## Commands, menus and startup
+
+- **Toolbar buttons** are `registerAction2` classes with `menu: { id: ViewActionsMenu, when }`, gated by context keys from `src/workbench/contextkeys.ts` (`actions/applicationActions.ts`).
+- **New context keys** are defined there and bound by a contribution (`contextkeysHandler.ts`).
+- **Startup work** is `registerWorkbenchContribution2(id, ctor, WorkbenchPhase.X)`. Choose the latest phase that still works.
+
+## Classes and functions
+
+Stateful owners are classes: views, services, contributions, process owners. Pure transforms and guards are functions. Build and packaging code is functions too; see `build-test-infrastructure`.
+
+## Copying from VS Code
+
+Never hand-copy. Use the importer:
+
+| Command | What it does |
+|---|---|
+| `node build/run.ts vscode import <checkout> src/vs/...` | Copies the file and its closure |
+| `adapt [--upstream-style] <paths>` | Records a reviewed edit |
+| `reset <checkout> <paths>` | Restores upstream text |
+| `sync` | Re-derives entry points after imports change |
+
+Rules:
+- An adapted file names its adaptation in its header.
+- `--upstream-style` keeps VS Code's formatting and lint baseline for infrastructure.
+- `npm run check:upstream` must pass.
+- Copy only what a consumer in the same change uses.
 
 ## Review bar
 
-Before completing, identify the owner of state, the service boundary, registration/composition location and teardown path. Compare the resulting organization to the upstream reference, not just whether it compiles. Existing procedural code is migration debt; remediate only the authorized area and report neighboring debt without spreading it.
+Before finishing, answer these against the devices reference:
+- Who owns each piece of state?
+- Which service boundary does the code cross?
+- Where is it registered?
+- How is it disposed?
+- Which widget renders each control?
+- Which upstream class did you compare with?
+
+Existing code outside the area you were asked to change is not precedent. Report its debt instead of copying it.

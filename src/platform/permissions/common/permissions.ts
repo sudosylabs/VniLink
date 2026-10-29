@@ -1,8 +1,12 @@
+/** Main-process IPC channel serving OS permission commands. */
+export const PERMISSIONS_CHANNEL_NAME = 'permissions';
+
 export const permissionKinds = ['screen', 'accessibility', 'camera', 'microphone'] as const;
 
 export type PermissionKind = typeof permissionKinds[number];
 
-export type PermissionStatus = 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown' | 'unsupported';
+/** `not-required`: the OS grants this to every app, with no consent to ask for (Windows screen and input). */
+export type PermissionStatus = 'granted' | 'denied' | 'restricted' | 'not-determined' | 'unknown' | 'unsupported' | 'not-required';
 
 export interface MachinePermission {
 	readonly kind: PermissionKind;
@@ -33,5 +37,5 @@ export function isPermissionCommand(value: unknown): value is PermissionCommand 
 export function isPermissionSnapshot(value: unknown): value is PermissionSnapshot {
 	return record(value) && Object.keys(value).length === 2 && typeof value.development === 'boolean' && Array.isArray(value.permissions) && value.permissions.length === permissionKinds.length &&
 		value.permissions.every((entry: unknown, index: number) => record(entry) && Object.keys(entry).length === 4 && entry.kind === permissionKinds[index] &&
-			typeof entry.status === 'string' && ['granted', 'denied', 'restricted', 'not-determined', 'unknown', 'unsupported'].includes(entry.status) && typeof entry.canRequest === 'boolean' && typeof entry.canOpenSettings === 'boolean');
+			typeof entry.status === 'string' && ['granted', 'denied', 'restricted', 'not-determined', 'unknown', 'unsupported', 'not-required'].includes(entry.status) && typeof entry.canRequest === 'boolean' && typeof entry.canOpenSettings === 'boolean');
 }

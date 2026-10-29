@@ -10,6 +10,8 @@ members = [
     "crates/vnilink-linux",
     "crates/vnilink-app",
     "crates/vnilink-node",
+    "crates/vnilink-log",
+    "crates/vnilink-testkit",
 ]
 resolver = "2"
 
@@ -22,11 +24,33 @@ rust-version = "1.91"
 [profile.dev]
 debug = "line-tables-only"
 
+# A remote screen moves every pixel of every frame through these crates; at
+# opt-level 0 converting one 1080p frame takes about 60 ms, so a dev build
+# could not keep up with the screen. Checks such as debug assertions and
+# overflow checks stay on; only code generation is optimised.
+[profile.dev.package.vnilink-media]
+opt-level = 3
+[profile.dev.package.vnilink-hevc]
+opt-level = 3
+[profile.dev.package.vnilink-macos]
+opt-level = 3
+[profile.dev.package.vnilink-windows]
+opt-level = 3
+[profile.dev.package.vnilink-linux]
+opt-level = 3
+# Dependencies change rarely, so optimising them costs one build; it covers
+# encryption and the codec bindings the picture also passes through.
+[profile.dev.package."*"]
+opt-level = 3
+
 # Enigo 0.6.1 with a macOS local-input coexistence fix; see vendor/enigo/VNILINK.md.
 [patch.crates-io]
 napi-build = { path = "vendor/napi-build" }
 iroh = { path = "vendor/iroh" }
 enigo = { path = "vendor/enigo" }
+libva = { path = "vendor/libva" }
 cpal = { path = "vendor/cpal" }
+portable-pty = { path = "vendor/portable-pty" }
 
 shiguredo_libvpx = { path = "vendor/shiguredo-libvpx" }
+shiguredo_aom = { path = "vendor/shiguredo-aom" }

@@ -7,14 +7,18 @@
 //! operating-system clipboard. Call [`Core::enable_os_input`] on the host so
 //! authorized sessions inject keys and pointer events. Call
 //! [`Core::set_clipboard`] so a granted controller can paste text. Call
-//! [`Core::set_file_roots`] so a granted peer can browse and receive files.
-//! Call [`Core::publish_video`] with encoded H.264 frames and
-//! [`Core::subscribe_video`] to receive them. [`Core::submit_local_key`] is
-//! the key path. The default mode inserts the character the controller
-//! produced. Map mode sends the physical HID position, and Translate mode
-//! asks the host to press the chord in its own layout.
-//! [`Core::submit_text`] types a finished string, and
-//! [`Core::set_swap_control_and_command`] exchanges Control and Command.
+//! [`Core::enable_filesystem_access`] so a granted peer can browse and
+//! receive files.
+//! A desktop is a Desktop service ([`Core::open_desktop_service`]) on a
+//! services connection: the host calls [`Core::publish_desktop_video`] with
+//! encoded frames, the viewer receives them from
+//! [`RemoteDesktopService::subscribe_video`], and input goes the other way:
+//! [`RemoteDesktopService::submit_local_key`] is the key path. The default
+//! mode inserts the character the controller produced. Map mode sends the
+//! physical HID position, and Translate mode asks the host to press the
+//! chord in its own layout. [`RemoteDesktopService::submit_text`] types a
+//! finished string, and [`Core::set_swap_control_and_command`] exchanges
+//! Control and Command on the desktops opened after it.
 //! The keyboard steps are in `crates/vnilink/KEYBOARD.md`.
 //!
 //! # Relay
@@ -55,17 +59,20 @@
 //! # Clipboard
 //!
 //! Clipboard is a separate grant from control. Text is UTF-8 and at most
-//! 256 KiB. [`Core::submit_clipboard`] sends it to the host.
-//! [`Core::publish_clipboard`] sends the host's text to the controller.
-//! Neither call reads or writes the operating-system clipboard. The steps
-//! are in `crates/vnilink/CLIPBOARD.md`.
+//! 256 KiB, and rides a Desktop's own pipe:
+//! [`RemoteDesktopService::submit_clipboard`] sends it to the host, and
+//! [`Core::publish_desktop_clipboard`] sends the host's text to one
+//! Desktop. Neither call reads or writes the operating-system clipboard.
+//! The steps are in `crates/vnilink/CLIPBOARD.md`.
 //!
 //! # File transfer
 //!
 //! File transfer is a separate grant from control and from clipboard. The
-//! owner approves roots with [`Core::set_file_roots`]; the peer browses
-//! them with `fs_*` calls and moves bytes with resumable transfer jobs
-//! (`job_submit_*`/`job_poll`). The steps are in `crates/vnilink/TRANSFER.md`.
+//! owner shares the whole disk with [`Core::enable_filesystem_access`]; the
+//! peer browses it through a Files service ([`RemoteFilesService`]) and
+//! moves bytes with its resumable transfer jobs (`files_service_upload`/
+//! `files_service_download`, `job_poll`). The steps are in
+//! `crates/vnilink/TRANSFER.md`.
 //!
 //! # Threading
 //!
@@ -76,6 +83,8 @@
 #![forbid(unsafe_code)]
 
 mod adaptation;
+mod bitrate;
+pub use bitrate::RateLimit;
 mod address;
 pub mod availability;
 pub use adaptation::{AdaptationReason, DesktopMediaStatus};
@@ -89,10 +98,14 @@ pub mod diagnostics;
 mod error;
 mod events;
 pub mod fs;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 mod hostname;
 mod input;
 mod installation;
 mod invitation;
+pub mod snapshot;
 pub use device_metadata::{DevicePresence, OperatingSystem};
 pub mod job;
 mod keyboard;
@@ -107,36 +120,48 @@ mod session;
 mod sidestream;
 pub mod system;
 pub mod terminal;
+pub mod trace;
+/// What tests reach in an engine that the application never does: hooks
+/// that park work at an exact point, and limits a test must know. Built
+/// for this crate's tests and the `test-probes` feature (the test kit's).
+#[cfg(any(test, feature = "test-probes"))]
+pub mod probes {
+    #[cfg(any(unix, windows))]
+    pub use crate::core::PrestageHooks;
+    /// The test agent's channel, which only the `test-probes` build has.
+    #[cfg(feature = "test-probes")]
+    pub use crate::core::{AgentChannel, AgentListener, AGENT_ALPN, MAX_AGENT_FRAME};
+    pub use crate::core::{DropPoint, Drops, MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
+    pub use crate::manifest::ScanHooks;
+}
+mod transfer;
 mod trust;
 mod video;
 pub mod video_caps;
 
 pub use availability::{
     evaluate, policy_descriptor, Availability, AvailabilityInputs, AvailabilityReason,
-    BackendState, Capability, PolicyChangeScope, PolicyDescriptor, POLICIES,
+    BackendState, Capability, PolicyChangeScope, PolicyDescriptor, RemoteStatus, POLICIES,
 };
-pub use clipboard::{
-    ClipboardFileEntry, FileSelection, HostClipboard, HostClipboardFiles, PreparedFile,
-    PreparedPaste, StoredFileSelection, MAX_CLIPBOARD_FILES, MAX_CLIPBOARD_FILES_BYTES,
-    MAX_CLIPBOARD_TEXT,
-};
+pub use clipboard::{HostClipboard, MAX_CLIPBOARD_TEXT};
 pub use core::service_stream::RemoteFilesService;
 pub use core::RemoteDesktopService;
 pub use core::TopologySnapshot;
 pub use core::{
     ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath, Snapshot,
-    VideoRouting, VideoTarget, BLOB_ALPN, BLOB_MAX_BYTES,
+    VideoRouting, VideoTarget,
 };
 pub use core::{DesktopControlState, DesktopInfo};
 pub use diagnostics::{
     build_snapshot, export_json, file_name_only, fingerprint, monotonic_ms, ConnectionSummary,
     DiagnosticSnapshot, QueueDepths, ResourceCounts, ServiceSummary, SnapshotInputs,
-    MAX_EXPORT_BYTES, MAX_SNAPSHOT_LISTED, SNAPSHOT_VERSION,
+    TransferSummary, MAX_EXPORT_BYTES, MAX_SNAPSHOT_LISTED, SNAPSHOT_VERSION,
 };
 pub use error::Error;
 pub use events::{CoreEvent, EventSubscription};
 pub use fs::{
-    DirPage, EntryKind, EntryToken, FsEntry, RevisionGate, MAX_LISTED, MAX_PAGE, MAX_ROOTS,
+    DirPage, EntryKind, EntryToken, FolderKind, FsEntry, Place, PlaceRoot, Places, RevisionGate,
+    TokenKind, MAX_LISTED, MAX_PAGE, MAX_ROOTS,
 };
 pub use hostname::{clean_hostname, local_hostname};
 pub use input::{
@@ -145,38 +170,37 @@ pub use input::{
     MAX_DISPLAYS, MAX_DISPLAY_EDGE, MAX_KEY_TEXT, MAX_PRECISE_WHEEL, WHEEL_DETENT,
 };
 pub use installation::{InstallationStore, MemoryStore};
-pub use job::{ConflictChoice, JobDirection, JobSnapshot, JobState};
+pub use job::{ConflictChoice, JobDestination, JobDirection, JobItem, JobSnapshot, JobState};
 pub use keyboard::{KeyboardMode, LocalKey};
 pub use manifest::{
-    keep_both_name, Manifest, ManifestEntry, MAX_MANIFEST_BYTES, MAX_MANIFEST_DEPTH,
-    MAX_MANIFEST_FILES, MAX_MANIFEST_FILE_BYTES,
+    keep_both_name, Manifest, ManifestEntry, MAX_MANIFEST_DEPTH, MAX_MANIFEST_FILES,
 };
 pub use os_input::{linux_evdev_keycode, OsInput};
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
-pub use protocol::{
-    Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION,
-};
+pub use protocol::{Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, PROTOCOL_VERSION};
 pub use relay::{CustomRelay, RelaySettings};
 pub use service::{
-    CloseCause, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions, ServicePhase,
-    ServiceSupport, SharingPolicy, SharingPolicyUpdate, MAX_SERVICE_RECORDS,
+    CloseCause, DesktopEnd, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions,
+    ServicePhase, ServiceSupport, SharingPolicy, SharingPolicyUpdate, StreamEnd, StreamFailure,
+    MAX_SERVICE_RECORDS,
 };
 pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
 pub use system::{
-    HostSessionState, HostSystemActions, OperationState, PrivacyState, SystemAction,
-    SystemOperation, SystemPolicy, SystemSupport,
+    HostSessionState, HostSystemActions, OperationState, PrivacyState, ScheduledSystemAction,
+    SystemAction, SystemOperation, SystemPolicy, SystemSupport, SYSTEM_ACTION_NOTICE,
 };
 pub use video::{
-    CodecSupport, EncodedFrame, HostCapture, RecordingVideoTap, VideoCodec, VideoSubscription,
-    MAX_VIDEO_FRAME,
+    picture_buffer_bits, CodecSupport, Condition, ConditionEntry, ConditionSet, EncodedFrame,
+    Evidence, FrameRole, FrameTiming, HostCapture, RecordingVideoTap, Region, VideoCodec,
+    VideoSubscription, YuvMatrix, MAX_REGIONS, MAX_VIDEO_FRAME, PICTURE_DRAIN, STILL_DRAIN,
 };
 pub use video_caps::{
-    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, VideoCodecCaps,
+    clamp_quality, negotiate as negotiate_video_codec, AgreedCodec, EncoderImplementation,
+    EncoderInput, VideoCodecCaps, WindowDecoder,
 };
 
 #[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
+pub(crate) mod test_support;
 
 mod cursor;
 pub use cursor::{CursorImage, CursorState, MAX_CURSOR_EDGE};

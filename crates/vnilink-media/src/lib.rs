@@ -22,42 +22,54 @@ mod controller;
 mod cursor;
 mod desktop;
 mod error;
-mod fanout;
 mod frame;
 mod host;
 mod nv12;
+mod pixels;
+mod stream;
+pub use pixels::{NativePicture, Pixels};
 mod pump;
 mod rate;
+mod still;
+pub use still::{StillEncoder, STILL_AFTER};
 mod recording;
 mod recording_format;
 mod recording_segments;
 pub use recording_segments::{
     RecordingFailure, RecordingRetention, RecordingSnapshot, SegmentWriter,
 };
+/// Pictures and comparisons for the platform encoders' measurements.
+#[doc(hidden)]
+pub mod measure;
+/// What a test needs of the computer it runs on, and how it says it skipped.
+#[doc(hidden)]
+pub mod needs;
+mod recovery;
+pub use recovery::{RecoveryQp, RECOVERY_KEYFRAME_FRAMES};
 mod recording_worker;
-pub use recording_worker::{
-    recover_desktop_recording, DesktopRecorder, RecordingPhase, RecordingStatus,
-};
+pub use recording_worker::{recover_desktop_recording, Recorder, RecordingPhase, RecordingStatus};
 mod recording_recovery;
 pub use recording_recovery::{scan_recording_prefix, RecordingRecovery};
+mod colour;
+pub use colour::{VideoSignal, YuvMatrix, UNDECLARED_SIGNAL};
 mod sps;
 pub use recording::{MatroskaRecorder, RecordingError, RecordingLimits};
-pub use sps::h264_picture_size;
+pub use sps::{h264_picture_size, h264_stream_sps, h264_video_signal};
 
 pub use annexb::{parse_annex_b, to_annex_b, AvccAccessUnit, NalUnit, ParsedAccessUnit};
 pub use channel::{ChannelSlot, FrameChannel};
 pub use controller::{serve_controller, ControllerOutput, ControllerVideo, DecodedFrame};
 pub use desktop::{CapturePlan, CursorPolicy, DesktopKind, MonitorSize};
-pub use error::{Error, PublishError};
-pub use fanout::serve_shared_capture;
-pub use frame::{encoded_size, scale_bgra, RawFrame};
-pub use host::{serve_capture, serve_desktop_capture, FrameSource, HostSession, OpenEncoder};
+pub use error::{Error, PublishError, FRAME_DROPPED};
+pub use frame::{changed_tiles, encoded_size, scale_bgra, Changes, RawFrame};
+pub use host::{serve_desktop_capture, FrameSource, FrameWait, HostSession, OpenEncoder};
 pub use nv12::{bgra_to_nv12, nv12_to_bgra, Nv12};
 pub use pump::{
-    CoreSink, EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput,
-    VideoDecoder, VideoEncoder,
+    EncodeParams, EncodedSample, FramePump, FrameSink, HostVideo, PumpOutput, VideoDecoder,
+    VideoEncoder,
 };
-pub use rate::{EncoderSettings, RateController};
+pub use rate::{EncoderSettings, RateChange, RateController};
+pub use stream::serve_shared_capture;
 pub use vnilink::Quality;
 
 #[cfg(test)]

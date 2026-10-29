@@ -4,8 +4,8 @@ This map records the accepted October 2026 instruction scope. It is not a runtim
 
 | Concern and source evidence | Authoritative owner | Intended result / remaining migration |
 |---|---|---|
-| `src/workbench/browser/workbench.ts` procedural composition versus upstream `src/vs/workbench/browser/workbench.ts`; main bootstrap versus CodeApplication/DesktopMain | `workbench-architecture`; `src/AGENTS.md` placement | Cohesive class owners, DI/registration and explicit lifecycle. Application refactor remains separate work. |
-| Shared bundle inputs in `build/tasks.mjs`, distributed process/staging logic in build/watch/dev | `build-test-infrastructure`; `build/AGENTS.md` | Reusable task definitions and process/artifact ownership. Do not replace useful composition just to add classes. |
+| Workbench composition versus upstream `src/vs/workbench/browser/workbench.ts`; main bootstrap versus CodeApplication/DesktopMain | `workbench-architecture`; `src/AGENTS.md` placement | Done: `VniLinkApplication`, `DesktopMain`/`Workbench`, registries, contributions and schema-driven settings. |
+| Build, packaging and test tasks in `build/lib`, run by `build/run.ts` | `build-test-infrastructure`; `build/AGENTS.md` | Done: TypeScript functions composed with `define`/`series`/`parallel`; classes only for OS-resource owners, enforced by `vnilink/build-classes`. |
 | Cross-area calls in `test/browser/tabs.ts`, smoke's monolithic orchestration | `build-test-infrastructure`; `test/AGENTS.md` | Selectable independent scenarios, shared automation and fixtures. Selector/driver implementation remains required. |
 | Windows-control and removed-sidebar assumptions in `test/smoke/main.ts` | `smoke-tests` | Platform-aware behavioral expectations; stale tests need separate implementation fixes. |
 | CI matrix/dependencies and missing project Linux image/runner | `cross-platform-validation` | Explicit Docker/native Windows/hardware prerequisites and evidence; provision a maintained runner in scoped work. |

@@ -8,7 +8,7 @@ import { safeStorage, app } from 'electron';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { KnownStorageProvider, PasswordStoreCLIOption } from '../common/encryption.js';
 import type { IEncryptionMainService } from '../common/encryption.js';
-import type { ILogService } from '../../log/common/log.js';
+import { ILogService } from '../../log/common/log.js';
 
 // The stock Electron API surface below is required by our pinned Electron
 // version, so typecheck fails the build if availability ever changes.
@@ -26,7 +26,7 @@ export class EncryptionMainService implements IEncryptionMainService {
 	declare public readonly _serviceBrand: undefined;
 
 	constructor(
-		private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService
 	) {
 		// if this commandLine switch is set, the user has opted in to using basic text encryption
 		if (app.commandLine.getSwitchValue('password-store') as PasswordStoreCLIOption === PasswordStoreCLIOption.basic) {

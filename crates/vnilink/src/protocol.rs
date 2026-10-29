@@ -17,37 +17,35 @@ impl fmt::Debug for KeyText {
     }
 }
 
-/// Application protocol version carried in the control hello.
-/// Version 2 adds H.264 High profile negotiation (`CODEC_H264_HIGH`).
-/// Version 3 negotiates an independent cursor stream in the Accept codec byte.
-/// Version 4 adds files-only sessions (`files_only` in Hello): Transfer-grant
-/// admission without video, input or screen sharing. Version 5 adds a neutral
-/// service-only connection; service permissions are checked on Open. Hosts admit
-/// 1 through 6;
-/// newer controllers fall back to a version-1 Baseline hello when an older
-/// host rejects it as incompatible (files-only needs v4 on both sides).
-/// Version 6 carries a probe-validated decoder mask for automatic codec selection.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// Application protocol version carried in the control hello. Peers speak
+/// exactly this version; any other is refused with `IncompatibleVersion`.
+pub const PROTOCOL_VERSION: u16 = 1;
 
-/// Version-3 Accept codec bit: independent cursor stream is available.
+/// Accept codec flag: the host sends the cursor as its own stream.
 pub(crate) const SEPARATE_CURSOR: u8 = 0x80;
 
-/// Oldest hello a version-2 host still admits. Version-1 sessions are
-/// Baseline-only.
-pub const MIN_PROTOCOL_VERSION: u16 = 1;
+/// Desktop Accept codec flag: the host sends AV1 4:4:4 still pictures of a
+/// still screen ([`crate::FrameRole::Still`]).
+pub(crate) const STILLS: u8 = 0x40;
 
-/// H.264 video codec identifier carried in Hello/Accept negotiation.
-/// Baseline decodes everywhere; every decoder we ship also decodes High.
+/// Agreed H.264 Baseline codec, carried in Accept. Baseline decodes everywhere.
 pub const CODEC_H264: u8 = 1;
 
-/// H.264 High profile. Offered by version-2 controllers whose decoder
-/// handles it; the host replies with the lower of offered and locally
-/// encodable, so a Baseline-only host answers `CODEC_H264`.
+/// Agreed H.264 High profile, carried in Accept when both sides handle it.
 pub const CODEC_H264_HIGH: u8 = 2;
+/// The offer bits a Hello's `bt601` mask may set: H.264, H.265, VP8, VP9
+/// and AV1, one each.
+const BT601_CODECS: u8 = 1 | 4 | 8 | 16 | 32;
 
 /// QUIC ALPN for the VniLink control channel. Bytes, not a string type, so the
 /// value matches what Iroh negotiates.
 pub const ALPN: &[u8] = b"vnilink/1";
+
+/// QUIC close code for a connection closed because its engine shut down,
+/// on control and files connections alike. The close is flushed with the
+/// endpoint's own, so it reaches a peer that a close frame written on a
+/// stream might not.
+pub(crate) const CLOSE_SHUT_DOWN: u32 = 2;
 
 pub(crate) const MAX_CONTROL_FRAME: usize = 256;
 
@@ -112,6 +110,12 @@ pub struct Quality {
     pub max_height: u16,
 }
 
+/// Largest width or height a [`Quality`] holds.
+pub(crate) const MAX_EDGE: u16 = 7680;
+
+/// Largest bitrate a [`Quality`] holds, in kb/s.
+pub(crate) const MAX_BITRATE_KBPS: u32 = 50_000;
+
 impl Quality {
     pub fn new(
         max_bitrate_kbps: u32,
@@ -119,7 +123,7 @@ impl Quality {
         max_width: u16,
         max_height: u16,
     ) -> Result<Self, Error> {
-        if !(1..=50_000).contains(&max_bitrate_kbps) {
+        if !(1..=MAX_BITRATE_KBPS).contains(&max_bitrate_kbps) {
             return Err(Error::InvalidSetting(
                 "bitrate must be between 1 and 50000 kbps",
             ));
@@ -127,7 +131,7 @@ impl Quality {
         if !(1..=60).contains(&max_frame_rate) {
             return Err(Error::InvalidSetting("frame rate must be between 1 and 60"));
         }
-        if !(1..=7680).contains(&max_width) || !(1..=7680).contains(&max_height) {
+        if !(1..=MAX_EDGE).contains(&max_width) || !(1..=MAX_EDGE).contains(&max_height) {
             return Err(Error::InvalidSetting(
                 "width and height must be between 1 and 7680",
             ));
@@ -185,16 +189,19 @@ pub(crate) enum ControlMessage {
         version: u16,
         codec: u8,
         quality: Quality,
-        /// Whether the dialing controller can decode H.264. The host rejects
-        /// with `Unsupported` instead of admitting a desktop session the peer
-        /// could never display. Ignored for files-only sessions (no video).
+        /// Whether the dialing viewer can decode H.264. The host refuses a
+        /// Desktop the viewer could never display. A presence link's Hello,
+        /// which asks for no picture, leaves this and the other desktop
+        /// fields at their defaults.
         decode: bool,
-        /// Files-only session for roots/listings/transfers: Transfer-grant
-        /// admission, no video/input/portal. Desktop sessions set false.
-        files_only: bool,
-        /// Neutral transport admission (v5), without granting any feature.
-        /// Must also set files_only so no desktop transport is started.
-        services_only: bool,
+        /// Whether the controller draws a cursor sent as its own stream. The
+        /// host separates the cursor only when both sides support it.
+        separate_cursor: bool,
+        /// The codecs, by their offer bits, whose decoder in the controller's
+        /// window shows BT.601 pictures correctly and BT.709 ones not (a
+        /// bit set means BT.601). The host encodes the agreed codec in that
+        /// matrix and declares it. Zero for every other controller.
+        bt601: u8,
         /// The controller's display name, if it has one. Stored on the peer
         /// record so the host's device list can name it. Display-only.
         hostname: Option<String>,
@@ -239,9 +246,8 @@ pub(crate) enum ControlMessage {
         stamp: SessionStamp,
         text: KeyText,
     },
-    /// Agreed encoder limits for the live session. The controller sends this
-    /// when the quality changes; the host applies it and re-emits
-    /// `QualityUpdated` for its media layer.
+    /// Agreed encoder limits for a live Desktop. Its viewer sends this when
+    /// the quality changes; the host applies it to that Desktop's encoder.
     Quality {
         stamp: SessionStamp,
         quality: Quality,
@@ -254,9 +260,19 @@ pub(crate) enum ControlMessage {
         displays: Vec<DisplayInfo>,
     },
     /// The one display this desktop stream will show and control.
+    /// The host's coarse availability of every capability for this peer,
+    /// sent on a neutral link after Accept and again whenever it changes.
+    Availability {
+        entries: Vec<(crate::Capability, crate::RemoteStatus)>,
+    },
     SelectDisplays {
         stamp: SessionStamp,
         displays: Vec<u64>,
+    },
+    /// What the viewer lost of the desktop stream since its last report.
+    VideoReport {
+        stamp: SessionStamp,
+        report: crate::video::VideoReport,
     },
 }
 
@@ -283,12 +299,12 @@ impl ControlMessage {
                 codec,
                 quality,
                 decode,
-                files_only,
-                services_only,
+                separate_cursor,
+                bt601,
                 hostname,
                 os,
             } => {
-                let mut bytes = Vec::with_capacity(16);
+                let mut bytes = Vec::with_capacity(18);
                 bytes.push(1);
                 bytes.extend_from_slice(&version.to_be_bytes());
                 bytes.push(*codec);
@@ -297,12 +313,8 @@ impl ControlMessage {
                 bytes.push(quality.max_frame_rate);
                 bytes.extend_from_slice(&quality.max_bitrate_kbps.to_be_bytes());
                 bytes.push(u8::from(*decode));
-                if *version >= 4 {
-                    bytes.push(u8::from(*files_only));
-                }
-                if *version >= 5 {
-                    bytes.push(u8::from(*services_only));
-                }
+                bytes.push(u8::from(*separate_cursor));
+                bytes.push(*bt601);
                 write_hostname(&mut bytes, hostname);
                 bytes.push(os.encode());
                 bytes
@@ -376,6 +388,23 @@ impl ControlMessage {
                 }
                 bytes
             }
+            Self::Availability { entries } => {
+                let mut bytes = Vec::with_capacity(2 + entries.len() * 2);
+                bytes.push(13);
+                bytes.push(entries.len() as u8);
+                for (capability, status) in entries {
+                    bytes.push(capability.wire_id());
+                    bytes.push(status.wire_id());
+                }
+                bytes
+            }
+            Self::VideoReport { stamp, report } => {
+                let mut bytes = Vec::with_capacity(17 + crate::video::REPORT_LEN);
+                bytes.push(14);
+                write_stamp(stamp, &mut bytes);
+                report.encode(&mut bytes);
+                bytes
+            }
             Self::SelectDisplays { stamp, displays } => {
                 let mut bytes = Vec::with_capacity(18 + displays.len() * 8);
                 bytes.push(12);
@@ -402,7 +431,7 @@ impl ControlMessage {
             return Err(Error::Malformed);
         }
         match bytes[0] {
-            1 if bytes.len() >= 15 => {
+            1 if bytes.len() >= 18 => {
                 let quality = Quality::new(
                     u32::from_be_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]),
                     bytes[8],
@@ -411,46 +440,25 @@ impl ControlMessage {
                 )
                 .map_err(|_| Error::Malformed)?;
                 let version = u16::from_be_bytes([bytes[1], bytes[2]]);
-                let decode = match bytes[13] {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(Error::Malformed),
+                let flag = |byte: u8| match byte {
+                    0 => Ok(false),
+                    1 => Ok(true),
+                    _ => Err(Error::Malformed),
                 };
-                // Version 4+: files-only flag follows decode; v1-v3 omit it.
-                let (files_only, hostname_start) = if version >= 4 {
-                    if bytes.len() < 16 {
-                        return Err(Error::Malformed);
-                    }
-                    let files_only = match bytes[14] {
-                        0 => false,
-                        1 => true,
-                        _ => return Err(Error::Malformed),
-                    };
-                    (files_only, 15)
-                } else {
-                    (false, 14)
-                };
-                let (services_only, hostname_start) = if version >= 5 {
-                    let flag = *bytes.get(hostname_start).ok_or(Error::Malformed)?;
-                    let neutral = match flag {
-                        0 => false,
-                        1 => true,
-                        _ => return Err(Error::Malformed),
-                    };
-                    if neutral && !files_only {
-                        return Err(Error::Malformed);
-                    }
-                    (neutral, hostname_start + 1)
-                } else {
-                    (false, hostname_start)
-                };
+                let decode = flag(bytes[13])?;
+                let separate_cursor = flag(bytes[14])?;
+                let bt601 = bytes[15];
+                if bt601 & !BT601_CODECS != 0 {
+                    return Err(Error::Malformed);
+                }
+                let hostname_start = 16;
                 Ok(Self::Hello {
                     version,
                     codec: bytes[3],
                     quality,
                     decode,
-                    files_only,
-                    services_only,
+                    separate_cursor,
+                    bt601,
                     hostname: read_hostname(
                         bytes
                             .get(hostname_start..bytes.len() - 1)
@@ -520,9 +528,34 @@ impl ControlMessage {
             }
             11 => decode_topology(bytes),
             12 => decode_selection(bytes),
+            13 => decode_availability(bytes),
+            14 if bytes.len() == 17 + crate::video::REPORT_LEN => Ok(Self::VideoReport {
+                stamp: decode_stamp(bytes),
+                report: crate::video::VideoReport::decode(
+                    bytes[17..].try_into().expect("report length checked"),
+                ),
+            }),
             _ => Err(Error::Malformed),
         }
     }
+}
+
+/// Strict: each capability at most once, every id and status known.
+fn decode_availability(bytes: &[u8]) -> Result<ControlMessage, Error> {
+    let count = usize::from(*bytes.get(1).ok_or(Error::Malformed)?);
+    if count > crate::Capability::ALL.len() || bytes.len() != 2 + count * 2 {
+        return Err(Error::Malformed);
+    }
+    let mut entries = Vec::with_capacity(count);
+    for pair in bytes[2..].chunks_exact(2) {
+        let capability = crate::Capability::from_wire_id(pair[0]).ok_or(Error::Malformed)?;
+        let status = crate::RemoteStatus::from_wire_id(pair[1]).ok_or(Error::Malformed)?;
+        if entries.iter().any(|(seen, _)| *seen == capability) {
+            return Err(Error::Malformed);
+        }
+        entries.push((capability, status));
+    }
+    Ok(ControlMessage::Availability { entries })
 }
 
 const DISPLAY_BYTES: usize = 32;
@@ -673,3 +706,7 @@ pub(crate) fn error_code(error: &Error) -> RejectCode {
         _ => RejectCode::Malformed,
     }
 }
+
+#[cfg(test)]
+#[path = "protocol_tests.rs"]
+mod tests;

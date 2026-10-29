@@ -1,16 +1,17 @@
 //! Real-network validation for one host and one controller.
 //!
 //! Boots two cores on the default public relay, pairs them through signed
-//! invitations, connects, streams synthetic video for a soak period, and
-//! reports connect latency, the transport path timeline (relay versus
-//! direct), round trips, and video delivery. The frames are synthetic bytes,
-//! not a captured desktop: this exercises pairing, sessioning, and the video
-//! stream over the real network, not capture or encode.
+//! invitations, links them, opens a Desktop service, streams synthetic video
+//! on it for a soak period, and reports connect latency, the transport path
+//! timeline (relay versus direct), round trips, and video delivery. The
+//! frames are synthetic bytes, not a captured desktop: this exercises
+//! pairing, the link, and the Desktop stream over the real network, not
+//! capture or encode.
 //!
 //! With a restart second, the controller core is dropped mid-soak and a new
-//! core reopens the same installation store, then reconnects. The report
-//! shows identity preservation, reconnect latency, the host generation step,
-//! and old-generation fencing.
+//! core reopens the same installation store, then links and opens its
+//! Desktop again. The report shows identity preservation, reconnect latency,
+//! the host generation step, and old-generation fencing.
 //!
 //! Run: `cargo run -p vnilink --example net_validate [soak_secs] [fps] [relay_url] [payload_bytes] [restart_at_secs]`
 //! Defaults: 60 seconds at 10 frames per second on the public relay with
@@ -21,9 +22,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use vnilink::{
-    Core, CoreConfig, CoreEvent, CustomRelay, EncodedFrame, Grants, InputEvent, MemoryStore,
-    OpenConfig, RelaySettings, SessionPath,
+    Core, CoreConfig, CustomRelay, EncodedFrame, Grants, HostCapture, MemoryStore, OpenConfig,
+    RelaySettings, RemoteDesktopService, ServiceKind, SessionInfo, SessionPath, SessionPhase,
+    VideoSubscription,
 };
+
+/// The monitor the host reports. Nothing is captured: the frames are synthetic.
+struct SyntheticMonitor;
+
+impl HostCapture for SyntheticMonitor {
+    fn monitor(&self) -> (u16, u16) {
+        (1920, 1080)
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -53,9 +64,11 @@ fn main() {
 
     let host = Core::start(host_config(&relay)).expect("host starts");
     // Synthetic frames bypass capture and encode, but admission still
-    // requires the negotiated codec flags.
+    // requires a monitor and the negotiated codec flags.
     host.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .expect("host flags");
+    host.set_capture(Box::new(SyntheticMonitor))
+        .expect("host monitor");
     let controller_store: Arc<dyn vnilink::InstallationStore> = Arc::new(MemoryStore::empty());
     let mut controller = Core::open(
         Arc::clone(&controller_store),
@@ -81,11 +94,9 @@ fn main() {
     host.start_hosting().expect("hosting");
 
     let started = Instant::now();
-    let mut session = controller.connect(&host.endpoint_id()).expect("connected");
+    let (mut session, mut desktop, mut video) = open_desktop(&controller, &host);
     let connect_ms = started.elapsed().as_millis();
-    let mut host_id = wait_incoming(&host, None);
-    let mut video = controller.subscribe_video().expect("video subscription");
-    let host_events = host.subscribe().expect("host events");
+    let mut hosted = wait_hosted(&host, None);
 
     let mut published = 0u64;
     let mut received = 0u64;
@@ -110,7 +121,7 @@ fn main() {
     while Instant::now() < end {
         if !restarted && started.elapsed() >= Duration::from_secs(restart_at) {
             restarted = true;
-            let old = (session.id, session.generation);
+            let old = hosted;
             let old_host = host
                 .snapshot()
                 .unwrap()
@@ -118,6 +129,7 @@ fn main() {
                 .map(|s| (s.id, s.generation));
             let controller_id = controller.endpoint_id();
             drop(video);
+            drop(desktop);
             drop(controller);
             std::thread::sleep(Duration::from_secs(3));
             controller = Core::open(
@@ -131,12 +143,9 @@ fn main() {
             let identity_preserved = controller.endpoint_id() == controller_id;
             println!("identity_preserved={identity_preserved}");
             let again = Instant::now();
-            session = controller
-                .connect(&host.endpoint_id())
-                .expect("reconnected");
+            (session, desktop, video) = open_desktop(&controller, &host);
             reconnect_ms = again.elapsed().as_millis();
-            video = controller.subscribe_video().expect("video subscription");
-            host_id = wait_incoming(&host, old_host.map(|host| host.0));
+            hosted = wait_hosted(&host, Some(old.0));
             let new_host = host
                 .snapshot()
                 .unwrap()
@@ -146,16 +155,23 @@ fn main() {
                 old_host.map(|host| host.1).unwrap_or(0),
                 new_host.map(|host| host.1).unwrap_or(0),
             );
-            stale_rejected = controller
-                .submit_input(old.0, old.1, InputEvent::key_down(0x04))
-                .is_err();
+            // The old Desktop's pictures are refused once its viewer left.
+            stale_rejected = matches!(
+                host.publish_desktop_video(
+                    old.0,
+                    old.1,
+                    EncodedFrame::h264(true, 0, vec![0x42u8; payload_bytes]).unwrap(),
+                ),
+                Err(vnilink::Error::NoSession | vnilink::Error::StaleSession)
+            );
             next_frame = Instant::now();
             next_sample = Instant::now();
         }
         let keyframe = index.is_multiple_of(30);
         let payload = vec![0x42u8; payload_bytes];
-        match host.publish_video(
-            host_id,
+        match host.publish_desktop_video(
+            hosted.0,
+            hosted.1,
             EncodedFrame::h264(keyframe, index * (1_000_000 / fps), payload).unwrap(),
         ) {
             Ok(()) => published += 1,
@@ -165,6 +181,12 @@ fn main() {
             }
         }
         index += 1;
+        if host
+            .take_desktop_keyframe_request(hosted.0, hosted.1)
+            .unwrap_or(false)
+        {
+            keyframe_requests += 1;
+        }
         while let Some(frame) = video.try_recv() {
             received += 1;
             if frame.keyframe {
@@ -173,11 +195,6 @@ fn main() {
         }
         if Instant::now() >= next_sample {
             next_sample = Instant::now() + Duration::from_secs(5);
-            while let Some(event) = host_events.try_recv() {
-                if matches!(event, CoreEvent::KeyframeRequested { .. }) {
-                    keyframe_requests += 1;
-                }
-            }
             if let Ok(paths) = controller.session_paths(session.id) {
                 for path in &paths {
                     relay_seen |= path.relay;
@@ -246,6 +263,40 @@ fn main() {
     for (secs, paths) in timeline {
         println!("t={secs}s {paths:?}");
     }
+    drop(video);
+    drop(desktop);
+}
+
+/// Links `controller` to `host` and opens a Desktop service on the link,
+/// as the application does: the link, the Desktop and its pictures.
+fn open_desktop(
+    controller: &Core,
+    host: &Core,
+) -> (SessionInfo, RemoteDesktopService, VideoSubscription) {
+    let pending = controller
+        .begin_connect_services(&host.endpoint_id())
+        .expect("linked");
+    let deadline = Instant::now() + Duration::from_secs(75);
+    let session = loop {
+        let session = controller.controller_session(pending.id).expect("the link");
+        if session.phase == SessionPhase::Active {
+            break session;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the link never became active: {:?}",
+            session.phase
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let owner = controller
+        .attach_controller_service(session.id, session.generation, ServiceKind::Desktop)
+        .expect("a Desktop owner");
+    let desktop = controller
+        .open_desktop_service(owner.id, owner.generation)
+        .expect("the Desktop service");
+    let video = desktop.subscribe_video().expect("video subscription");
+    (session, desktop, video)
 }
 
 fn host_config(relay: &Option<RelaySettings>) -> CoreConfig {
@@ -264,16 +315,19 @@ fn controller_open_config(relay: &Option<RelaySettings>) -> OpenConfig {
     config
 }
 
-fn wait_incoming(host: &Core, exclude_id: Option<u64>) -> u64 {
+/// The host's Desktop service, other than `exclude_id`: its id and generation.
+fn wait_hosted(host: &Core, exclude_id: Option<u64>) -> (u64, u64) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if let Some(session) = host.snapshot().unwrap().incoming {
-            if Some(session.id) != exclude_id {
-                return session.id;
-            }
+        if let Some(service) = host.hosted_services().unwrap().into_iter().find(|service| {
+            service.kind == ServiceKind::Desktop
+                && service.phase == vnilink::ServicePhase::Active
+                && Some(service.id) != exclude_id
+        }) {
+            return (service.id, service.generation);
         }
         if Instant::now() > deadline {
-            panic!("host never reported the incoming session");
+            panic!("host never reported the Desktop service");
         }
         std::thread::sleep(Duration::from_millis(50));
     }

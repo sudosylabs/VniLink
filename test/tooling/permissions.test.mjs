@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
 
-const result = await build({ stdin: { contents: `export { MachinePermissionService } from './src/platform/permissions/electron-main/permissionService.js'; export { isPermissionCommand, isPermissionSnapshot } from './src/platform/permissions/common/permissions.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
+const result = await build({ stdin: { contents: `export { MachinePermissions } from './src/platform/permissions/electron-main/machinePermissions.js'; export { isPermissionCommand, isPermissionSnapshot } from './src/platform/permissions/common/permissions.js';`, loader: 'ts', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node', tsconfig: 'tsconfig.json' });
 
-const { MachinePermissionService, isPermissionCommand, isPermissionSnapshot } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { MachinePermissions, isPermissionCommand, isPermissionSnapshot } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 function fixture(platform = 'darwin') {
 	const states = { screen: 'denied', camera: 'not-determined', microphone: 'granted' };
@@ -28,8 +28,10 @@ function fixture(platform = 'darwin') {
 	return {
 		states, prompts, urls, preferences, trust: () => {
 			trusted = true;
-		}, service: new MachinePermissionService(platform, true, preferences, async url => {
+		}, service: new MachinePermissions(platform, true, preferences, async url => {
 			urls.push(url);
+		}, async () => {
+			prompts.push('screen');
 		})
 	};
 }
@@ -68,11 +70,29 @@ test('Accessibility requests do not assume a prompt grants access', async () => 
 	assert.deepEqual(f.prompts, ['accessibility']);
 });
 
+test('Screen Recording is asked for once so macOS lists the app, then given in its settings', async () => {
+	const f = fixture();
+	assert.equal(f.service.snapshot().permissions[0].canRequest, true);
+	const snapshot = await f.service.execute({ type: 'request', kind: 'screen' });
+	// macOS decides in its own prompt; the status stays what it reports.
+	assert.equal(snapshot.permissions[0].status, 'denied');
+	assert.equal(snapshot.permissions[0].canRequest, false);
+	assert.equal(snapshot.permissions[0].canOpenSettings, true);
+	assert.deepEqual(f.prompts, ['screen']);
+	await assert.rejects(f.service.execute({ type: 'request', kind: 'screen' }));
+	assert.deepEqual(f.prompts, ['screen']);
+	const granted = fixture();
+	granted.states.screen = 'granted';
+	assert.equal(granted.service.snapshot().permissions[0].canRequest, false);
+});
+
 test('platform limitations never become fake grants or invoke unsupported APIs', async () => {
 	const win = fixture('win32');
 	const snapshot = win.service.snapshot();
-	assert.equal(snapshot.permissions[0].status, 'unsupported');
-	assert.equal(snapshot.permissions[1].status, 'unsupported');
+	// Windows has no screen or input consent: the app may already do both.
+	assert.equal(snapshot.permissions[0].status, 'not-required');
+	assert.equal(snapshot.permissions[1].status, 'not-required');
+	assert.equal(snapshot.permissions[0].canRequest || snapshot.permissions[0].canOpenSettings, false);
 	assert.equal(snapshot.permissions[2].canRequest, false);
 	await win.service.execute({ type: 'openSettings', kind: 'camera' });
 	assert.deepEqual(win.urls, ['ms-settings:privacy-webcam']);

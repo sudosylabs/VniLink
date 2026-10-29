@@ -16,6 +16,8 @@ pub enum ServiceKind {
     SystemAudio,
     Microphone,
     System,
+    /// One still screenshot. Uses the same grant as [`ServiceKind::Desktop`].
+    ScreenSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +29,20 @@ pub enum ServicePhase {
     Suspended,
     Closed(CloseCause),
     Failed(String),
+}
+
+impl ServicePhase {
+    /// The phase as a record names it: its state and, closed, its cause.
+    /// Never a failure's message, which can carry a network library's text.
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Waiting => "waiting".into(),
+            Self::Active => "active".into(),
+            Self::Suspended => "suspended".into(),
+            Self::Closed(cause) => format!("closed: {cause:?}"),
+            Self::Failed(_) => "failed".into(),
+        }
+    }
 }
 
 /// Why a service record reached [`ServicePhase::Closed`]. Every close
@@ -52,6 +68,114 @@ pub enum CloseCause {
     PeerClose,
     /// An idle policy reclaimed this service while the parent lived on.
     IdleExpired,
+    /// This computer's own producer for the service failed; the viewer
+    /// learns why from the stream's end.
+    Failed(StreamFailure),
+}
+
+/// What failed in a host's desktop producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamFailure {
+    /// The encoder did not open, or stopped encoding.
+    Encoder,
+    /// Capture stopped, or gave pictures that could not be sent.
+    Capture,
+    /// The OS or its user withdrew permission to record the screen.
+    Permission,
+    /// The display being shown went away.
+    DisplayGone,
+}
+
+/// Why a host stopped sending a desktop picture, as it tells the viewer in
+/// the stream's last message before finishing it. One byte on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEnd {
+    Failed(StreamFailure),
+    /// Its user stopped sharing the screen.
+    Stopped,
+    /// Its user ended the whole connection, as by stopping hosting.
+    Disconnected,
+    /// VniLink on the host is quitting.
+    Shutdown,
+    /// Its user withdrew this computer's permission to view or control.
+    Revoked,
+}
+
+impl StreamEnd {
+    pub(crate) fn encode(self) -> u8 {
+        match self {
+            Self::Failed(StreamFailure::Encoder) => 1,
+            Self::Failed(StreamFailure::Capture) => 2,
+            Self::Failed(StreamFailure::Permission) => 3,
+            Self::Failed(StreamFailure::DisplayGone) => 4,
+            Self::Stopped => 5,
+            Self::Shutdown => 6,
+            Self::Revoked => 7,
+            Self::Disconnected => 8,
+        }
+    }
+
+    pub(crate) fn decode(byte: u8) -> Result<Self, crate::Error> {
+        Ok(match byte {
+            1 => Self::Failed(StreamFailure::Encoder),
+            2 => Self::Failed(StreamFailure::Capture),
+            3 => Self::Failed(StreamFailure::Permission),
+            4 => Self::Failed(StreamFailure::DisplayGone),
+            5 => Self::Stopped,
+            6 => Self::Shutdown,
+            7 => Self::Revoked,
+            8 => Self::Disconnected,
+            _ => return Err(crate::Error::Malformed),
+        })
+    }
+
+    /// What a host tells its viewer when its own record closed for
+    /// `cause`. `None` where there is nobody to tell (the viewer closed,
+    /// the link is gone) or nothing the viewer could act on.
+    pub(crate) fn for_close(cause: CloseCause) -> Option<Self> {
+        match cause {
+            CloseCause::Failed(failure) => Some(Self::Failed(failure)),
+            CloseCause::OwnerClose => Some(Self::Stopped),
+            CloseCause::ParentLoss => Some(Self::Disconnected),
+            CloseCause::Shutdown => Some(Self::Shutdown),
+            CloseCause::Revoked => Some(Self::Revoked),
+            CloseCause::DeviceLoss => Some(Self::Failed(StreamFailure::Capture)),
+            CloseCause::PeerClose | CloseCause::Replaced | CloseCause::IdleExpired => None,
+        }
+    }
+}
+
+/// Why a desktop picture stopped, as the viewer concludes it: the host's
+/// own word when its `END` arrived, otherwise what the symptoms show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DesktopEnd {
+    /// The host said why.
+    Host(StreamEnd),
+    /// The host finished the stream without saying why.
+    PeerClosed,
+    /// The connection to the host was lost on a direct path.
+    LinkLost,
+    /// The connection was lost while it went through a relay.
+    RelayUnreachable,
+}
+
+impl DesktopEnd {
+    /// Stable label for diagnostics and the bridge.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Host(StreamEnd::Failed(StreamFailure::Encoder)) => "hostEncoderFailed",
+            Self::Host(StreamEnd::Failed(StreamFailure::Capture)) => "hostCaptureFailed",
+            Self::Host(StreamEnd::Failed(StreamFailure::Permission)) => "hostPermission",
+            Self::Host(StreamEnd::Failed(StreamFailure::DisplayGone)) => "displayGone",
+            Self::Host(StreamEnd::Stopped) => "hostStopped",
+            Self::Host(StreamEnd::Disconnected) => "hostDisconnected",
+            Self::Host(StreamEnd::Shutdown) => "hostShutdown",
+            Self::Host(StreamEnd::Revoked) => "revoked",
+            Self::PeerClosed => "peerClosed",
+            Self::LinkLost => "linkLost",
+            Self::RelayUnreachable => "relayUnreachable",
+        }
+    }
 }
 
 impl ServicePhase {
@@ -97,20 +221,6 @@ pub struct ServiceSupport {
     pub system_audio: bool,
     pub microphone: bool,
     pub system_actions: bool,
-}
-
-impl ServiceSupport {
-    pub fn supports(self, kind: ServiceKind) -> bool {
-        match kind {
-            ServiceKind::Desktop => self.desktop,
-            ServiceKind::Files => self.files,
-            ServiceKind::Terminal => self.terminal,
-            ServiceKind::Camera => self.camera,
-            ServiceKind::SystemAudio => self.system_audio,
-            ServiceKind::Microphone => self.microphone,
-            ServiceKind::System => self.system_actions,
-        }
-    }
 }
 
 /// Cancellation for one service on one connection generation.
@@ -539,4 +649,35 @@ fn sharing_boolean<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<bool>, D::Error> {
     <bool as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_stream_end_is_one_known_byte() {
+        use crate::{StreamEnd, StreamFailure};
+        for end in [
+            StreamEnd::Failed(StreamFailure::Encoder),
+            StreamEnd::Failed(StreamFailure::Capture),
+            StreamEnd::Failed(StreamFailure::Permission),
+            StreamEnd::Failed(StreamFailure::DisplayGone),
+            StreamEnd::Stopped,
+            StreamEnd::Shutdown,
+            StreamEnd::Revoked,
+            StreamEnd::Disconnected,
+        ] {
+            assert_eq!(StreamEnd::decode(end.encode()).unwrap(), end);
+        }
+        for unknown in [0, 9, 255] {
+            assert!(matches!(
+                StreamEnd::decode(unknown),
+                Err(crate::Error::Malformed)
+            ));
+        }
+        assert_eq!(StreamEnd::for_close(crate::CloseCause::PeerClose), None);
+        assert_eq!(
+            StreamEnd::for_close(crate::CloseCause::DeviceLoss),
+            Some(StreamEnd::Failed(StreamFailure::Capture))
+        );
+    }
 }

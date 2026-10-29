@@ -12,6 +12,7 @@ pub enum FfiServiceKind {
     SystemAudio,
     Microphone,
     System,
+    ScreenSnapshot,
 }
 
 impl From<FfiServiceKind> for vnilink::ServiceKind {
@@ -24,6 +25,7 @@ impl From<FfiServiceKind> for vnilink::ServiceKind {
             FfiServiceKind::SystemAudio => Self::SystemAudio,
             FfiServiceKind::Microphone => Self::Microphone,
             FfiServiceKind::System => Self::System,
+            FfiServiceKind::ScreenSnapshot => Self::ScreenSnapshot,
         }
     }
 }
@@ -38,6 +40,7 @@ impl From<vnilink::ServiceKind> for FfiServiceKind {
             vnilink::ServiceKind::SystemAudio => Self::SystemAudio,
             vnilink::ServiceKind::Microphone => Self::Microphone,
             vnilink::ServiceKind::System => Self::System,
+            vnilink::ServiceKind::ScreenSnapshot => Self::ScreenSnapshot,
         }
     }
 }
@@ -68,6 +71,27 @@ pub enum FfiCloseCause {
     Shutdown,
     PeerClose,
     IdleExpired,
+    Failed(FfiStreamFailure),
+}
+
+/// See [`vnilink::StreamFailure`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiStreamFailure {
+    Encoder,
+    Capture,
+    Permission,
+    DisplayGone,
+}
+
+impl From<vnilink::StreamFailure> for FfiStreamFailure {
+    fn from(value: vnilink::StreamFailure) -> Self {
+        match value {
+            vnilink::StreamFailure::Encoder => Self::Encoder,
+            vnilink::StreamFailure::Capture => Self::Capture,
+            vnilink::StreamFailure::Permission => Self::Permission,
+            vnilink::StreamFailure::DisplayGone => Self::DisplayGone,
+        }
+    }
 }
 
 impl From<vnilink::CloseCause> for FfiCloseCause {
@@ -81,6 +105,7 @@ impl From<vnilink::CloseCause> for FfiCloseCause {
             vnilink::CloseCause::Shutdown => Self::Shutdown,
             vnilink::CloseCause::PeerClose => Self::PeerClose,
             vnilink::CloseCause::IdleExpired => Self::IdleExpired,
+            vnilink::CloseCause::Failed(failure) => Self::Failed(failure.into()),
         }
     }
 }
@@ -176,11 +201,6 @@ impl VnilinkCore {
             .transfer_desktop_control(from_id, from_generation, to_id, to_generation)
             .map_err(map_error)
     }
-    pub fn host_desktop_active(&self, id: u64, generation: u64) -> Result<bool, FfiError> {
-        self.inner
-            .host_desktop_active(id, generation)
-            .map_err(map_error)
-    }
     pub fn begin_connect_services(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
         self.inner
             .begin_connect_services(&endpoint_id)
@@ -215,30 +235,52 @@ impl VnilinkCore {
             .map_err(map_error)
     }
 
+    /// One job for the entries `names` of `src_folder`.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_upload(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
         self.inner
-            .files_service_upload(id, generation, src_root, &src_rel, dst_root, &dst_rel)
+            .files_service_upload(
+                id,
+                generation,
+                src_root,
+                &src_folder,
+                &names,
+                dst_root,
+                &dst_rel,
+            )
             .map_err(map_error)
     }
+    /// One job for the entries `names` of `src_folder`.
+    #[allow(clippy::too_many_arguments)]
     pub fn files_service_download(
         &self,
         id: u64,
         generation: u64,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
         self.inner
-            .files_service_download(id, generation, src_root, &src_rel, dst_root, &dst_rel)
+            .files_service_download(
+                id,
+                generation,
+                src_root,
+                &src_folder,
+                &names,
+                dst_root,
+                &dst_rel,
+            )
             .map_err(map_error)
     }
     pub fn files_service_jobs(
@@ -316,25 +358,6 @@ impl VnilinkCore {
             })
             .map_err(map_error)
     }
-    pub fn controller_service_support(
-        &self,
-        connection_id: u64,
-    ) -> Result<FfiServiceSupport, FfiError> {
-        let support = self
-            .inner
-            .controller_service_support(connection_id)
-            .map_err(map_error)?;
-        Ok(FfiServiceSupport {
-            desktop: support.desktop,
-            files: support.files,
-            terminal: support.terminal,
-            camera: support.camera,
-            system_audio: support.system_audio,
-            microphone: support.microphone,
-            system_actions: support.system_actions,
-        })
-    }
-
     pub fn attach_controller_service(
         &self,
         connection_id: u64,
@@ -438,13 +461,20 @@ impl DesktopService {
             .set_swap_control_and_command(enabled)
             .map_err(map_error)
     }
-    pub fn submit_local_key(&self, usage: u16, down: bool, text: String) -> Result<(), FfiError> {
+    /// `composing` marks a dead key or an input-method step that has not typed yet.
+    pub fn submit_local_key(
+        &self,
+        usage: u16,
+        down: bool,
+        text: String,
+        composing: bool,
+    ) -> Result<(), FfiError> {
         self.inner
             .submit_local_key(vnilink::LocalKey {
                 usage,
                 down,
                 text: &text,
-                composing: false,
+                composing,
             })
             .map_err(map_error)
     }
@@ -466,10 +496,12 @@ impl FilesService {
 }
 
 impl FilesService {
+    /// One job for the entries `names` of `src_folder`, however many.
     pub fn upload(
         &self,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
@@ -479,16 +511,19 @@ impl FilesService {
                 info.id,
                 info.generation,
                 src_root,
-                &src_rel,
+                &src_folder,
+                &names,
                 dst_root,
                 &dst_rel,
             )
             .map_err(map_error)
     }
+    /// One job for the entries `names` of `src_folder`, however many.
     pub fn download(
         &self,
         src_root: u64,
-        src_rel: String,
+        src_folder: String,
+        names: Vec<String>,
         dst_root: u64,
         dst_rel: String,
     ) -> Result<u64, FfiError> {
@@ -498,11 +533,25 @@ impl FilesService {
                 info.id,
                 info.generation,
                 src_root,
-                &src_rel,
+                &src_folder,
+                &names,
                 dst_root,
                 &dst_rel,
             )
             .map_err(map_error)
+    }
+    /// Advances whenever any job changes. Read `jobs` again only when it
+    /// differs from the value last seen.
+    pub fn job_revision(&self) -> Result<u64, FfiError> {
+        Ok(self.core()?.job_revision())
+    }
+    /// Watches one folder on the other computer, or none.
+    pub fn watch(&self, folder: Option<(u64, String)>) {
+        self.inner.watch(folder);
+    }
+    /// How many times the watched folder has changed.
+    pub fn folder_revision(&self) -> u64 {
+        self.inner.folder_revision()
     }
     pub fn jobs(&self) -> Result<Vec<crate::FfiJobSnapshot>, FfiError> {
         let info = self.inner.info();
@@ -584,6 +633,13 @@ impl FilesService {
             .map(crate::files::dir_page)
             .map_err(map_error)
     }
+    /// The other computer's roots, home folder and usual folders.
+    pub fn places(&self) -> Result<crate::FfiPlaces, FfiError> {
+        self.inner
+            .places()
+            .map(crate::files::places)
+            .map_err(map_error)
+    }
     pub fn mkdir(&self, root: u64, path: String, name: String) -> Result<(), FfiError> {
         self.inner.mkdir(root, &path, &name).map_err(map_error)
     }
@@ -595,27 +651,23 @@ impl FilesService {
         expected: Option<crate::FfiEntryToken>,
         new_name: String,
     ) -> Result<(), FfiError> {
-        let expected = expected.map(|token| vnilink::EntryToken {
-            dev: token.dev,
-            ino: token.ino,
-        });
+        let expected = expected.map(crate::files::to_entry_token).transpose()?;
         self.inner
             .rename(root, &path, &name, expected, &new_name)
             .map_err(map_error)
     }
+    /// Deletes an entry on the other computer: to its Trash when `trash`.
     pub fn delete(
         &self,
         root: u64,
         path: String,
         name: String,
         expected: Option<crate::FfiEntryToken>,
+        trash: bool,
     ) -> Result<(), FfiError> {
-        let expected = expected.map(|token| vnilink::EntryToken {
-            dev: token.dev,
-            ino: token.ino,
-        });
+        let expected = expected.map(crate::files::to_entry_token).transpose()?;
         self.inner
-            .delete(root, &path, &name, expected)
+            .delete(root, &path, &name, expected, trash)
             .map_err(map_error)
     }
 }
@@ -628,6 +680,7 @@ pub struct FfiDesktopInfo {
     pub codec: u8,
     pub quality: crate::FfiQuality,
     pub separate_cursor: bool,
+    pub stills: bool,
 }
 impl From<vnilink::DesktopInfo> for FfiDesktopInfo {
     fn from(value: vnilink::DesktopInfo) -> Self {
@@ -638,6 +691,7 @@ impl From<vnilink::DesktopInfo> for FfiDesktopInfo {
             codec: value.codec,
             quality: crate::types::quality_record(&value.quality),
             separate_cursor: value.separate_cursor,
+            stills: value.stills,
         }
     }
 }
@@ -900,6 +954,15 @@ impl FilesService {
             .map(crate::files::job_snapshot)
             .map_err(map_error)
     }
+    /// Claims and resumes this computer's transfers that a lost Files owner
+    /// left interrupted.
+    pub fn resume_orphans(&self) -> Result<Vec<crate::FfiJobSnapshot>, FfiError> {
+        let info = self.inner.info();
+        self.core()?
+            .files_service_resume_orphans(info.id, info.generation)
+            .map(|jobs| jobs.into_iter().map(crate::files::job_snapshot).collect())
+            .map_err(map_error)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -912,7 +975,63 @@ pub enum FfiAdaptationReason {
     Recovering,
     Idle,
 }
+/// See [`vnilink::RateLimit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiRateLimit {
+    None,
+    Setting,
+    Relay,
+    Network,
+    Encoder,
+    Receiver,
+}
+impl From<vnilink::RateLimit> for FfiRateLimit {
+    fn from(limit: vnilink::RateLimit) -> Self {
+        use vnilink::RateLimit as Limit;
+        match limit {
+            Limit::None => Self::None,
+            Limit::Setting => Self::Setting,
+            Limit::Relay => Self::Relay,
+            Limit::Network => Self::Network,
+            Limit::Encoder => Self::Encoder,
+            Limit::Receiver => Self::Receiver,
+        }
+    }
+}
+/// See [`vnilink::Condition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiCondition {
+    LinkBlackout,
+    RelayBacklog,
+    LinkCongestion,
+    LinkLoss,
+    HostSecureDesktop,
+    EncoderSlow,
+    DecoderSlow,
+    DecoderRecovering,
+    EncoderSoftware,
+    DecoderSoftware,
+    RelayPath,
+}
+impl From<vnilink::Condition> for FfiCondition {
+    fn from(condition: vnilink::Condition) -> Self {
+        use vnilink::Condition as C;
+        match condition {
+            C::LinkBlackout => Self::LinkBlackout,
+            C::RelayBacklog => Self::RelayBacklog,
+            C::LinkCongestion => Self::LinkCongestion,
+            C::LinkLoss => Self::LinkLoss,
+            C::HostSecureDesktop => Self::HostSecureDesktop,
+            C::EncoderSlow => Self::EncoderSlow,
+            C::DecoderSlow => Self::DecoderSlow,
+            C::DecoderRecovering => Self::DecoderRecovering,
+            C::EncoderSoftware => Self::EncoderSoftware,
+            C::DecoderSoftware => Self::DecoderSoftware,
+            C::RelayPath => Self::RelayPath,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiDesktopMediaStatus {
     pub reason: FfiAdaptationReason,
     pub received_kbps: u32,
@@ -924,6 +1043,10 @@ pub struct FfiDesktopMediaStatus {
     pub decode_us: u64,
     pub encode_us: u64,
     pub capture_us: u64,
+    /// What most holds the bitrate where it is.
+    pub limit: FfiRateLimit,
+    /// What is wrong with the picture now, from the most severe.
+    pub conditions: Vec<FfiCondition>,
 }
 impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
     fn from(status: vnilink::DesktopMediaStatus) -> Self {
@@ -947,14 +1070,67 @@ impl From<vnilink::DesktopMediaStatus> for FfiDesktopMediaStatus {
             decode_us: status.decode_us,
             encode_us: status.encode_us,
             capture_us: status.capture_us,
+            limit: status.limit.into(),
+            conditions: status.conditions.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Why a desktop picture stopped; see [`vnilink::DesktopEnd`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiDesktopEnd {
+    HostEncoderFailed,
+    HostCaptureFailed,
+    HostPermission,
+    DisplayGone,
+    HostStopped,
+    HostDisconnected,
+    HostShutdown,
+    Revoked,
+    PeerClosed,
+    LinkLost,
+    RelayUnreachable,
+}
+impl From<vnilink::DesktopEnd> for FfiDesktopEnd {
+    fn from(end: vnilink::DesktopEnd) -> Self {
+        use vnilink::{DesktopEnd as End, StreamEnd as Host, StreamFailure as Failed};
+        match end {
+            End::Host(Host::Failed(Failed::Encoder)) => Self::HostEncoderFailed,
+            End::Host(Host::Failed(Failed::Capture)) => Self::HostCaptureFailed,
+            End::Host(Host::Failed(Failed::Permission)) => Self::HostPermission,
+            End::Host(Host::Failed(Failed::DisplayGone)) => Self::DisplayGone,
+            End::Host(Host::Stopped) => Self::HostStopped,
+            End::Host(Host::Disconnected) => Self::HostDisconnected,
+            End::Host(Host::Shutdown) => Self::HostShutdown,
+            End::Host(Host::Revoked) => Self::Revoked,
+            End::PeerClosed => Self::PeerClosed,
+            End::LinkLost => Self::LinkLost,
+            End::RelayUnreachable => Self::RelayUnreachable,
         }
     }
 }
 
 impl DesktopService {
+    /// Why the picture stopped, once it did; readable after the service
+    /// closed. `None` while it lives or when this computer closed it.
+    pub fn end(&self) -> Option<FfiDesktopEnd> {
+        self.inner.end().map(Into::into)
+    }
     pub fn report_decode_duration(&self, microseconds: u64) -> Result<(), FfiError> {
         self.inner
             .report_decode_duration(microseconds)
+            .map_err(map_error)
+    }
+    /// Whether the window decodes in software, its decoder restarts in
+    /// total, and the still pictures it showed in total.
+    pub fn report_decoder(
+        &self,
+        software: bool,
+        recoveries: u64,
+        stills_shown: u64,
+    ) -> Result<(), FfiError> {
+        self.inner
+            .report_decoder(software, recoveries, stills_shown)
             .map_err(map_error)
     }
     pub fn media_status(&self) -> Result<FfiDesktopMediaStatus, FfiError> {

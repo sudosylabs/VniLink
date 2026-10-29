@@ -1,41 +1,32 @@
-//! Deletion isolates a listed object before destructive cleanup. Unix moves
-//! it into an exclusively created private directory and verifies its identity
-//! there; the cleanup retains directory handles and never follows child links.
-//! A failed cleanup leaves a recovery namespace instead of sweeping public names.
+//! Deletion isolates a listed object before destructive cleanup. It moves
+//! into an exclusively created private directory once its identity is
+//! verified (there on Unix; on the handle that moves it on Windows); the
+//! cleanup retains directory handles and never follows child links. A
+//! failed cleanup leaves a recovery namespace instead of sweeping public
+//! names.
 
 use crate::error::Error;
 
-#[cfg(windows)]
-use super::entry::stat;
 use super::entry::{EntryKind, EntryToken};
 use super::path::check_name;
-use super::rename::STALE_ENTRY;
+use super::rename::{still_listed, STALE_ENTRY};
 use super::roots::RootSet;
 
 pub(crate) const DELETE_FAILED: &str = "the entry could not be deleted";
 pub(crate) const DELETE_INCOMPLETE: &str =
     "the folder was removed, but some of its contents remain";
 
-#[cfg(windows)]
-const ASIDE_ATTEMPTS: u32 = 8;
-
-/// Work left after the fenced mutation. `Done` means the name is already
-/// gone. `Tree` is the temporary folder to remove once the caller has
-/// dropped its locks.
+/// Work left after the fenced mutation: the isolated object, to remove
+/// once the caller has dropped its locks.
 pub(crate) enum DeleteWork {
-    #[cfg(windows)]
-    Done,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     Isolated(vnilink_rename::anchored::DeleteCandidate),
-    #[cfg(windows)]
-    Tree {
-        path: std::path::PathBuf,
-        dev: u64,
-        ino: u64,
-    },
+    /// A file already removed, where ids are positions.
+    #[cfg(any(unix, windows))]
+    Removed,
 }
 
-/// Promotes only the two static delete outcomes. Any other peer text stays
+/// Promotes only the static delete outcomes. Any other peer text stays
 /// the generic refusal, so a response cannot inject a new error string.
 pub(crate) fn failure_message(message: &str) -> &'static str {
     if message == DELETE_FAILED {
@@ -55,13 +46,9 @@ pub(crate) fn stage_delete(
     expected: Option<EntryToken>,
 ) -> Result<DeleteWork, Error> {
     check_name(name)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         stage_anchored(roots, id, rel, name, expected)
-    }
-    #[cfg(windows)]
-    {
-        stage_path(roots, id, rel, name, expected)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -72,39 +59,36 @@ pub(crate) fn stage_delete(
 
 pub(crate) fn finish_delete(work: DeleteWork) -> Result<(), Error> {
     match work {
-        #[cfg(windows)]
-        DeleteWork::Done => Ok(()),
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         DeleteWork::Isolated(candidate) => candidate
             .finish()
             .map_err(|_| Error::InvalidSetting(DELETE_INCOMPLETE)),
-        #[cfg(windows)]
-        DeleteWork::Tree { path, dev, ino } => finish_windows(&path, dev, ino),
+        #[cfg(any(unix, windows))]
+        DeleteWork::Removed => Ok(()),
     }
 }
 
+/// Whether a delete may act on `name`, of `kind` and now tokened
+/// `current`, listed as `expected`. A listed link is the object the user
+/// pointed at; removing it would be a different operation from cleaning
+/// children inside a real folder that was already moved aside. Where ids
+/// are positions a folder is refused: no fingerprint covers what it holds.
 fn accept_listed(
     kind: EntryKind,
-    token: EntryToken,
+    current: EntryToken,
     expected: Option<EntryToken>,
+    positional: bool,
 ) -> Result<(), Error> {
-    // A listed symlink is the object the user pointed at. Removing it would
-    // be a different operation from cleaning children inside a real folder
-    // that was already moved aside.
-    if kind == EntryKind::Symlink || (kind == EntryKind::Other && token == EntryToken::NONE) {
+    if kind == EntryKind::Symlink || (kind == EntryKind::Other && current == EntryToken::NONE) {
         return Err(Error::InvalidSetting(DELETE_FAILED));
     }
-    if let Some(expected) = expected {
-        let replaced = expected.is_strong()
-            && ((token.is_strong() && !expected.same_object(token)) || !token.is_strong());
-        if replaced {
-            return Err(Error::InvalidSetting(STALE_ENTRY));
-        }
+    if positional && kind == EntryKind::Dir {
+        return Err(Error::UnprovenEntry);
     }
-    Ok(())
+    still_listed(expected, current, positional)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn stage_anchored(
     roots: &RootSet,
     id: u64,
@@ -112,16 +96,39 @@ fn stage_anchored(
     name: &str,
     expected: Option<EntryToken>,
 ) -> Result<DeleteWork, Error> {
-    use std::os::unix::io::AsFd;
+    use vnilink_rename::anchored::AsDir;
 
-    let parent = roots.open_dir_fd(id, rel)?;
-    let (kind, token) = listed_at(&parent, name)?;
-    accept_listed(kind, token, expected)?;
-    let expected = token
-        .dev
-        .zip(token.ino)
-        .ok_or(Error::InvalidSetting(DELETE_FAILED))?;
-    vnilink_rename::anchored::DeleteCandidate::stage(parent.as_fd(), name, expected)
+    let parent = roots.open_dir_held(id, rel)?;
+    let ids = super::rename::volume_ids(&parent);
+    let st = vnilink_rename::anchored::stat_at(parent.as_dir(), name)
+        .map_err(|_| Error::InvalidSetting(DELETE_FAILED))?;
+    let positional = ids != vnilink_rename::VolumeIds::Stable;
+    accept_listed(
+        entry_kind(&st),
+        super::entry::token_of(name, &st, ids),
+        expected,
+        positional,
+    )?;
+    // Where ids are positions a file moved aside takes another id, so it is
+    // not staged and checked by id: its fingerprint is checked again on the
+    // very object removed (the deleting handle on Windows, the entry moved
+    // aside under a private name on Unix) and it is removed at once.
+    if positional {
+        return vnilink_rename::anchored::delete_file_checked(parent.as_dir(), name, |stated| {
+            still_listed(expected, super::entry::token_of(name, stated, ids), true).is_ok()
+        })
+        .map(|()| DeleteWork::Removed)
+        .map_err(|error| {
+            Error::InvalidSetting(if error.kind() == std::io::ErrorKind::InvalidData {
+                STALE_ENTRY
+            } else {
+                DELETE_FAILED
+            })
+        });
+    }
+    // Moved aside only while it is still the object just stated; where ids
+    // are positions, the entry at the position just fingerprinted.
+    vnilink_rename::anchored::DeleteCandidate::stage(parent.as_dir(), name, st.identity())
         .map(DeleteWork::Isolated)
         .map_err(|error| {
             Error::InvalidSetting(if error.kind() == std::io::ErrorKind::InvalidData {
@@ -132,16 +139,9 @@ fn stage_anchored(
         })
 }
 
-#[cfg(unix)]
-fn listed_at(
-    parent: &std::os::unix::io::OwnedFd,
-    name: &str,
-) -> Result<(EntryKind, EntryToken), Error> {
-    use std::os::unix::io::AsFd;
-
-    let st = vnilink_rename::anchored::stat_at(parent.as_fd(), name)
-        .map_err(|_| Error::InvalidSetting(DELETE_FAILED))?;
-    let kind = if st.is_symlink {
+#[cfg(any(unix, windows))]
+pub(crate) fn entry_kind(st: &vnilink_rename::anchored::EntryStat) -> EntryKind {
+    if st.is_symlink {
         EntryKind::Symlink
     } else if st.is_dir {
         EntryKind::Dir
@@ -149,83 +149,5 @@ fn listed_at(
         EntryKind::File
     } else {
         EntryKind::Other
-    };
-    Ok((
-        kind,
-        EntryToken {
-            dev: Some(st.dev),
-            ino: Some(st.ino),
-        },
-    ))
-}
-
-#[cfg(windows)]
-fn stage_path(
-    roots: &RootSet,
-    id: u64,
-    rel: &str,
-    name: &str,
-    expected: Option<EntryToken>,
-) -> Result<DeleteWork, Error> {
-    let (parent, source) = roots.resolve_parent(id, rel, name)?;
-    let before = stat(&source, String::new());
-    accept_listed(before.kind, before.token, expected)?;
-    #[cfg(windows)]
-    let identity = before
-        .token
-        .dev
-        .zip(before.token.ino)
-        .ok_or(Error::InvalidSetting(DELETE_FAILED))?;
-    if before.kind != EntryKind::Dir {
-        #[cfg(windows)]
-        vnilink_rename::windows::delete_tree_checked(&source, identity)
-            .map_err(|_| Error::InvalidSetting(DELETE_FAILED))?;
-        return Ok(DeleteWork::Done);
-    }
-    // Pin the directory object before the rename. The walk rechecks this
-    // identity so a replacement at the temporary name is left alone.
-    let path = aside_path(&parent, &source)?;
-    #[cfg(windows)]
-    {
-        Ok(DeleteWork::Tree {
-            path,
-            dev: identity.0,
-            ino: identity.1,
-        })
-    }
-}
-
-#[cfg(windows)]
-fn aside_path(
-    parent: &std::path::Path,
-    source: &std::path::Path,
-) -> Result<std::path::PathBuf, Error> {
-    for attempt in 0..ASIDE_ATTEMPTS {
-        let temp = parent.join(format!(".vnldelete.{attempt}"));
-        if std::fs::symlink_metadata(&temp).is_ok() {
-            continue;
-        }
-        match vnilink_rename::rename_noreplace(source, &temp) {
-            Ok(()) => return Ok(temp),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return Err(Error::InvalidSetting(DELETE_FAILED)),
-        }
-    }
-    Err(Error::InvalidSetting(DELETE_FAILED))
-}
-
-#[cfg(windows)]
-fn finish_windows(path: &std::path::Path, dev: u64, ino: u64) -> Result<(), Error> {
-    if vnilink_rename::windows::delete_tree_checked(path, (dev, ino)).is_ok() {
-        return Ok(());
-    }
-    leftover(path)
-}
-
-#[cfg(windows)]
-fn leftover(path: &std::path::Path) -> Result<(), Error> {
-    match std::fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        _ => Err(Error::InvalidSetting(DELETE_INCOMPLETE)),
     }
 }

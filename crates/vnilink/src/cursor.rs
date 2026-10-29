@@ -3,7 +3,6 @@ use crate::Error;
 use std::sync::Arc;
 
 pub const MAX_CURSOR_EDGE: u16 = 512;
-pub(crate) const MAGIC: [u8; 4] = *b"CUR3";
 pub(crate) const MAX_BODY: usize = 18 + 512 * 512 * 4;
 
 /// Premultiplied BGRA pixels and the point in the image under the mouse.

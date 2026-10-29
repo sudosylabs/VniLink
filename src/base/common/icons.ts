@@ -25,6 +25,31 @@ export const Icons = Object.freeze({
 	audio: 'audio',
 	recording: 'recording',
 	power: 'power',
+	importInvitation: 'importInvitation',
+	createInvitation: 'createInvitation',
+	view: 'view',
+	camera: 'camera',
+	lock: 'lock',
+	copy: 'copy',
+	fullScreen: 'fullScreen',
+	warning: 'warning',
+	info: 'info',
+	error: 'error',
+	exitFullScreen: 'exitFullScreen',
+	fillView: 'fillView',
+	fitToView: 'fitToView',
+	diagnostics: 'diagnostics',
+	stop: 'stop',
+	check: 'check',
+	file: 'file',
+	newFolder: 'newFolder',
+	trash: 'trash',
+	rename: 'rename',
+	drive: 'drive',
+	up: 'up',
+	search: 'search',
+	more: 'more',
+	transfers: 'transfers',
 
 	close: 'close',
 	minimize: 'minimize',
@@ -35,3 +60,10 @@ export const Icons = Object.freeze({
 export type IconId = typeof Icons[keyof typeof Icons];
 
 export type IconVariant = 'outlined' | 'filled';
+
+const iconIds: ReadonlySet<string> = new Set(Object.values(Icons));
+
+/** Whether `value` names a product icon, such as a `ThemeIcon` id given to a menu item. */
+export function isIconId(value: string): value is IconId {
+	return iconIds.has(value);
+}

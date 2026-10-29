@@ -1,0 +1,119 @@
+[package]
+name = "vnilink-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "=1.4.2", features = ["derive"] }
+libfuzzer-sys = "=0.4.10"
+vnilink = { path = "..", features = ["fuzzing"] }
+
+# Not a member of the repository's workspace: cargo-fuzz builds it with a
+# nightly toolchain and sanitizer flags of its own.
+[workspace]
+members = ["."]
+
+# The repository's patched sources, as its workspace uses them.
+[patch.crates-io]
+iroh = { path = "../../../vendor/iroh" }
+enigo = { path = "../../../vendor/enigo" }
+cpal = { path = "../../../vendor/cpal" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "control_message"
+path = "fuzz_targets/control_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file_request"
+path = "fuzz_targets/file_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transfer_receive"
+path = "fuzz_targets/transfer_receive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "video_reassemble"
+path = "fuzz_targets/video_reassemble.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "video_report"
+path = "fuzz_targets/video_report.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_feedback"
+path = "fuzz_targets/host_feedback.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fs_wire"
+path = "fuzz_targets/fs_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "clipboard_frame"
+path = "fuzz_targets/clipboard_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cursor_state"
+path = "fuzz_targets/cursor_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "system_reply"
+path = "fuzz_targets/system_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_payload"
+path = "fuzz_targets/snapshot_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "terminal_event"
+path = "fuzz_targets/terminal_event.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "job_message"
+path = "fuzz_targets/job_message.rs"
+test = false
+doc = false
+bench = false

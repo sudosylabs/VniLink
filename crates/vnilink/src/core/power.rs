@@ -40,11 +40,13 @@ impl Drop for Slot {
 
 impl Core {
     pub fn power_policy(&self) -> Result<PowerPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.power_policy)
     }
     /// Saved first; the resource actor reconciles live owners on its next tick.
     /// An OS rejection appears as Failed/Unavailable, never a false Active ACK.
     pub fn set_power_policy(&self, policy: PowerPolicy) -> Result<(), Error> {
+        let _engine = self.engine();
         policy.validate()?;
         let mut state = self.alive_state()?;
         let previous = state.power_policy;
@@ -59,6 +61,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn HostPowerFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let _state = self.alive_state()?;
         let mut target = lock(&self.shared.power_factory);
         target.revision = target.revision.checked_add(1).ok_or(Error::Busy)?;
@@ -66,9 +69,17 @@ impl Core {
         Ok(())
     }
     pub fn power_status(&self) -> Result<Vec<PowerStatus>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         Ok(lock(&self.shared.power_status).to_vec())
     }
+}
+
+/// Control was used: a controller's input was applied here, or a picture of
+/// this computer reached a controlling viewer. Only used control locks this
+/// computer when it ends; see [`LockAfterControl`].
+pub(super) fn note_control_used(shared: &Shared) {
+    shared.control_used.store(true, Ordering::Release);
 }
 
 pub(super) fn start(shared: Weak<Shared>) {
@@ -120,18 +131,20 @@ pub(super) fn start(shared: Weak<Shared>) {
                 // Lock-after-control decision: any live remote control, and
                 // any live parent session to tell explicit close from
                 // network loss. Sampled after synchronize/expire on the
-                // same tick; the machine lives in State so grant sites
-                // arm it synchronously.
+                // same tick. A use noted since the last tick arms it even
+                // when control already ended within the tick.
                 let controlling = state.input_holder().is_some();
                 let parent_live = state
                     .incoming
                     .values()
                     .any(|s| s.phase == SessionPhase::Active);
                 let lock_enabled = state.power_policy.lock_after_control;
-                let lock_fire = state
-                    .lock_watch
-                    .tick(now, lock_enabled, controlling, parent_live)
-                    == LockDecision::Fire;
+                let used = core.control_used.swap(false, Ordering::AcqRel);
+                let lock_fire =
+                    state
+                        .lock_watch
+                        .tick(now, lock_enabled, controlling, used, parent_live)
+                        == LockDecision::Fire;
                 (
                     consumers,
                     factory.revision,
@@ -148,6 +161,11 @@ pub(super) fn start(shared: Weak<Shared>) {
                     let locked = actions
                         .as_ref()
                         .is_some_and(|actions| actions.lock_workstation().is_ok());
+                    tracing::info!(
+                        target: crate::trace::POWER,
+                        locked,
+                        "locked after control"
+                    );
                     events.publish(CoreEvent::HostLocked { locked });
                 });
             }
@@ -155,6 +173,13 @@ pub(super) fn start(shared: Weak<Shared>) {
                 let slot = &mut slots[kind.index()];
                 let count = watchers.len() as u32;
                 if count == 0 || slot.revision != revision {
+                    if slot.inhibitor.is_some() {
+                        tracing::info!(
+                            target: crate::trace::POWER,
+                            kind = ?kind,
+                            "power hold released"
+                        );
+                    }
                     slot.clear();
                     slot.revision = revision;
                 }
@@ -176,11 +201,37 @@ pub(super) fn start(shared: Weak<Shared>) {
                     let (startup, _guard, task) = slot.pending.take().unwrap();
                     match task.await {
                         Ok(Ok(inhibitor)) if !startup.is_cancelled() && count != 0 => {
+                            tracing::info!(
+                                target: crate::trace::POWER,
+                                kind = ?kind,
+                                owners = count,
+                                "power held"
+                            );
                             slot.inhibitor = Some(inhibitor)
                         }
-                        Ok(Ok(_)) => {} // Drop a late native success immediately.
-                        Ok(Err(error)) => slot.failure = Some(error.to_string()),
-                        Err(_) => slot.failure = Some("native power worker ended".into()),
+                        // Drop a late native success immediately.
+                        Ok(Ok(_)) => tracing::debug!(
+                            target: crate::trace::POWER,
+                            kind = ?kind,
+                            "a power hold that came late was released"
+                        ),
+                        Ok(Err(error)) => {
+                            tracing::warn!(
+                                target: crate::trace::POWER,
+                                kind = ?kind,
+                                failure = error.name(),
+                                "power not held"
+                            );
+                            slot.failure = Some(error.to_string())
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                target: crate::trace::POWER,
+                                kind = ?kind,
+                                "power not held: its worker ended"
+                            );
+                            slot.failure = Some("native power worker ended".into())
+                        }
                     }
                 }
                 let phase = if count == 0 {

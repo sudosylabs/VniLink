@@ -13,5 +13,6 @@ fn system_support_reports_actions_and_never_mutates_physical_privacy() {
     assert!(actions.set_input_blocked(true).is_err());
     let session = actions.session_state();
     assert!(["wayland", "x11", "linux"].contains(&session.session.as_str()));
-    assert_eq!(session.locked, None);
+    // `locked` is logind's LockedHint for this session: the test machine's
+    // own state where logind answers, unknown where it does not.
 }

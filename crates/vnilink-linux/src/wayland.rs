@@ -1,6 +1,7 @@
 //! One compositor-authorized RemoteDesktop session owns capture and input.
 //! D-Bus Notify methods work without an EIS connection. The worker serializes
 //! them on its own runtime: core input callbacks can run inside Tokio already.
+// trace: records every ignored failure
 use std::os::fd::OwnedFd;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -14,9 +15,9 @@ use ashpd::desktop::{
     PersistMode, Session,
 };
 use vnilink::{HostDesktop, InputEvent, PointerButton};
-use vnilink_media::{Error, FrameSource, RawFrame};
+use vnilink_media::{Error, FrameSource, FrameWait, RawFrame};
 
-use crate::PortalCapture;
+use crate::{PortalCapture, ScreenGrant};
 use futures_util::StreamExt;
 
 const INPUT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -43,7 +44,11 @@ impl Connection {
     fn close(&self) {
         if !self.closed.swap(true, Ordering::AcqRel) {
             // Wake the worker if idle. If busy/full, it observes closed itself.
-            let _ = self.tx.try_send(Command::Close);
+            vnilink::ignored!(
+                vnilink::trace::INPUT,
+                "a busy or ended worker notices the close itself",
+                self.tx.try_send(Command::Close)
+            );
         }
     }
 }
@@ -112,13 +117,21 @@ impl HostDesktop for WaylandInput {
 }
 
 /// Capture and input share the same consent and are revoked together.
+/// Someone may allow the screen without remote interaction: the grant is
+/// then view-only, and its session still ends the capture when revoked.
+/// With a [`ScreenGrant`], the portal keeps the consent until it is revoked
+/// in the system's settings: only the first start asks.
 pub struct WaylandCapture {
     capture: PortalCapture,
     input: WaylandInput,
     cursor_metadata: bool,
+    control: bool,
 }
 impl WaylandCapture {
-    pub fn open(startup: vnilink::BackendStartup) -> Result<Self, Error> {
+    pub fn open(
+        startup: vnilink::BackendStartup,
+        grant: Option<ScreenGrant>,
+    ) -> Result<Self, Error> {
         startup.check().map_err(startup_error)?;
         let (tx, rx) = mpsc::sync_channel(64);
         let connection = Arc::new(Connection {
@@ -131,12 +144,12 @@ impl WaylandCapture {
             .name("vnilink-wayland-input".into())
             .spawn({
                 let startup = startup.clone();
-                move || worker_main(worker, rx, ready_tx, startup)
+                move || worker_main(worker, rx, ready_tx, startup, grant)
             })
             .map_err(|_| Error::CaptureRejected("the Wayland input worker could not start"))?;
         // Consent may need human interaction. Cancellation in the GTK layer
         // fences installation; a lost receiver makes the worker close its grant.
-        let (fd, node, logical, cursor_metadata) = match startup.receive(&ready_rx) {
+        let (fd, node, logical, cursor_metadata, control) = match startup.receive(&ready_rx) {
             Ok(result) => result?,
             Err(error) => {
                 connection.close();
@@ -147,7 +160,7 @@ impl WaylandCapture {
             connection.close();
             startup_error(error)
         })?;
-        let capture = match PortalCapture::open(fd, node, startup.clone()) {
+        let capture = match PortalCapture::open_for_encoder(fd, node, startup.clone()) {
             Ok(capture) => capture,
             Err(error) => {
                 connection.close();
@@ -164,6 +177,7 @@ impl WaylandCapture {
             capture,
             input,
             cursor_metadata,
+            control,
         };
         startup.check().map_err(startup_error)?;
         Ok(source)
@@ -178,16 +192,40 @@ impl WaylandCapture {
             None
         }
     }
-    pub fn desktop(&self) -> WaylandInput {
-        self.input.clone()
+    /// Input through the grant, when it allowed remote interaction.
+    pub fn desktop(&self) -> Option<WaylandInput> {
+        self.control.then(|| self.input.clone())
+    }
+    /// Whether the grant has ended: revoked from the compositor's sharing
+    /// controls, refused input, or closed here. It is never granted again.
+    pub fn revoked(&self) -> bool {
+        self.input.connection.closed.load(Ordering::Acquire)
     }
 }
 impl FrameSource for WaylandCapture {
     fn size(&self) -> (u16, u16) {
         self.capture.size()
     }
+    fn attested_at(&self) -> Option<std::time::Instant> {
+        self.capture.attested_at()
+    }
+
+    fn attested_display(&self) -> &str {
+        "portal"
+    }
+
+    fn cursor(&self) -> Option<vnilink::CursorState> {
+        WaylandCapture::cursor(self)
+    }
+
+    /// The portal capture's wake, in slices short enough that the grant's
+    /// end is seen between them.
+    fn wait_frame(&self, deadline: std::time::Instant) -> FrameWait {
+        FrameWait::from_arrived(self.capture.wait_frame(deadline))
+    }
+
     fn poll_frame(&self, time: u64) -> Result<Option<RawFrame>, Error> {
-        if self.input.connection.closed.load(Ordering::Acquire) {
+        if self.revoked() {
             return Err(Error::CaptureRejected(
                 "the Wayland control permission session ended",
             ));
@@ -201,7 +239,7 @@ impl Drop for WaylandCapture {
     }
 }
 
-type Ready = Result<(OwnedFd, u32, (i32, i32), bool), Error>;
+type Ready = Result<(OwnedFd, u32, (i32, i32), bool, bool), Error>;
 struct Grant {
     proxy: RemoteDesktop,
     session: Session<RemoteDesktop>,
@@ -209,6 +247,8 @@ struct Grant {
     node: u32,
     logical: (i32, i32),
     cursor_metadata: bool,
+    /// Keyboard and pointer were granted with the screen.
+    control: bool,
 }
 fn startup_error(_: vnilink::Error) -> Error {
     Error::CaptureRejected("desktop capture startup cancelled or expired")
@@ -218,17 +258,24 @@ async fn cancelled(startup: &vnilink::BackendStartup) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
-async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
+async fn open_grant(
+    startup: &vnilink::BackendStartup,
+    grant: Option<&ScreenGrant>,
+) -> Result<Grant, Error> {
     startup.check().map_err(startup_error)?;
-    let proxy = RemoteDesktop::new()
+    let bus = crate::dbus::session_bus()
         .await
-        .map_err(|_| Error::Unsupported("the RemoteDesktop portal is unavailable"))?;
+        .map_err(|_| Error::Unsupported("the RemoteDesktop portal"))?;
+    let proxy = RemoteDesktop::with_connection(bus.clone())
+        .await
+        .map_err(|_| Error::Unsupported("the RemoteDesktop portal"))?;
     let session = proxy
         .create_session(Default::default())
         .await
         .map_err(|_| {
             Error::CaptureRejected("the RemoteDesktop portal could not create a session")
         })?;
+    let token = grant.and_then(ScreenGrant::token);
     // Once a session exists, cancellation must explicitly close it, including
     // while the compositor's permission request is waiting for the user.
     let work = async {
@@ -240,11 +287,16 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
                 &session,
                 SelectDevicesOptions::default()
                     .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
-                    .set_persist_mode(PersistMode::DoNot),
+                    .set_persist_mode(if grant.is_some() {
+                        PersistMode::ExplicitlyRevoked
+                    } else {
+                        PersistMode::DoNot
+                    })
+                    .set_restore_token(token.as_deref()),
             )
             .await?
             .response()?;
-        let cast = Screencast::new().await?;
+        let cast = Screencast::with_connection(bus).await?;
         let cursor_metadata = cast
             .available_cursor_modes()
             .await
@@ -267,12 +319,31 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
             .start(&session, None, Default::default())
             .await?
             .response()?;
-        if !response
+        let control = response
             .devices()
-            .contains(DeviceType::Keyboard | DeviceType::Pointer)
-        {
-            return Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Other));
+            .contains(DeviceType::Keyboard | DeviceType::Pointer);
+        // Each start answers with the token for the next; the one offered
+        // is spent. A grant that cannot be kept asks again next time.
+        if let (Some(grant), Some(token)) = (grant, response.restore_token()) {
+            if let Err(error) = grant.keep(token) {
+                tracing::warn!(
+                    target: vnilink::trace::CAPTURE,
+                    failure = vnilink::trace::Failure::failure_name(&error),
+                    reason = vnilink::trace::Failure::failure_reason(&error),
+                    "the screen sharing grant was not kept: the next session asks again"
+                );
+            }
         }
+        tracing::info!(
+            target: vnilink::trace::CAPTURE,
+            offered_token = token.is_some(),
+            kept = response.restore_token().is_some(),
+            control = response
+                .devices()
+                .contains(DeviceType::Keyboard | DeviceType::Pointer),
+            cursor_metadata,
+            "the RemoteDesktop portal granted a session"
+        );
         let streams = response.streams();
         let stream = streams
             .first()
@@ -291,7 +362,7 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
         let fd = cast
             .open_pipe_wire_remote(&session, Default::default())
             .await?;
-        Ok::<_, ashpd::Error>((fd, node, logical, cursor_metadata))
+        Ok::<_, ashpd::Error>((fd, node, logical, cursor_metadata, control))
     };
     let result = tokio::select! {
         biased;
@@ -299,20 +370,56 @@ async fn open_grant(startup: &vnilink::BackendStartup) -> Result<Grant, Error> {
         result = work => result,
     };
     match result {
-        Ok((fd, node, logical, cursor_metadata)) => Ok(Grant {
+        Ok((fd, node, logical, cursor_metadata, control)) => Ok(Grant {
             proxy,
             session,
             fd,
             node,
             logical,
             cursor_metadata,
+            control,
         }),
-        Err(_) => {
-            let _ = tokio::time::timeout(INPUT_TIMEOUT, session.close()).await;
-            Err(Error::CaptureRejected(
-                "allow one screen, keyboard and pointer in the RemoteDesktop permission dialog",
-            ))
+        Err(error) => {
+            tracing::info!(
+                target: vnilink::trace::CAPTURE,
+                declined = matches!(
+                    error,
+                    ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)
+                ),
+                failure = portal_failure(&error),
+                "the RemoteDesktop portal did not grant a session"
+            );
+            vnilink::ignored!(
+                vnilink::trace::CAPTURE,
+                "a refused portal session is closed at best",
+                tokio::time::timeout(INPUT_TIMEOUT, session.close()).await
+            );
+            Err(grant_error(&error))
         }
+    }
+}
+/// What the portal said, by kind only: its messages are the desktop's text.
+fn portal_failure(error: &ashpd::Error) -> &'static str {
+    match error {
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled) => "declined",
+        ashpd::Error::Response(_) => "response failed",
+        ashpd::Error::Portal(_) => "portal error",
+        ashpd::Error::Zbus(_) => "bus error",
+        ashpd::Error::NoResponse => "no response",
+        ashpd::Error::RequiresVersion(..) => "portal too old",
+        ashpd::Error::PortalNotFound(_) => "portal not found",
+        _ => "other",
+    }
+}
+
+/// Someone at this computer declining the dialog is a denial; anything
+/// else, including a grant without exactly one screen, is not.
+fn grant_error(error: &ashpd::Error) -> Error {
+    match error {
+        ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled) => {
+            Error::CaptureDenied("screen sharing was declined on this computer")
+        }
+        _ => Error::CaptureRejected("choose one screen in the RemoteDesktop permission dialog"),
     }
 }
 fn worker_main(
@@ -320,23 +427,33 @@ fn worker_main(
     rx: mpsc::Receiver<Command>,
     ready: mpsc::Sender<Ready>,
     startup: vnilink::BackendStartup,
+    grant: Option<ScreenGrant>,
 ) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     else {
-        let _ = ready.send(Err(Error::CaptureRejected(
-            "the Wayland input runtime could not start",
-        )));
+        tracing::warn!(target: vnilink::trace::INPUT, "the Wayland input runtime could not start");
+        vnilink::ignored!(
+            vnilink::trace::INPUT,
+            "the opener stopped waiting for the portal",
+            ready.send(Err(Error::CaptureRejected(
+                "the Wayland input runtime could not start",
+            )))
+        );
         return;
     };
     // zbus drops proxies by spawning cleanup tasks. Keep a runtime context
     // entered until all portal objects/streams have been dropped.
     let _runtime_context = runtime.enter();
-    let grant = match runtime.block_on(open_grant(&startup)) {
+    let grant = match runtime.block_on(open_grant(&startup, grant.as_ref())) {
         Ok(grant) => grant,
         Err(error) => {
-            let _ = ready.send(Err(error));
+            vnilink::ignored!(
+                vnilink::trace::INPUT,
+                "the opener stopped waiting for the portal",
+                ready.send(Err(error))
+            );
             return;
         }
     };
@@ -347,18 +464,36 @@ fn worker_main(
         node,
         logical,
         cursor_metadata,
+        control,
     } = grant;
     let mut closed = match runtime.block_on(session.receive_closed()) {
         Ok(closed) => Box::pin(closed),
-        Err(_) => {
-            let _ = ready.send(Err(Error::CaptureRejected(
-                "the Wayland permission session could not be monitored",
-            )));
-            let _ = runtime.block_on(session.close());
+        Err(error) => {
+            tracing::warn!(
+                target: vnilink::trace::CAPTURE,
+                failure = portal_failure(&error),
+                "the portal session could not be watched for its end"
+            );
+            vnilink::ignored!(
+                vnilink::trace::INPUT,
+                "the opener stopped waiting for the portal",
+                ready.send(Err(Error::CaptureRejected(
+                    "the Wayland permission session could not be monitored",
+                )))
+            );
+            vnilink::ignored!(
+                vnilink::trace::CAPTURE,
+                "an unwatched portal session is closed at best",
+                runtime.block_on(session.close())
+            );
             return;
         }
     };
-    if startup.check().is_ok() && ready.send(Ok((fd, node, logical, cursor_metadata))).is_ok() {
+    if startup.check().is_ok()
+        && ready
+            .send(Ok((fd, node, logical, cursor_metadata, control)))
+            .is_ok()
+    {
         while !connection.closed.load(Ordering::Acquire) {
             // Pump D-Bus even with no input queued, and notice compositor-side
             // revocation instead of keeping a cached picture alive indefinitely.
@@ -374,26 +509,49 @@ fn worker_main(
                 Ok(Command::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Ok(Command::Input(events, reply)) => {
+                    let count = events.len();
+                    let started = std::time::Instant::now();
                     let result = runtime.block_on(async {
                         tokio::time::timeout(INPUT_TIMEOUT, deliver(&proxy, &session, node, events))
                             .await
                     });
+                    tracing::trace!(
+                        target: vnilink::trace::INPUT,
+                        events = count,
+                        micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                        ok = matches!(result, Ok(Ok(()))),
+                        "portal input delivered"
+                    );
                     let result = match result {
                         Ok(Ok(())) => Ok(()),
-                        _ => {
+                        failed => {
+                            tracing::warn!(
+                                target: vnilink::trace::INPUT,
+                                timed_out = failed.is_err(),
+                                "the portal refused input: input ends for this session"
+                            );
                             connection.closed.store(true, Ordering::Release);
                             Err(vnilink::Error::InputFailed(
                                 "the Wayland portal rejected input or ended the session",
                             ))
                         }
                     };
-                    let _ = reply.send(result);
+                    vnilink::ignored!(
+                        vnilink::trace::INPUT,
+                        "the caller stopped waiting for its input's answer",
+                        reply.send(result)
+                    );
                 }
             }
         }
     }
     connection.closed.store(true, Ordering::Release);
-    let _ = runtime.block_on(async { tokio::time::timeout(INPUT_TIMEOUT, session.close()).await });
+    tracing::info!(target: vnilink::trace::INPUT, "the portal session ended");
+    vnilink::ignored!(
+        vnilink::trace::CAPTURE,
+        "an ending portal session is closed at best",
+        runtime.block_on(async { tokio::time::timeout(INPUT_TIMEOUT, session.close()).await })
+    );
 }
 async fn deliver(
     proxy: &RemoteDesktop,

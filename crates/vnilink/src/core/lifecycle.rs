@@ -1,4 +1,5 @@
 //! Open, shutdown, identity, and relay.
+// trace: records every ignored failure
 
 use super::*;
 
@@ -6,7 +7,7 @@ use super::host::{accept_loop, bind_endpoint};
 
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use iroh::{RelayMode, SecretKey};
@@ -201,25 +202,44 @@ impl Core {
                 crate::system::SystemPolicy::default(),
             ),
         };
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_name("vnilink")
-            .build()
-            .map_err(Error::network)?;
+        let span = crate::trace::engine_span();
+        let runtime = {
+            thread_local! {
+                /// The engine span this runtime thread runs in, for its life.
+                static ENTERED: std::cell::RefCell<Option<tracing::span::EnteredSpan>> =
+                    const { std::cell::RefCell::new(None) };
+            }
+            let entering = span.clone();
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_name("vnilink")
+                .on_thread_start(move || {
+                    ENTERED
+                        .with(|entered| *entered.borrow_mut() = Some(entering.clone().entered()));
+                })
+                .on_thread_stop(|| {
+                    ENTERED.with(|entered| entered.borrow_mut().take());
+                })
+                .build()
+                .map_err(Error::network)?
+        };
         let runtime_handle = runtime.handle().clone();
         let listen = if direct_only {
             Listen::Loopback
         } else {
             config.listen
         };
-        let endpoint = runtime.block_on(bind_endpoint(
-            secret.clone(),
-            relay_mode,
-            listen,
-            direct_only || !bound_relay.is_public(),
-        ))?;
+        let endpoint = span.in_scope(|| {
+            runtime.block_on(bind_endpoint(
+                secret.clone(),
+                relay_mode,
+                listen,
+                direct_only || !bound_relay.is_public(),
+            ))
+        })?;
         let input_cleanup = Arc::new(AtomicUsize::new(0));
-        let cleanup_executor = input_cleanup::Executor::new().map_err(Error::network)?;
+        let cleanup_executor =
+            input_cleanup::Executor::new(span.clone()).map_err(Error::network)?;
         let shared = Arc::new_cyclic(move |weak| Shared {
             sharing_serial: Mutex::new(()),
             power_factory: Mutex::new(power::Factory {
@@ -235,16 +255,17 @@ impl Core {
             relay: bound_relay,
             store,
             runtime_handle,
+            span,
             self_weak: weak.clone(),
             teardown_phase: AtomicU8::new(0),
             teardown_lock: Mutex::new(()),
             teardown_cv: Condvar::new(),
             #[cfg(any(test, feature = "test-probes"))]
             close_count: AtomicUsize::new(0),
+            #[cfg(feature = "test-probes")]
+            agent: Mutex::new(None),
             #[cfg(test)]
             teardown_budget_ms: AtomicU64::new(0),
-            #[cfg(test)]
-            block_blob_shutdown: AtomicBool::new(false),
             #[cfg(test)]
             block_endpoint_close: AtomicBool::new(false),
             events: EventHub::new(event_capacity),
@@ -257,6 +278,7 @@ impl Core {
                 system_policy,
                 desktop_quality_default: crate::session::controller_offer(),
                 desktop_codec_default: None,
+                window_decoders: None,
                 system_operations: HashMap::new(),
                 next_operation_id: 1,
                 privacy: None,
@@ -266,9 +288,7 @@ impl Core {
                 replay,
                 record_relay,
                 incoming: HashMap::new(),
-                incoming_slots: Arc::new(AtomicUsize::new(0)),
                 outgoing: HashMap::new(),
-                clipboard_owner: None,
                 desktop_control: None,
                 lock_watch: crate::power::LockAfterControl::default(),
                 next_session_id: 1,
@@ -281,6 +301,10 @@ impl Core {
                 pairing_window: None,
                 control_request: None,
                 next_control_request: 1,
+                snapshot_recent: HashMap::new(),
+                presence_links: false,
+                presence: HashMap::new(),
+                link_refused: std::collections::HashSet::new(),
             }),
             desktop: Arc::new(Mutex::new(None)),
             desktop_info: Mutex::new(None),
@@ -289,23 +313,25 @@ impl Core {
             input_cleanup,
             capture: Mutex::new(None),
             clipboard: Mutex::new(None),
-            clipboard_file_source: Mutex::new(None),
-            paste_waiters: Mutex::new(HashMap::new()),
-            paste_preparing: Mutex::new(std::collections::HashSet::new()),
-            paste_nonce: AtomicU64::new(1),
             camera_factory: Mutex::new(None),
+            camera_turned_off: std::sync::atomic::AtomicBool::new(false),
+            control_used: std::sync::atomic::AtomicBool::new(false),
+            snapshot_factory: Mutex::new(None),
+            snapshot_tap: Mutex::new(None),
             camera_open: Mutex::new(std::collections::HashSet::new()),
             audio_factory: Mutex::new(None),
             terminal_factory: Mutex::new(None),
             system_actions: Mutex::new(None),
             privacy_serial: Mutex::new(()),
+            system_notice: Mutex::new(crate::system::SYSTEM_ACTION_NOTICE),
+            hostname: Mutex::new(None),
             terminal_sessions: Mutex::new(HashMap::new()),
             clipboard_available: AtomicBool::new(false),
-            video_inbox: Mutex::new(None),
-            video_subscriber: Mutex::new(Weak::new()),
             session_gate: tokio::sync::Mutex::new(()),
             desktop_gate: tokio::sync::Mutex::new(()),
             desktop_streams: AtomicUsize::new(0),
+            secure_desktop: std::sync::atomic::AtomicBool::new(false),
+            last_desktop_end: Mutex::new(None),
             desktop_routers: Mutex::new(std::collections::HashSet::new()),
             topology: Mutex::new(super::topology::TopologySnapshot {
                 revision: 0,
@@ -318,22 +344,31 @@ impl Core {
             pointer_defaults: Mutex::new(crate::PointerSettings::default()),
             cursor_receiver: AtomicBool::new(false),
             file_roots: Mutex::new(crate::fs::RootSet::default()),
-            blob_dir: Mutex::new(None),
-            blob_store: Mutex::new(None),
-            blob_open: tokio::sync::Mutex::new(()),
-            blob_offers: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            blob_recent_fetches: Arc::new(Mutex::new(HashMap::new())),
-            blob_import_pins: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            blob_job_offers: Mutex::new(std::collections::HashSet::new()),
-            blob_serving: Mutex::new(std::collections::HashMap::new()),
+            transfer_dir: Mutex::new(None),
+            files_serving: Mutex::new(std::collections::HashMap::new()),
+            files_fetching: Mutex::new(std::collections::HashMap::new()),
+            files_dialing: tokio::sync::Mutex::new(()),
+            files_gate: Default::default(),
+            transfer_counters: Default::default(),
+            job_prefetch: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(any(test, feature = "test-probes"))]
+            prefetch_off: AtomicBool::new(false),
+            #[cfg(any(test, feature = "test-probes"))]
+            drops: Mutex::new(None),
+            folder_watches: Mutex::new(std::collections::HashMap::new()),
+            watch_next: std::sync::atomic::AtomicU64::new(1),
             jobs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             job_next: std::sync::atomic::AtomicU64::new(1),
-            job_save: Mutex::new(()),
+            job_journal: Mutex::new(Default::default()),
             job_owner_gate: Mutex::new(()),
             job_cancel: Mutex::new(std::collections::HashMap::new()),
             job_driving: Mutex::new(std::collections::HashSet::new()),
+            job_revision: AtomicU64::new(0),
+            job_wake: (Mutex::new(()), std::sync::Condvar::new()),
+            job_workers: Mutex::new(std::collections::HashSet::new()),
             file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
             backend_state: Mutex::new(std::collections::HashMap::new()),
+            presence_wake: Mutex::new(HashMap::new()),
         });
         let accept = Arc::clone(&shared);
         runtime.spawn(async move { accept_loop(accept).await });
@@ -345,9 +380,7 @@ impl Core {
     }
 
     pub fn shutdown(&self) {
-        // Settle the blob store first so its directory reopens cleanly.
-        // A storage fence may already have scheduled the same close.
-        self.blob_close_store();
+        let _engine = self.engine();
         {
             let mut state = lock(&self.shared.state);
             if !state.shut_down {
@@ -356,6 +389,10 @@ impl Core {
             }
         }
         self.finish_endpoint_close();
+        // Its jobs are interrupted before it says it has shut down, not when
+        // their streams next notice: after its links closed saying it shut
+        // down, so a stopped stream does not tell a peer it stopped sending.
+        super::service_jobs::interrupt_orphaned(&self.shared);
     }
 
     /// Closes the endpoint once. A storage fence may already have claimed the
@@ -372,6 +409,7 @@ impl Core {
                 return;
             }
         }
+        close_links_for_shutdown(&self.shared);
         let blocked = take_close_block(&self.shared);
         let limit = teardown_limit(&self.shared, blocked);
         let endpoint = self.shared.endpoint.clone();
@@ -385,19 +423,24 @@ impl Core {
             })
             .await
             .is_ok();
-            let _ = tx.send(closed);
+            crate::ignored!(
+                crate::trace::SESSION,
+                "the caller stopped waiting for its answer",
+                tx.send(closed)
+            );
         });
         let observed = rx.recv_timeout(limit.saturating_add(Duration::from_secs(1)));
         match observed {
             Ok(true) => mark_teardown_finished(&self.shared),
             _ => {
-                eprintln!("vnilink: installation endpoint close exceeded 5s; restart required");
+                tracing::error!(target: crate::trace::SESSION, "the endpoint did not close within 5 s: restart required");
                 release_teardown_claim(&self.shared);
             }
         }
     }
 
     pub fn endpoint_id(&self) -> String {
+        let _engine = self.engine();
         self.shared.secret.public().to_string()
     }
 
@@ -407,6 +450,7 @@ impl Core {
     /// After [`Core::reset_identity`], the new secret is only in the store.
     /// This stopped core still reports the key it bound.
     pub fn export_identity(&self) -> [u8; 32] {
+        let _engine = self.engine();
         self.shared.secret.to_bytes()
     }
 
@@ -414,11 +458,13 @@ impl Core {
     /// includes pending changes. Credentials remain opaque inside CustomRelay:
     /// callers can preserve or replace them but cannot read the token string.
     pub fn relay_configuration(&self) -> Result<RelaySettings, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.record_relay.clone())
     }
 
     /// Compare saved and bound relays inside Rust, including private credentials.
     pub fn relay_restart_required(&self) -> Result<bool, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.record_relay != self.shared.relay)
     }
 
@@ -428,6 +474,7 @@ impl Core {
     /// relay bound at start. A credential stays in the installation record and
     /// out of [`Debug`]. This does not dial the relay.
     pub fn set_relay(&self, relay: RelaySettings) -> Result<(), Error> {
+        let _engine = self.engine();
         relay.to_relay_mode()?;
         let mut state = self.alive_state()?;
         if self.shared.store.is_none() {
@@ -452,6 +499,7 @@ impl Core {
     /// locked or unavailable store leaves this process and the saved record
     /// unchanged.
     pub fn reset_identity(&self) -> Result<(), Error> {
+        let _engine = self.engine();
         {
             let mut state = self.alive_state()?;
             let store = self.shared.store.clone().ok_or(Error::InvalidSetting(
@@ -476,6 +524,7 @@ impl Core {
     }
 
     pub fn subscribe(&self) -> Result<EventSubscription, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         self.shared.events.subscribe()
     }
@@ -483,6 +532,7 @@ impl Core {
     /// Live hosted peers, oldest id first. `Snapshot::incoming` remains the
     /// latest session for single-view callers. Use this when iterating peers.
     pub fn hosted_sessions(&self) -> Result<Vec<SessionInfo>, Error> {
+        let _engine = self.engine();
         let state = self.alive_state()?;
         let mut sessions: Vec<SessionInfo> = state
             .incoming
@@ -495,6 +545,7 @@ impl Core {
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
+        let _engine = self.engine();
         let state = lock(&self.shared.state);
         if state.shut_down {
             return Err(Error::ShutDown);
@@ -525,6 +576,7 @@ impl Core {
     }
 
     pub fn capabilities(&self) -> Capabilities {
+        let _engine = self.engine();
         desktop_capabilities(&self.shared)
     }
 
@@ -533,6 +585,7 @@ impl Core {
     /// released without a finished close can be claimed again.
     #[cfg(any(test, feature = "test-probes"))]
     pub fn endpoint_close_count(&self) -> usize {
+        let _engine = self.engine();
         self.shared.close_count.load(Ordering::Relaxed)
     }
 
@@ -546,24 +599,142 @@ impl Core {
         self.shared.teardown_phase.load(Ordering::Acquire)
     }
 
-    /// Shortens only a blocked blob shutdown or endpoint close. A real close
-    /// keeps the production budget.
+    /// Shortens only a blocked endpoint close. A real close keeps the
+    /// production budget.
     #[cfg(test)]
-    pub(crate) fn arm_blocked_teardown(
-        &self,
-        budget: Duration,
-        block_blob: bool,
-        block_close: bool,
-    ) {
+    pub(crate) fn arm_blocked_teardown(&self, budget: Duration) {
         let millis = u64::try_from(budget.as_millis()).unwrap_or(0);
         self.shared
             .teardown_budget_ms
             .store(millis, Ordering::Release);
         self.shared
-            .block_blob_shutdown
-            .store(block_blob, Ordering::Release);
-        self.shared
             .block_endpoint_close
-            .store(block_close, Ordering::Release);
+            .store(true, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    use crate::core::{Core, OpenConfig};
+    use crate::error::Error;
+    use crate::installation::{self, MemoryStore};
+    use crate::invitation;
+    use crate::relay::{CustomRelay, RelaySettings};
+    use crate::session::Grants;
+    use crate::test_support::loopback_core;
+
+    const TOKEN: &str = "relay-credential-alpha";
+
+    fn open_loop(store: &MemoryStore, relay: RelaySettings) -> Core {
+        let core = Core::open_direct(Arc::new(store.clone()), relay).expect("installation opens");
+        core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .expect("flags");
+        core
+    }
+
+    fn credentialed_relay() -> RelaySettings {
+        let relay = CustomRelay::new("https://relay.example.com./")
+            .unwrap()
+            .with_auth_token(TOKEN)
+            .unwrap();
+        RelaySettings::custom(vec![relay]).unwrap()
+    }
+
+    fn all_grants() -> Grants {
+        Grants {
+            view: true,
+            control: true,
+            clipboard: true,
+            transfer: true,
+        }
+    }
+
+    #[test]
+    fn reset_identity_forgets_trust_and_keeps_the_saved_relay() {
+        let store = MemoryStore::empty();
+        let host = open_loop(&store, RelaySettings::public_n0());
+        let controller = loopback_core();
+        let invitation = controller
+            .create_invitation(Duration::from_secs(120))
+            .unwrap();
+        host.accept_invitation(&invitation).unwrap();
+        host.set_desktop_sharing(all_grants()).unwrap();
+        let settings = credentialed_relay();
+        host.set_relay(settings.clone()).unwrap();
+        assert_eq!(host.relay_configuration().unwrap(), settings);
+        assert!(!format!("{:?}", host.relay_configuration().unwrap()).contains(TOKEN));
+        assert_eq!(host.snapshot().unwrap().devices.len(), 1);
+        assert!(host.snapshot().unwrap().public_relay);
+        let issued = host.create_invitation(Duration::from_secs(60)).unwrap();
+        let (opened, _) = invitation::open(&issued, SystemTime::now()).unwrap();
+        assert!(opened.relays.is_empty());
+        assert!(!issued.contains(TOKEN));
+        let old_id = host.endpoint_id();
+        let old_secret = host.export_identity();
+        host.reset_identity().unwrap();
+        assert!(matches!(host.snapshot(), Err(Error::ShutDown)));
+        assert_eq!(host.endpoint_id(), old_id);
+        assert!(
+            host.export_identity() == old_secret,
+            "the stopped core dropped the key it bound"
+        );
+        drop(host);
+
+        let host = open_loop(&store, RelaySettings::public_n0());
+        assert_ne!(host.endpoint_id(), old_id);
+        assert!(
+            host.export_identity() != old_secret,
+            "reset kept the previous identity"
+        );
+        let snapshot = host.snapshot().unwrap();
+        assert!(snapshot.devices.is_empty());
+        assert!(!snapshot.public_relay);
+        assert_eq!(snapshot.relay_urls, settings.relay_urls().unwrap());
+        assert!(!format!("{snapshot:?}").contains(TOKEN));
+        assert_eq!(format!("{store:?}"), "MemoryStore");
+        let saved = installation::decode(store.record().as_ref().unwrap()).unwrap();
+        assert_eq!(saved.relay, settings);
+        let rendered = format!("{saved:?}");
+        assert!(rendered.contains("[redacted]"));
+        assert!(!rendered.contains(TOKEN));
+        let config = OpenConfig {
+            initial_relay: settings,
+            ..OpenConfig::default()
+        };
+        assert!(!format!("{config:?}").contains(TOKEN));
+
+        let paired = host.accept_invitation(&invitation).unwrap();
+        assert_eq!(paired.grants, Grants::default());
+        assert_eq!(paired.endpoint_id, controller.endpoint_id());
+    }
+
+    #[test]
+    fn a_timed_out_endpoint_close_can_be_retried() {
+        let store = MemoryStore::empty();
+        let host = open_loop(&store, RelaySettings::public_n0());
+        host.arm_blocked_teardown(Duration::from_millis(40));
+        store.fail_next_save(Error::StoreRecoveryRequired);
+        assert!(matches!(
+            host.set_desktop_sharing(all_grants()),
+            Err(Error::StoreRecoveryRequired)
+        ));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while host.teardown_phase() == 1 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(host.teardown_phase(), 0);
+        assert!(!host.endpoint_is_closed());
+        assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
+        host.shutdown();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !host.endpoint_is_closed() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(host.endpoint_is_closed());
+        assert_eq!(host.teardown_phase(), 2);
+        assert_eq!(host.endpoint_close_count(), 2);
     }
 }

@@ -1,15 +1,33 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls and window state only.
  *--------------------------------------------------------------------------------------------*/
 
+import { IChannel, IPCServer, IServerChannel, StaticRouter } from '../../../base/parts/ipc/common/ipc.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
-import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
+import { IRemoteService } from './services.js';
 
 export const IMainProcessService = createDecorator<IMainProcessService>('mainProcessService');
 
-export interface IMainProcessService {
-	readonly _serviceBrand: undefined;
-	getChannel(channelName: string): IChannel;
+export interface IMainProcessService extends IRemoteService { }
+
+/**
+ * An implementation of `IMainProcessService` that leverages `IPCServer`.
+ */
+export class MainProcessService implements IMainProcessService {
+
+	declare readonly _serviceBrand: undefined;
+
+	constructor(
+		private server: IPCServer,
+		private router: StaticRouter
+	) { }
+
+	getChannel(channelName: string): IChannel {
+		return this.server.getChannel(channelName, this.router);
+	}
+
+	registerChannel(channelName: string, channel: IServerChannel<string>): void {
+		this.server.registerChannel(channelName, channel);
+	}
 }

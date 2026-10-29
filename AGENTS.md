@@ -8,6 +8,8 @@ The current repository is not the quality standard. Follow the documented target
 
 Read paths and reference files supplied by the user before drawing conclusions. Treat examples as evidence of a broader concern, not as its entire scope. For substantial changes or proposals, assess architecture, lifecycle, contracts/security, UX/accessibility, portability and build/test reproducibility; pursue the relevant concerns and explain material exclusions. Separate source evidence, inference and proposals.
 
+Comments, docs and fixtures describe the project, never a contributor's computer or account; `error-doc-voice` owns that rule.
+
 VS Code is the TypeScript architectural reference. Read the corresponding upstream subsystem before designing ours. Preserve copied infrastructure at full fidelity; explicit VniLink product adaptations remain valid. Import directories alone do not constitute architectural fidelity. See `workbench-architecture` for reference selection and provenance.
 
 ## Repository structure
@@ -16,7 +18,7 @@ VS Code is the TypeScript architectural reference. Read the corresponding upstre
 |---|---|
 | `src/` | Electron/TypeScript architecture; `src/AGENTS.md` owns its layers. |
 | `crates/` | Rust core, facade, bridge, media and native backends; `crates/AGENTS.md` owns the dependency map. |
-| `build/`, `scripts/` | Reusable build/tooling definitions and thin executable launchers, separate from runtime code. |
+| `build/`, `scripts/` | Build, packaging and test tasks as TypeScript functions run by `node build/run.ts <task>`; `scripts/` holds only the Windows validation entry point. |
 | `test/` | TypeScript contract, native bridge and UI automation; Rust behavior tests remain with their crates. |
 | `assets/` | Product artwork and shipped notices/resources, accessed through owning helpers. |
 | `vendor/` | Intentional dependency sources/patches with provenance and license obligations. |
@@ -26,12 +28,13 @@ VS Code is the TypeScript architectural reference. Read the corresponding upstre
 
 ## Placement and skills
 
-- `src/AGENTS.md` — TypeScript layers and file placement; `workbench-architecture` — class ownership, service composition and upstream study.
+- `src/AGENTS.md` — TypeScript layers and file placement; `workbench-architecture` — how views, services, contributions and IPC are written, with `src/workbench/contrib/devices` as the reference; `recipes` — step lists for common additions.
 - `crates/AGENTS.md` — Rust ownership and dependency direction; `engine-bridge` and `ffi-boundary` — control and binary contracts.
-- `build/AGENTS.md`, `test/AGENTS.md` — maintained build/test infrastructure; `build-test-infrastructure` — reusable tasks, runners and fixtures.
+- `build/AGENTS.md`, `test/AGENTS.md` — maintained build/test infrastructure; `build-test-infrastructure` — build tasks as functions, runners and fixtures; `smoke-tests` — running scenarios and validating UI changes.
 - `design-philosophy`, `ux-css-layout`, `ux-theming`, `accessibility` — product design and interaction requirements.
 - `async-cancellation`, `memory-leak-audit`, `error-doc-voice` — lifecycle, resources and error semantics.
 - `unit-tests` — authoritative validation selection and completion policy; `cross-platform-validation` — environments, prerequisites and limits of evidence.
+- `code-review` — review scope and the architecture checklist every change answers.
 - `commit-organization` — coherent commit boundaries, selective staging and verification of each commit; use when committing work or planning a commit series.
 
 Skill names refer to `.agents/skills/<name>/SKILL.md`. Read the applicable guidance, not every skill as a ritual. New instructions belong to one owner; other documents link to that owner.

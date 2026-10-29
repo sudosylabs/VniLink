@@ -168,9 +168,31 @@ pub struct FfiSessionInfo {
     pub role: FfiSessionRole,
     pub phase: FfiSessionPhase,
     pub peer_id: String,
-    pub quality: Option<FfiQuality>,
-    pub monitor_width: u16,
-    pub monitor_height: u16,
+}
+
+/// One capability a paired computer reported, by stable name and coarse status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiCapabilityStatus {
+    pub capability: String,
+    pub status: String,
+}
+
+pub(crate) fn capability_name(capability: vnilink::Capability) -> &'static str {
+    match capability {
+        vnilink::Capability::DesktopView => "desktopView",
+        vnilink::Capability::DesktopControl => "desktopControl",
+        vnilink::Capability::Clipboard => "clipboard",
+        vnilink::Capability::Files => "files",
+        vnilink::Capability::Terminal => "terminal",
+        vnilink::Capability::Camera => "camera",
+        vnilink::Capability::SystemAudio => "systemAudio",
+        vnilink::Capability::Microphone => "microphone",
+        vnilink::Capability::SystemLock => "systemLock",
+        vnilink::Capability::SystemRestart => "systemRestart",
+        vnilink::Capability::SystemShutdown => "systemShutdown",
+        vnilink::Capability::SystemPrivacy => "systemPrivacy",
+        vnilink::Capability::Recording => "recording",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -245,7 +267,91 @@ pub struct FfiEncodedFrame {
     pub payload: Vec<u8>,
     pub display_id: u64,
     pub revision: u64,
+    pub role: FfiFrameRole,
+    /// Where the picture changed since the one before it; see
+    /// [`vnilink::EncodedFrame::regions`].
+    pub regions: Option<Vec<FfiRegion>>,
+    pub timing: FfiFrameTiming,
 }
+
+/// A part of a picture, in its pixels; see [`vnilink::Region`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FfiRegion {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl From<vnilink::Region> for FfiRegion {
+    fn from(value: vnilink::Region) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        }
+    }
+}
+
+impl From<FfiRegion> for vnilink::Region {
+    fn from(value: FfiRegion) -> Self {
+        Self {
+            x: value.x,
+            y: value.y,
+            width: value.width,
+            height: value.height,
+        }
+    }
+}
+
+/// What a frame is to the picture; see [`vnilink::FrameRole`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FfiFrameRole {
+    #[default]
+    Changed,
+    Unchanged,
+    Still,
+}
+
+impl FfiFrameRole {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Changed => "changed",
+            Self::Unchanged => "unchanged",
+            Self::Still => "still",
+        }
+    }
+}
+
+impl From<vnilink::FrameRole> for FfiFrameRole {
+    fn from(value: vnilink::FrameRole) -> Self {
+        match value {
+            vnilink::FrameRole::Changed => Self::Changed,
+            vnilink::FrameRole::Unchanged => Self::Unchanged,
+            vnilink::FrameRole::Still => Self::Still,
+        }
+    }
+}
+
+/// Where a received frame's time went; see [`vnilink::FrameTiming`].
+/// Telemetry, not content: it never makes two frames unequal.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FfiFrameTiming {
+    /// Capture to send on the host, in microseconds.
+    pub host_us: u32,
+    /// Time queued on this computer before it was read, in microseconds.
+    pub queued_us: u32,
+}
+
+impl PartialEq for FfiFrameTiming {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for FfiFrameTiming {}
+
 impl FfiEncodedFrame {
     pub fn new(
         codec: FfiVideoCodec,
@@ -266,14 +372,29 @@ impl FfiEncodedFrame {
         self
     }
     pub(crate) fn into_core(self) -> Result<vnilink::EncodedFrame, FfiError> {
-        vnilink::EncodedFrame::new(
-            self.codec.into(),
-            self.keyframe,
-            self.timestamp_us,
-            self.payload,
-        )
-        .map(|frame| frame.with_source(self.display_id, self.revision))
-        .map_err(map_error)
+        let frame = match self.role {
+            FfiFrameRole::Still => vnilink::EncodedFrame::still(self.timestamp_us, self.payload),
+            FfiFrameRole::Changed | FfiFrameRole::Unchanged => vnilink::EncodedFrame::new(
+                self.codec.into(),
+                self.keyframe,
+                self.timestamp_us,
+                self.payload,
+            )
+            .map(|frame| match self.role {
+                FfiFrameRole::Unchanged => frame.unchanged(),
+                _ => frame,
+            }),
+        };
+        frame
+            .map(|frame| {
+                frame
+                    .with_source(self.display_id, self.revision)
+                    .with_regions(
+                        self.regions
+                            .map(|regions| regions.into_iter().map(Into::into).collect()),
+                    )
+            })
+            .map_err(map_error)
     }
 }
 impl From<vnilink::EncodedFrame> for FfiEncodedFrame {
@@ -285,6 +406,14 @@ impl From<vnilink::EncodedFrame> for FfiEncodedFrame {
             payload: value.payload,
             display_id: value.display_id,
             revision: value.revision,
+            role: value.role.into(),
+            regions: value
+                .regions
+                .map(|regions| regions.into_iter().map(Into::into).collect()),
+            timing: FfiFrameTiming {
+                host_us: value.timing.host_us,
+                queued_us: value.timing.queued_us,
+            },
         }
     }
 }
@@ -296,8 +425,32 @@ impl std::fmt::Debug for FfiEncodedFrame {
             .field("timestamp_us", &self.timestamp_us)
             .field("display_id", &self.display_id)
             .field("revision", &self.revision)
+            .field("role", &self.role)
+            .field("regions", &self.regions.as_ref().map(Vec::len))
             .field("payload_len", &self.payload.len())
             .finish()
+    }
+}
+
+/// A codec the app's window decodes, whether in hardware, whether at
+/// 4:4:4, and whether it shows only BT.601 pictures right; see
+/// [`vnilink::WindowDecoder`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FfiWindowDecoder {
+    pub codec: FfiVideoCodec,
+    pub hardware: bool,
+    pub chroma444: bool,
+    pub bt601: bool,
+}
+
+impl From<FfiWindowDecoder> for vnilink::WindowDecoder {
+    fn from(value: FfiWindowDecoder) -> Self {
+        Self {
+            codec: value.codec.into(),
+            hardware: value.hardware,
+            chroma444: value.chroma444,
+            bt601: value.bt601,
+        }
     }
 }
 
@@ -359,6 +512,21 @@ pub enum FfiEvent {
     HostingChanged {
         hosting: bool,
     },
+    /// A folder watched with `watch_folder` changed.
+    FolderChanged {
+        watch: u64,
+    },
+    /// A paired computer asked this one to restart or shut down.
+    SystemActionScheduled {
+        operation_id: u64,
+        action: crate::FfiSystemAction,
+        endpoint_id: String,
+        remaining_ms: u32,
+    },
+    SystemActionEnded {
+        operation_id: u64,
+        state: crate::FfiOperationState,
+    },
     DevicePaired {
         endpoint_id: String,
     },
@@ -382,6 +550,13 @@ pub enum FfiEvent {
         endpoint_id: String,
         hostname: Option<String>,
     },
+    PresenceChanged {
+        endpoint_id: String,
+        presence: String,
+    },
+    PeerAvailabilityChanged {
+        endpoint_id: String,
+    },
     SessionChanged {
         id: u64,
         generation: u64,
@@ -395,22 +570,9 @@ pub enum FfiEvent {
     HostedServiceChanged {
         service: crate::FfiServiceInfo,
     },
-    QualityUpdated {
-        id: u64,
-        quality: FfiQuality,
-    },
     InputFailed {
         id: u64,
         message: String,
-    },
-    KeyframeRequested {
-        id: u64,
-    },
-    ClipboardReceived {
-        id: u64,
-    },
-    ClipboardFilesReceived {
-        id: u64,
     },
     DesktopClipboardReceived {
         service: crate::FfiServiceInfo,
@@ -480,13 +642,6 @@ pub(crate) fn session_role(role: vnilink::SessionRole) -> FfiSessionRole {
     }
 }
 
-pub(crate) fn to_session_role(role: FfiSessionRole) -> vnilink::SessionRole {
-    match role {
-        FfiSessionRole::Controller => vnilink::SessionRole::Controller,
-        FfiSessionRole::Host => vnilink::SessionRole::Host,
-    }
-}
-
 pub(crate) fn session_phase(phase: &vnilink::SessionPhase) -> FfiSessionPhase {
     match phase {
         vnilink::SessionPhase::Connecting => FfiSessionPhase::Connecting,
@@ -510,9 +665,6 @@ pub(crate) fn session_info(info: vnilink::SessionInfo) -> FfiSessionInfo {
         role: session_role(info.role),
         phase: session_phase(&info.phase),
         peer_id: info.peer_id,
-        quality: info.quality.as_ref().map(quality_record),
-        monitor_width: info.monitor_width,
-        monitor_height: info.monitor_height,
     }
 }
 
@@ -527,13 +679,7 @@ pub(crate) fn device_info(info: vnilink::DeviceInfo) -> FfiDeviceInfo {
             }
             .to_string()
         }),
-        presence: match info.presence {
-            vnilink::DevicePresence::Connected => "connected",
-            vnilink::DevicePresence::Connecting => "connecting",
-            vnilink::DevicePresence::Reconnecting => "reconnecting",
-            vnilink::DevicePresence::Disconnected => "disconnected",
-        }
-        .to_string(),
+        presence: presence_label(info.presence).to_string(),
         endpoint_id: info.endpoint_id,
         hostname: info.hostname,
         pet_name: info.pet_name,
@@ -606,9 +752,48 @@ pub(crate) fn to_keyboard_mode(mode: FfiKeyboardMode) -> vnilink::KeyboardMode {
     }
 }
 
+pub(crate) fn presence_label(presence: vnilink::DevicePresence) -> &'static str {
+    match presence {
+        vnilink::DevicePresence::Connected => "connected",
+        vnilink::DevicePresence::Connecting => "connecting",
+        vnilink::DevicePresence::Reconnecting => "reconnecting",
+        vnilink::DevicePresence::NotAccepting => "notAccepting",
+        vnilink::DevicePresence::Disconnected => "disconnected",
+    }
+}
+
 pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
     match event {
+        vnilink::CoreEvent::PresenceChanged {
+            endpoint_id,
+            presence,
+        } => FfiEvent::PresenceChanged {
+            endpoint_id,
+            presence: presence_label(presence).to_string(),
+        },
+        vnilink::CoreEvent::PeerAvailabilityChanged { endpoint_id } => {
+            FfiEvent::PeerAvailabilityChanged { endpoint_id }
+        }
         vnilink::CoreEvent::HostingChanged { hosting } => FfiEvent::HostingChanged { hosting },
+        vnilink::CoreEvent::FolderChanged { watch } => FfiEvent::FolderChanged { watch },
+        vnilink::CoreEvent::SystemActionScheduled {
+            operation_id,
+            action,
+            endpoint_id,
+            remaining_ms,
+        } => FfiEvent::SystemActionScheduled {
+            operation_id,
+            action: action.into(),
+            endpoint_id,
+            remaining_ms,
+        },
+        vnilink::CoreEvent::SystemActionEnded {
+            operation_id,
+            state,
+        } => FfiEvent::SystemActionEnded {
+            operation_id,
+            state: state.into(),
+        },
         vnilink::CoreEvent::DevicePaired { endpoint_id } => FfiEvent::DevicePaired { endpoint_id },
         vnilink::CoreEvent::DeviceAuthorized { endpoint_id } => {
             FfiEvent::DeviceAuthorized { endpoint_id }
@@ -651,19 +836,10 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
         vnilink::CoreEvent::HostedServiceChanged { service } => FfiEvent::HostedServiceChanged {
             service: service.into(),
         },
-        vnilink::CoreEvent::QualityUpdated { id, quality } => FfiEvent::QualityUpdated {
-            id,
-            quality: quality_record(&quality),
-        },
         vnilink::CoreEvent::InputFailed { id, message } => FfiEvent::InputFailed {
             id,
             message: message.to_string(),
         },
-        vnilink::CoreEvent::KeyframeRequested { id } => FfiEvent::KeyframeRequested { id },
-        vnilink::CoreEvent::ClipboardReceived { id } => FfiEvent::ClipboardReceived { id },
-        vnilink::CoreEvent::ClipboardFilesReceived { id } => {
-            FfiEvent::ClipboardFilesReceived { id }
-        }
         vnilink::CoreEvent::DesktopClipboardReceived { service } => {
             FfiEvent::DesktopClipboardReceived {
                 service: service.into(),
@@ -830,9 +1006,6 @@ mod bridge_serialization_tests {
             role: FfiSessionRole::Controller,
             phase: FfiSessionPhase::Active,
             peer_id: "peer".into(),
-            quality: None,
-            monitor_width: 0,
-            monitor_height: 0,
         };
         let value = serde_json::to_value(session).unwrap();
         assert_eq!(value["id"], u64::MAX.to_string());

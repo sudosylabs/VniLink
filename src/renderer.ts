@@ -1,9 +1,14 @@
-import { DesktopMain } from './workbench/electron-browser/desktop.main.js';
+import { context } from './base/parts/sandbox/electron-browser/globals.js';
+import { isNativeWindowConfiguration } from './platform/window/common/windowConfiguration.js';
+import { main } from './workbench/workbench.desktop.main.js';
 
-void window.vnilink.getAppInfo().then(async info => {
-	const desktop = new DesktopMain(window.vnilink, info);
-	await desktop.open();
-}).catch((error: unknown) => {
+void (async () => {
+	const configuration: unknown = await context.resolveConfiguration();
+	if (!isNativeWindowConfiguration(configuration)) {
+		throw new Error('Invalid window configuration');
+	}
+	await main(configuration);
+})().catch((error: unknown) => {
 	console.error(error);
 	const status = document.querySelector('[role="status"]');
 	if (status) {

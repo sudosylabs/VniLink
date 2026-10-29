@@ -4,9 +4,9 @@
 //! frames. [`ScreenPlan`] is the one-monitor ScreenCaptureKit configuration.
 //! [`ScreenCapture::start`] lists shareable content and starts a stream; tests
 //! do not call it, and this crate has not captured the screen.
-//! [`HostSession`] paces captured pictures and publishes Annex-B for the
-//! hosted session. [`serve_stream`] copies an open capture until the session
-//! ends.
+//! [`HostSession`] paces captured pictures and publishes Annex-B for a
+//! hosted Desktop service. [`serve_shared`] encodes every live viewer from
+//! one open capture.
 //!
 //! VideoToolbox emits length-prefixed NALs. Keyframes are converted to Annex-B
 //! with SPS and PPS in front so another operating system can decode them.
@@ -17,14 +17,24 @@ mod camera;
 pub use camera::{camera_devices, microphone_authorized, MacCameraFactory};
 mod capture;
 #[cfg(target_os = "macos")]
+mod clock;
+#[cfg(target_os = "macos")]
+pub use clock::{host_time_instant, host_time_now};
+#[cfg(target_os = "macos")]
 mod decode;
 mod encode;
 mod host;
 mod pixels;
+#[cfg(target_os = "macos")]
+mod pointer;
+#[cfg(target_os = "macos")]
+pub use pointer::{system_pointer, PointerImage, SystemPointer};
 
 pub use capture::{display_scale, ScreenPlan, FILEVAULT_PREBOOT_SUPPORTED};
 #[cfg(target_os = "macos")]
 pub use capture::{list_displays, ScreenCapture};
+#[cfg(target_os = "macos")]
+mod snapshot;
 #[cfg(target_os = "macos")]
 pub use decode::MacDecoder;
 #[cfg(target_os = "macos")]
@@ -32,10 +42,12 @@ pub use encode::probe_hevc;
 pub use encode::{MacEncoder, MacVideoEncoder};
 pub use host::HostSession;
 #[cfg(target_os = "macos")]
-pub use host::{serve_desktop, serve_shared, serve_stream};
+pub use host::{serve_desktop, serve_shared};
 pub use pixels::raw_frame_from_bgra;
 #[cfg(target_os = "macos")]
 pub use pixels::raw_frame_from_pixel_buffer;
+#[cfg(target_os = "macos")]
+pub use snapshot::{screen_capture_allowed, MacSnapshot};
 
 #[cfg(test)]
 #[path = "tests.rs"]

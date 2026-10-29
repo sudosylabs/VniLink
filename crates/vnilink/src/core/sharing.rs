@@ -4,14 +4,17 @@ use crate::{CloseCause, ServicePhase, SharingPolicy};
 
 impl Core {
     pub fn sharing_policy(&self) -> Result<SharingPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.trust.sharing)
     }
 
     pub fn change_sharing_policy(&self, update: crate::SharingPolicyUpdate) -> Result<(), Error> {
+        let _engine = self.engine();
         self.update_sharing_policy(|policy| update.apply(policy))
     }
 
     pub fn set_sharing_policy(&self, policy: SharingPolicy) -> Result<(), Error> {
+        let _engine = self.engine();
         self.update_sharing_policy(|current| *current = policy)
     }
 
@@ -68,6 +71,7 @@ impl Core {
                     crate::ServiceKind::SystemAudio => permissions.system_audio,
                     crate::ServiceKind::Microphone => permissions.microphone,
                     crate::ServiceKind::System => permissions.system_actions,
+                    crate::ServiceKind::ScreenSnapshot => permissions.desktop,
                 };
                 if !allowed
                     && record.change(
@@ -83,11 +87,8 @@ impl Core {
         }
         for peer in peers {
             if !policy.files {
-                super::blob::drop_blob_offers(&self.shared, &peer);
-                super::jobs::interrupt_peer_jobs(&self.shared, &peer);
-            }
-            if !policy.clipboard {
-                super::clipboard::drop_peer_clipboard_files(&self.shared, &peer);
+                super::transfer::close_peer_files(&self.shared, &peer);
+                super::jobs::interrupt_peer_jobs(&self.shared, &peer, false);
             }
             self.shared.events.publish(CoreEvent::DeviceAuthorized {
                 endpoint_id: PublicKey::from_bytes(&peer)
@@ -107,7 +108,72 @@ impl Core {
                     .store(true, std::sync::atomic::Ordering::Release);
             }
         }
-        super::service_jobs::cancel_orphaned(&self.shared);
+        super::service_jobs::interrupt_orphaned(&self.shared);
         privacy_result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::installation::MemoryStore;
+    use crate::test_support::loopback_core;
+    use crate::{Core, Error, RelaySettings, ServiceKind, SharingPolicy, SharingPolicyUpdate};
+
+    #[test]
+    fn global_consent_is_durable_covers_future_peers_and_failed_save_changes_nothing() {
+        let store = MemoryStore::empty();
+        let host = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0()).unwrap();
+        assert_eq!(host.sharing_policy().unwrap(), SharingPolicy::default());
+        host.change_sharing_policy(SharingPolicyUpdate {
+            terminal: Some(true),
+            files: Some(true),
+            ..Default::default()
+        })
+        .unwrap();
+        let a = loopback_core();
+        let b = loopback_core();
+        for peer in [&a, &b] {
+            host.accept_invitation(&peer.create_invitation(Duration::from_secs(60)).unwrap())
+                .unwrap();
+            assert!(
+                host.service_permissions(&peer.endpoint_id())
+                    .unwrap()
+                    .terminal
+            );
+            assert!(host.service_permissions(&peer.endpoint_id()).unwrap().files);
+        }
+        let saved = store.record();
+        store.fail_next_save(Error::StoreUnavailable);
+        assert!(matches!(
+            host.set_service_sharing(ServiceKind::Terminal, false),
+            Err(Error::StoreUnavailable)
+        ));
+        assert_eq!(store.record(), saved);
+        for peer in [&a, &b] {
+            assert!(
+                host.service_permissions(&peer.endpoint_id())
+                    .unwrap()
+                    .terminal
+            );
+        }
+        host.set_service_sharing(ServiceKind::Terminal, false)
+            .unwrap();
+        for peer in [&a, &b] {
+            let permissions = host.service_permissions(&peer.endpoint_id()).unwrap();
+            assert!(!permissions.terminal);
+            assert!(permissions.files);
+        }
+        host.shutdown();
+        drop(host);
+        let reopened = Core::open_direct(Arc::new(store), RelaySettings::public_n0()).unwrap();
+        assert!(!reopened.sharing_policy().unwrap().terminal);
+        assert!(reopened.sharing_policy().unwrap().files);
+        for device in reopened.snapshot().unwrap().devices {
+            assert_eq!(device.os, Some(crate::OperatingSystem::local()));
+            assert_eq!(device.presence, crate::DevicePresence::Disconnected);
+        }
     }
 }

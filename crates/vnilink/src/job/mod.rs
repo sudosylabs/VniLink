@@ -11,8 +11,9 @@ mod wire;
 pub(crate) use wire::{
     check_version, decode, encode, error_for_status, DownloadRequest, JobCancel, JobReply,
     JobResolve, JobResume, JobStateReply, JobStatus, ManifestReply, UploadOffer, JOB_VERSION,
-    MAX_JOB_FRAME, STATUS_DENIED, STATUS_ERROR, STATUS_OK, STATUS_STALE, TAG_FS, TAG_JOB_CANCEL,
-    TAG_JOB_DOWNLOAD, TAG_JOB_RESOLVE, TAG_JOB_RESUME, TAG_JOB_STATUS, TAG_JOB_UPLOAD,
+    MAX_JOB_FRAME, STATUS_DENIED, STATUS_ERROR, STATUS_OK, STATUS_STALE, TAG_JOB_CANCEL,
+    TAG_JOB_DOWNLOAD, TAG_JOB_MANIFEST, TAG_JOB_RESOLVE, TAG_JOB_RESUME, TAG_JOB_STATUS,
+    TAG_JOB_UPLOAD,
 };
 
 use serde::{Deserialize, Serialize};
@@ -99,7 +100,31 @@ pub struct JobSnapshot {
     pub skipped_files: u64,
     pub skipped_symlinks: u64,
     pub waiting_file: Option<String>,
+    /// The file moving now, while the transfer moves files.
+    pub current_file: Option<String>,
+    /// Why the transfer stopped, failed, or is trying again while it
+    /// still moves files.
     pub error: Option<String>,
+    /// Where the transfer lands, on the side that submitted it.
+    pub destination: Option<JobDestination>,
+}
+
+/// Where a transfer lands: the folder on the receiving computer and the
+/// files and folders copied into it, so the Files tab can show each one
+/// arriving there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobDestination {
+    pub root: u64,
+    pub folder: String,
+    pub items: Vec<JobItem>,
+}
+
+/// One file or folder a transfer copies, by the name it arrives under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobItem {
+    pub name: String,
+    /// Known once the sender has listed what it sends.
+    pub folder: bool,
 }
 
 /// Host-local cache retention. Active jobs/imports remain independently pinned.

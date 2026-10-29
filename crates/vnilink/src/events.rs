@@ -3,7 +3,6 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use crate::protocol::Quality;
 use crate::session::{SessionPhase, SessionRole};
 
 pub(crate) const MAX_SUBSCRIBERS: usize = 8;
@@ -16,6 +15,23 @@ pub(crate) const MAX_SUBSCRIBERS: usize = 8;
 pub enum CoreEvent {
     HostingChanged {
         hosting: bool,
+    },
+    /// A folder watched with [`crate::Core::watch_folder`] changed.
+    FolderChanged {
+        watch: u64,
+    },
+    /// A paired computer asked this one to restart or shut down. It runs
+    /// after `remaining_ms` unless cancelled; show its user the notice.
+    SystemActionScheduled {
+        operation_id: u64,
+        action: crate::system::SystemAction,
+        endpoint_id: String,
+        remaining_ms: u32,
+    },
+    /// A scheduled restart or shutdown ran, failed, was refused or was cancelled.
+    SystemActionEnded {
+        operation_id: u64,
+        state: crate::system::OperationState,
     },
     DevicePaired {
         endpoint_id: String,
@@ -56,6 +72,17 @@ pub enum CoreEvent {
         endpoint_id: String,
         hostname: Option<String>,
     },
+    /// A paired computer became reachable, unreachable, or stopped accepting
+    /// connections. Only emitted while presence links run.
+    PresenceChanged {
+        endpoint_id: String,
+        presence: crate::DevicePresence,
+    },
+    /// A paired computer sent a new report of what it allows; read it with
+    /// [`crate::Core::peer_availability`].
+    PeerAvailabilityChanged {
+        endpoint_id: String,
+    },
     SessionChanged {
         id: u64,
         generation: u64,
@@ -70,35 +97,11 @@ pub enum CoreEvent {
     HostedServiceChanged {
         service: crate::ServiceInfo,
     },
-    QualityUpdated {
-        id: u64,
-        quality: Quality,
-    },
     /// The host could not apply an input event, or the controller was told
     /// that input will not be applied. The message names the reason, not the key.
     InputFailed {
         id: u64,
         message: &'static str,
-    },
-    /// The host should encode a keyframe for this session.
-    ///
-    /// Predicted frames were dropped, or the controller asked for a keyframe.
-    KeyframeRequested {
-        id: u64,
-    },
-    /// The host published clipboard text. Read it with [`crate::Core::clipboard_text`].
-    ///
-    /// The event carries no characters. Clipboard text is not logged.
-    ClipboardReceived {
-        id: u64,
-    },
-    /// A file selection offer arrived. Read it with
-    /// [`crate::Core::clipboard_files`] or
-    /// [`crate::Core::incoming_clipboard_files`].
-    ///
-    /// The event carries no paths. Selections are not logged.
-    ClipboardFilesReceived {
-        id: u64,
     },
     /// Host text for an exact Desktop owner. Carries no clipboard contents.
     DesktopClipboardReceived {
@@ -190,5 +193,64 @@ impl EventHub {
             }
             Err(TrySendError::Disconnected(_)) => false,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_slow_subscriber_does_not_block_the_publisher() {
+        let hub = EventHub::new(1);
+        let subscription = hub.subscribe().unwrap();
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        hub.publish(CoreEvent::HostingChanged { hosting: false });
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        assert_eq!(subscription.lagged(), 2);
+        assert_eq!(
+            subscription.try_recv(),
+            Some(CoreEvent::HostingChanged { hosting: true })
+        );
+        assert!(subscription.try_recv().is_none());
+    }
+
+    #[test]
+    fn a_subscriber_that_keeps_up_does_not_lag() {
+        let hub = EventHub::new(2);
+        let subscription = hub.subscribe().unwrap();
+        assert!(subscription
+            .recv_timeout(Duration::from_millis(0))
+            .is_none());
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        hub.publish(CoreEvent::HostingChanged { hosting: false });
+        assert_eq!(subscription.lagged(), 0);
+        assert_eq!(
+            subscription.recv_timeout(Duration::ZERO),
+            Some(CoreEvent::HostingChanged { hosting: true })
+        );
+        assert_eq!(
+            subscription.try_recv(),
+            Some(CoreEvent::HostingChanged { hosting: false })
+        );
+        assert!(subscription.recv_timeout(Duration::ZERO).is_none());
+    }
+
+    #[test]
+    fn the_ninth_subscriber_is_busy_until_one_is_dropped() {
+        let hub = EventHub::new(1);
+        let mut subscriptions = Vec::new();
+        for _ in 0..MAX_SUBSCRIBERS {
+            subscriptions.push(hub.subscribe().unwrap());
+        }
+        assert!(matches!(hub.subscribe(), Err(crate::error::Error::Busy)));
+        subscriptions.pop();
+        let replacement = hub.subscribe().unwrap();
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        assert_eq!(
+            replacement.try_recv(),
+            Some(CoreEvent::HostingChanged { hosting: true })
+        );
+        assert_eq!(replacement.lagged(), 0);
     }
 }

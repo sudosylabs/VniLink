@@ -1,9 +1,27 @@
-import { IApplicationService } from '../../src/workbench/services/application/common/applicationService.js';
-import { IConnectionService } from '../../src/workbench/services/connection/common/connectionService.js';
-import { IConfigurationService, defaultConfiguration } from '../../src/platform/configuration/common/configuration.js';
-import { Event, Emitter } from '../../src/base/common/event.js';
-import { HomeView } from '../../src/workbench/contrib/home/browser/home.js';
-import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/common/deviceService.js';
+import { ISystemActionService } from '../../src/workbench/services/systemActions/systemActionService.js';
+import { IApplicationService } from '../../src/workbench/services/application/applicationService.js';
+import { IConnectionService } from '../../src/workbench/services/connection/connectionService.js';
+import { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
+import { FakeConfigurationService, FakePermissionService } from './settingsFixture.js';
+import { Emitter, Event } from '../../src/base/common/event.js';
+import { HomeView } from '../../src/workbench/contrib/home/homeView.js';
+import '../../src/workbench/contrib/devices/devices.contribution.js';
+import '../../src/workbench/contrib/settings/settings.contribution.js';
+import '../../src/workbench/actions/applicationActions.js';
+import { IMenuService } from '../../src/platform/actions/common/actions.js';
+import { MenuService } from '../../src/platform/actions/common/menuService.js';
+import { ICommandService } from '../../src/platform/commands/common/commands.js';
+import { IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
+import { ContextKeyService } from '../../src/platform/contextkey/browser/contextKeyService.js';
+import { IContextKeyService } from '../../src/platform/contextkey/common/contextkey.js';
+import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
+import { ILogService, NullLogService } from '../../src/platform/log/common/log.js';
+import { ActiveTabContext, RestartRequiredContext } from '../../src/workbench/contextkeys.js';
+import { ViewActionsMenu } from '../../src/workbench/parts/titlebar/viewActionsToolbar.js';
+import { IDevicePairingPopover } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
+import { CommandService } from '../../src/workbench/services/commands/commandService.js';
+import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
+import { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 
@@ -37,7 +55,6 @@ export async function verifyHomeLifecycle(): Promise<void> {
 	const changed = new Emitter<readonly DeviceSummary[]>();
 	const stateChanged = new Emitter<void>();
 	let devices: readonly DeviceSummary[] = [];
-	let requests = 0;
 	let restartRequired = false;
 	let restarts = 0;
 	const restartChanged = new Emitter<void>();
@@ -48,6 +65,8 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			return devices;
 		},
 		onDidChangeDevices: changed.event,
+		onDidChangeAvailability: Event.None as Event<string>,
+		availability: () => Promise.resolve(null),
 		initialize: () => Promise.resolve(),
 		connect: () => Promise.resolve(), rename: () => Promise.resolve(), forget: () => Promise.resolve(),
 		exportPairingFile: () => Promise.reject(new Error('Not used')),
@@ -55,12 +74,23 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		pairingCheck: () => Promise.resolve('123'), incomingPairing: () => Promise.resolve(null),
 		approvePairing: () => Promise.resolve(), rejectPairing: () => Promise.resolve(),
 		refresh() {
-			requests++;
-			devices = [{ id: 'peer', name: '<b>Remote computer</b>', os: 'linux', presence: 'connected' }];
+			devices = [{ id: 'peer', name: '<b>Remote computer</b>', os: 'linux', presence: 'connected', hostname: null, direct: 0, relays: 0 }];
 			changed.fire(devices);
 			return Promise.resolve();
 		},
 	};
+	const popovers: string[] = [];
+	const popoverAnchors: HTMLElement[] = [];
+	const popover: IDevicePairingPopover = {
+		_serviceBrand: undefined,
+		toggle: (anchor, kind) => {
+			popoverAnchors.push(anchor);
+			popovers.push(kind);
+		},
+		hide: () => undefined,
+	};
+	const configuration = new FakeConfigurationService();
+	configuration.setError('relays', 'Unavailable');
 	const services = new InstantiationService(new ServiceCollection([IApplicationService, {
 		_serviceBrand: undefined, get restartRequired() {
 			return restartRequired;
@@ -68,7 +98,15 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			restarts++;
 			return Promise.resolve();
 		}, openRelayDocumentation: () => Promise.resolve()
-	}], [IDeviceService, service], [IConnectionService, { _serviceBrand: undefined, available: false, load: () => Promise.reject(new Error('Unavailable')), save: () => Promise.reject(new Error('Unavailable')) }], [IConfigurationService, { _serviceBrand: undefined, snapshot: { revision: 0, values: defaultConfiguration, error: null }, onDidChangeConfiguration: Event.None, initialize: () => Promise.resolve(), updateValue: () => Promise.resolve() }]), true);
+	}], [IDeviceService, service], [IScreenSnapshotService, { _serviceBrand: undefined, capture: () => Promise.resolve({ status: 'disconnected' as const }), access: () => Promise.resolve({ status: 'disconnected' as const }) }], [IConnectionService, { _serviceBrand: undefined, getRunningRelays: () => Promise.reject(new Error('Unavailable')) }],
+		[IConfigurationService, configuration], [IPermissionService, new FakePermissionService()],
+		[ILogService, new NullLogService()],
+		[IContextKeyService, new SyncDescriptor(ContextKeyService)],
+		[ICommandService, new SyncDescriptor(CommandService)],
+		[IMenuService, new SyncDescriptor(MenuService)], [IDevicePairingPopover, popover],
+		[ISystemActionService, {
+			_serviceBrand: undefined, onDidChange: Event.None, progress: () => undefined, run: () => Promise.resolve(), cancel: () => Promise.resolve(),
+		}]), true);
 	const home = services.createInstance(HomeView);
 	try {
 		assert(!home.element.querySelector('[data-section-id="files"]'), 'Files settings still appear in the sidebar');
@@ -79,20 +117,42 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		if (!devicesPage || !connection || !back) {
 			return;
 		}
-		const refresh = home.actions[0];
 		connection.click();
 		const settingsPage = home.element.querySelector('.home-content > main');
-		assert(home.actions.length === 0, 'Settings retained device actions');
+		const contextKeys = services.invokeFunction(accessor => accessor.get(IContextKeyService));
+		const menu = services.invokeFunction(accessor => accessor.get(IMenuService)).createMenu(ViewActionsMenu, contextKeys);
+		const restartActions = () => menu.getActions().flatMap(([, actions]) => actions).filter(action => action.id === 'workbench.action.restart');
+		const activeTab = ActiveTabContext.bindTo(contextKeys);
+		const required = RestartRequiredContext.bindTo(contextKeys);
+		activeTab.set(HomeView.ID);
+		assert(restartActions().length === 0, 'Restart offered while nothing needs it');
 		restartRequired = true;
-		restartChanged.fire();
-		assert(home.actions.some(action => action.id === 'home.restart'), 'Restart action missing on settings page');
-		await home.actions[0].run(new AbortController().signal);
-		assert(restarts === 1, 'Restart action bypassed application service');
+		required.set(true);
+		assert(restartActions().length === 1, 'Restart action missing on Home');
+		await restartActions()[0].run();
+		assert(restarts === 1, 'Restart action bypassed the application service');
+		activeTab.set('remote-session');
+		assert(restartActions().length === 0, 'Restart action shown outside Home');
+		activeTab.set(HomeView.ID);
 		restartRequired = false;
-		restartChanged.fire();
-		assert(home.actions.length === 0, 'Restart action survived reverted configuration');
-		await refresh.run(new AbortController().signal);
-		assert(requests === 1, 'Refresh bypassed the device service');
+		required.set(false);
+		assert(restartActions().length === 0, 'Restart action survived reverted configuration');
+		const deviceActions = () => menu.getActions().flatMap(([, actions]) => actions).map(action => action.id).filter(id => id.startsWith('vnilink.devices.'));
+		assert(deviceActions().length === 0, 'Pairing actions shown on a Settings page');
+		back.click();
+		assert(deviceActions().join() === 'vnilink.devices.importInvitation,vnilink.devices.createInvitation', `Pairing actions missing on Devices: ${deviceActions().join()}`);
+		const anchor = document.createElement('button');
+		const pairingActions = menu.getActions({ shouldForwardArgs: true }).flatMap(([, actions]) => actions).filter(action => action.id.startsWith('vnilink.devices.'));
+		for (const action of pairingActions) {
+			await action.run({ anchor });
+		}
+		assert(popovers.join() === 'import,create' && popoverAnchors.every(each => each === anchor), `Pairing actions did not open their popover at the button: ${JSON.stringify(popovers)}`);
+		activeTab.set('remote-session');
+		assert(deviceActions().length === 0, 'Pairing actions shown outside Home');
+		activeTab.set(HomeView.ID);
+		connection.click();
+		menu.dispose();
+		await service.refresh(new AbortController().signal);
 		back.click();
 		assert(home.element.querySelector('.home-content > main') === devicesPage, 'Devices page was recreated');
 		assert((devicesPage.textContent.includes('<b>Remote computer</b>')) && !devicesPage.querySelector('b'), 'Device data became HTML');

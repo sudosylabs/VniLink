@@ -5,6 +5,9 @@
 //! not consequences of desktop permission. Sending a request is receipt, not
 //! proof the machine acted: restart and shutdown complete without an
 //! observable reply, and operations are never replayed after reconnect.
+//!
+//! A restart or shutdown first waits [`SYSTEM_ACTION_NOTICE`], so the person
+//! at the computer can save their work or cancel; a lock runs at once.
 
 /// Persistent owner thread for Windows local-input blocking. The native
 /// contract binds blocking to its thread; this module is also compiled
@@ -14,6 +17,10 @@
 pub mod owner;
 
 use crate::error::Error;
+
+/// How long a restart or shutdown waits before it runs. The person at the
+/// computer can cancel or start it sooner; so can the computer that asked.
+pub const SYSTEM_ACTION_NOTICE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// One destructive or session-level host operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,8 +53,8 @@ impl SystemAction {
     }
 }
 
-/// Terminal outcome of one admitted operation. Operations never move again
-/// after reaching `Refused`, `Executed` or `Failed`.
+/// Outcome of one admitted operation. Operations never move again after
+/// reaching `Refused`, `Executed`, `Failed` or `Cancelled`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationState {
     /// The host admitted the request; execution is pending or unobservable.
@@ -56,8 +63,13 @@ pub enum OperationState {
     Refused,
     /// The native call returned success.
     Executed,
-    /// The native call failed or the request was cancelled first.
+    /// The native call failed.
     Failed,
+    /// A restart or shutdown is counting down its notice.
+    Scheduled,
+    /// The notice ended without running: cancelled at either computer, or
+    /// the computer that asked went away.
+    Cancelled,
 }
 
 impl OperationState {
@@ -67,6 +79,8 @@ impl OperationState {
             Self::Refused => 2,
             Self::Executed => 3,
             Self::Failed => 4,
+            Self::Scheduled => 5,
+            Self::Cancelled => 6,
         }
     }
 
@@ -76,6 +90,8 @@ impl OperationState {
             2 => Ok(Self::Refused),
             3 => Ok(Self::Executed),
             4 => Ok(Self::Failed),
+            5 => Ok(Self::Scheduled),
+            6 => Ok(Self::Cancelled),
             _ => Err(Error::Malformed),
         }
     }
@@ -92,6 +108,19 @@ pub struct SystemOperation {
     pub completion_observable: bool,
     /// Short human-readable reason. Never carries secrets or paths.
     pub detail: String,
+    /// Time left in the notice while `Scheduled`; zero otherwise.
+    pub notice_remaining_ms: u32,
+}
+
+/// A restart or shutdown counting down on this computer, for the notice its
+/// user sees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledSystemAction {
+    pub operation_id: u64,
+    pub action: SystemAction,
+    /// The computer that asked.
+    pub endpoint_id: String,
+    pub remaining_ms: u32,
 }
 
 /// Native facilities this installation can actually invoke. A `true` bit
@@ -234,11 +263,21 @@ pub trait HostSystemActions: Send + Sync {
 
 /// One retained operation with the connection generation that owns it.
 /// Queries on another generation fail; operations never replay.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct SystemOperationRecord {
     pub operation: SystemOperation,
     pub connection_id: u64,
     pub generation: u64,
+    pub peer: [u8; 32],
+    /// While `Scheduled`: when it runs, and what wakes its countdown early.
+    pub notice: Option<Notice>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Notice {
+    pub deadline: std::time::Instant,
+    pub run_now: bool,
+    pub wake: std::sync::Arc<tokio::sync::Notify>,
 }
 
 /// Single global privacy/input-block holder. Only the holding System owner
@@ -277,4 +316,17 @@ pub(crate) fn truncate_detail(detail: String) -> String {
         end -= 1;
     }
     detail[..end].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_detail_truncates_on_char_boundaries() {
+        let long = "é".repeat(300);
+        let truncated = truncate_detail(long);
+        assert!(truncated.len() <= 256);
+        assert!(truncated.chars().all(|c| c == 'é'));
+    }
 }

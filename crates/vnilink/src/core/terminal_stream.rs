@@ -1,5 +1,6 @@
 //! Independently cancelled terminal pipe over an admitted neutral connection.
-use super::service_stream::{read, write};
+// trace: records every ignored failure
+use super::service_stream::{read, write, HostedEnd, HostedEnding};
 use super::terminal_runtime::{self, HostedTerminal};
 use super::*;
 use crate::terminal::{
@@ -26,7 +27,7 @@ fn resize(size: TerminalSize) -> Vec<u8> {
     b.extend(size.columns.to_be_bytes());
     b
 }
-fn encode_event(event: TerminalEvent) -> Vec<u8> {
+pub(crate) fn encode_event(event: TerminalEvent) -> Vec<u8> {
     match event {
         TerminalEvent::Output(bytes) => {
             let mut b = vec![1];
@@ -46,7 +47,7 @@ fn encode_event(event: TerminalEvent) -> Vec<u8> {
         TerminalEvent::Failed(_) => vec![4], // Backend details never travel on the wire.
     }
 }
-fn decode_event(bytes: Vec<u8>) -> Result<TerminalEvent, Error> {
+pub(crate) fn decode_event(bytes: Vec<u8>) -> Result<TerminalEvent, Error> {
     match bytes.first() {
         Some(1) if bytes.len() > 1 && bytes.len() <= TERMINAL_CHUNK + 1 => {
             Ok(TerminalEvent::Output(bytes[1..].to_vec()))
@@ -119,6 +120,7 @@ impl Drop for RemoteTerminalService {
 
 impl Core {
     pub fn terminal_policy(&self) -> Result<crate::terminal::TerminalPolicy, Error> {
+        let _engine = self.engine();
         Ok(self.alive_state()?.terminal_policy)
     }
     /// Host-local, durable and transactional. Busy leaves both runtime and saved
@@ -127,6 +129,7 @@ impl Core {
         &self,
         policy: crate::terminal::TerminalPolicy,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let policy = policy.validate()?;
         let mut state = self.alive_state()?;
         if !state.terminal_pending.is_empty() || !lock(&self.shared.terminal_sessions).is_empty() {
@@ -144,6 +147,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn crate::terminal::HostTerminalFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         // Lock order is always state, then factory.
         *lock(&self.shared.terminal_factory) = factory;
@@ -168,8 +172,33 @@ impl Core {
         }
         Ok(())
     }
+    /// The local user's change of shell. Unlike [`Core::set_terminal_factory`],
+    /// which ends every shell, this refuses with Busy while any shell is alive
+    /// or starting, as a policy change does.
+    pub fn replace_terminal_factory(
+        &self,
+        factory: Arc<dyn crate::terminal::HostTerminalFactory>,
+    ) -> Result<(), Error> {
+        let _engine = self.engine();
+        let state = self.alive_state()?;
+        if !state.terminal_pending.is_empty() || !lock(&self.shared.terminal_sessions).is_empty() {
+            return Err(Error::Busy);
+        }
+        // Lock order is always state, then factory.
+        *lock(&self.shared.terminal_factory) = Some(factory);
+        Ok(())
+    }
+    /// The shell the installed factory runs, when it came from a choice.
+    pub fn terminal_shell_id(&self) -> Result<Option<String>, Error> {
+        let _engine = self.engine();
+        self.ensure_alive()?;
+        Ok(lock(&self.shared.terminal_factory)
+            .as_ref()
+            .and_then(|factory| factory.shell_id().map(str::to_owned)))
+    }
     /// Host-side retained shell records, including detached persistent sessions.
     pub fn hosted_terminal_sessions(&self) -> Result<Vec<TerminalSessionInfo>, Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let mut sessions: Vec<_> = lock(&self.shared.terminal_sessions)
             .values()
@@ -179,6 +208,7 @@ impl Core {
         Ok(sessions)
     }
     pub fn close_terminal_session(&self, id: &str) -> Result<(), Error> {
+        let _engine = self.engine();
         self.ensure_alive()?;
         let sessions = lock(&self.shared.terminal_sessions);
         sessions
@@ -194,6 +224,7 @@ impl Core {
         generation: u64,
         size: TerminalSize,
     ) -> Result<RemoteTerminalService, Error> {
+        let _engine = self.engine();
         self.open_terminal_service_with_options(
             id,
             generation,
@@ -210,6 +241,7 @@ impl Core {
         generation: u64,
         options: TerminalOptions,
     ) -> Result<RemoteTerminalService, Error> {
+        let _engine = self.engine();
         options.size.validate()?;
         if options
             .resume_id
@@ -271,11 +303,19 @@ impl Core {
             match opened {
                 Err(error) => {
                     phase = ServicePhase::Failed(error.to_string());
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::TERMINAL,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
                 Ok((mut send, mut recv, session)) => {
                     let session_id = session.id.clone();
-                    let _ = ready.send(Ok(session));
+                    crate::ignored!(
+                        crate::trace::TERMINAL,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(session))
+                    );
                     let run = async {
                         let sending = async {
                             while let Some(frame) = requests.recv().await {
@@ -305,11 +345,25 @@ impl Core {
                         tokio::select! { result = sending => result, result = receiving => result }
                     };
                     let result = lease.run(run).await;
+                    if let Err(error) = &result {
+                        tracing::info!(
+                            target: crate::trace::TERMINAL,
+                            service = id,
+                            error = error.name(),
+                            closed_here = lease.is_cancelled()
+                                && super::services::closed_here(&shared, id, generation),
+                            "terminal pipe ended"
+                        );
+                    }
                     if result.is_err() && !lease.is_cancelled() {
                         phase = ServicePhase::Failed("terminal pipe ended".into());
                         if !matches!(result, Err(Error::InputFailed(_))) {
-                            let _ = events
-                                .try_send(TerminalEvent::Failed("terminal pipe ended".into()));
+                            crate::ignored!(
+                                crate::trace::TERMINAL,
+                                "a viewer whose events are full or gone learns of the end from the pipe",
+                                events
+                                    .try_send(TerminalEvent::Failed("terminal pipe ended".into()))
+                            );
                         }
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
@@ -338,18 +392,30 @@ impl Core {
                             .await?;
                             write(&mut control, session_id.into_bytes()).await?;
                             super::service_stream::status(&read(&mut response).await?)?;
-                            let _ = control.finish();
+                            crate::ignored!(
+                                crate::trace::TERMINAL,
+                                "a stream that cannot finish is closed with its link",
+                                control.finish()
+                            );
                             Ok::<(), Error>(())
                         };
                         if !matches!(tokio::time::timeout(TIMEOUT, close).await, Ok(Ok(()))) {
-                            let _ = tokio::time::timeout(
-                                Duration::from_millis(250),
-                                write(&mut send, vec![6]),
-                            )
-                            .await;
+                            crate::ignored!(
+                                crate::trace::TERMINAL,
+                                "the peer may be gone before it hears why",
+                                tokio::time::timeout(
+                                    Duration::from_millis(250),
+                                    write(&mut send, vec![6]),
+                                )
+                                .await
+                            );
                         }
                     }
-                    let _ = send.finish();
+                    crate::ignored!(
+                        crate::trace::TERMINAL,
+                        "a stream that cannot finish is closed with its link",
+                        send.finish()
+                    );
                     // Finishing this stream only retires its local owner.
                 }
             }
@@ -397,6 +463,20 @@ pub(super) async fn serve(
     };
     let mut attached: Option<terminal_runtime::Attachment> = None;
     let explicit_close = Arc::new(AtomicBool::new(false));
+    // Says how the stream ended when it ends, however it ends: a task the
+    // engine drops while tearing down records it too.
+    let ending = {
+        let explicit_close = explicit_close.clone();
+        HostedEnding::new(&shared, id, move |ended| {
+            tracing::debug!(
+                target: crate::trace::TERMINAL,
+                service = id,
+                ended,
+                explicit_close = explicit_close.load(std::sync::atomic::Ordering::Acquire),
+                "terminal stream ended"
+            );
+        })
+    };
     // Clones for startup cancellation: a delayed native open must not leak a
     // retained shell when parent loss / revoke / shutdown wins first.
     let mut startup_parent = parent.clone();
@@ -450,9 +530,18 @@ pub(super) async fn serve(
                 });
                 let opened = tokio::select! {
                     biased;
-                    _ = startup_parent.changed() => return Err(Error::NoSession),
-                    _ = startup_stop.changed() => return Err(Error::NoSession),
-                    _ = read(&mut recv) => return Err(Error::NoSession),
+                    _ = startup_parent.changed() => {
+                        ending.why(HostedEnd::ConnectionEnded);
+                        return Err(Error::NoSession);
+                    }
+                    _ = startup_stop.changed() => {
+                        ending.why(HostedEnd::service_closed(&shared, id));
+                        return Err(Error::NoSession);
+                    }
+                    _ = read(&mut recv) => {
+                        ending.why(HostedEnd::ViewerClosed);
+                        return Err(Error::NoSession);
+                    }
                     result = tokio::time::timeout(TIMEOUT, join) => result
                         .map_err(|_| Error::Timeout)?
                         .map_err(|_| Error::Unsupported("terminal backend startup"))?,
@@ -493,6 +582,14 @@ pub(super) async fn serve(
         let runtime = match opened {
             Ok(runtime) => runtime,
             Err(error) => {
+                tracing::info!(
+                    target: crate::trace::TERMINAL,
+                    service = id,
+                    error = error.name(),
+                    reason = error.reason(),
+                    resume = options.resume_id.is_some(),
+                    "terminal not opened"
+                );
                 let status = match error {
                     Error::Unauthorized => 6,
                     Error::Busy => 4,
@@ -503,6 +600,15 @@ pub(super) async fn serve(
                 return Err(error);
             }
         };
+        tracing::info!(
+            target: crate::trace::TERMINAL,
+            service = id,
+            rows = options.size.rows,
+            columns = options.size.columns,
+            persistent = options.persistent,
+            resumed = options.resume_id.is_some(),
+            "terminal opened"
+        );
         attached = Some(terminal_runtime::Attachment {
             terminal: runtime.clone(),
             explicit_close: explicit_close.clone(),
@@ -520,12 +626,28 @@ pub(super) async fn serve(
         } else {
             0
         };
+        // Why the shell stopped under its stream: its viewer's close reaches
+        // the host by a request of its own or by this stream, whichever comes
+        // first; otherwise the host ended it.
+        let stopped = || {
+            if runtime
+                .closed_by_viewer
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                HostedEnd::ViewerClosed
+            } else {
+                HostedEnd::service_closed(&shared, id)
+            }
+        };
         let receiving = async {
             loop {
-                let bytes = read(&mut recv).await?;
+                let bytes = read(&mut recv).await.inspect_err(|_| {
+                    ending.why(HostedEnd::ViewerClosed);
+                })?;
                 let command = match bytes.first() {
                     Some(6) if bytes.len() == 1 => {
                         explicit_close.store(true, std::sync::atomic::Ordering::Release);
+                        ending.why(HostedEnd::ViewerClosed);
                         return Ok(());
                     }
                     Some(1) if bytes.len() > 1 && bytes.len() <= TERMINAL_CHUNK + 1 => {
@@ -546,7 +668,10 @@ pub(super) async fn serve(
                     match runtime.commands.try_send(command) {
                         Ok(()) => break,
                         Err(std::sync::mpsc::TrySendError::Full(value)) => command = value,
-                        Err(_) => return Err(Error::NoSession),
+                        Err(_) => {
+                            ending.why(stopped());
+                            return Err(Error::NoSession);
+                        }
                     }
                     // Cancellation drops this future and its unaccepted command.
                     // No blocking sender survives a lost connection.
@@ -560,10 +685,17 @@ pub(super) async fn serve(
         let sending = async {
             loop {
                 if runtime.stop.load(std::sync::atomic::Ordering::Acquire) {
+                    ending.why(stopped());
                     return Err(Error::NoSession);
                 }
                 let (first, bytes, ended) = runtime.read(offset);
                 if first > offset {
+                    tracing::debug!(
+                        target: crate::trace::TERMINAL,
+                        service = id,
+                        lost = first - offset,
+                        "terminal output dropped before it was sent"
+                    );
                     write(
                         &mut send,
                         encode_event(TerminalEvent::OutputGap(first - offset)),
@@ -573,10 +705,29 @@ pub(super) async fn serve(
                 }
                 if !bytes.is_empty() {
                     offset += bytes.len() as u64;
-                    write(&mut send, encode_event(TerminalEvent::Output(bytes))).await?;
+                    write(&mut send, encode_event(TerminalEvent::Output(bytes)))
+                        .await
+                        .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
                     continue;
                 }
                 if let Some(event) = ended {
+                    match &event {
+                        TerminalEvent::Exited(code) => tracing::info!(
+                            target: crate::trace::TERMINAL,
+                            service = id,
+                            code,
+                            "terminal shell exited"
+                        ),
+                        _ => tracing::warn!(
+                            target: crate::trace::TERMINAL,
+                            service = id,
+                            "terminal backend failed"
+                        ),
+                    }
+                    ending.why(match event {
+                        TerminalEvent::Exited(_) => HostedEnd::Finished("shell exited"),
+                        _ => HostedEnd::Failed("shell failed"),
+                    });
                     write(&mut send, encode_event(event)).await?;
                     explicit_close.store(true, std::sync::atomic::Ordering::Release);
                     return Ok(());
@@ -589,12 +740,29 @@ pub(super) async fn serve(
     if *parent.borrow() || *stop.borrow() {
         return Err(Error::NoSession);
     }
-    let result = tokio::select! { biased; _ = parent.changed() => Err(Error::NoSession), _ = stop.changed() => Err(Error::NoSession), result = run => result };
+    let result = tokio::select! {
+        biased;
+        _ = parent.changed() => {
+            ending.why(HostedEnd::ConnectionEnded);
+            Err(Error::NoSession)
+        }
+        _ = stop.changed() => {
+            ending.why(HostedEnd::service_closed(&shared, id));
+            Err(Error::NoSession)
+        }
+        result = run => result,
+    };
     if matches!(result, Err(Error::Malformed)) {
         explicit_close.store(true, std::sync::atomic::Ordering::Release);
+        ending.why(HostedEnd::Malformed);
     }
+    ending.close(result.as_ref().err().map(Error::name));
     drop(attached);
-    let _ = send.finish();
+    crate::ignored!(
+        crate::trace::TERMINAL,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     result
 }
 
@@ -606,6 +774,7 @@ impl Core {
         connection: u64,
         generation: u64,
     ) -> Result<Vec<TerminalSessionInfo>, Error> {
+        let _engine = self.engine();
         let bytes = self.terminal_registry_request(connection, generation, None)?;
         let sessions: Vec<TerminalSessionInfo> =
             serde_json::from_slice(&bytes).map_err(|_| Error::Malformed)?;
@@ -623,6 +792,7 @@ impl Core {
         generation: u64,
         id: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         if id.len() != 32 || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Err(Error::InvalidSetting("terminal resume ID is invalid"));
         }
@@ -651,7 +821,11 @@ impl Core {
                 if let Some(id) = &id { write(&mut send, id.as_bytes().to_vec()).await?; }
                 super::service_stream::status(&read(&mut recv).await?)?;
                 let result = if id.is_none() { read(&mut recv).await? } else { Vec::new() };
-                let _ = send.finish();
+                crate::ignored!(
+                    crate::trace::TERMINAL,
+                    "a stream that cannot finish is closed with its link",
+                    send.finish()
+                );
                 Ok(result)
             });
             tokio::select! { biased; _ = stop.changed() => Err(Error::NoSession), result = request => result.map_err(|_| Error::Timeout)? }
@@ -680,6 +854,9 @@ pub(super) async fn registry(
                 let sessions = lock(&shared.terminal_sessions);
                 match sessions.get(id).filter(|s| s.peer == peer) {
                     Some(session) => {
+                        session
+                            .closed_by_viewer
+                            .store(true, std::sync::atomic::Ordering::Release);
                         session
                             .stop
                             .store(true, std::sync::atomic::Ordering::Release);
@@ -722,7 +899,11 @@ pub(super) async fn registry(
                 .await?;
             }
         }
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::TERMINAL,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         Ok(())
     };
     if *parent.borrow() {

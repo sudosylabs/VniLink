@@ -1,4 +1,5 @@
 //! A bounded, acknowledged clipboard pipe owned by one Desktop instance.
+// trace: records every ignored failure
 use super::desktop_stream::{runtime, DesktopRuntime};
 use super::*;
 use crate::clipboard::{self, Frame};
@@ -37,7 +38,22 @@ impl ClipboardState {
         lock(&self.rx).take();
         *lock(&self.latest) = None;
     }
-    fn submit(&self, text: &str) -> Result<(), Error> {
+    /// Sends `text` and waits for the other side to apply it; records the
+    /// outcome, its size and how long it took, never the text.
+    fn submit(&self, service: u64, text: &str) -> Result<(), Error> {
+        let started = std::time::Instant::now();
+        let result = self.offer(text);
+        tracing::debug!(
+            target: crate::trace::CLIPBOARD,
+            service,
+            bytes = text.len(),
+            ended = result.as_ref().err().map(Error::name),
+            took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "clipboard sent"
+        );
+        result
+    }
+    fn offer(&self, text: &str) -> Result<(), Error> {
         clipboard::check_text(text)?;
         if self.closed.load(Ordering::Acquire) {
             return Err(Error::Unsupported("Desktop clipboard pipe ended"));
@@ -72,7 +88,10 @@ impl Drop for PipeGuard {
 impl RemoteDesktopService {
     /// Returns only after the host acknowledges native clipboard application.
     pub fn submit_clipboard(&self, text: &str) -> Result<(), Error> {
-        self.active_desktop()?.clipboard.submit(text)
+        let span = self.shared.upgrade().map(|shared| shared.span.clone());
+        let _engine = span.as_ref().map(tracing::Span::enter);
+        let desktop = self.active_desktop()?;
+        desktop.clipboard.submit(desktop.info.service.id, text)
     }
     /// Latest host text for this Desktop; never reads the local OS clipboard.
     pub fn clipboard_text(&self) -> Result<Option<String>, Error> {
@@ -93,14 +112,16 @@ impl Core {
         generation: u64,
         text: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let desktop = runtime(&*self.alive_state()?, id, generation, false)?;
-        desktop.clipboard.submit(text)
+        desktop.clipboard.submit(id, text)
     }
     pub fn controller_desktop_clipboard_text(
         &self,
         id: u64,
         generation: u64,
     ) -> Result<Option<String>, Error> {
+        let _engine = self.engine();
         let desktop = runtime(&*self.alive_state()?, id, generation, false)?;
         if desktop.clipboard.closed.load(Ordering::Acquire) {
             return Err(Error::Unsupported("Desktop clipboard pipe ended"));
@@ -115,13 +136,14 @@ impl Core {
         generation: u64,
         text: &str,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let desktop = {
             let state = self.alive_state()?;
             let desktop = runtime(&state, id, generation, true)?;
             allowed(&state, &desktop)?;
             desktop
         };
-        desktop.clipboard.submit(text)
+        desktop.clipboard.submit(id, text)
     }
 }
 fn allowed(state: &State, desktop: &DesktopRuntime) -> Result<(), Error> {
@@ -294,35 +316,38 @@ async fn exchange(
             .unwrap_or_else(|| tokio::time::Instant::now() + TIMEOUT);
         tokio::select! {
             _ = tokio::time::sleep_until(deadline), if pending.is_some() => {
-                if let Some(request) = pending.take() { let _ = request.reply.send(Err(Error::Timeout)); }
+                if let Some(request) = pending.take() { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout))); }
                 return Err(Error::Timeout);
             }
             request = requests.recv(), if pending.is_none() => {
                 let Some(request) = request else { return Err(Error::NoSession); };
-                if request.deadline <= tokio::time::Instant::now() { let _ = request.reply.send(Err(Error::Timeout)); continue; }
-                if let Err(error) = validate(&shared, &desktop, hosted) { let _ = request.reply.send(Err(error)); continue; }
+                if request.deadline <= tokio::time::Instant::now() { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout))); continue; }
+                if let Err(error) = validate(&shared, &desktop, hosted) { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(error))); continue; }
                 let result = tokio::time::timeout_at(request.deadline, write(&mut send, Frame::Text(request.text.clone()))).await.map_err(|_| Error::Timeout).and_then(|r| r);
-                if let Err(error) = result { let _ = request.reply.send(Err(error)); return Err(Error::NoSession); }
+                if let Err(error) = result { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(error))); return Err(Error::NoSession); }
                 pending = Some(request);
             }
             frame = incoming.recv() => match frame.ok_or(Error::NoSession)?? {
                 Frame::Text(text) => {
                     let result = receive(&shared, &desktop, hosted, &text);
+                    tracing::debug!(
+                        target: crate::trace::CLIPBOARD,
+                        service = desktop.info.service.id,
+                        hosted,
+                        bytes = text.len(),
+                        refused = result.as_ref().err().map(Error::name),
+                        reason = result.as_ref().err().and_then(Error::reason),
+                        "clipboard received"
+                    );
                     tokio::time::timeout(TIMEOUT, write(&mut send, Frame::Status(clipboard::status_code(&result)))).await.map_err(|_| Error::Timeout)??;
                 }
                 Frame::Status(status) => {
                     let request = pending.take().ok_or(Error::Malformed)?;
                     if request.deadline <= tokio::time::Instant::now() {
-                        let _ = request.reply.send(Err(Error::Timeout));
+                        crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout)));
                         return Err(Error::Timeout);
                     }
-                    let _ = request.reply.send(clipboard::status_result(status));
-                }
-                Frame::Ready => return Err(Error::Malformed),
-                // File selections and paste preparation ride the session
-                // clipboard stream, never a per-Desktop-owner stream.
-                Frame::Files { .. } | Frame::Prepare { .. } | Frame::FilesReady { .. } => {
-                    return Err(Error::Malformed)
+                    crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(clipboard::status_result(status)));
                 }
             }
         }

@@ -1,4 +1,5 @@
 //! Locally approved native sources and explicit receiver playback workers.
+// trace: records every ignored failure
 use crate::{
     audio::{AudioService, FfiAudioDevice, FfiAudioOutputDevice},
     error::map_error,
@@ -282,7 +283,11 @@ impl HostAudioFactory for NativeFactory {
                     if admitted {
                         // Loopback APIs may deliver nothing while the system is quiet.
                         // Successful native start is readiness; never fabricate captured PCM.
-                        let _ = ready.send(Ok(()));
+                        vnilink::ignored!(
+                            vnilink::trace::AUDIO,
+                            "the opener stopped waiting for the sound source",
+                            ready.send(Ok(()))
+                        );
                     }
                     let mut last = Instant::now();
                     while !producer.is_cancelled() {
@@ -295,7 +300,11 @@ impl HostAudioFactory for NativeFactory {
                                 last = Instant::now();
                                 if !admitted {
                                     admitted = true;
-                                    let _ = ready.send(Ok(()));
+                                    vnilink::ignored!(
+                                        vnilink::trace::AUDIO,
+                                        "the opener stopped waiting for the sound source",
+                                        ready.send(Ok(()))
+                                    );
                                 }
                             }
                             None => {
@@ -312,7 +321,11 @@ impl HostAudioFactory for NativeFactory {
                 };
                 if let Err(error) = run() {
                     producer.fail();
-                    let _ = ready.send(Err(error));
+                    vnilink::ignored!(
+                        vnilink::trace::AUDIO,
+                        "the opener stopped waiting for the sound source",
+                        ready.send(Err(error))
+                    );
                 }
             })
             .map_err(|_| vnilink::Error::Unsupported("audio worker"))?;
@@ -510,7 +523,11 @@ impl VnilinkCore {
                     if player.is_cancelled() || worker_stop.load(Ordering::Acquire) {
                         return Err(vnilink::Error::NoSession);
                     }
-                    let _ = ready.send(Ok(()));
+                    vnilink::ignored!(
+                        vnilink::trace::AUDIO,
+                        "the opener stopped waiting for the sound source",
+                        ready.send(Ok(()))
+                    );
                     while !worker_stop.load(Ordering::Acquire) && !player.is_cancelled() {
                         if let Some(block) = player
                             .poll_internal()
@@ -528,7 +545,11 @@ impl VnilinkCore {
                 if let Err(error) = run() {
                     let error = map_error(error);
                     *worker_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
-                    let _ = ready.send(Err(error));
+                    vnilink::ignored!(
+                        vnilink::trace::AUDIO,
+                        "the opener stopped waiting for the sound source",
+                        ready.send(Err(error))
+                    );
                 }
                 worker_stop.store(true, Ordering::Release);
                 player.close();

@@ -80,6 +80,8 @@ pub struct AudioSource {
     failed: AtomicBool,
     queue: Mutex<VecDeque<AudioPacket>>,
     notify: tokio::sync::Notify,
+    /// Packets dropped because nobody took them in time.
+    dropped: std::sync::atomic::AtomicU64,
 }
 impl AudioSource {
     pub fn new() -> Arc<Self> {
@@ -89,6 +91,7 @@ impl AudioSource {
             failed: AtomicBool::new(false),
             queue: Mutex::new(VecDeque::with_capacity(8)),
             notify: tokio::sync::Notify::new(),
+            dropped: std::sync::atomic::AtomicU64::new(0),
         })
     }
     pub fn publish(&self, packet: AudioPacket) -> Result<(), Error> {
@@ -99,11 +102,21 @@ impl AudioSource {
         }
         if queue.len() == 8 {
             queue.pop_front();
-        } // loss is observable through sequence gaps.
+            // Loss is also observable through sequence gaps.
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
         queue.push_back(packet);
         drop(queue);
         self.notify.notify_one();
         Ok(())
+    }
+    /// Packets published and not yet taken to send.
+    pub fn queued(&self) -> usize {
+        self.queue.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+    /// Packets dropped so far because nobody took them in time.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
     pub fn is_cancelled(&self) -> bool {
         self.stopped.load(Ordering::Acquire)
@@ -164,5 +177,56 @@ impl AudioBackend {
 impl Drop for AudioBackend {
     fn drop(&mut self) {
         self.source.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(kind: AudioKind) -> AudioConfig {
+        AudioConfig {
+            device_id: if kind == AudioKind::System {
+                "approved-system"
+            } else {
+                "approved-mic"
+            }
+            .into(),
+            kind,
+            channels: 2,
+            voice: false,
+        }
+    }
+    fn packet(encoder: &mut vnilink_audio::AudioEncoder) -> AudioPacket {
+        encoder.encode(&[0.125; 1920]).unwrap()
+    }
+    #[test]
+    fn source_queue_is_bounded_and_closed_backend_cannot_be_reclaimed() {
+        let source = AudioSource::new();
+        let mut initial = vnilink_audio::AudioEncoder::new(AudioFormat::Stereo, false).unwrap();
+        source.publish(packet(&mut initial)).unwrap();
+        let backend = AudioBackend::new(config(AudioKind::System), source.clone()).unwrap();
+        assert!(matches!(
+            AudioBackend::new(config(AudioKind::System), source.clone()),
+            Err(Error::Busy)
+        ));
+        let mut encoder = vnilink_audio::AudioEncoder::new(AudioFormat::Stereo, false).unwrap();
+        for _ in 0..40 {
+            source.publish(packet(&mut encoder)).unwrap();
+        }
+        for sequence in 32..40 {
+            assert_eq!(source.pop().unwrap().sequence, sequence);
+        }
+        assert!(source.pop().is_none());
+        drop(backend);
+        assert!(source.is_cancelled());
+        assert!(matches!(
+            source.publish(packet(&mut encoder)),
+            Err(Error::NoSession)
+        ));
+        assert!(matches!(
+            AudioBackend::new(config(AudioKind::System), source),
+            Err(Error::NoSession)
+        ));
     }
 }

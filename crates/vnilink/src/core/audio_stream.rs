@@ -1,6 +1,7 @@
 //! Independent Audio pipes on a neutral parent. Mute is receiver-local.
+// trace: records every ignored failure
 use super::{
-    service_stream::{preamble, read, status, write},
+    service_stream::{preamble, read, status, write, HostedEnd, HostedEnding},
     *,
 };
 use crate::{audio::*, CloseCause, ServiceKind, ServiceLease, ServicePhase};
@@ -42,6 +43,7 @@ impl Core {
         &self,
         factory: Option<Arc<dyn HostAudioFactory>>,
     ) -> Result<(), Error> {
+        let _engine = self.engine();
         let mut state = self.alive_state()?;
         *lock(&self.shared.audio_factory) = factory;
         for record in state.hosted_services.values_mut().filter(|r| {
@@ -67,6 +69,7 @@ impl Core {
         generation: u64,
         kind: AudioKind,
     ) -> Result<Vec<AudioDevice>, Error> {
+        let _engine = self.engine();
         let (link, stamp) = self.service_link(connection, generation)?;
         let mut stop = self
             .alive_state()?
@@ -95,6 +98,7 @@ impl Core {
         generation: u64,
         config: AudioConfig,
     ) -> Result<RemoteAudioService, Error> {
+        let _engine = self.engine();
         config.validate()?;
         let mut lease = self.service_lease(id, generation)?;
         if lease.info().kind != config.kind.service() {
@@ -149,12 +153,20 @@ impl Core {
             match opened {
                 Err(error) => {
                     phase = ServicePhase::Failed(error.to_string());
-                    let _ = ready.send(Err(error));
+                    crate::ignored!(
+                        crate::trace::AUDIO,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Err(error))
+                    );
                 }
                 Ok((mut send, mut recv, actual)) => {
                     let format = actual.format().unwrap();
                     let kind = actual.kind;
-                    let _ = ready.send(Ok(actual));
+                    crate::ignored!(
+                        crate::trace::AUDIO,
+                        "the caller stopped waiting for its answer",
+                        ready.send(Ok(actual))
+                    );
                     let run = async {
                         loop {
                             let bytes = tokio::time::timeout(
@@ -164,7 +176,10 @@ impl Core {
                             .await
                             .map_err(|_| Error::Timeout)??;
                             if bytes == [0] {
-                                break;
+                                return Ok("stopped");
+                            }
+                            if bytes == [4] {
+                                return Ok("withdrawn");
                             }
                             if bytes == [3] && kind == AudioKind::System {
                                 continue; // Source is silent; this is liveness, not an Opus frame.
@@ -179,14 +194,35 @@ impl Core {
                             }
                             packets.publish(packet)?;
                         }
-                        Ok(())
                     };
-                    if lease.run(run).await.is_err() && !lease.is_cancelled() {
+                    let ended = lease.run(run).await;
+                    // A viewer that closed the audio itself has no other reason
+                    // to give; otherwise the host's word, or what failed.
+                    let closed_here =
+                        lease.is_cancelled() && super::services::closed_here(&shared, id, generation);
+                    tracing::info!(
+                        target: crate::trace::AUDIO,
+                        service = id,
+                        kind = ?kind,
+                        ended = (!closed_here).then(|| match &ended {
+                            Ok(words) => *words,
+                            Err(Error::Unsupported("remote audio capture ended")) => "capture ended",
+                            Err(error) => error.name(),
+                        }),
+                        closed_here,
+                        dropped = packets.dropped(),
+                        "audio ended"
+                    );
+                    if ended.is_err() && !lease.is_cancelled() {
                         phase = ServicePhase::Failed("audio pipe ended".into());
                     } else if lease.is_cancelled() {
                         phase = ServicePhase::Closed(CloseCause::OwnerClose);
                     }
-                    let _ = send.finish();
+                    crate::ignored!(
+                        crate::trace::AUDIO,
+                        "a stream that cannot finish is closed with its link",
+                        send.finish()
+                    );
                 }
             }
             packets.close();
@@ -270,7 +306,11 @@ pub(super) async fn list(
             serde_json::to_vec(&devices).map_err(|_| Error::Malformed)?,
         )
         .await?;
-        let _ = send.finish();
+        crate::ignored!(
+            crate::trace::AUDIO,
+            "a stream that cannot finish is closed with its link",
+            send.finish()
+        );
         Ok(())
     };
     if *parent.borrow() {
@@ -307,6 +347,17 @@ pub(super) async fn serve(
         .ok_or(Error::Unsupported("audio backend"))?;
     let startup_parent = parent.clone();
     let startup_stop = stop.clone();
+    // Says how the stream ended when it ends, however it ends: a task the
+    // engine drops while tearing down records it too.
+    let ending = HostedEnding::new(&shared, id, move |ended| {
+        tracing::debug!(
+            target: crate::trace::AUDIO,
+            service = id,
+            kind = ?kind,
+            ended,
+            "audio stream ended"
+        );
+    });
     let run = async {
         let opening = async {
             let config: AudioConfig =
@@ -337,7 +388,14 @@ pub(super) async fn serve(
                 startup.check()?;
                 Ok::<_, Error>(backend)
             });
-            let backend = tokio::select! {biased;_=read(&mut recv)=>return Err(Error::NoSession),result=open=>result.map_err(|_|Error::Unsupported("audio startup"))??};
+            let backend = tokio::select! {
+                biased;
+                _ = read(&mut recv) => {
+                    ending.why(HostedEnd::ViewerClosed);
+                    return Err(Error::NoSession);
+                }
+                result = open => result.map_err(|_| Error::Unsupported("audio startup"))??,
+            };
             if *startup_parent.borrow() || *startup_stop.borrow() {
                 return Err(Error::NoSession);
             }
@@ -347,7 +405,24 @@ pub(super) async fn serve(
             }
             Ok(backend)
         };
-        let backend = match tokio::time::timeout(TIMEOUT, opening).await {
+        let opened = tokio::time::timeout(TIMEOUT, opening).await;
+        if !matches!(opened, Ok(Ok(_))) {
+            tracing::info!(
+                target: crate::trace::AUDIO,
+                service = id,
+                kind = ?kind,
+                error = match &opened {
+                    Ok(Err(error)) => error.name(),
+                    _ => "timeout",
+                },
+                reason = match &opened {
+                    Ok(Err(error)) => error.reason(),
+                    _ => None,
+                },
+                "audio not opened"
+            );
+        }
+        let backend = match opened {
             Ok(Ok(backend)) => backend,
             _ => {
                 response(&mut send, 1).await?;
@@ -371,12 +446,32 @@ pub(super) async fn serve(
             serde_json::to_vec(&backend.config).map_err(|_| Error::Malformed)?,
         )
         .await?;
+        tracing::info!(
+            target: crate::trace::AUDIO,
+            service = id,
+            kind = ?kind,
+            channels = backend.config.channels,
+            voice = backend.config.voice,
+            "audio opened"
+        );
         let sending = async {
             let mut tick = tokio::time::interval(Duration::from_millis(10));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_write = std::time::Instant::now();
             loop {
                 if backend.source.is_cancelled() {
+                    tracing::info!(
+                        target: crate::trace::AUDIO,
+                        service = id,
+                        failed = backend.source.has_failed(),
+                        dropped = backend.source.dropped(),
+                        "audio capture ended"
+                    );
+                    ending.why(if backend.source.has_failed() {
+                        HostedEnd::Failed("capture failed")
+                    } else {
+                        HostedEnd::Finished("capture ended")
+                    });
                     write(
                         &mut send,
                         vec![if backend.source.has_failed() { 2 } else { 0 }],
@@ -409,12 +504,43 @@ pub(super) async fn serve(
                 }
             }
         };
-        tokio::select! {result=sending=>result,_=read(&mut recv)=>Ok(())}
+        tokio::select! {
+            result = sending => result.inspect_err(|_| ending.why(HostedEnd::ViewerClosed)),
+            _ = read(&mut recv) => {
+                ending.why(HostedEnd::ViewerClosed);
+                Ok(())
+            }
+        }
     };
     if *parent.borrow() || *stop.borrow() {
         return Err(Error::NoSession);
     }
-    let result = tokio::select! {biased;_=parent.changed()=>Err(Error::NoSession),_=stop.changed()=>Err(Error::NoSession),result=run=>result};
-    let _ = send.finish();
+    let result = tokio::select! {
+        biased;
+        _ = parent.changed() => {
+            ending.why(HostedEnd::ConnectionEnded);
+            Err(Error::NoSession)
+        }
+        _ = stop.changed() => {
+            ending.why(HostedEnd::service_closed(&shared, id));
+            Err(Error::NoSession)
+        }
+        result = run => result,
+    };
+    // The service closed under the stream for a reason other than its
+    // viewer's close: the viewer hears it was withdrawn.
+    if *stop.borrow() && HostedEnd::service_closed(&shared, id) == HostedEnd::ServiceClosed {
+        crate::ignored!(
+            crate::trace::AUDIO,
+            "the peer may be gone before it hears why",
+            tokio::time::timeout(Duration::from_millis(500), write(&mut send, vec![4])).await
+        );
+    }
+    ending.close(result.as_ref().err().map(Error::name));
+    crate::ignored!(
+        crate::trace::AUDIO,
+        "a stream that cannot finish is closed with its link",
+        send.finish()
+    );
     result
 }

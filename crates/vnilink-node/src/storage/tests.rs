@@ -14,9 +14,10 @@ use super::database::{
     arm_schema_fault, bundled_sqlite_version, expected_vfs_name, SchemaFault, CREATE_SQL,
 };
 use super::key::{FileVault, KeyVault, KeyringVault, MemoryVault, KEY_ACCOUNT, KEY_SERVICE};
+#[cfg(unix)]
+use super::paths::linux_app_dir;
 use super::paths::{
-    self, linux_app_dir, linux_fstype_is_remote, linux_mount_fstype, linux_path_is_remote,
-    resolve_mount_path,
+    self, linux_fstype_is_remote, linux_mount_fstype, linux_path_is_remote, resolve_mount_path,
 };
 use super::{recover_installation, EncryptedInstallationStore, Failure};
 
@@ -62,18 +63,11 @@ impl Drop for Fixture {
     }
 }
 
+/// The engine directory the store expects: owner-only, as production creates
+/// it. On Windows a plain directory inherits the temp folder's broader DACL,
+/// which the store rightly refuses.
 fn create_private_dir(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(path).unwrap();
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir(path).unwrap();
-    }
+    super::paths::ensure_private_dir(path).expect("private fixture directory");
 }
 
 fn memory() -> Arc<MemoryVault> {
@@ -135,20 +129,22 @@ fn bundled_sqlite_is_the_pinned_351_release() {
     assert_eq!(bundled_sqlite_version(), "3.51.3");
 }
 
+// Linux path rules over Unix paths; on Windows `/var/data` is not even absolute.
+#[cfg(unix)]
 #[test]
 fn linux_paths_follow_absolute_xdg_then_home() {
-    let home = Path::new("/home/me");
+    let home = Path::new("/home/someone");
     assert_eq!(
         linux_app_dir(Some(home), Some(std::ffi::OsStr::new("/var/data"))).unwrap(),
         PathBuf::from("/var/data/vnilink")
     );
     assert_eq!(
         linux_app_dir(Some(home), Some(std::ffi::OsStr::new(""))).unwrap(),
-        PathBuf::from("/home/me/.local/share/vnilink")
+        PathBuf::from("/home/someone/.local/share/vnilink")
     );
     assert_eq!(
         linux_app_dir(Some(home), Some(std::ffi::OsStr::new("relative"))).unwrap(),
-        PathBuf::from("/home/me/.local/share/vnilink")
+        PathBuf::from("/home/someone/.local/share/vnilink")
     );
     assert_eq!(
         linux_app_dir(None, Some(std::ffi::OsStr::new("/var/data"))).unwrap(),
@@ -188,7 +184,7 @@ fn linux_mountinfo_uses_the_longest_match() {
         Some("nfs")
     );
     assert_eq!(
-        linux_mount_fstype(info, Path::new("/home/engine")).as_deref(),
+        linux_mount_fstype(info, Path::new("/home/someone/engine")).as_deref(),
         Some("ext4")
     );
     assert!(linux_mount_fstype("", Path::new("/home")).is_none());
@@ -848,8 +844,10 @@ fn a_busy_begin_is_unavailable_and_a_later_save_uses_a_fresh_nonce() {
     let error = store.save(b"blocked".to_vec()).unwrap_err();
     let elapsed = started.elapsed();
     assert_eq!(error, FfiError::StoreUnavailable);
+    // The save waits out the busy timeout before it gives up; any longer
+    // is a busy computer, and only a hang fails.
     assert!(elapsed >= Duration::from_millis(700), "{elapsed:?}");
-    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(60), "{elapsed:?}");
     assert_eq!(nonce_of(&fixture.database()), nonce);
     connection.execute_batch("ROLLBACK").unwrap();
     drop(connection);

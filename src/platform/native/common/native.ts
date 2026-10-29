@@ -1,11 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls and window state only.
+ *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links, clipboard, relaunch and logs.
  *--------------------------------------------------------------------------------------------*/
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
+import type { NativeScreenSource } from '../../engine/common/engine.js';
 import type { Event } from '../../../base/common/event.js';
+import { VSBuffer } from '../../../base/common/buffer.js';
+import type { MessageBoxOptions, MessageBoxReturnValue } from '../../../base/parts/sandbox/common/electronTypes.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 export interface IWindowState {
@@ -45,7 +48,45 @@ export interface INativeHostService {
 	closeWindow(options?: ITargetWindowOptions): Promise<void>;
 	setFullScreen(fullscreen: boolean, options?: ITargetWindowOptions): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
+	pickFolder(defaultPath: string): Promise<string | null>;
+	/** A native message box over the window, as VS Code's desktop dialogs are. */
+	showMessageBox(options: MessageBoxOptions & ITargetWindowOptions): Promise<MessageBoxReturnValue>;
+	getCaptureDisplays(): Promise<NativeScreenSource[]>;
+	openExternal(url: string): Promise<void>;
+
+	// Clipboard
+	readClipboardText(type?: 'selection' | 'clipboard'): Promise<string>;
+	writeClipboardText(text: string, type?: 'selection' | 'clipboard'): Promise<void>;
+	/** Places a PNG picture on the clipboard. */
+	writeClipboardPicture(png: VSBuffer): Promise<void>;
+
+	/** Restarts the application; main refuses unless the engine requires a restart. */
+	relaunch(): Promise<void>;
+
+	// Logs
+	/** Shows this run's logs folder in the system's file manager. */
+	openLogsFolder(): Promise<void>;
+	/** The end of this run's main and window logs, for a diagnostics export. */
+	readLogTails(): Promise<LogTail[]>;
 }
+
+/** The end of one log file: its path in the logs folder and its last lines. */
+export interface LogTail {
+	readonly name: string;
+	readonly text: string;
+}
+
+/** The most of each log a tail carries, in characters. */
+export const MAX_LOG_TAIL = 256 * 1024;
+
+export function isLogTails(value: unknown): value is LogTail[] {
+	return Array.isArray(value) && value.length <= 32 && value.every((tail: unknown) =>
+		typeof tail === 'object' && tail !== null && 'name' in tail && typeof tail.name === 'string' && tail.name.length > 0 && tail.name.length <= 256
+		&& 'text' in tail && typeof tail.text === 'string' && tail.text.length <= MAX_LOG_TAIL);
+}
+
+/** Main-process IPC channel serving {@link INativeHostService}. */
+export const NATIVE_HOST_CHANNEL_NAME = 'nativeHost';
 
 export type NativeHostMethod =
 	| 'getWindowState'
@@ -55,7 +96,34 @@ export type NativeHostMethod =
 	| 'unmaximizeWindow'
 	| 'closeWindow'
 	| 'setFullScreen'
-	| 'updateWindowControls';
+	| 'updateWindowControls'
+	| 'pickFolder'
+	| 'showMessageBox'
+	| 'getCaptureDisplays'
+	| 'openExternal'
+	| 'readClipboardText'
+	| 'writeClipboardText'
+	| 'writeClipboardPicture'
+	| 'relaunch'
+	| 'openLogsFolder'
+	| 'readLogTails';
+
+/** Longest text a window may place on the clipboard. */
+const MAX_CLIPBOARD_TEXT = 16 * 1024 * 1024;
+
+/** Largest picture a window may save. */
+const MAX_PICTURE_BYTES = 32 * 1024 * 1024;
+
+const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+export function isPng(value: unknown): value is VSBuffer {
+	return value instanceof VSBuffer && value.byteLength > pngSignature.length && value.byteLength <= MAX_PICTURE_BYTES
+		&& pngSignature.every((byte, index) => value.buffer[index] === byte);
+}
+
+function isClipboardType(value: unknown): boolean {
+	return value === undefined || value === 'selection' || value === 'clipboard';
+}
 
 export function isWindowState(value: unknown): value is IWindowState {
 	if (typeof value !== 'object' || value === null) {
@@ -82,16 +150,55 @@ export function isWindowState(value: unknown): value is IWindowState {
 		value.zoomFactor >= 0.25 &&
 		value.zoomFactor <= 5 &&
 		'backgroundMaterial' in value &&
-		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'mica')
+		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'glass' || value.backgroundMaterial === 'mica')
 	);
+}
+
+const messageBoxKeys = ['message', 'detail', 'type', 'buttons', 'defaultId', 'cancelId', 'title', 'noLink', 'checkboxLabel', 'checkboxChecked', 'targetWindowId'];
+
+/** A short message box with at most four buttons and an optional checkbox; nothing that reaches files or links. */
+export function isMessageBoxOptions(value: unknown, windowId: number): value is MessageBoxOptions & ITargetWindowOptions {
+	if (typeof value !== 'object' || value === null || Array.isArray(value) || Object.keys(value).some(key => !messageBoxKeys.includes(key))) {
+		return false;
+	}
+	const shortText = (field: unknown, max: number): boolean => field === undefined || (typeof field === 'string' && field.length <= max && !field.includes('\0'));
+	const buttons: unknown = Reflect.get(value, 'buttons');
+	const count = Array.isArray(buttons) ? buttons.length : 0;
+	const index = (field: unknown): boolean => field === undefined || (Number.isInteger(field) && Number(field) >= 0 && Number(field) < Math.max(count, 1));
+	const type: unknown = Reflect.get(value, 'type');
+	const target: unknown = Reflect.get(value, 'targetWindowId');
+	return typeof Reflect.get(value, 'message') === 'string' && shortText(Reflect.get(value, 'message'), 500)
+		&& shortText(Reflect.get(value, 'detail'), 1000) && shortText(Reflect.get(value, 'title'), 100)
+		&& (type === undefined || type === 'none' || type === 'info' || type === 'warning' || type === 'question')
+		&& (buttons === undefined || (Array.isArray(buttons) && buttons.length <= 4 && buttons.every(button => typeof button === 'string' && button.length > 0 && button.length <= 64)))
+		&& index(Reflect.get(value, 'defaultId')) && index(Reflect.get(value, 'cancelId'))
+		&& (Reflect.get(value, 'noLink') === undefined || typeof Reflect.get(value, 'noLink') === 'boolean')
+		&& shortText(Reflect.get(value, 'checkboxLabel'), 100) && Reflect.get(value, 'checkboxLabel') !== ''
+		&& (Reflect.get(value, 'checkboxChecked') === undefined || (typeof Reflect.get(value, 'checkboxChecked') === 'boolean' && Reflect.get(value, 'checkboxLabel') !== undefined))
+		&& (target === undefined || target === windowId);
 }
 
 export function isNativeHostRequest(method: unknown, args: unknown): method is NativeHostMethod {
 	if (typeof method !== 'string' || !Array.isArray(args) || !Number.isSafeInteger(args[0]) || args[0] <= 0) {
 		return false;
 	}
-	if (method === 'getWindowState') {
+	if (method === 'getWindowState' || method === 'getCaptureDisplays' || method === 'relaunch' || method === 'openLogsFolder' || method === 'readLogTails') {
 		return args.length === 1;
+	}
+	if (method === 'readClipboardText') {
+		return args.length <= 2 && isClipboardType(args[1]);
+	}
+	if (method === 'writeClipboardText') {
+		return args.length >= 2 && args.length <= 3 && typeof args[1] === 'string' && args[1].length <= MAX_CLIPBOARD_TEXT && isClipboardType(args[2]);
+	}
+	if (method === 'writeClipboardPicture') {
+		return args.length === 2 && isPng(args[1]);
+	}
+	if (method === 'showMessageBox') {
+		return args.length === 2 && isMessageBoxOptions(args[1], Number(args[0]));
+	}
+	if (method === 'pickFolder' || method === 'openExternal') {
+		return args.length === 2 && typeof args[1] === 'string' && args[1].length > 0 && args[1].length <= 4096 && !args[1].includes('\0');
 	}
 	let options: unknown;
 	if (method === 'setFullScreen') {

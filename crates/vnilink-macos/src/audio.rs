@@ -1,5 +1,6 @@
 //! Audio-only ScreenCaptureKit streams. Local approval and existing permission
 //! precede activation; this adapter never requests permission or changes outputs.
+// trace: records every ignored failure
 use screencapturekit::{
     cm::CMSampleBuffer,
     shareable_content::SCShareableContent,
@@ -209,7 +210,11 @@ impl MacSystemAudio {
 impl Drop for MacSystemAudio {
     fn drop(&mut self) {
         self.failed.store(true, Ordering::Release);
-        let _ = self.stream.stop_capture();
+        vnilink::ignored!(
+            vnilink::trace::AUDIO,
+            "a stream that cannot stop ends with its capture",
+            self.stream.stop_capture()
+        );
     }
 }
 fn configuration(format: Format) -> SCStreamConfiguration {

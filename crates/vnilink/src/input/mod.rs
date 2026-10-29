@@ -1,3 +1,4 @@
+// trace: records every ignored failure
 use crate::error::Error;
 
 mod events;
@@ -7,7 +8,7 @@ mod queue;
 pub mod usage;
 mod window;
 
-pub(crate) use events::{check_key_text, key_text_problem, swap_command_key, swap_pointer_button};
+pub(crate) use events::{key_text_problem, swap_command_key, swap_pointer_button};
 pub use events::{InputEvent, PointerButton};
 pub use map::{
     desktop_bounds, display_for_point, map_point, map_window_to_desktop, validate_topology,

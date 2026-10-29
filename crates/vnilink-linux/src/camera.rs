@@ -4,6 +4,7 @@
 //! node, and capture opens through the held instance, never the
 //! recyclable path. A replacement unit with identical facts therefore
 //! loses consent even when no enumeration observed the gap.
+// trace: records every ignored failure
 #[cfg(target_os = "linux")]
 use crate::LinuxEncoder;
 use std::collections::{HashMap, HashSet};
@@ -23,7 +24,9 @@ use v4l::{
     Device, Format, FourCC,
 };
 use vnilink::{
-    camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory},
+    camera::{
+        CameraApproval, CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory,
+    },
     Error,
 };
 #[cfg(target_os = "linux")]
@@ -32,6 +35,9 @@ use vnilink_media::{EncodeParams, RawFrame, VideoEncoder};
 const BITRATE: u32 = 4_000_000;
 #[cfg(target_os = "linux")]
 const IDLE: Duration = Duration::from_secs(5);
+/// How long one wait for a frame lasts before cancellation is checked again.
+#[cfg(target_os = "linux")]
+const POLL_MS: i32 = 25;
 #[cfg(target_os = "linux")]
 const RAW_LIMIT: usize = 128 * 1024 * 1024;
 /// One enumerated V4L2 node with the hardware facts that identify it.
@@ -237,16 +243,23 @@ struct FactoryState {
 }
 
 pub struct LinuxCameraFactory {
-    approved: Vec<String>,
+    approved: CameraApproval,
     inspector: Box<dyn Inspector>,
     state: Mutex<FactoryState>,
 }
 impl LinuxCameraFactory {
     #[cfg(target_os = "linux")]
-    pub fn new(approved: Vec<String>) -> Result<Self, Error> {
-        Self::with_inspector(approved, Box::new(V4lInspector))
+    pub fn new(approved: CameraApproval) -> Result<Self, Error> {
+        Self::with_approval(approved, Box::new(V4lInspector))
     }
+    #[cfg(test)]
     fn with_inspector(approved: Vec<String>, inspector: Box<dyn Inspector>) -> Result<Self, Error> {
+        Self::with_approval(CameraApproval::Only(approved), inspector)
+    }
+    fn with_approval(
+        approved: CameraApproval,
+        inspector: Box<dyn Inspector>,
+    ) -> Result<Self, Error> {
         Self {
             approved,
             inspector,
@@ -255,8 +268,10 @@ impl LinuxCameraFactory {
         .validated()
     }
     fn validated(self) -> Result<Self, Error> {
-        if self.approved.len() > 32 || self.approved.iter().any(|id| !valid_approval(id)) {
-            return Err(Error::InvalidSetting("invalid approved V4L2 camera IDs"));
+        if let CameraApproval::Only(ids) = &self.approved {
+            if ids.len() > 32 || ids.iter().any(|id| !valid_approval(id)) {
+                return Err(Error::InvalidSetting("invalid approved V4L2 camera IDs"));
+            }
         }
         Ok(self)
     }
@@ -273,11 +288,15 @@ impl LinuxCameraFactory {
     /// node that cannot be opened is withheld until it can be held, and
     /// a first appearance that cannot be held is not recorded as seen.
     /// Serial-bound identities are never held or retired: the same
-    /// serial reappearing is the same instance.
+    /// serial reappearing is the same instance. With All, no camera was
+    /// chosen by name, so any present camera is the one offered.
     fn observe(&self, unique: &[(String, String, String, Option<String>)]) {
+        let CameraApproval::Only(approved_ids) = &self.approved else {
+            return;
+        };
         let mut state = self.state.lock().unwrap();
         for (identity, path, _, serial) in unique {
-            if serial.is_some() || !self.approved.contains(identity) {
+            if serial.is_some() || !approved_ids.contains(identity) {
                 continue;
             }
             if state.invalidated.contains(identity) {
@@ -299,7 +318,7 @@ impl LinuxCameraFactory {
                 }
             }
         }
-        for approved in &self.approved {
+        for approved in approved_ids {
             let present = unique
                 .iter()
                 .any(|(identity, _, _, _)| identity == approved);
@@ -320,7 +339,7 @@ impl LinuxCameraFactory {
         identity: &str,
         serial: &Option<String>,
     ) -> Result<Option<Arc<dyn HeldNode>>, Error> {
-        if serial.is_some() {
+        if serial.is_some() || !self.approved.names(identity) {
             return Ok(None);
         }
         let mut state = self.state.lock().unwrap();
@@ -344,7 +363,7 @@ impl LinuxCameraFactory {
     /// original transient error propagates. Serial-bound approvals never
     /// retire here: only the serial distinguishes their instances.
     fn capture_failed(&self, identity: &str, serial: &Option<String>, error: Error) -> Error {
-        if serial.is_some() {
+        if serial.is_some() || !self.approved.names(identity) {
             return error;
         }
         let mut state = self.state.lock().unwrap();
@@ -367,9 +386,11 @@ impl HostCameraFactory for LinuxCameraFactory {
         Ok(unique
             .into_iter()
             .filter(|(identity, _, _, serial)| {
-                self.approved.contains(identity)
+                self.approved.allows(identity)
                     && !retired.contains(identity)
-                    && (serial.is_some() || held.contains(identity))
+                    && (serial.is_some()
+                        || held.contains(identity)
+                        || !self.approved.names(identity))
             })
             .map(|(identity, _, name, _)| CameraDevice { id: identity, name })
             .collect())
@@ -381,7 +402,7 @@ impl HostCameraFactory for LinuxCameraFactory {
     ) -> Result<CameraBackend, Error> {
         startup.check()?;
         requested.validate()?;
-        if !self.approved.contains(&requested.device_id) {
+        if !self.approved.allows(&requested.device_id) {
             return Err(Error::Unauthorized);
         }
         // Resolve the approved identity to its current node. A replacement
@@ -426,17 +447,27 @@ impl HostCameraFactory for LinuxCameraFactory {
                         // Retain the exact approved descriptor until capture has
                         // opened it, even if enumeration retires its factory entry.
                         let _held = worker_held;
-                        if capture(
+                        // The step that failed is the reason given: a missing
+                        // encoder and an unusable format are not the same fault.
+                        if let Err(error) = capture(
                             worker_requested,
                             open_path,
                             node,
                             source.clone(),
                             &ready,
                             &worker_startup,
-                        )
-                        .is_err()
-                        {
-                            let _ = ready.try_send(Err(Error::Unsupported("V4L2 camera")));
+                        ) {
+                            tracing::warn!(
+                                target: vnilink::trace::CAMERA,
+                                failure = vnilink::trace::Failure::failure_name(&error),
+                                reason = vnilink::trace::Failure::failure_reason(&error),
+                                "the camera did not run"
+                            );
+                            vnilink::ignored!(
+                                vnilink::trace::CAMERA,
+                                "the opener stopped waiting for the camera",
+                                ready.try_send(Err(error))
+                            );
                             source.fail();
                         }
                         source.close();
@@ -451,7 +482,7 @@ impl HostCameraFactory for LinuxCameraFactory {
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (&open_path, &node, worker_held);
+                let _unused = (&open_path, &node, worker_held);
                 Err(Error::Unsupported("camera capture"))
             }
         };
@@ -542,16 +573,24 @@ fn capture(
     };
     config.validate()?;
     let mut encoder = LinuxEncoder::open(
+        vnilink::VideoCodec::H264,
         config.width,
         config.height,
         config.fps as u8,
         BITRATE,
         false,
+        vnilink::YuvMatrix::Bt709,
     )
     .map_err(|_| Error::Unsupported("camera H.264 encoder"))?;
     let mut stream = Stream::with_buffers(&device, Type::VideoCapture, 2)
         .map_err(|_| Error::Unsupported("camera buffers"))?;
-    stream.set_timeout(Duration::from_millis(25));
+    // `v4l` queues the last buffer again at the start of every `next`, so a
+    // `next` that timed out leaves it queued twice and the driver refuses it
+    // (EINVAL). Only the first `next`, which starts streaming, waits inside
+    // `v4l`, as long as a camera may take to deliver its first frame; later
+    // ones are made once the device says a frame is ready.
+    stream.set_timeout(IDLE);
+    let handle = stream.handle();
     startup.check()?;
     if source.is_cancelled() {
         return Ok(());
@@ -559,15 +598,22 @@ fn capture(
     let start = Instant::now();
     let mut reported = false;
     let mut last = start;
+    let mut streaming = false;
     while !source.is_cancelled() {
         if !reported {
             startup.check()?;
         }
-        let (bytes, metadata) = match stream.next() {
-            Ok(frame) => frame,
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut && last.elapsed() < IDLE => continue,
-            Err(_) => return Err(Error::Unsupported("camera stopped delivering frames")),
-        };
+        if streaming {
+            match handle.poll(libc::POLLIN, POLL_MS) {
+                Ok(0) if last.elapsed() < IDLE => continue,
+                Ok(ready) if ready > 0 => {}
+                _ => return Err(Error::Unsupported("camera stopped delivering frames")),
+            }
+        }
+        let (bytes, metadata) = stream
+            .next()
+            .map_err(|_| Error::Unsupported("camera stopped delivering frames"))?;
+        streaming = true;
         last = Instant::now();
         let used = metadata.bytesused as usize;
         let bytes = bytes
@@ -584,6 +630,7 @@ fn capture(
                 &frame,
                 &EncodeParams {
                     force_keyframe: source.take_keyframe_request(),
+                    recovery: false,
                     bitrate_bps: BITRATE,
                     frame_rate: config.fps as u8,
                 },
@@ -867,6 +914,57 @@ mod tests {
     }
 
     #[test]
+    fn all_cameras_lists_each_present_camera_including_one_plugged_in_later() {
+        let (inspector, script) = scripted(vec![node(
+            "/dev/video0",
+            "uvcvideo",
+            "Alpha Cam",
+            "usb-0000:00:14.0-1",
+            None,
+        )]);
+        let factory =
+            LinuxCameraFactory::with_approval(CameraApproval::All, Box::new(inspector)).unwrap();
+        let names = |factory: &LinuxCameraFactory| {
+            factory
+                .devices()
+                .unwrap()
+                .into_iter()
+                .map(|device| device.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&factory), ["Alpha Cam"]);
+        script.set_nodes(vec![
+            node(
+                "/dev/video0",
+                "uvcvideo",
+                "Alpha Cam",
+                "usb-0000:00:14.0-1",
+                None,
+            ),
+            node(
+                "/dev/video2",
+                "uvcvideo",
+                "Beta Cam",
+                "usb-0000:00:14.0-2",
+                Some("B1"),
+            ),
+        ]);
+        assert_eq!(names(&factory), ["Alpha Cam", "Beta Cam"]);
+        // Nothing was chosen by name, so a camera that left and came back
+        // is still offered.
+        script.set_nodes(vec![]);
+        assert!(names(&factory).is_empty());
+        script.set_nodes(vec![node(
+            "/dev/video0",
+            "uvcvideo",
+            "Alpha Cam",
+            "usb-0000:00:14.0-1",
+            None,
+        )]);
+        assert_eq!(names(&factory), ["Alpha Cam"]);
+    }
+
+    #[test]
     fn recycled_node_keeps_path_but_loses_approval() {
         let (inspector, script) = scripted(vec![node(
             "/dev/video0",
@@ -1119,9 +1217,11 @@ mod tests {
 
     #[test]
     fn serialised_reappearance_keeps_consent_for_the_same_instance() {
+        // No such node, as in the tests beside it: a real camera at
+        // /dev/video0 answers with its own identity, which is refused.
         let unit = |serial: Option<&str>| {
             node(
-                "/dev/video0",
+                "/dev/vnilink-nonexistent0",
                 "uvcvideo",
                 "Twin Cam",
                 "usb-0000:00:14.0-1",

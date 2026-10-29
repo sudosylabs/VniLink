@@ -1,0 +1,45 @@
+{
+  "nameShort": "VniLink",
+  "nameLong": "VniLink",
+  "applicationName": "vnilink",
+  "appId": "fr.sudosy.vnilink",
+  "publisherName": "Sudosy Labs",
+  "repositoryUrl": "https://github.com/sudosylabs/VniLink",
+  "supportEmail": "support@sudosy.fr",
+  "invitation": {
+    "extension": "vnl",
+    "name": "VniLink invitation",
+    "mimeType": "application/x-vnilink-invitation"
+  },
+  "platforms": {
+    "darwin": {
+      "executableName": "VniLink",
+      "minimumSystemVersion": "14.0",
+      "icon": "assets/apple/VniLink/Resources/AppIcon.icon",
+      "fallbackIconSource": "assets/desktop/app-icon.png",
+      "signing": "developer-id-and-notarization",
+      "targets": [
+        { "architecture": "arm64", "rustTarget": "aarch64-apple-darwin" },
+        { "architecture": "x64", "rustTarget": "x86_64-apple-darwin" }
+      ]
+    },
+    "win32": {
+      "executableName": "vnilink",
+      "minimumSystemVersion": "10.0.19045",
+      "icon": "assets/windows/app-icon.ico",
+      "signing": "unsigned",
+      "targets": [{ "architecture": "x64", "rustTarget": "x86_64-pc-windows-gnu" }]
+    },
+    "linux": {
+      "executableName": "vnilink",
+      "desktopFileName": "fr.sudosy.vnilink.desktop",
+      "icon": "assets/linux/app-icon.png",
+      "signing": "unsigned",
+      "intendedDistributions": [
+        { "id": "ubuntu", "minimumVersion": "24.04" },
+        { "id": "debian", "minimumVersion": "13" }
+      ],
+      "targets": [{ "architecture": "x64", "rustTarget": "x86_64-unknown-linux-gnu" }]
+    }
+  }
+}
