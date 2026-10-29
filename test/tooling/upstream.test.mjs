@@ -108,6 +108,8 @@ test('native-host proxy sends its window as context, forwards window events and 
 	assert.deepEqual(events, [{ ...state, revision: 3, focused: true }]);
 	assert.equal(host.windowId, 7);
 	assert.equal(isNativeHostRequest('setFullScreen', [7, 'yes']), false);
+	assert.equal(isNativeHostRequest('setRemoteKeyboard', [7, true]), true);
+	assert.equal(isNativeHostRequest('setRemoteKeyboard', [7]), false, 'a remote desktop says whether it has the keyboard');
 	assert.equal(isNativeHostRequest('updateWindowControls', [7, { height: Infinity }]), false);
 	assert.equal(isNativeHostRequest('focusWindow', [7, { targetWindowId: 8 }]), false);
 	assert.equal(isNativeHostRequest('openExternal', [7, '']), false);

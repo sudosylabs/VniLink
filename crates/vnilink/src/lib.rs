@@ -171,11 +171,11 @@ pub use input::{
 };
 pub use installation::{InstallationStore, MemoryStore};
 pub use job::{ConflictChoice, JobDestination, JobDirection, JobItem, JobSnapshot, JobState};
-pub use keyboard::{KeyboardMode, LocalKey};
+pub use keyboard::{KeyboardMode, LocalKey, SystemKeys};
 pub use manifest::{
     keep_both_name, Manifest, ManifestEntry, MAX_MANIFEST_DEPTH, MAX_MANIFEST_FILES,
 };
-pub use os_input::{linux_evdev_keycode, OsInput};
+pub use os_input::{linux_evdev_keycode, usage_for_native_key, OsInput};
 pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
 pub use protocol::{Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, PROTOCOL_VERSION};
 pub use relay::{CustomRelay, RelaySettings};

@@ -47,6 +47,11 @@ export interface INativeHostService {
 	unmaximizeWindow(options?: ITargetWindowOptions): Promise<void>;
 	closeWindow(options?: ITargetWindowOptions): Promise<void>;
 	setFullScreen(fullscreen: boolean, options?: ITargetWindowOptions): Promise<void>;
+	/**
+	 * Whether a remote desktop in this window has the keyboard, so the
+	 * application's own shortcuts, such as Command-C on a Mac, go to it.
+	 */
+	setRemoteKeyboard(owned: boolean): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
 	pickFolder(defaultPath: string): Promise<string | null>;
 	/** A native message box over the window, as VS Code's desktop dialogs are. */
@@ -96,6 +101,7 @@ export type NativeHostMethod =
 	| 'unmaximizeWindow'
 	| 'closeWindow'
 	| 'setFullScreen'
+	| 'setRemoteKeyboard'
 	| 'updateWindowControls'
 	| 'pickFolder'
 	| 'showMessageBox'
@@ -187,6 +193,9 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	}
 	if (method === 'readClipboardText') {
 		return args.length <= 2 && isClipboardType(args[1]);
+	}
+	if (method === 'setRemoteKeyboard') {
+		return args.length === 2 && typeof args[1] === 'boolean';
 	}
 	if (method === 'writeClipboardText') {
 		return args.length >= 2 && args.length <= 3 && typeof args[1] === 'string' && args[1].length <= MAX_CLIPBOARD_TEXT && isClipboardType(args[2]);

@@ -31,6 +31,8 @@ export class NativeHostMainService extends Disposable {
 	private readonly stateChanged = this._register(new Emitter<IWindowState>());
 	public readonly onDidChangeWindowState = this.stateChanged.event;
 	private readonly revisions = new Map<number, number>();
+	/** Windows whose remote desktop has the keyboard. */
+	private readonly remoteKeyboards = new Set<number>();
 	private readonly materials = new Map<number, WindowMaterial>();
 
 	/** `logsHome` is this run's logs folder. */
@@ -135,6 +137,24 @@ export class NativeHostMainService extends Disposable {
 	public setFullScreen(windowId: number, fullscreen: boolean): Promise<void> {
 		this.window(windowId).setFullScreen(fullscreen);
 		return Promise.resolve();
+	}
+
+	public setRemoteKeyboard(windowId: number, owned: boolean): Promise<void> {
+		const window = this.window(windowId);
+		if (owned) {
+			if (!this.remoteKeyboards.has(windowId)) {
+				this.remoteKeyboards.add(windowId);
+				window.once('closed', () => this.remoteKeyboards.delete(windowId));
+			}
+		} else {
+			this.remoteKeyboards.delete(windowId);
+		}
+		return Promise.resolve();
+	}
+
+	/** Whether a remote desktop in window `windowId` has the keyboard. */
+	public hasRemoteKeyboard(windowId: number): boolean {
+		return this.remoteKeyboards.has(windowId);
 	}
 
 	public updateWindowControls(windowId: number, options: IWindowControlsOptions): Promise<void> {

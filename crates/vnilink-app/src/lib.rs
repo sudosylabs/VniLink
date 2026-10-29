@@ -63,6 +63,7 @@ mod services;
 mod snapshot;
 pub use snapshot::{snapshot_error_outcome, FfiScreenAccess, FfiScreenSnapshot};
 mod system;
+mod system_keys;
 mod terminal;
 pub use services::{
     DesktopService, FfiAdaptationReason, FfiCloseCause, FfiCondition, FfiDesktopControlState,

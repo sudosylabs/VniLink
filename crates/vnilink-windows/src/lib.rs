@@ -83,6 +83,10 @@ pub use power::WindowsPowerFactory;
 mod system;
 #[cfg(windows)]
 pub use system::WindowsSystemActions;
+#[cfg(windows)]
+mod system_keys;
+#[cfg(windows)]
+pub use system_keys::WindowsSystemKeys;
 
 #[cfg(windows)]
 mod camera;

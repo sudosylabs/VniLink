@@ -337,6 +337,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private swapModifiers = false;
 	/** The exchange chosen from this desktop's menu for this computer, remembered between runs. */
 	private swapChosen: boolean | undefined;
+	/** Whether the picture has the keyboard, with this computer's own shortcuts, as last said. */
+	private keyboardOwned = false;
 
 	constructor(
 		private readonly device: DeviceSummary,
@@ -427,6 +429,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			}
 		}));
 		this._register(toDisposable(() => {
+			this.ownKeyboard(false);
 			this.releaseInput();
 		}));
 		void this.connect();
@@ -741,11 +744,16 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.showPointer();
 		}));
 		this.sessionListeners.add(session.onEnd(end => {
+			this.ownKeyboard(false);
 			this.releaseInput();
 			this.showProblem(end, true);
 		}));
 		this.session.value = session;
 		this.applySwap(true);
+		// A new session takes the keyboard where the picture already has focus; it starts without it.
+		const document = this.canvas.ownerDocument;
+		const focused = document.activeElement === this.canvas && document.hasFocus();
+		this.ownKeyboard(focused, focused);
 		this.stills.reset();
 		this.remotePointer = undefined;
 		this.showPointer();
@@ -896,9 +904,35 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			event.preventDefault();
 			this.scroll(event);
 		}, { passive: false }));
+		this._register(addDisposableListener(this.canvas, EventType.FOCUS, () => {
+			this.ownKeyboard(true);
+		}));
 		this._register(addDisposableListener(this.canvas, EventType.BLUR, () => {
+			this.ownKeyboard(false);
 			this.releaseInput();
 		}));
+	}
+
+	/**
+	 * Gives the picture the keyboard, or takes it back: while it has it, this
+	 * computer's own shortcuts, such as Alt-Tab or Command-Tab, and the
+	 * application's, such as Command-C, go to the other computer. Keys taken
+	 * that way never reach this window, so a later release lets go of them.
+	 */
+	private ownKeyboard(owned: boolean, again = false): void {
+		const session = this.session.value;
+		const wanted = owned && this.control && session !== undefined;
+		if (wanted === this.keyboardOwned && !again) {
+			return;
+		}
+		this.keyboardOwned = wanted;
+		void this.nativeHost.setRemoteKeyboard(wanted);
+		if (session && this.control) {
+			if (wanted) {
+				this.pressed = true;
+			}
+			session.send({ type: 'captureSystemKeys', enabled: wanted });
+		}
 	}
 
 	/**

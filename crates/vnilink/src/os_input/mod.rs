@@ -12,6 +12,15 @@ pub fn linux_evdev_keycode(usage: u16) -> Option<i32> {
         .map(i32::from)
 }
 
+/// The HID usage of the key this operating system calls `code`: a Core
+/// Graphics keycode on macOS, a set-1 scan code with `0xE000` added for an
+/// extended key on Windows, an X11 keycode on Linux. Where two usages share
+/// one position, the lower is given. Does not read or inject input.
+pub fn usage_for_native_key(code: u16) -> Option<u16> {
+    (0..=crate::input::usage::RIGHT_META)
+        .find(|usage| key_for_usage(*usage).is_some_and(|codes| platform_code(codes) == code))
+}
+
 /// Injects key and pointer events with the operating system's input API.
 ///
 /// macOS uses Core Graphics and needs Accessibility permission. The first call

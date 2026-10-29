@@ -133,6 +133,7 @@ test('the input channel takes keys with their composing state and the display th
 	assert(isDesktopInputCommand({ type: 'selectDisplays', ...target, ids: ['7'] }));
 	assert(isDesktopInputCommand({ type: 'swapSessionModifiers', ...target, enabled: true }), 'the Control and Command exchange goes in order with the keys');
 	assert(!isDesktopInputCommand({ type: 'swapSessionModifiers', ...target, enabled: 'yes' }), 'the exchange is on or off');
+	assert(isDesktopInputCommand({ type: 'captureSystemKeys', ...target, enabled: false }), 'this computer\'s shortcuts go to the desktop while it has the keyboard');
 	assert(!isDesktopInputCommand({ type: 'updateSessionQuality', ...target, role: 'Controller', quality: { max_bitrate_kbps: 1, max_frame_rate: 1, max_width: 1, max_height: 1 } }), 'only input and display selection');
 	assert(!isDesktopInputCommand({ type: 'submitKey', ...target, usage: 4, down: true, extra: 1 }), 'an input with an extra field is refused');
 });

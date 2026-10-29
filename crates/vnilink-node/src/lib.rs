@@ -776,6 +776,14 @@ enum Command {
         generation: String,
         enabled: bool,
     },
+    /// Whether this computer's own shortcuts, such as Alt-Tab, go to this
+    /// desktop; on while it has the keyboard.
+    CaptureSystemKeys {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        enabled: bool,
+    },
     StartNativeScreenSharing {
         #[serde(rename = "displayId")]
         display_id: u32,
@@ -2125,7 +2133,8 @@ impl EngineBridge {
             | Command::SubmitLocalKey { .. }
             | Command::ReleaseSessionInput { .. }
             | Command::SelectDisplays { .. }
-            | Command::SwapSessionModifiers { .. } => Err(Error::new(
+            | Command::SwapSessionModifiers { .. }
+            | Command::CaptureSystemKeys { .. } => Err(Error::new(
                 Status::InvalidArg,
                 "Desktop input goes on its data channel",
             )),
@@ -2320,7 +2329,9 @@ impl CommandShape {
                 &["type", "sessionId", "generation", "dx", "dy"]
             }
             "submitText" => &["type", "sessionId", "generation", "text"],
-            "swapSessionModifiers" => &["type", "sessionId", "generation", "enabled"],
+            "swapSessionModifiers" | "captureSystemKeys" => {
+                &["type", "sessionId", "generation", "enabled"]
+            }
             "submitLocalKey" => &[
                 "type",
                 "sessionId",

@@ -354,6 +354,7 @@ impl VnilinkCore {
                 Arc::new(DesktopService {
                     inner: Arc::new(inner),
                     core: Arc::downgrade(&self.inner),
+                    system_keys: std::sync::Mutex::new(None),
                 })
             })
             .map_err(map_error)
@@ -421,6 +422,8 @@ pub struct FilesService {
 pub struct DesktopService {
     pub(crate) inner: Arc<vnilink::RemoteDesktopService>,
     pub(crate) core: std::sync::Weak<vnilink::Core>,
+    /// This computer's shortcuts, taken while the desktop has the keyboard.
+    system_keys: std::sync::Mutex<Option<crate::system_keys::SystemKeyCapture>>,
 }
 
 impl DesktopService {
@@ -460,6 +463,23 @@ impl DesktopService {
         self.inner
             .set_swap_control_and_command(enabled)
             .map_err(map_error)
+    }
+    /// Takes this computer's own shortcuts, such as Alt-Tab or Command-Tab,
+    /// for this desktop while `enabled`, so they act on the other computer.
+    /// Off, keys taken and still held are left to `release_input`. Fails
+    /// where this computer has no hook, or withholds it, as macOS does
+    /// without Accessibility permission.
+    pub fn capture_system_keys(&self, enabled: bool) -> Result<(), FfiError> {
+        let mut capture = self
+            .system_keys
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !enabled {
+            *capture = None;
+        } else if capture.is_none() {
+            *capture = Some(crate::system_keys::SystemKeyCapture::start(&self.inner)?);
+        }
+        Ok(())
     }
     /// `composing` marks a dead key or an input-method step that has not typed yet.
     pub fn submit_local_key(

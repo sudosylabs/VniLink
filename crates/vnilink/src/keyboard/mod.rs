@@ -4,9 +4,12 @@
 //! already produced. Map mode sends the physical key. Translate mode asks the
 //! host to press the chord in its own layout.
 
+mod capture;
 mod chord;
 mod layout;
 mod plan;
+
+pub use capture::SystemKeys;
 
 pub(crate) use layout::layout_steps;
 pub use layout::{HostLayout, LayoutStep, ModifierLevel};

@@ -37,14 +37,16 @@ export function installApplicationMenu(): void {
  * macOS delivers editing and window shortcuts through menu key equivalents.
  * Without an Edit menu they are handled here; menu items, even hidden ones,
  * would make AppKit add Writing Tools and AutoFill to the application menu.
+ * While `remoteHasKeyboard` says a remote desktop has the keyboard, they go
+ * to the page, which sends them to the other computer.
  */
-export function registerEditingShortcuts(window: BrowserWindow): void {
+export function registerEditingShortcuts(window: BrowserWindow, remoteHasKeyboard: () => boolean): void {
 	if (!isMacintosh) {
 		return;
 	}
 	const contents = window.webContents;
 	contents.on('before-input-event', (event, input) => {
-		if (input.type !== 'keyDown' || !input.meta || input.control || input.alt) {
+		if (input.type !== 'keyDown' || !input.meta || input.control || input.alt || remoteHasKeyboard()) {
 			return;
 		}
 		switch ((input.shift ? 'shift+' : '') + input.key.toLowerCase()) {

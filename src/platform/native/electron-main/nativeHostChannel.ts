@@ -41,6 +41,7 @@ export class NativeHostChannel implements IServerChannel {
 			case 'unmaximizeWindow': return this.nativeHost.unmaximizeWindow(windowId);
 			case 'closeWindow': return this.nativeHost.closeWindow(windowId);
 			case 'setFullScreen': return this.nativeHost.setFullScreen(windowId, args[1] === true);
+			case 'setRemoteKeyboard': return this.nativeHost.setRemoteKeyboard(windowId, args[1] === true);
 			case 'updateWindowControls': return this.nativeHost.updateWindowControls(windowId, args[1] as IWindowControlsOptions);
 			case 'pickFolder': return this.nativeHost.pickFolder(windowId, String(args[1]));
 			case 'showMessageBox':

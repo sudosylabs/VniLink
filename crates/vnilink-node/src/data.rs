@@ -664,6 +664,7 @@ impl DataChannel {
                 | Command::ReleaseSessionInput { .. }
                 | Command::SelectDisplays { .. }
                 | Command::SwapSessionModifiers { .. }
+                | Command::CaptureSystemKeys { .. }
         ) {
             return Err(Error::from_reason("Not an interactive input command"));
         }
@@ -708,6 +709,17 @@ impl DataChannel {
             Command::ReleaseSessionInput { .. } => service.release_input(),
             Command::SwapSessionModifiers { enabled, .. } => {
                 service.set_swap_control_and_command(enabled)
+            }
+            // A computer without a hook keeps its shortcuts; the desktop stays.
+            Command::CaptureSystemKeys { enabled, .. } => {
+                if let Err(error) = service.capture_system_keys(enabled) {
+                    tracing::info!(
+                        target: vnilink::trace::INPUT,
+                        failure = super::ffi_error_name(&error),
+                        "this computer's shortcuts stay here"
+                    );
+                }
+                Ok(())
             }
             // The display the pointer lands on, sent in order with it.
             Command::SelectDisplays { ids, .. } => service.select_displays(
@@ -964,6 +976,11 @@ impl DataChannel {
         {
             if let Ok(desktop) = self.desktop.lock() {
                 if let Some(desktop) = desktop.as_ref() {
+                    vnilink::ignored!(
+                        vnilink::trace::INPUT,
+                        "a desktop without a hook has none to stop",
+                        desktop.service.capture_system_keys(false)
+                    );
                     vnilink::ignored!(
                         vnilink::trace::INPUT,
                         "input of a closed desktop is released by its host",

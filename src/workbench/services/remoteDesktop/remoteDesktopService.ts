@@ -122,7 +122,9 @@ export type DesktopInput =
 	/** The display the pointer lands on; the other computer takes the pointer only there. */
 	| { readonly type: 'selectDisplays'; readonly ids: string[] }
 	/** Whether Control and Command are exchanged; send `releaseSessionInput` first, as a held key refuses it. */
-	| { readonly type: 'swapSessionModifiers'; readonly enabled: boolean };
+	| { readonly type: 'swapSessionModifiers'; readonly enabled: boolean }
+	/** Whether this computer's own shortcuts, such as Alt-Tab, go to the other computer; on while the picture has the keyboard. */
+	| { readonly type: 'captureSystemKeys'; readonly enabled: boolean };
 
 /** How the picture is doing: the engine's view of it, and the codec it arrives in. */
 export interface DesktopStats {

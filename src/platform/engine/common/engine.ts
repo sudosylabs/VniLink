@@ -709,7 +709,9 @@ export type DesktopInputCommand =
 	/** The display the pointer lands on, sent in order with it. */
 	| { type: 'selectDisplays'; sessionId: string; generation: string; ids: string[] }
 	/** Whether this desktop exchanges Control and Command; refused while a key is held, so it follows `releaseSessionInput`. */
-	| { type: 'swapSessionModifiers'; sessionId: string; generation: string; enabled: boolean };
+	| { type: 'swapSessionModifiers'; sessionId: string; generation: string; enabled: boolean }
+	/** Whether this computer's own shortcuts, such as Alt-Tab, go to the desktop; on while it has the keyboard. */
+	| { type: 'captureSystemKeys'; sessionId: string; generation: string; enabled: boolean };
 
 export function isDesktopInputCommand(value: unknown): value is DesktopInputCommand {
 	if (!record(value)) {
@@ -730,7 +732,7 @@ export function isDesktopInputCommand(value: unknown): value is DesktopInputComm
 			break;
 		case 'releaseSessionInput': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
 		case 'selectDisplays': keys = ['sessionId', 'generation', 'ids']; valid = decimal(value.sessionId) && decimal(value.generation) && decimals(value.ids); break;
-		case 'swapSessionModifiers': keys = ['sessionId', 'generation', 'enabled']; valid = decimal(value.sessionId) && decimal(value.generation) && typeof value.enabled === 'boolean'; break;
+		case 'swapSessionModifiers': case 'captureSystemKeys': keys = ['sessionId', 'generation', 'enabled']; valid = decimal(value.sessionId) && decimal(value.generation) && typeof value.enabled === 'boolean'; break;
 		default: return false;
 	}
 	return valid && Object.keys(value).length === keys.length + 1 && Object.keys(value).every(key => key === 'type' || keys.includes(key));

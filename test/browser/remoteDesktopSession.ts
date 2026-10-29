@@ -135,6 +135,8 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 	const tabService = disposables.add(new TabService());
 	const windowState = disposables.add(new Emitter<IWindowState>());
 	const fullScreen: boolean[] = [];
+	/** Whether the picture had the keyboard, as each change told the window. */
+	const remoteKeyboard: boolean[] = [];
 	const fakes = new DesktopViewFakes();
 	const services = disposables.add(new InstantiationService(new ServiceCollection(
 		...fakes.services(disposables),
@@ -144,6 +146,10 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 			onDidChangeWindowState: windowState.event,
 			setFullScreen: (value: boolean) => {
 				fullScreen.push(value);
+				return Promise.resolve();
+			},
+			setRemoteKeyboard: (owned: boolean) => {
+				remoteKeyboard.push(owned);
 				return Promise.resolve();
 			},
 		}],
@@ -516,9 +522,14 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(!drawn() && canvas.style.cursor === 'none', 'A hidden pointer still shows');
 		// Leaving the screen lets go of everything held there.
 		// A test window has no focus of its own to lose, so the blur is dispatched as the system would.
+		// With focus, the picture takes the keyboard, this computer's own shortcuts included.
+		canvas.dispatchEvent(new FocusEvent('focus'));
+		const captured = (): boolean | undefined => sessions[0].sent.filter(input => input.type === 'captureSystemKeys').at(-1)?.enabled;
+		assert(captured() === true && remoteKeyboard.at(-1) === true, 'The picture did not take the keyboard');
 		press(canvas, 'keydown', 'ShiftLeft', 'Shift', { shiftKey: true });
 		canvas.dispatchEvent(new FocusEvent('blur'));
-		assert(sessions[0].sent.at(-1)?.type === 'releaseSessionInput', 'Leaving the screen did not let go of the keys');
+		assert(JSON.stringify(sessions[0].sent.slice(-2)) === JSON.stringify([{ type: 'captureSystemKeys', enabled: false }, { type: 'releaseSessionInput' }]), `Leaving the screen did not give the keyboard back and let go of the keys: ${JSON.stringify(sessions[0].sent.slice(-2))}`);
+		assert(remoteKeyboard.at(-1) === false, 'The window still gives its shortcuts to the picture');
 
 		// A dropped connection is tried again by itself, over the last picture, dimmed.
 		sessions[0].end('linkLost');
@@ -611,7 +622,8 @@ export async function showDesktopFixture(state: DesktopFixtureState): Promise<{ 
 		...fakes.services(disposables),
 		[ITabService, disposables.add(new TabService())],
 		[INativeHostService, {
-			_serviceBrand: undefined, onDidChangeWindowState: disposables.add(new Emitter<IWindowState>()).event, setFullScreen: () => Promise.resolve(),
+			_serviceBrand: undefined, onDidChangeWindowState: disposables.add(new Emitter<IWindowState>()).event,
+			setFullScreen: () => Promise.resolve(), setRemoteKeyboard: () => Promise.resolve(),
 		}],
 		[IConfigurationService, { _serviceBrand: undefined, getValue: () => undefined, onDidChangeConfiguration: disposables.add(new Emitter<never>()).event }],
 		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],

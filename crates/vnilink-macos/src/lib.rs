@@ -63,6 +63,10 @@ mod privacy;
 mod system;
 #[cfg(target_os = "macos")]
 pub use system::MacSystemActions;
+#[cfg(target_os = "macos")]
+mod system_keys;
+#[cfg(target_os = "macos")]
+pub use system_keys::MacSystemKeys;
 
 #[cfg(target_os = "macos")]
 mod audio;

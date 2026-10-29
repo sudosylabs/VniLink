@@ -404,7 +404,8 @@ export class VniLinkApplication extends Disposable {
 		this.checkRunning();
 		const windows = this.instantiationService.invokeFunction(accessor => accessor.get(IWindowsMainService));
 		const window = await windows.openMainWindow(this.options.showWindow ?? true);
-		registerEditingShortcuts(window);
+		const nativeHost = this.instantiationService.invokeFunction(accessor => accessor.get(INativeHostMainService));
+		registerEditingShortcuts(window, () => nativeHost.hasRemoteKeyboard(window.id));
 		registerDevelopmentWindow(window);
 		this.checkRunning();
 		return window;
