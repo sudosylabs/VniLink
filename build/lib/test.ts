@@ -113,6 +113,37 @@ export async function testService(root: string, signal: AbortSignal, args: reado
 	await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])], { env: peer.env });
 }
 
+/** How many times `test:stress` runs a suite when `--times` does not say. */
+const defaultStressRuns = 25;
+
+/** Takes `--times <n>` out of `args`: a positive whole number of runs, the rest names services. */
+export function selectRuns(args: readonly string[]): { readonly times: number; readonly services: string[] } {
+	const index = args.indexOf('--times');
+	if (index < 0) {
+		return { times: defaultStressRuns, services: [...args] };
+	}
+	const value = args.at(index + 1);
+	if (value === undefined || !/^[1-9]\d*$/.test(value)) {
+		throw new Error('--times needs a positive whole number of runs');
+	}
+	return { times: Number(value), services: args.filter((_, position) => position !== index && position !== index + 1) };
+}
+
+/**
+ * Runs the functional suites of the named services again and again, each run
+ * alone, and stops at the first failure: an order the engines do not
+ * guarantee shows in a few runs where one run passes by luck.
+ */
+export async function stressService(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const { times, services: named } = selectRuns(args);
+	const services = selectServices(await testkitServices(root, 'tests'), named);
+	for (let run = 1; run <= times; run++) {
+		signal.throwIfAborted();
+		console.log(`Stress run ${String(run)} of ${String(times)}: ${services.join(', ')}`);
+		await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])]);
+	}
+}
+
 /**
  * Runs the performance suites of the named services. Each run is saved under
  * `.build/bench` and compared with the previous one; a regression fails the task.
