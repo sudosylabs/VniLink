@@ -21,6 +21,9 @@ pub struct DesktopAudioStatus {
     pub enabled: bool,
     pub muted: bool,
     pub error: Option<FfiError>,
+    /// The error is this computer's own: its output could not play the
+    /// sound, which the other computer was sending.
+    pub playback_failed: bool,
 }
 trait Playback: Send + Sync {
     fn close(&self);
@@ -75,6 +78,7 @@ impl DesktopAudio {
                 enabled: true,
                 muted: false,
                 error: None,
+                playback_failed: false,
             },
             revision: 0,
             closed: false,
@@ -139,6 +143,7 @@ impl DesktopAudio {
             state.revision = state.revision.saturating_add(1);
             state.status.enabled = enabled;
             state.status.error = None;
+            state.status.playback_failed = false;
             state.status.phase = if enabled {
                 DesktopAudioPhase::Starting
             } else {
@@ -233,6 +238,7 @@ fn run(
         attempted = Some(revision);
         let info = desktop.info();
         drop(desktop);
+        let mut playback_failed = false;
         let outcome = (|| {
             let devices = core.remote_audio_devices(
                 info.connection_id,
@@ -286,7 +292,7 @@ fn run(
                 audio.set_muted(state.status.muted);
                 state.audio = Some(audio.clone());
             }
-            let playback = start_playback(&core, audio)?;
+            let playback = start_playback(&core, audio).inspect_err(|_| playback_failed = true)?;
             let mut state = lock(&state);
             if state.closed || state.revision != revision || !desktop_active(&weak_desktop) {
                 playback.close();
@@ -305,6 +311,7 @@ fn run(
             if state.revision == revision && !state.closed {
                 state.status.phase = DesktopAudioPhase::Unavailable;
                 state.status.error = Some(error);
+                state.status.playback_failed = playback_failed;
                 let owner = retire(&mut state);
                 drop(state);
                 close_owner(&core, owner);

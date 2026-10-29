@@ -94,6 +94,8 @@ export interface DesktopAudioStatus {
 	phase: 'starting' | 'playing' | 'muted' | 'unavailable' | 'stopped';
 	enabled: boolean;
 	muted: boolean;
+	/** The error is this computer's: its output couldn't play the sound sent. */
+	playbackFailed: boolean;
 	error: { code: string; message: string } | null;
 }
 
@@ -206,7 +208,7 @@ export function isDesktopAudioOperation(value: unknown): value is DesktopAudioOp
 }
 
 export function isDesktopAudioStatus(value: unknown): value is DesktopAudioStatus {
-	return record(value) && Object.keys(value).length === 4 && typeof value.phase === 'string'
+	return record(value) && Object.keys(value).length === 5 && typeof value.phase === 'string' && typeof value.playbackFailed === 'boolean'
 		&& ['starting', 'playing', 'muted', 'unavailable', 'stopped'].includes(value.phase)
 		&& typeof value.enabled === 'boolean' && typeof value.muted === 'boolean'
 		&& (value.error === null || (record(value.error) && Object.keys(value.error).length === 2 && typeof value.error.code === 'string' && value.error.code.length > 0 && value.error.code.length <= 64 && typeof value.error.message === 'string' && value.error.message.length <= 2048));

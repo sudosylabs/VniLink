@@ -21,8 +21,12 @@ export interface DesktopBarModel {
 	readonly size: string;
 	/** The display shown, as its menu names it; `undefined` hides the menu, as with one display or none to choose. */
 	readonly display: string | undefined;
-	/** The other computer's sound here; `undefined` while it has none to play. */
-	readonly sound: 'playing' | 'muted' | undefined;
+	/**
+	 * The other computer's sound here: playing, muted, or unavailable for
+	 * the reason given, which the button offers to try again; `undefined`
+	 * while it has none to play.
+	 */
+	readonly sound: 'playing' | 'muted' | { readonly unavailable: string } | undefined;
 	/** Privacy mode on the other computer; `undefined` where it can't be asked for. */
 	readonly privacy: boolean | undefined;
 	/** The running recording's length; `undefined` while none runs. */
@@ -35,6 +39,7 @@ export interface DesktopBarDelegate {
 	sizeActions(): IAction[];
 	displayActions(): IAction[];
 	moreActions(): IAction[];
+	/** Mutes or unmutes the sound, or tries again for sound that was unavailable. */
 	toggleSound(): void;
 	togglePrivacy(): void;
 	stopRecording(): void;
@@ -209,10 +214,19 @@ export class DesktopSessionBar extends Disposable {
 			this.displayButton.replaceChildren(renderIcon(Icons.remoteDesktop), $('span', undefined, model.display), renderIcon(Icons.chevronDown));
 			this.displayButton.setAttribute('aria-label', nls.localize('desktop.displayIs', 'Display: {0}', model.display));
 		}
-		this.soundButton.hidden = model.sound === undefined;
-		this.soundButton.setAttribute('aria-pressed', String(model.sound === 'muted'));
-		this.soundButton.replaceChildren(renderIcon(model.sound === 'muted' ? Icons.audioMuted : Icons.audio));
-		describe(this.soundButton, model.sound === 'muted' ? nls.localize('desktop.unmute', 'Unmute Sound') : nls.localize('desktop.mute', 'Mute Sound'));
+		const sound = model.sound;
+		this.soundButton.hidden = sound === undefined;
+		if (typeof sound === 'object') {
+			this.soundButton.dataset.sound = 'unavailable';
+			this.soundButton.removeAttribute('aria-pressed');
+			this.soundButton.replaceChildren(renderIcon(Icons.audioMuted));
+			describe(this.soundButton, nls.localize('desktop.soundUnavailable', '{0} Click to try again.', sound.unavailable));
+		} else {
+			delete this.soundButton.dataset.sound;
+			this.soundButton.setAttribute('aria-pressed', String(sound === 'muted'));
+			this.soundButton.replaceChildren(renderIcon(sound === 'muted' ? Icons.audioMuted : Icons.audio));
+			describe(this.soundButton, sound === 'muted' ? nls.localize('desktop.unmute', 'Unmute Sound') : nls.localize('desktop.mute', 'Mute Sound'));
+		}
 		this.privacyButton.hidden = model.privacy === undefined;
 		this.privacyButton.setAttribute('aria-pressed', String(model.privacy === true));
 		this.privacyButton.setAttribute('aria-label', nls.localize('desktop.privacyMode', 'Privacy mode'));

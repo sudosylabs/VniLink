@@ -452,6 +452,11 @@
 	background: color-mix(in srgb, var(--accent) 36%, transparent);
 }
 
+/* Sound that can't be heard keeps its button, which says why and tries again. */
+.desktop-bar button[data-sound='unavailable'] {
+	color: var(--desktop-warning);
+}
+
 .desktop-bar button > .vnilink-icon {
 	width: 16px;
 	height: 16px;

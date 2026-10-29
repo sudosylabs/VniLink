@@ -935,6 +935,7 @@ impl DataChannel {
             vnilink_app::DesktopAudioPhase::Stopped => "stopped",
         };
         Ok(serde_json::json!({"phase":phase,"enabled":status.enabled,"muted":status.muted,
+            "playbackFailed":status.playback_failed,
             "error":status.error.map(|error| serde_json::json!({"code":super::ffi_error_name(&error),"message":error.to_string()}))}).to_string())
     }
 

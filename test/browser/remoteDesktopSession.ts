@@ -54,7 +54,7 @@ class FakeSession implements IDesktopSession {
 	public reason: DesktopMediaStatus['reason'] = 'networkPressure';
 	public limit: DesktopRateLimit = 'none';
 	/** The other computer's sound, as its channel answers; each operation asked. */
-	public sound: DesktopAudioStatus = { phase: 'playing', enabled: true, muted: false, error: null };
+	public sound: DesktopAudioStatus = { phase: 'playing', enabled: true, muted: false, playbackFailed: false, error: null };
 	public readonly soundOperations: DesktopAudioOperation[] = [];
 
 	constructor(public readonly control: boolean) { }
@@ -67,6 +67,8 @@ class FakeSession implements IDesktopSession {
 		this.soundOperations.push(operation);
 		if (operation.type === 'muted') {
 			this.sound = { ...this.sound, muted: operation.muted, phase: operation.muted ? 'muted' : 'playing' };
+		} else if (operation.type === 'enabled' && operation.enabled) {
+			this.sound = { ...this.sound, phase: 'playing', muted: false, playbackFailed: false, error: null };
 		}
 		return Promise.resolve(this.sound);
 	}
@@ -457,6 +459,14 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		sound.click();
 		await until(() => sound.getAttribute('aria-pressed') === 'true' && sound.getAttribute('aria-label') === 'Unmute Sound', 'Muting did not show');
 		assert(sessions[0].soundOperations.some(operation => operation.type === 'muted' && operation.muted), 'Muting did not reach the sound');
+
+		// Sound that stops says why, and its button asks again.
+		sessions[0].sound = { phase: 'unavailable', enabled: true, muted: false, playbackFailed: false, error: { code: 'Unauthorized', message: 'not shared' } };
+		await until(() => sound.dataset.sound === 'unavailable', 'Unavailable sound was hidden', 3000);
+		assert(sound.getAttribute('aria-label')?.includes('doesn’t share its sound') === true, `The reason was not given: ${String(sound.getAttribute('aria-label'))}`);
+		sound.click();
+		await until(() => sound.dataset.sound === undefined && sound.getAttribute('aria-label') === 'Mute Sound', 'Trying again did not bring the sound back');
+		assert(sessions[0].soundOperations.at(-1)?.type === 'enabled', 'Trying again did not ask for the sound');
 
 		// Privacy mode blanks the screen there and blocks its input; a refusal says why and changes nothing.
 		const privacy = control('Privacy');

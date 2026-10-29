@@ -391,7 +391,7 @@ test('media channels require matching bounded source configuration and reject ex
 
 test('desktop audio controls validate exact shapes and never carry decoded audio', async () => {
 	const { isDesktopAudioOperation, isDesktopAudioStatus } = await load('../../src/platform/engine/common/dataChannel.ts');
-	const status = { phase: 'unavailable', enabled: true, muted: false, error: { code: 'Unsupported', message: 'No output' } };
+	const status = { phase: 'unavailable', enabled: true, muted: false, playbackFailed: true, error: { code: 'Unsupported', message: 'No output' } };
 	assert(isDesktopAudioOperation({ type: 'status' }));
 	assert(isDesktopAudioOperation({ type: 'muted', muted: true }));
 	assert(isDesktopAudioOperation({ type: 'enabled', enabled: false }));
@@ -400,6 +400,7 @@ test('desktop audio controls validate exact shapes and never carry decoded audio
 	assert(!isDesktopAudioOperation({ type: 'enabled', enabled: true, muted: true }));
 	assert(isDesktopAudioStatus(status));
 	assert(!isDesktopAudioStatus({ ...status, phase: 'invented' }));
+	assert(!isDesktopAudioStatus({ ...status, playbackFailed: undefined }), 'A status without who failed was accepted');
 	assert(!isDesktopAudioStatus({ ...status, data: new Uint8Array([1]) }));
 	assert(!isDesktopAudioStatus({ ...status, error: { ...status.error, code: 'x'.repeat(65) } }));
 	const f = fixture();
@@ -427,7 +428,7 @@ test('renderer audio requests survive stale replies and close rejects a pending 
 	port2.on('message', message => messages.push(message));
 	const frames = [];
 	const client = new DataChannelClient(port1, packet => frames.push(packet), error => errors.push(error));
-	const status = { phase: 'muted', enabled: true, muted: true, error: null };
+	const status = { phase: 'muted', enabled: true, muted: true, playbackFailed: false, error: null };
 	try {
 		const pending = client.desktopAudio({ type: 'muted', muted: true });
 		await until(() => messages.some(message => message.type === 'desktopAudio'));

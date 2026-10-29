@@ -19,7 +19,7 @@ import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type Deskt
 import { ISystemActionService } from '../../services/systemActions/systemActionService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
 import { IUIStateService } from '../../services/uiState/uiStateService.js';
-import { DesktopSessionBar, type DesktopBarDelegate } from './desktopSessionBar.js';
+import { DesktopSessionBar, type DesktopBarDelegate, type DesktopBarModel } from './desktopSessionBar.js';
 import { DesktopStatsOverlay, type DesktopPhase } from './desktopStatsOverlay.js';
 import { RemoteDesktopMenu } from './remoteDesktopMenu.js';
 import { StillCompositor } from './stillCompositor.js';
@@ -213,6 +213,22 @@ function problemAdvice(name: string, problem: DesktopProblem): string {
 		case 'linkLost': case 'relayUnreachable': case 'peerClosed': case 'hostEncoderFailed': case 'hostCaptureFailed':
 		case 'hostStopped': case 'hostDisconnected': case 'revoked': case 'cantShow':
 			return '';
+	}
+}
+
+/**
+ * Why the other computer's sound isn't heard, from the engine's error
+ * category and whether this computer's own output failed.
+ */
+function soundUnavailableReason(name: string, sound: DesktopAudioStatus): string {
+	if (sound.playbackFailed) {
+		return nls.localize('desktop.soundPlaybackFailed', 'This computer’s speakers couldn’t play the sound of {0}.', name);
+	}
+	switch (sound.error?.code) {
+		case 'Unauthorized': return nls.localize('desktop.soundNotShared', '{0} doesn’t share its sound.', name);
+		case 'Busy': return nls.localize('desktop.soundBusy', '{0} is playing sound from another computer.', name);
+		case 'Unsupported': return nls.localize('desktop.soundUnsupported', '{0} has no sound to share. On a Mac, VniLink needs Screen & System Audio Recording.', name);
+		case undefined: default: return nls.localize('desktop.soundStopped', 'The sound of {0} stopped.', name);
 	}
 }
 
@@ -525,7 +541,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			return;
 		}
 		try {
-			const status = await this.session.value?.audio({ type: 'muted', muted: !sound.muted });
+			// Enabling sound that was unavailable asks the other computer again.
+			const status = await this.session.value?.audio(sound.phase === 'unavailable' ? { type: 'enabled', enabled: true } : { type: 'muted', muted: !sound.muted });
 			this.showSound(status);
 		} catch {
 			this.stats.notice(nls.localize('desktop.soundFailed', 'The sound couldn’t be changed.'));
@@ -552,8 +569,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	}
 
 	private showSound(status: DesktopAudioStatus | undefined): void {
-		const playable = status && (status.phase === 'playing' || status.phase === 'muted' || status.phase === 'starting');
-		this.sound = playable ? status : undefined;
+		this.sound = status?.phase === 'stopped' ? undefined : status;
 		this.updateBar();
 	}
 
@@ -588,13 +604,25 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 	}
 
+	/** The sound as the bar shows it; still starting shows nothing yet. */
+	private soundModel(): DesktopBarModel['sound'] {
+		const sound = this.sound;
+		if (!sound || sound.phase === 'stopped' || sound.phase === 'starting') {
+			return undefined;
+		}
+		if (sound.phase === 'unavailable') {
+			return { unavailable: soundUnavailableReason(this.device.name, sound) };
+		}
+		return sound.muted ? 'muted' : 'playing';
+	}
+
 	private updateBar(): void {
 		const shownIndex = this.displays.findIndex(display => display.id === (this.requestedDisplay ?? this.shown?.display));
 		this.bar.update({
 			phase: this.phase,
 			size: pictureSizeLabel(this.pictureSize),
 			display: this.control && this.displays.length > 1 && shownIndex >= 0 ? displayLabel(this.displays[shownIndex], shownIndex, false) : undefined,
-			sound: this.sound ? (this.sound.muted ? 'muted' : 'playing') : undefined,
+			sound: this.soundModel(),
 			privacy: this.control && this.phase === 'live' ? this.privacy : undefined,
 			recording: this.recording.recording ? formatElapsed(this.recording.elapsedMs) : undefined,
 			fullScreen: this.fullScreen,
