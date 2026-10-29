@@ -121,11 +121,45 @@ fn device(id: &str) -> Result<cpal::Device, Error> {
         .device_by_id(&parsed)
         .ok_or(Error::DeviceStage("find selected ID"))
 }
+/// The format a device of `channels` exchanges: mono for one channel, and
+/// stereo for two or more, which are mixed down or written to front left and
+/// right. WASAPI orders wider layouts front left, front right, centre, LFE,
+/// then left/right pairs of surround channels.
 fn format(channels: u16) -> Result<Format, Error> {
     match channels {
+        0 => Err(Error::InvalidFormat),
         1 => Ok(Format::Mono),
-        2 => Ok(Format::Stereo),
-        _ => Err(Error::InvalidFormat),
+        _ => Ok(Format::Stereo),
+    }
+}
+const SURROUND_GAIN: f32 = std::f32::consts::FRAC_1_SQRT_2;
+/// Left and right of one frame of `channels` samples, read through `sample`.
+/// Centre and surround channels join at -3 dB, LFE is left out, and the sum
+/// is scaled so a full-scale frame stays within full scale.
+fn downmix(channels: usize, sample: impl Fn(usize) -> f32) -> (f32, f32) {
+    match channels {
+        1 => (sample(0), sample(0)),
+        2 => (sample(0), sample(1)),
+        _ => {
+            let mut left = sample(0);
+            let mut right = sample(1);
+            let mut gain = 1.0;
+            let centre = sample(2) * SURROUND_GAIN;
+            left += centre;
+            right += centre;
+            gain += SURROUND_GAIN;
+            // Index 3 is LFE; pairs follow from index 4.
+            let mut pair = 4;
+            while pair < channels {
+                left += sample(pair) * SURROUND_GAIN;
+                if pair + 1 < channels {
+                    right += sample(pair + 1) * SURROUND_GAIN;
+                }
+                gain += SURROUND_GAIN;
+                pair += 2;
+            }
+            (left / gain, right / gain)
+        }
     }
 }
 struct Buffer {
@@ -171,12 +205,8 @@ where
                     return;
                 }
                 for frame in data.chunks_exact(native_channels) {
-                    let left = frame[0].to_sample::<f32>();
-                    let right = if native_channels == 2 {
-                        frame[1].to_sample::<f32>()
-                    } else {
-                        left
-                    };
+                    let (left, right) =
+                        downmix(native_channels, |channel| frame[channel].to_sample::<f32>());
                     if !left.is_finite() || !right.is_finite() {
                         buffer.failed.store(true, Ordering::Release);
                         return;
@@ -298,9 +328,12 @@ impl NativeCapture {
     }
 }
 
+/// Plays the ring's mono or stereo samples. A device with more channels
+/// gets them on front left and right, and silence on the others.
 fn output_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
+    played: Format,
     mut consumer: rtrb::Consumer<f32>,
     buffer: Arc<Buffer>,
 ) -> Result<cpal::Stream, Error>
@@ -308,6 +341,8 @@ where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
     let failure = buffer.clone();
+    let device_channels = usize::from(config.channels);
+    let played = played.channels();
     let mut config = config;
     config.buffer_size = cpal::BufferSize::Fixed(config.sample_rate / 100);
     device
@@ -316,11 +351,13 @@ where
             move |data: &mut [T], _| {
                 data.fill(T::EQUILIBRIUM);
                 let mut missing = false;
-                for sample in data {
-                    if let Ok(value) = consumer.pop() {
-                        *sample = T::from_sample(value);
-                    } else {
-                        missing = true;
+                for frame in data.chunks_exact_mut(device_channels) {
+                    for sample in &mut frame[..played] {
+                        if let Ok(value) = consumer.pop() {
+                            *sample = T::from_sample(value);
+                        } else {
+                            missing = true;
+                        }
                     }
                 }
                 if missing {
@@ -359,13 +396,13 @@ impl NativeOutput {
         let buffer = Buffer::new();
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => {
-                output_stream::<f32>(&device, config.config(), consumer, buffer.clone())?
+                output_stream::<f32>(&device, config.config(), output, consumer, buffer.clone())?
             }
             cpal::SampleFormat::I16 => {
-                output_stream::<i16>(&device, config.config(), consumer, buffer.clone())?
+                output_stream::<i16>(&device, config.config(), output, consumer, buffer.clone())?
             }
             cpal::SampleFormat::U16 => {
-                output_stream::<u16>(&device, config.config(), consumer, buffer.clone())?
+                output_stream::<u16>(&device, config.config(), output, consumer, buffer.clone())?
             }
             _ => return Err(Error::InvalidFormat),
         };
@@ -435,5 +472,49 @@ impl NativeOutput {
     }
     pub fn underruns(&self) -> u64 {
         self.buffer.underruns.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn any_channel_count_is_exchanged_as_mono_or_stereo() {
+        assert!(format(0).is_err());
+        assert_eq!(format(1).unwrap(), Format::Mono);
+        for channels in [2, 4, 6, 8] {
+            assert_eq!(
+                format(channels).unwrap(),
+                Format::Stereo,
+                "a {channels}-channel device plays and records stereo"
+            );
+        }
+    }
+
+    #[test]
+    fn surround_folds_to_stereo_without_lfe_and_within_full_scale() {
+        let frame = |values: &'static [f32]| move |channel: usize| values[channel];
+        assert_eq!(downmix(1, frame(&[0.5])), (0.5, 0.5));
+        assert_eq!(downmix(2, frame(&[0.25, -0.5])), (0.25, -0.5));
+        // 5.1: FL FR C LFE SL SR. LFE alone is not heard in stereo.
+        assert_eq!(
+            downmix(6, frame(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+            (0.0, 0.0)
+        );
+        let (left, right) = downmix(6, frame(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0]));
+        assert!(
+            left > 0.0 && (left - right).abs() < f32::EPSILON,
+            "centre is in both"
+        );
+        let (left, right) = downmix(6, frame(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
+        assert!(left > 0.0 && right == 0.0, "a left surround stays left");
+        for channels in [6, 8] {
+            let (left, right) = downmix(channels, |_| 1.0);
+            assert!(
+                left <= 1.0 && right <= 1.0,
+                "{channels} channels at full scale mix within full scale"
+            );
+        }
     }
 }
