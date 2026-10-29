@@ -395,6 +395,24 @@
 	color: var(--status-connected);
 }
 
+/* A finished transfer's mark, in the ring's place and colours. */
+.files-mark {
+	width: 16px;
+	height: 16px;
+}
+
+.files-mark[data-tone='landed'] {
+	color: var(--status-connected);
+}
+
+.files-mark[data-tone='failed'] {
+	color: var(--status-disconnected);
+}
+
+.files-mark[data-tone='cancelled'] {
+	color: var(--muted);
+}
+
 .files-row.arriving .files-row-name {
 	color: var(--muted);
 }

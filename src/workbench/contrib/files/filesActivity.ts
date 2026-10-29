@@ -3,7 +3,7 @@ import { $, addDisposableListener, append, EventType, getActiveElement } from '.
 import { StandardKeyboardEvent } from '../../../base/browser/keyboardEvent.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { Emitter } from '../../../base/common/event.js';
-import { Icons } from '../../../base/common/icons.js';
+import { Icons, type IconId } from '../../../base/common/icons.js';
 import { KeyCode } from '../../../base/common/keyCodes.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import type { FileConflictChoice, FileJob, FilePlaces } from '../../../platform/engine/common/files.js';
@@ -86,6 +86,26 @@ function actionOf(job: FileJob): TransferAction | undefined {
 		case 'Interrupted': return 'resume';
 		case 'Failed': return 'retry';
 		case 'Cancelled': case 'Complete': return undefined;
+	}
+}
+
+/**
+ * A transfer's mark in the activity list: its ring while it still has bytes
+ * to move, a check, error or cross once it has finished.
+ */
+function renderJobMark(job: FileJob): HTMLElement {
+	const mark = (icon: IconId, tone: ArrivalTone | 'cancelled'): HTMLElement => {
+		const element = renderIcon(icon);
+		element.classList.add('files-mark');
+		element.dataset.tone = tone;
+		return element;
+	};
+	switch (job.state) {
+		case 'Complete': return mark(Icons.check, 'landed');
+		case 'Failed': return mark(Icons.error, 'failed');
+		case 'Cancelled': return mark(Icons.close, 'cancelled');
+		case 'Preparing': case 'Serving': case 'Transferring': case 'WaitingDecision': case 'Interrupted':
+			return renderRing(jobProgress(job), toneOf(job));
 	}
 }
 
@@ -368,7 +388,7 @@ export class FilesActivity extends Disposable {
 				const where = destination ? folderOn({ root: destination.root, path: destination.path }, to.places, to.computer) : to.computer;
 				const item = append(items, $('li.files-activity-item'));
 				item.dataset.state = job.state;
-				append(item, renderRing(jobProgress(job), toneOf(job)));
+				append(item, renderJobMark(job));
 				const text = append(item, $('span.files-activity-text'));
 				append(text, $('span.files-activity-name', { title: job.label }, job.label));
 				const detail = job.state === 'Complete'
