@@ -1,6 +1,6 @@
 import { Emitter } from '../../src/base/common/event.js';
 import { DisposableStore } from '../../src/base/common/lifecycle.js';
-import type { DesktopCondition, DesktopMediaStatus, DesktopRateLimit } from '../../src/platform/engine/common/dataChannel.js';
+import type { DesktopAudioOperation, DesktopAudioStatus, DesktopCondition, DesktopMediaStatus, DesktopRateLimit } from '../../src/platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../src/platform/engine/common/engine.js';
 import { IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
 import { INativeHostService, type IWindowState } from '../../src/platform/native/common/native.js';
@@ -13,6 +13,7 @@ import { IDeviceService, type DeviceSummary } from '../../src/workbench/services
 import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPictureRole, type DesktopPointer, type DesktopRegion, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
+import { DesktopViewFakes } from './remoteDesktopServices.js';
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
@@ -32,6 +33,8 @@ async function until(condition: () => boolean, message: string, timeout = 5000):
 
 /** A display as the other computer arranges it: the second one, right of the first. */
 const display: DisplayInfo = { id: '7', origin_x: 1920, origin_y: 0, width: 1920, height: 1080, rotation_deg: 0, scale_percent: 100, revision: '3' };
+/** Another display of the same computer, to switch to. */
+const otherDisplay: DisplayInfo = { id: '8', origin_x: 3840, origin_y: 0, width: 2560, height: 1440, rotation_deg: 0, scale_percent: 100, revision: '3' };
 
 /** A session whose pictures, end and input the test plays and reads. */
 class FakeSession implements IDesktopSession {
@@ -50,15 +53,26 @@ class FakeSession implements IDesktopSession {
 	/** Why the quality is where it is, and what holds the bitrate. */
 	public reason: DesktopMediaStatus['reason'] = 'networkPressure';
 	public limit: DesktopRateLimit = 'none';
+	/** The other computer's sound, as its channel answers; each operation asked. */
+	public sound: DesktopAudioStatus = { phase: 'playing', enabled: true, muted: false, error: null };
+	public readonly soundOperations: DesktopAudioOperation[] = [];
 
 	constructor(public readonly control: boolean) { }
 
 	public displays(): Promise<readonly DisplayInfo[]> {
-		return Promise.resolve([display]);
+		return Promise.resolve([display, otherDisplay]);
+	}
+
+	public audio(operation: DesktopAudioOperation): Promise<DesktopAudioStatus | undefined> {
+		this.soundOperations.push(operation);
+		if (operation.type === 'muted') {
+			this.sound = { ...this.sound, muted: operation.muted, phase: operation.muted ? 'muted' : 'playing' };
+		}
+		return Promise.resolve(this.sound);
 	}
 
 	public stats(): Promise<DesktopStats | undefined> {
-		return Promise.resolve({ codec: 'h264', status: { reason: this.reason, receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000, limit: this.limit, conditions: this.conditions }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } }, skipped: 0 });
+		return Promise.resolve({ codec: 'h264', softwareDecoder: false, status: { reason: this.reason, receivedKbps: 9400, receivedFps: 60, receiverQueueMs: 4, hostQueueMs: 2, lossPerMille: 3, rttMs: 18, encodeUs: 4000, captureUs: 1000, limit: this.limit, conditions: this.conditions }, latency: { host: { p50: 9, p95: 14, count: 60 }, decode: { p50: 3, p95: 5, count: 60 } }, skipped: 0 });
 	}
 
 	public send(input: DesktopInput): void {
@@ -76,7 +90,7 @@ class FakeSession implements IDesktopSession {
 	}
 
 	/** A 1920 × 1080 picture of display 7 at revision 3, in one colour, with a 40 × 40 patch of another at 100, 100. */
-	public picture(role: DesktopPictureRole = 'changed', colour = '#1d4b6c', patch?: string, regions?: readonly DesktopRegion[]): void {
+	public picture(role: DesktopPictureRole = 'changed', colour = '#1d4b6c', patch?: string, regions?: readonly DesktopRegion[], shows = '7'): void {
 		const canvas = new OffscreenCanvas(1920, 1080);
 		const context = canvas.getContext('2d');
 		if (context) {
@@ -87,7 +101,12 @@ class FakeSession implements IDesktopSession {
 				context.fillRect(100, 100, 40, 40);
 			}
 		}
-		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), role, regions, display: '7', revision: '3', decodedAt: performance.now() });
+		this.pictures.fire({ frame: new VideoFrame(canvas, { timestamp: 0 }), role, regions, display: shows, revision: '3', decodedAt: performance.now() });
+	}
+
+	/** A picture of display 7 at revision 3 as given, such as a painted scene. */
+	public firePicture(frame: VideoFrame): void {
+		this.pictures.fire({ frame, role: 'changed', display: '7', revision: '3', decodedAt: performance.now() });
 	}
 
 	/** The other computer's pointer at `x`, `y` in the picture: a white 4 × 4 square, its hot spot at the top left. */
@@ -113,7 +132,9 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 	const tabService = disposables.add(new TabService());
 	const windowState = disposables.add(new Emitter<IWindowState>());
 	const fullScreen: boolean[] = [];
+	const fakes = new DesktopViewFakes();
 	const services = disposables.add(new InstantiationService(new ServiceCollection(
+		...fakes.services(disposables),
 		[ITabService, tabService],
 		[INativeHostService, {
 			_serviceBrand: undefined,
@@ -136,6 +157,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 				sessions.push(session);
 				return Promise.resolve({ session });
 			},
+			startRecording: () => fakes.startRecording(),
 		}],
 	), true));
 	const host = document.createElement('div');
@@ -153,14 +175,37 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		host.append(view.element);
 		const overlay = view.element.querySelector<HTMLElement>('.desktop-overlay');
 		const canvas = view.element.querySelector<HTMLCanvasElement>('.desktop-screen');
-		const role = (): string => view.element.querySelector('.desktop-status-role')?.textContent ?? '';
+		const role = (): string => view.element.querySelector('.desktop-stats-role')?.textContent ?? '';
+		const text = (selector: string): string => view.element.querySelector(selector)?.textContent ?? '';
+		/** A control of the session bar, by what it says to assistive technology. */
+		const control = (label: string): HTMLButtonElement => {
+			const found = [...view.element.querySelectorAll<HTMLButtonElement>('.desktop-bar button')].find(button => button.getAttribute('aria-label')?.startsWith(label));
+			assert(found !== undefined, `The bar has no ${label} control`);
+			return found;
+		};
+		/** The detail named `term` in the expanded picture details. */
+		const detail = (term: string): string => {
+			const terms = [...view.element.querySelectorAll('.desktop-stats-details dt')];
+			return terms.find(node => node.textContent === term)?.nextElementSibling?.textContent ?? '';
+		};
+		/** Opens a bar menu and runs its item labelled `label`. */
+		const pick = (menu: HTMLButtonElement, label: string): void => {
+			menu.click();
+			const action = fakes.menus.at(-1)?.actions.find(item => item.label === label);
+			assert(action !== undefined, `The menu has no ${label}: ${fakes.lastMenu().join()}`);
+			void action.run();
+		};
 		assert(overlay !== null && canvas !== null, 'The tab has no screen');
+		// Nothing below the picture takes room from it, and nothing of this tab is in the titlebar.
+		assert(!view.element.querySelector('.desktop-status, footer'), 'The status bar is still there');
 		// Connecting until the first picture, which then fills the tab and takes the keyboard.
 		await until(() => sessions.length === 1, 'The tab did not open the screen');
 		assert(!overlay.hidden && overlay.textContent.includes('Connecting to Studio PC'), 'Connecting is not said');
 		sessions[0].picture();
-		await until(() => overlay.hidden === true && role() === 'Controlling Studio PC', 'The first picture did not show');
-		await until(() => view.element.querySelector('.desktop-status-size')?.textContent === '1920 × 1080', 'The display size is not shown');
+		await until(() => overlay.hidden === true && role() === 'Controlling', 'The first picture did not show');
+		assert(view.element.querySelector('.desktop-bar-host')?.classList.contains('revealed') === false, 'The controls cover the first picture');
+		// Two displays there: the bar says which one shows.
+		await until(() => control('Display').getAttribute('aria-label') === 'Display: Display 1', 'The shown display is not named');
 		assert(canvas.width === 1920 && canvas.height === 1080, 'The picture was not drawn at its size');
 		assert(document.activeElement === canvas, 'The screen did not take the keyboard');
 		// Pictures decoded within one frame of the screen: only the newest is drawn.
@@ -225,30 +270,55 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		sessions[0].picture('changed', '#0000ff');
 		await frame();
 		await frame();
-		// How the picture is doing, once a second.
-		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', `Wrong stats: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
+		// How the picture is doing, once a second: frame rate, round trip and path in one line.
+		await until(() => text('.desktop-stats-summary') === '60 fps · 18 ms · Relay', `Wrong stats: ${text('.desktop-stats-summary')}`, 3000);
+		// On request every detail, including the colour a still brought.
+		const details = view.element.querySelector<HTMLButtonElement>('.desktop-stats-toggle');
+		assert(details?.getAttribute('aria-expanded') === 'false', 'The details are not offered');
+		details.click();
+		assert(details.getAttribute('aria-expanded') === 'true', 'The details did not open');
+		await until(() => detail('Bitrate') === '9.4 Mb/s · Lowered for the network', `Wrong bitrate: ${detail('Bitrate')}`, 3000);
+		assert(detail('Picture') === '1920 × 1080 · 60 fps' && detail('Codec') === 'H.264 · 4:2:0, stills 4:4:4' && detail('Decoder') === 'Hardware, in this window'
+			&& detail('Encoder') === 'Hardware, on Studio PC' && detail('Connection') === 'Relay · 18 ms round trip', `Wrong details: ${text('.desktop-stats-facts')}`);
+		assert(text('.desktop-stats-latency').includes('On Studio PC9.0 · 14.0 ms') && text('.desktop-stats-latency').includes('Network9 ms each way'), `Wrong latency: ${text('.desktop-stats-latency')}`);
 		// A bitrate that is held says what holds it, and only when no cut already explains the picture.
 		sessions[0].reason = 'stable';
-		for (const [limit, text] of [['setting', 'At your bandwidth limit'], ['relay', 'Limited by the relay'], ['network', 'Limited by the network'], ['encoder', 'Limited by Studio PC'], ['receiver', 'Limited by this computer']] as const) {
+		for (const [limit, held] of [['setting', 'At your bandwidth limit'], ['relay', 'Limited by the relay'], ['network', 'Limited by the network'], ['encoder', 'Limited by Studio PC'], ['receiver', 'Limited by this computer']] as const) {
 			sessions[0].limit = limit;
-			await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === `60 fps · H.264 · 9.4 Mb/s · 18 ms · ${text}`, `Wrong stats for ${limit}: ${view.element.querySelector('.desktop-status-stats')?.textContent ?? ''}`, 3000);
+			await until(() => detail('Bitrate') === `9.4 Mb/s · ${held}`, `Wrong bitrate for ${limit}: ${detail('Bitrate')}`, 3000);
 		}
 		sessions[0].limit = 'none';
-		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms', 'A bitrate nothing holds was explained', 3000);
+		await until(() => detail('Bitrate') === '9.4 Mb/s', 'A bitrate nothing holds was explained', 3000);
 		sessions[0].reason = 'networkPressure';
 		sessions[0].limit = 'network';
-		await until(() => view.element.querySelector('.desktop-status-stats')?.textContent === '60 fps · H.264 · 9.4 Mb/s · 18 ms · Lowered for the network', 'A cut said its cause twice', 3000);
+		await until(() => detail('Bitrate') === '9.4 Mb/s · Lowered for the network', 'A cut said its cause twice', 3000);
 		sessions[0].limit = 'none';
-		// What is wrong, beside the stats: the worst in one phrase, all of them on hover and to a screen reader.
-		const condition = view.element.querySelector<HTMLElement>('.desktop-status-condition');
+		details.click();
+		// What is wrong, under the line: the worst in one phrase, all of them on hover.
+		const condition = view.element.querySelector<HTMLElement>('.desktop-stats-condition');
 		assert(condition !== null && !condition.hidden && condition.textContent === 'Slow network: lowered quality', `Wrong condition: ${condition?.textContent ?? ''}`);
-		assert(condition.title === 'Slow network: lowered quality\nConnected through a relay' && condition.tabIndex === 0, `Wrong condition details: ${condition.title}`);
-		assert(condition.getAttribute('aria-label') === 'Slow network: lowered quality. Connected through a relay', 'The conditions are not read out');
+		assert(condition.title === 'Slow network: lowered quality\nConnected through a relay', `Wrong condition details: ${condition.title}`);
 		// A relay alone needs no attention.
 		sessions[0].conditions = ['relay.path'];
 		await until(() => condition.hidden === true, 'A relay alone was shown as a problem', 3000);
 		sessions[0].conditions = ['encoder.software'];
-		await until(() => condition.textContent === 'Studio PC is encoding in software', `Wrong software condition: ${condition.textContent}`, 3000);
+		await until(() => condition.textContent === 'Studio PC is encoding in software' && condition.classList.contains('explanation'), `Wrong software condition: ${condition.textContent}`, 3000);
+		await until(() => text('.desktop-stats-summary') === '60 fps · 18 ms · Direct', 'A direct path is not said', 3000);
+
+		// The overlay goes where it is dragged, settling in the nearest corner, remembered for this computer.
+		const stats = view.element.querySelector<HTMLElement>('.desktop-stats');
+		const grip = view.element.querySelector<HTMLButtonElement>('.desktop-stats-grip');
+		const corner = (): string => stats?.dataset.corner ?? '';
+		assert(stats !== null && corner() === 'topRight' && grip !== null, 'The overlay does not start top right');
+		const viewBox = view.element.getBoundingClientRect();
+		const gripBox = grip.getBoundingClientRect();
+		grip.dispatchEvent(new PointerEvent('pointerdown', { clientX: gripBox.left + 4, clientY: gripBox.top + 4, button: 0, pointerId: 7, bubbles: true }));
+		stats.dispatchEvent(new PointerEvent('pointermove', { clientX: viewBox.left + 40, clientY: viewBox.bottom - 40, pointerId: 7, bubbles: true }));
+		stats.dispatchEvent(new PointerEvent('pointerup', { clientX: viewBox.left + 40, clientY: viewBox.bottom - 40, pointerId: 7, bubbles: true }));
+		assert(corner() === 'bottomLeft' && fakes.uiState.get('desktop.statsCorner.studio') === 'bottomLeft', `The overlay did not settle where it was dropped: ${corner()}`);
+		// The arrow keys move it between corners from its grip.
+		grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+		assert(corner() === 'topLeft', 'The arrow keys did not move the overlay');
 
 		// The pointer's display is chosen once, before anything else is sent.
 		assert(JSON.stringify(sessions[0].sent[0]) === JSON.stringify({ type: 'selectDisplays', ids: ['7'] }), `The shown display was not selected: ${JSON.stringify(sessions[0].sent[0])}`);
@@ -316,14 +386,16 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		const placed = mark.getBoundingClientRect();
 		assert(Math.abs(placed.left - (box.left + 960 * scale)) < 1.5 && Math.abs(placed.top - (box.top + 540 * scale)) < 1.5, `The other pointer is in the wrong place: ${String(placed.left)}, ${String(placed.top)}`);
 		// Original size: one picture pixel on one screen pixel, scrolling where the tab is smaller.
-		const picker = view.element.querySelector<HTMLSelectElement>('.desktop-size-picker select');
-		assert(picker !== null && picker.value === 'fit' && picker.getAttribute('aria-label') === 'Picture size', 'The picture size choice is missing');
-		assert([...picker.options].map(option => option.textContent).join() === 'Fit,Stretch,50%,75%,Original size,150%,200%', `Wrong picture sizes: ${[...picker.options].map(option => option.textContent).join()}`);
-		const choose = (value: string): void => {
-			picker.value = value;
-			picker.dispatchEvent(new Event('change'));
+		const sizes = control('Picture size');
+		assert(sizes.getAttribute('aria-label') === 'Picture size: Fit', 'The picture size choice is missing');
+		sizes.click();
+		assert(fakes.lastMenu().join() === 'Fit,Stretch,-,50%,75%,Original size,150%,200%,-,Full Screen', `Wrong picture sizes: ${fakes.lastMenu().join()}`);
+		assert(fakes.menus.at(-1)?.actions[0].checked === true, 'The size in use is not marked');
+		const choose = (label: string): void => {
+			pick(sizes, label);
 		};
-		choose('1');
+		choose('Original size');
+		assert(sizes.getAttribute('aria-label') === 'Picture size: Original size', 'The bar does not say the size chosen');
 		const original = canvas.getBoundingClientRect();
 		assert(Math.abs(original.width * ratio - 1920) < 0.5 && Math.abs(original.height * ratio - 1080) < 0.5, `Original size is not one pixel per pixel: ${String(original.width * ratio)}`);
 		const scrolls = stage.scrollWidth > stage.clientWidth;
@@ -343,13 +415,12 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		const markAt = mark.getBoundingClientRect();
 		assert(Math.abs(markAt.left - (shown.left + 960 * shown.width / 1920)) < 1.5, `The other pointer did not follow the scrolled picture: ${String(markAt.left)}`);
 		// Stretch fills the tab both ways it can, keeping the picture's shape.
-		choose('stretch');
+		choose('Stretch');
 		const stretched = canvas.getBoundingClientRect();
 		assert(Math.abs(Math.min(room.width - stretched.width, room.height - stretched.height)) < 1 && stage.scrollWidth <= stage.clientWidth, `Stretch did not fill the tab: ${String(stretched.width)} × ${String(stretched.height)}`);
-		choose('fit');
+		choose('Fit');
 		// Full screen covers the window and is left from its button or the window itself, not by a key, which goes to the other computer.
-		const toggle = view.element.querySelector<HTMLButtonElement>('.desktop-status-button');
-		assert(toggle?.getAttribute('aria-label') === 'Full Screen', 'The full screen button is missing');
+		const toggle = control('Full Screen');
 		toggle.click();
 		await until(() => fullScreen.join() === 'true' && view.element.classList.contains('desktop-view-fullscreen') && toggle.getAttribute('aria-label') === 'Exit Full Screen', 'Full screen did not cover the window');
 		toggle.click();
@@ -357,6 +428,65 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		toggle.click();
 		windowState.fire({ windowId: 1, revision: 1, focused: true, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none' });
 		assert(!view.element.classList.contains('desktop-view-fullscreen') && toggle.getAttribute('aria-label') === 'Full Screen', 'Leaving full screen from the window did not restore the tab');
+		// The controls stay off the picture until the pointer reaches the top edge.
+		const barHost = view.element.querySelector<HTMLElement>('.desktop-bar-host');
+		assert(barHost !== null, 'The tab has no controls');
+		// A moment after its last menu, the bar leaves the picture by itself.
+		await until(() => !barHost.classList.contains('revealed'), 'The controls stayed over the picture', 3000);
+		view.element.dispatchEvent(new PointerEvent('pointermove', { clientX: viewBox.left + 400, clientY: viewBox.top + 2, bubbles: true }));
+		assert(barHost.classList.contains('revealed'), 'The top edge did not bring the controls down');
+
+		// Another display: chosen from the bar, kept while the old one's pictures still arrive.
+		const displays = control('Display');
+		displays.click();
+		assert(fakes.lastMenu().join() === 'Display 1 · 1920 × 1080,Display 2 · 2560 × 1440', `Wrong displays: ${fakes.lastMenu().join()}`);
+		pick(displays, 'Display 2 · 2560 × 1440');
+		assert(JSON.stringify(sessions[0].sent.at(-1)) === JSON.stringify({ type: 'selectDisplays', ids: ['8'] }), `The display was not asked for: ${JSON.stringify(sessions[0].sent.at(-1))}`);
+		sessions[0].picture();
+		await frame();
+		await frame();
+		assert(!sessions[0].sent.some((input, index) => index > 0 && input.type === 'selectDisplays' && input.ids[0] === '7'), 'A picture of the old display took the choice back');
+		sessions[0].picture('changed', '#1d4b6c', undefined, undefined, '8');
+		await until(() => displays.getAttribute('aria-label') === 'Display: Display 2', 'The new display is not named', 3000);
+		pick(displays, 'Display 1 · 1920 × 1080');
+		sessions[0].picture();
+		await until(() => displays.getAttribute('aria-label') === 'Display: Display 1', 'Switching back did not show the first display', 3000);
+
+		// Its sound plays here and is muted from the bar.
+		const sound = control('Mute Sound');
+		sound.click();
+		await until(() => sound.getAttribute('aria-pressed') === 'true' && sound.getAttribute('aria-label') === 'Unmute Sound', 'Muting did not show');
+		assert(sessions[0].soundOperations.some(operation => operation.type === 'muted' && operation.muted), 'Muting did not reach the sound');
+
+		// Privacy mode blanks the screen there and blocks its input; a refusal says why and changes nothing.
+		const privacy = control('Privacy');
+		assert(privacy.getAttribute('aria-pressed') === 'false', 'Privacy mode shows on before it is asked');
+		privacy.click();
+		await until(() => privacy.getAttribute('aria-pressed') === 'true', 'Privacy mode did not turn on');
+		assert(fakes.privacyRequests.join() === 'true' && text('.desktop-stats-notice').startsWith('Privacy mode on'), `Privacy mode was not asked for or said: ${text('.desktop-stats-notice')}`);
+		fakes.privacyError = 'Not allowed there';
+		privacy.click();
+		await until(() => text('.desktop-stats-notice') === 'Privacy mode: Not allowed there', `A refusal was not said: ${text('.desktop-stats-notice')}`);
+		assert(privacy.getAttribute('aria-pressed') === 'true', 'A refused change turned privacy mode off');
+
+		// More: recording, then the computer's own actions and diagnostics, then this tab's.
+		const more = control('More');
+		more.click();
+		assert(fakes.lastMenu().join() === 'Record Screen,-,Lock Screen,Restart or Shut Down…,-,Export Diagnostics…,Open Logs Folder,-,Show Picture Details,Disconnect', `Wrong More menu: ${fakes.lastMenu().join()}`);
+		pick(more, 'Record Screen');
+		const recordingButton = (): HTMLButtonElement | undefined => [...view.element.querySelectorAll<HTMLButtonElement>('.desktop-bar-recording')].find(button => !button.hidden);
+		await until(() => recordingButton()?.textContent === '0:00', 'The recording does not show in the bar');
+		const running = fakes.recordings.get('1');
+		assert(running !== undefined, 'The recording did not start');
+		fakes.recordings.set('1', { ...running, durationMs: '5000' });
+		await until(() => recordingButton()?.textContent === '0:05', 'The recording length does not advance', 3000);
+		recordingButton()?.click();
+		await until(() => recordingButton() === undefined && text('.desktop-stats-notice') === 'Recording saved to the recordings folder.', `Stopping the recording was not said: ${text('.desktop-stats-notice')}`);
+		assert(fakes.stopped.join() === '1' && fakes.released.join() === '1', 'The recording was not stopped and released');
+		// The details can be put away; what just happened still shows.
+		pick(more, 'Show Picture Details');
+		assert(stats.classList.contains('details-off') && fakes.uiState.get('desktop.showStats') === false, 'The details were not put away');
+		pick(more, 'Show Picture Details');
 		sessions[0].pointer(960, 540, false);
 		assert(!drawn() && canvas.style.cursor === 'none', 'A hidden pointer still shows');
 		// Leaving the screen lets go of everything held there.
@@ -382,7 +512,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await until(() => overlay.textContent.includes('Studio PC no longer allows VniLink to record its screen.') && overlay.textContent.includes('system settings'), `A withdrawn permission was not said: ${overlay.textContent}`);
 		// An end interrupts: its overlay is an alert, and the picture's conditions go with it.
 		assert(overlay.getAttribute('role') === 'alert', 'An end is not announced as an alert');
-		assert(view.element.querySelector<HTMLElement>('.desktop-status-condition')?.hidden === true, 'A condition outlived its picture');
+		assert(view.element.querySelector<HTMLElement>('.desktop-stats-condition')?.hidden === true, 'A condition outlived its picture');
 		const opened = sessions.length;
 		assert(opened === 3, 'A withdrawn permission was tried again by itself');
 		overlay.querySelector<HTMLButtonElement>('button.primary')?.click();
@@ -395,11 +525,12 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		await until(() => overlay.textContent.includes('Studio PC doesn’t share its screen with this computer.'), 'A refusal is not said', 4000);
 		const buttons = [...overlay.querySelectorAll('button')].map(button => button.textContent);
 		assert(buttons.join() === 'Try Again,Close Tab', `Wrong actions: ${buttons.join()}`);
-		assert(role() === 'Not connected', 'The status bar does not say it is not connected');
+		assert(role() === 'Not connected', 'The overlay does not say it is not connected');
 		overlay.querySelector<HTMLButtonElement>('button.primary')?.click();
 		await until(() => sessions.length === 5, 'Try Again did not open the screen');
 		assert(await tabService.close(view.id), 'The tab did not close');
 		assert(sessions[4].disposed, 'Closing the tab did not end the session');
+		assert(fakes.privacyRequests.at(-1) === false, 'Closing the tab left privacy mode on there');
 
 		// Viewing only sends nothing.
 		services.invokeFunction(accessor => {
@@ -410,7 +541,10 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		host.replaceChildren(viewer.element);
 		await until(() => sessions.length === 6, 'The view-only tab did not open the screen');
 		sessions[5].picture();
-		await until(() => viewer.element.querySelector('.desktop-status-role')?.textContent === 'Viewing Studio PC', 'Viewing is not said');
+		await until(() => viewer.element.querySelector('.desktop-stats-role')?.textContent === 'Viewing', 'Viewing is not said');
+		// Viewing only, nothing there can be switched: no display choice, no privacy mode.
+		const viewerControls = [...viewer.element.querySelectorAll<HTMLButtonElement>('.desktop-bar button')].filter(button => !button.hidden).map(button => button.getAttribute('aria-label') ?? '');
+		assert(!viewerControls.some(label => label.startsWith('Display') || label.startsWith('Privacy')), `A view-only tab offers to switch things there: ${viewerControls.join()}`);
 		const screen = viewer.element.querySelector<HTMLCanvasElement>('.desktop-screen');
 		assert(screen !== null, 'The view-only tab has no screen');
 		press(screen, 'keydown', 'KeyA', 'a');
@@ -432,4 +566,91 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		host.remove();
 		disposables.dispose();
 	}
+}
+
+/** What the desktop fixture shows: the line alone, its details, a slowed picture, or the controls with a menu open. */
+export type DesktopFixtureState = 'collapsed' | 'details' | 'slow' | 'bar';
+
+/**
+ * A controlling remote desktop tab over a desktop-like picture, for the smoke
+ * run's screenshots. Synthetic: a painted scene and test stats, not a
+ * captured screen.
+ */
+export async function showDesktopFixture(state: DesktopFixtureState): Promise<{ dispose(): void }> {
+	const disposables = new DisposableStore();
+	const device: DeviceSummary = { id: 'studio', name: 'Studio Mac', os: 'macos', presence: 'connected', hostname: 'studio.local', direct: 1, relays: 0 };
+	const fakes = new DesktopViewFakes();
+	let session: FakeSession | undefined;
+	const services = disposables.add(new InstantiationService(new ServiceCollection(
+		...fakes.services(disposables),
+		[ITabService, disposables.add(new TabService())],
+		[INativeHostService, {
+			_serviceBrand: undefined, onDidChangeWindowState: disposables.add(new Emitter<IWindowState>()).event, setFullScreen: () => Promise.resolve(),
+		}],
+		[IConfigurationService, { _serviceBrand: undefined, getValue: () => undefined }],
+		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
+		[IRemoteDesktopService, {
+			_serviceBrand: undefined,
+			open: (_deviceId: string, control: boolean) => {
+				session = new FakeSession(control);
+				session.conditions = state === 'slow' ? ['link.congestion', 'relay.path'] : [];
+				session.reason = state === 'slow' ? 'networkPressure' : 'stable';
+				return Promise.resolve({ session });
+			},
+			startRecording: () => fakes.startRecording(),
+		}],
+	), true));
+	const tabService = services.invokeFunction(accessor => accessor.get(ITabService));
+	const host = document.createElement('div');
+	host.style.cssText = 'position:fixed;inset:var(--titlebar-height) 0 0 0;z-index:99;display:flex;';
+	document.body.append(host);
+	disposables.add({
+		dispose: () => {
+			host.remove();
+		}
+	});
+	services.invokeFunction(accessor => {
+		new OpenRemoteDesktopAction().run(accessor, device.id);
+	});
+	const view = tabService.activeTab;
+	assert(view instanceof RemoteDesktopView, 'The fixture did not open a remote desktop');
+	host.append(view.element);
+	await until(() => session !== undefined, 'The fixture did not open its session');
+	const scene = (): void => {
+		const canvas = new OffscreenCanvas(1920, 1080);
+		const context = canvas.getContext('2d');
+		if (context) {
+			const sky = context.createLinearGradient(0, 0, 1920, 1080);
+			sky.addColorStop(0, '#3b4a6b');
+			sky.addColorStop(1, '#1f2638');
+			context.fillStyle = sky;
+			context.fillRect(0, 0, 1920, 1080);
+			context.fillStyle = 'rgba(30, 30, 34, 0.75)';
+			context.fillRect(0, 0, 1920, 32);
+			context.fillStyle = '#f4f4f6';
+			context.fillRect(200, 140, 900, 560);
+			context.fillStyle = '#e9e9ed';
+			context.fillRect(200, 140, 220, 560);
+			context.fillStyle = '#1e1e1e';
+			context.fillRect(820, 460, 820, 480);
+		}
+		session?.firePicture(new VideoFrame(canvas, { timestamp: 0 }));
+	};
+	scene();
+	await until(() => view.element.querySelector<HTMLElement>('.desktop-overlay')?.hidden === true, 'The fixture picture did not show');
+	await until(() => (view.element.querySelector('.desktop-stats-summary')?.textContent ?? '') !== '', 'The fixture stats did not show', 3000);
+	if (state === 'details') {
+		view.element.querySelector<HTMLButtonElement>('.desktop-stats-toggle')?.click();
+	}
+	if (state === 'slow') {
+		await until(() => view.element.querySelector<HTMLElement>('.desktop-stats-condition')?.hidden === false, 'The fixture condition did not show', 3000);
+	}
+	if (state === 'bar') {
+		view.element.dispatchEvent(new PointerEvent('pointermove', { clientX: view.element.getBoundingClientRect().left + 400, clientY: view.element.getBoundingClientRect().top + 1, bubbles: true }));
+	}
+	return {
+		dispose: () => {
+			disposables.dispose();
+		}
+	};
 }

@@ -7,7 +7,8 @@ const result = await build({
 		contents: `
 			export { avcCodec } from './src/workbench/services/camera/h264.js';
 			export { EngineCameraStream } from './src/workbench/services/camera/engineCameraStream.js';
-			export { cameraOpenFailure, cameraRecordingFailure, cameraRefusal } from './src/workbench/services/camera/cameraServiceImpl.js';
+			export { cameraOpenFailure, cameraRefusal } from './src/workbench/services/camera/cameraServiceImpl.js';
+			export { recordingStartFailure } from './src/workbench/services/recording/sessionRecording.js';
 			export { isNativeHostRequest, isPng } from './src/platform/native/common/native.js';
 			export { isPictureName } from './src/platform/recording/common/recording.js';
 			export { VSBuffer } from './src/base/common/buffer.js';
@@ -30,7 +31,7 @@ const result = await build({
 	}],
 });
 
-const { avcCodec, EngineCameraStream, cameraOpenFailure, cameraRecordingFailure, cameraRefusal, isNativeHostRequest, isPictureName, isPng, VSBuffer } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { avcCodec, EngineCameraStream, cameraOpenFailure, recordingStartFailure, cameraRefusal, isNativeHostRequest, isPictureName, isPng, VSBuffer } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 
 /** An access unit as the host sends one: SPS, PPS, then the picture. */
 const keyframe = Uint8Array.from([0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1f, 0xda, 0, 0, 0, 1, 0x68, 0xce, 0, 0, 1, 0x65, 0x88]);
@@ -172,9 +173,9 @@ test('the host\'s report and refusals become the tab\'s reasons', () => {
 	assert.equal(cameraOpenFailure(new Error('NoSession: gone')), 'disconnected');
 	assert.equal(cameraOpenFailure(new Error('Native data channel unavailable')), 'failed');
 	assert.equal(cameraOpenFailure('Busy'), 'failed');
-	assert.equal(cameraRecordingFailure(new Error('Unauthorized: recording is not allowed')), 'notAllowed');
-	assert.equal(cameraRecordingFailure(new Error('NoSession: no camera is open on this connection')), 'disconnected');
-	assert.equal(cameraRecordingFailure(new Error('Unsupported: recording storage is unavailable')), 'failed');
+	assert.equal(recordingStartFailure(new Error('Unauthorized: recording is not allowed')), 'notAllowed');
+	assert.equal(recordingStartFailure(new Error('NoSession: no camera is open on this connection')), 'disconnected');
+	assert.equal(recordingStartFailure(new Error('Unsupported: recording storage is unavailable')), 'failed');
 });
 
 test('a window names, never places, a PNG it saves or copies', () => {

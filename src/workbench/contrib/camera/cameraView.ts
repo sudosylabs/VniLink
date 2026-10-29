@@ -9,9 +9,10 @@ import type { RecordingStatus } from '../../../platform/engine/common/engine.js'
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { IRecordingService } from '../../../platform/recording/common/recording.js';
 import { defaultButtonStyles } from '../../../platform/theme/browser/defaultStyles.js';
-import { ICameraService, type CameraChoice, type CameraEnd, type CameraFailure, type CameraRecordingFailure, type ICameraStream } from '../../services/camera/cameraService.js';
+import { ICameraService, type CameraChoice, type CameraEnd, type CameraFailure, type ICameraStream } from '../../services/camera/cameraService.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { INativeRuntimeService } from '../../services/nativeRuntime/nativeRuntimeService.js';
+import { formatElapsed, SessionRecording, type RecordingStartFailure } from '../../services/recording/sessionRecording.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
 
 /** How long the controls stay over a playing picture after the pointer stops. */
@@ -19,9 +20,6 @@ const controlsDelay = 3000;
 
 /** How long a confirmation stays on screen. */
 const noticeDelay = 2500;
-
-/** How often a running recording's length is read. */
-const recordingPoll = 1000;
 
 /** The camera chosen last on each computer, for this run of the application. */
 const lastCamera = new Map<string, string>();
@@ -48,7 +46,7 @@ function problemMessage(name: string, problem: CameraProblem): string {
 	}
 }
 
-function recordingStartMessage(name: string, failure: CameraRecordingFailure): string {
+function recordingStartMessage(name: string, failure: RecordingStartFailure): string {
 	switch (failure) {
 		case 'notAllowed': return nls.localize('camera.recordingNotAllowed', '{0} doesn\'t allow recording.', name);
 		case 'disconnected': return nls.localize('camera.recordingDisconnected', '{0} isn\'t connected.', name);
@@ -71,14 +69,6 @@ function recordingEndMessage(status: RecordingStatus): string {
 function timestamp(date: Date): string {
 	const two = (value: number): string => String(value).padStart(2, '0');
 	return `${String(date.getFullYear())}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}.${two(date.getMinutes())}.${two(date.getSeconds())}`;
-}
-
-function elapsed(milliseconds: number): string {
-	const seconds = Math.floor(milliseconds / 1000);
-	const minutes = Math.floor(seconds / 60);
-	const hours = Math.floor(minutes / 60);
-	const two = (value: number): string => String(value).padStart(2, '0');
-	return hours ? `${String(hours)}:${two(minutes % 60)}:${two(seconds % 60)}` : `${String(minutes)}:${two(seconds % 60)}`;
 }
 
 /** A round button over the picture. */
@@ -123,11 +113,9 @@ export class CameraView extends Disposable implements WorkbenchTab {
 	private readonly stream = this._register(new MutableDisposable<ICameraStream>());
 	private readonly idleTimer = this._register(new MutableDisposable());
 	private readonly noticeTimer = this._register(new MutableDisposable());
-	private readonly recordingTimer = this._register(new MutableDisposable());
+	private readonly recording: SessionRecording;
 	private cameras: readonly CameraChoice[] = [];
 	private recordingAllowed = false;
-	private recording: string | undefined;
-	private stopping = false;
 	private attempt = 0;
 	private hasPicture = false;
 	private playing = false;
@@ -139,7 +127,7 @@ export class CameraView extends Disposable implements WorkbenchTab {
 		@ICameraService private readonly cameraService: ICameraService,
 		@ITabService private readonly tabService: ITabService,
 		@INativeHostService private readonly nativeHost: INativeHostService,
-		@INativeRuntimeService private readonly nativeRuntime: INativeRuntimeService,
+		@INativeRuntimeService nativeRuntime: INativeRuntimeService,
 		@IRecordingService private readonly recordingService: IRecordingService,
 	) {
 		super();
@@ -161,6 +149,7 @@ export class CameraView extends Disposable implements WorkbenchTab {
 		append(this.recordingBadge, $('span.camera-recording-dot', { 'aria-hidden': 'true' }));
 		this.recordingTime = append(this.recordingBadge, $('span'));
 		this.recordingBadge.hidden = true;
+		this.recording = this._register(new SessionRecording(() => this.cameraService.startRecording(this.device.id), nativeRuntime));
 		this.controls = append(this.element, $('.camera-controls', { role: 'toolbar', 'aria-label': nls.localize('camera.controls', 'Camera controls') }));
 		const start = append(this.controls, $('.camera-controls-side'));
 		this.picker = append(start, $<HTMLSelectElement>('select.camera-picker'));
@@ -184,6 +173,12 @@ export class CameraView extends Disposable implements WorkbenchTab {
 	}
 
 	private registerListeners(): void {
+		this._register(this.recording.onDidChange(() => {
+			this.updateControls();
+		}));
+		this._register(this.recording.onDidEnd(status => {
+			this.showNotice(status ? recordingEndMessage(status) : nls.localize('camera.recordingLost', 'The recording stopped.'));
+		}));
 		this._register(this.retry.onDidClick(() => {
 			void this.start();
 		}));
@@ -233,10 +228,6 @@ export class CameraView extends Disposable implements WorkbenchTab {
 		this._register(toDisposable(() => {
 			if (this.fullScreen) {
 				void this.nativeHost.setFullScreen(false);
-			}
-			// A recording outlives its tab only long enough to finish its file.
-			if (this.recording) {
-				void this.finishRecording(this.recording, true);
 			}
 		}));
 	}
@@ -369,14 +360,17 @@ export class CameraView extends Disposable implements WorkbenchTab {
 
 	private updateControls(): void {
 		this.shutter.disabled = !this.playing;
-		this.record.disabled = this.stopping || (!this.recording && (!this.playing || !this.recordingAllowed));
-		describe(this.record, this.recording
+		const recording = this.recording.recording;
+		this.record.disabled = this.recording.stopping || (!recording && (!this.playing || !this.recordingAllowed));
+		describe(this.record, recording
 			? nls.localize('camera.stopRecording', 'Stop Recording')
 			: this.playing && !this.recordingAllowed
 				? recordingStartMessage(this.device.name, 'notAllowed')
-				: nls.localize('camera.record', 'Record'), this.recording ? Icons.stop : Icons.recording);
-		this.record.setAttribute('aria-pressed', String(this.recording !== undefined));
-		this.element.classList.toggle('camera-is-recording', this.recording !== undefined);
+				: nls.localize('camera.record', 'Record'), recording ? Icons.stop : Icons.recording);
+		this.record.setAttribute('aria-pressed', String(recording));
+		this.element.classList.toggle('camera-is-recording', recording);
+		this.recordingBadge.hidden = !recording;
+		this.recordingTime.textContent = formatElapsed(this.recording.elapsedMs);
 		describe(this.fit, this.fitted ? nls.localize('camera.fill', 'Fill the Tab') : nls.localize('camera.fit', 'Show the Whole Picture'), this.fitted ? Icons.fillView : Icons.fitToView);
 		describe(this.fullScreenButton, this.fullScreen ? nls.localize('camera.exitFullScreen', 'Exit Full Screen') : nls.localize('camera.fullScreen', 'Full Screen'), this.fullScreen ? Icons.exitFullScreen : Icons.fullScreen);
 	}
@@ -442,84 +436,9 @@ export class CameraView extends Disposable implements WorkbenchTab {
 	}
 
 	public async toggleRecording(): Promise<void> {
-		if (this.recording) {
-			await this.finishRecording(this.recording, false);
-			return;
-		}
-		const result = await this.cameraService.startRecording(this.device.id);
-		if (this._store.isDisposed) {
-			if ('recording' in result) {
-				void this.finishRecording(result.recording, true);
-			}
-			return;
-		}
-		if ('failure' in result) {
-			this.showNotice(recordingStartMessage(this.device.name, result.failure));
-			return;
-		}
-		this.recording = result.recording;
-		this.stopping = false;
-		this.recordingBadge.hidden = false;
-		this.recordingTime.textContent = elapsed(0);
-		this.updateControls();
-		this.watchRecording(result.recording);
-	}
-
-	/** Follows the recording until its file is finished, however it ends. */
-	private watchRecording(id: string): void {
-		const interval = setInterval(() => {
-			void this.nativeRuntime.recordingStatus(id).then(status => {
-				if (status.phase === 'Finished' || status.phase === 'Failed') {
-					this.recordingEnded(id, status);
-				} else {
-					this.recordingTime.textContent = elapsed(Number(status.durationMs));
-				}
-			}, () => {
-				this.recordingEnded(id, undefined);
-			});
-		}, recordingPoll);
-		this.recordingTimer.value = toDisposable(() => {
-			clearInterval(interval);
-		});
-	}
-
-	private recordingEnded(id: string, status: RecordingStatus | undefined): void {
-		if (this.recording !== id) {
-			return;
-		}
-		this.recording = undefined;
-		this.stopping = false;
-		this.recordingTimer.clear();
-		this.recordingBadge.hidden = true;
-		this.updateControls();
-		this.showNotice(status ? recordingEndMessage(status) : nls.localize('camera.recordingLost', 'The recording stopped.'));
-		void this.nativeRuntime.releaseRecording(id).catch(() => { /* Already released, or the engine stopped. */ });
-	}
-
-	/** Stops a recording and, once its file is finished, releases it. */
-	private async finishRecording(id: string, detached: boolean): Promise<void> {
-		if (!detached) {
-			if (this.stopping) {
-				return;
-			}
-			this.stopping = true;
-			this.updateControls();
-		}
-		try {
-			let status = await this.nativeRuntime.stopRecording(id);
-			for (let wait = 0; wait < 100 && status.phase !== 'Finished' && status.phase !== 'Failed'; wait++) {
-				await new Promise(resolve => setTimeout(resolve, 100));
-				status = await this.nativeRuntime.recordingStatus(id);
-			}
-			if (detached) {
-				await this.nativeRuntime.releaseRecording(id);
-			} else {
-				this.recordingEnded(id, status);
-			}
-		} catch {
-			if (!detached) {
-				this.recordingEnded(id, undefined);
-			}
+		const failure = await this.recording.toggle();
+		if (failure && !this._store.isDisposed) {
+			this.showNotice(recordingStartMessage(this.device.name, failure));
 		}
 	}
 

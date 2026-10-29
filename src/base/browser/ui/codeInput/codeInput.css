@@ -1,0 +1,40 @@
+.code-input {
+	display: flex;
+	gap: 8px;
+}
+
+.code-input-digit {
+	width: 44px;
+	height: 52px;
+	padding: 0;
+	border: 1px solid var(--code-input-border);
+	border-radius: 8px;
+	background: var(--code-input-background);
+	color: var(--code-input-foreground);
+	caret-color: var(--code-input-focus-border);
+	font:
+		600 24px/1 ui-monospace,
+		'SF Mono',
+		Menlo,
+		Consolas,
+		monospace;
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+}
+
+.code-input-digit:focus {
+	outline: 1px solid var(--code-input-focus-border);
+	outline-offset: -1px;
+	border-color: var(--code-input-focus-border);
+}
+
+.code-input-digit:disabled {
+	opacity: 0.6;
+}
+
+@media (forced-colors: active) {
+	.code-input-digit:focus {
+		outline: 2px solid Highlight;
+		outline-offset: 1px;
+	}
+}

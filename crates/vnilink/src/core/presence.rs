@@ -125,6 +125,7 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
                     reached = true;
                     failures = 0;
                 }
+                release_link(&shared, info.id);
             }
             Err(Error::NotPaired | Error::ShutDown) => break,
             Err(error) => tracing::debug!(
@@ -183,6 +184,26 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
     let mut wakes = lock(&shared.presence_wake);
     if wakes.get(&peer).is_some_and(|w| Arc::ptr_eq(w, &wake)) {
         wakes.remove(&peer);
+    }
+}
+
+/// Drops the record of a link that has ended. Every redial makes a new
+/// session; kept, an unreachable computer would add one a minute to the
+/// controller's session list until the list was too long to read. A service
+/// still running on it keeps the record until that service has ended.
+fn release_link(shared: &Shared, id: u64) {
+    let mut state = lock(&shared.state);
+    super::services::synchronize(&mut state, &shared.events);
+    let ended = state
+        .outgoing
+        .get(&id)
+        .is_some_and(|session| finished(&session.phase));
+    let in_use = state
+        .services
+        .values()
+        .any(|record| record.info.connection_id == id && !record.info.phase.finished());
+    if ended && !in_use {
+        state.outgoing.remove(&id);
     }
 }
 

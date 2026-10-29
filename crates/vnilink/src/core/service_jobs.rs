@@ -653,6 +653,7 @@ async fn handle_adopt(
         Ok(()) => job::STATUS_OK,
         Err(Error::TransferDenied) => job::STATUS_DENIED,
         Err(Error::NoSession | Error::StaleSession) => job::STATUS_STALE,
+        Err(Error::Busy) => job::STATUS_BUSY,
         _ => job::STATUS_ERROR,
     };
     let reply = job::JobReply {

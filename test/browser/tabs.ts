@@ -141,6 +141,8 @@ export async function verifyTabs(): Promise<boolean> {
 		await settle();
 		const action = root.querySelector<HTMLButtonElement>('.view-action');
 		assert(action?.getAttribute('aria-label') === 'Action first', 'Toolbar does not follow the active tab');
+		// The titlebar drags the window; its actions are pressed, not dragged.
+		assert(action !== null && getComputedStyle(action).getPropertyValue('-webkit-app-region') === 'no-drag', 'A titlebar action drags the window');
 		action?.click();
 		await settle();
 		assert(ran.join() === 'first', 'Action ran against the wrong view');

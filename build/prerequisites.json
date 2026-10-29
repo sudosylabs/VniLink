@@ -707,6 +707,11 @@
       "same": "build",
       "requires": ["process-tools", "ffprobe"]
     },
+    "test:stress": {
+      "description": "Run a service's functional suite again and again to find an order the engines do not guarantee",
+      "same": "build",
+      "requires": ["process-tools"]
+    },
     "test:service": {
       "description": "Run one service's functional suite on this computer",
       "same": "build",

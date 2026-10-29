@@ -1,6 +1,6 @@
 import { assert, current, edit, settle, settleEdit, SettingsFixture, toggle } from './settingsFixture.js';
 
-const pageIds = ['appearance', 'connection', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power'];
+const pageIds = ['general', 'connection', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power'];
 
 /** Every page renders from its layout and applies changes without a Save button. */
 async function verifyPagesRender(): Promise<void> {
@@ -99,8 +99,8 @@ async function verifyUnavailable(): Promise<void> {
 async function verifyCustomControls(): Promise<void> {
 	const fixture = new SettingsFixture();
 	try {
-		const appearance = fixture.open('appearance');
-		assert(appearance.element.querySelectorAll('.theme-mode-picker .theme-choice').length === 3, 'Theme choices missing');
+		const appearance = fixture.open('general');
+		assert(appearance.element.querySelectorAll('[data-section="appearance"] .theme-mode-picker .theme-choice').length === 3, 'Theme choices missing from General');
 		assert(!appearance.element.textContent.includes('Translucent background'), 'Retired background setting is shown');
 		const dark = appearance.element.querySelector<HTMLInputElement>('input[type="radio"][value="dark"]');
 		assert(dark, 'Dark theme missing');

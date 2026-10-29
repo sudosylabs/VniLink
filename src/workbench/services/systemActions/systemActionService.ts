@@ -1,5 +1,5 @@
 import type { Event } from '../../../base/common/event.js';
-import type { SystemActionKind } from '../../../platform/engine/common/engine.js';
+import type { SystemActionKind, SystemPrivacy } from '../../../platform/engine/common/engine.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 
 export const ISystemActionService = createDecorator<ISystemActionService>('systemActionService');
@@ -12,8 +12,12 @@ export interface SystemActionProgress {
 	readonly message: string;
 }
 
+/** Privacy mode as asked of one computer: where it stands, or why it couldn't be set, in words. */
+export type SystemPrivacyResult = { readonly privacy: SystemPrivacy } | { readonly error: string };
+
 /**
- * Locks, restarts and shuts down paired computers. A restart or shutdown
+ * Locks, restarts and shuts down paired computers, and blanks their screen
+ * and blocks their keyboard and mouse while privacy mode is on. A restart or shutdown
  * waits out a notice on that computer, where its user can cancel it; this
  * computer can cancel it too until then.
  */
@@ -25,4 +29,11 @@ export interface ISystemActionService {
 	run(deviceId: string, action: SystemActionKind): Promise<void>;
 	/** Cancels the restart or shutdown counting down on `deviceId`. */
 	cancel(deviceId: string): Promise<void>;
+	/** Privacy mode on `deviceId` as it stands. */
+	privacy(deviceId: string): Promise<SystemPrivacyResult>;
+	/**
+	 * Turns privacy mode on `deviceId` on or off. One computer holds it at a
+	 * time; it ends by itself when this computer disconnects.
+	 */
+	setPrivacy(deviceId: string, enabled: boolean): Promise<SystemPrivacyResult>;
 }

@@ -14,6 +14,7 @@ import { IRemoteDesktopService } from '../../src/workbench/services/remoteDeskto
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 import still from './fixtures/still.json' with { type: 'json' };
+import { DesktopViewFakes } from './remoteDesktopServices.js';
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
@@ -62,6 +63,7 @@ export async function verifyRemoteDesktopStill(): Promise<void> {
 	const sessions: EngineDesktopSession[] = [];
 	const tabService = disposables.add(new TabService());
 	const services = disposables.add(new InstantiationService(new ServiceCollection(
+		...new DesktopViewFakes().services(disposables),
 		[ITabService, tabService],
 		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
 		[INativeHostService, { _serviceBrand: undefined, onDidChangeWindowState: Event.None, setFullScreen: () => Promise.resolve() }],
@@ -74,6 +76,7 @@ export async function verifyRemoteDesktopStill(): Promise<void> {
 					onCursor: disposables.add(new Emitter<never>()).event,
 					requestKeyframe: () => undefined,
 					mediaStatus: () => Promise.resolve(undefined),
+					desktopAudio: () => Promise.reject(new Error('No sound in this test')),
 					close: () => undefined,
 				};
 				session.attach({ video, input: undefined });

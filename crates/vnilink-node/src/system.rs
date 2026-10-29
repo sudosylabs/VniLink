@@ -1,13 +1,14 @@
 //! Lock, restart and shut down: asking a paired computer, and the notice
-//! this computer's user answers when one asks it.
+//! this computer's user answers when one asks it. Privacy mode too: a
+//! paired computer's screen blanked and its local input blocked.
 // trace: records every ignored failure
 use super::{core_error, parse_id, session_target, Command, Reply, State};
 use napi::{Error, Result};
 use serde::Serialize;
 use std::sync::Arc;
 use vnilink_app::{
-    FfiOperationState, FfiScheduledSystemAction, FfiSystemAction, FfiSystemOperation,
-    SystemServiceHandle,
+    FfiOperationState, FfiPrivacyState, FfiScheduledSystemAction, FfiSystemAction,
+    FfiSystemOperation, SystemServiceHandle,
 };
 
 #[derive(Serialize)]
@@ -27,6 +28,25 @@ pub(super) struct TransferScheduledSystemAction {
     action: &'static str,
     endpoint_id: String,
     remaining_ms: u32,
+}
+
+/// Privacy mode on a paired computer: whether its screen is blanked and
+/// whether its own keyboard and mouse are blocked. Whichever connection
+/// holds the lease, never which one.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TransferPrivacy {
+    display_private: bool,
+    input_blocked: bool,
+}
+
+fn privacy(state: FfiPrivacyState) -> Reply {
+    Reply::SystemPrivacy {
+        privacy: TransferPrivacy {
+            display_private: state.display_private,
+            input_blocked: state.input_blocked,
+        },
+    }
 }
 
 pub(super) fn action_name(action: FfiSystemAction) -> &'static str {
@@ -138,6 +158,26 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             let id = parse_id(id, "Invalid system operation ID")?;
             let handle = service(state, session, generation)?;
             Ok(transfer(handle.cancel(id).map_err(core_error)?))
+        }
+        Command::SetSystemPrivacy {
+            session_id,
+            generation,
+            enabled,
+        } => {
+            let (session, generation) = session_target(session_id, generation)?;
+            let handle = service(state, session, generation)?;
+            // One switch for both: a blank screen whose keyboard still types is no privacy.
+            Ok(privacy(
+                handle.set_privacy(*enabled, *enabled).map_err(core_error)?,
+            ))
+        }
+        Command::SystemPrivacy {
+            session_id,
+            generation,
+        } => {
+            let (session, generation) = session_target(session_id, generation)?;
+            let handle = service(state, session, generation)?;
+            Ok(privacy(handle.privacy().map_err(core_error)?))
         }
         Command::ScheduledSystemActions => Ok(Reply::ScheduledSystemActions {
             actions: state

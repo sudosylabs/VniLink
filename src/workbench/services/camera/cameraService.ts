@@ -1,6 +1,7 @@
 import type { Event } from '../../../base/common/event.js';
 import type { IDisposable } from '../../../base/common/lifecycle.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
+import type { RecordingStartFailure } from '../recording/sessionRecording.js';
 
 export const ICameraService = createDecorator<ICameraService>('cameraService');
 
@@ -45,8 +46,6 @@ export interface CameraList {
 	readonly recording: boolean;
 }
 
-/** Why a recording of the camera couldn't start. */
-export type CameraRecordingFailure = 'notAllowed' | 'disconnected' | 'failed';
 
 /**
  * A running camera picture. Each frame belongs to the listener, which closes
@@ -70,5 +69,5 @@ export interface ICameraService {
 	 * the recording settings. The recording is the engine's: follow it with
 	 * `INativeRuntimeService.recordingStatus` and `stopRecording`.
 	 */
-	startRecording(deviceId: string): Promise<{ readonly failure: CameraRecordingFailure } | { readonly recording: string }>;
+	startRecording(deviceId: string): Promise<{ readonly failure: RecordingStartFailure } | { readonly recording: string }>;
 }

@@ -1,8 +1,9 @@
 import type { Event } from '../../../base/common/event.js';
 import type { IDisposable } from '../../../base/common/lifecycle.js';
-import type { DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
+import type { DesktopAudioOperation, DesktopAudioStatus, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
 import { createDecorator } from '../../../platform/instantiation/common/instantiation.js';
 import type { DisplayInfo, VideoCodecCaps } from '../../../platform/engine/common/engine.js';
+import type { RecordingStartFailure } from '../recording/sessionRecording.js';
 import type { DesktopLatencySummary } from './desktopLatency.js';
 
 /**
@@ -126,6 +127,8 @@ export interface DesktopStats {
 	readonly status: DesktopMediaStatus;
 	/** `h264`, `h265`, `vp8`, `vp9` or `av1`. */
 	readonly codec: string;
+	/** Whether this window decodes in software, having no hardware decoder for the codec. */
+	readonly softwareDecoder: boolean;
 	/** Where the pictures' time went since the last read. */
 	readonly latency: DesktopLatencySummary;
 	/** Pictures replaced by newer ones before they were drawn, since the last read. */
@@ -154,6 +157,12 @@ export interface IDesktopSession extends IDisposable {
 	skipped(picture: DesktopPicture): void;
 	/** How the picture is doing now; `undefined` once ended or before the first picture. */
 	stats(): Promise<DesktopStats | undefined>;
+	/**
+	 * The other computer's sound, which plays here while its screen shows:
+	 * where it stands, or muted or not. `undefined` once ended; rejects when
+	 * the engine can't answer.
+	 */
+	audio(operation: DesktopAudioOperation): Promise<DesktopAudioStatus | undefined>;
 }
 
 export const IRemoteDesktopService = createDecorator<IRemoteDesktopService>('remoteDesktopService');
@@ -165,5 +174,10 @@ export interface IRemoteDesktopService {
 	codecs(): Promise<Readonly<VideoCodecCaps>>;
 	/** Opens the screen of `deviceId`; with `control`, its keyboard and pointer too. */
 	open(deviceId: string, control: boolean): Promise<{ readonly failure: DesktopFailure } | { readonly session: IDesktopSession }>;
+	/**
+	 * Records the screen of `deviceId` into the recordings folder, while that
+	 * computer allows it; follow and stop it with `INativeRuntimeService`.
+	 */
+	startRecording(deviceId: string): Promise<{ readonly failure: RecordingStartFailure } | { readonly recording: string }>;
 }
 

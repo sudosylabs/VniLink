@@ -163,6 +163,23 @@ class SmokeSuite {
 		}
 	}
 
+	/** The remote desktop over a picture: its details collapsed, open and slowed, and its controls brought down. */
+	private async verifyDesktopLayouts(window: BrowserWindow, driver: WindowDriver): Promise<void> {
+		const size = window.getSize();
+		try {
+			window.setSize(1400, 900);
+			for (const state of ['collapsed', 'details', 'slow', 'bar'] as const) {
+				await window.webContents.executeJavaScript(`browserTests.browserScenarios.showDesktopFixture(${JSON.stringify(state)})`);
+				// The controls slide down; the picture is taken once they have arrived.
+				await window.webContents.executeJavaScript(`new Promise(resolve => setTimeout(resolve, 400))`);
+				await driver.screenshot(`desktop-${state}`);
+			}
+		} finally {
+			await window.webContents.executeJavaScript(`browserTests.browserScenarios.clearDesktopFixture()`);
+			window.setSize(size[0], size[1]);
+		}
+	}
+
 	private async verifyDeviceLayouts(window: BrowserWindow, driver: WindowDriver): Promise<void> {
 		const size = window.getSize();
 		const theme = nativeTheme.themeSource;
@@ -247,15 +264,55 @@ class SmokeSuite {
 				browserTests.browserScenarios.requestFixturePairing();
 				const popover = document.querySelector('.device-pairing-popover');
 				const deadline = Date.now() + 3000;
-				while (!popover.querySelector('.device-pairing-field:not([hidden]) input')) {
+				const boxes = () => [...popover.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
+				while (boxes().length !== 3) {
 					if (Date.now() > deadline) { throw new Error('Incoming pairing field did not appear'); }
 					await new Promise(resolve => requestAnimationFrame(resolve));
 				}
 				if (popover.querySelector('.device-pairing-code:not([hidden])')) { throw new Error('Incoming confirmation disclosed the expected code'); }
-				const input = popover.querySelector('.device-pairing-field input');
-				input.value = '731';
-				input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+				[...'731'].forEach((digit, index) => {
+					boxes()[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
+				});
+				boxes()[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 			})()`);
+			// Opening an invitation: choose it, type the creator's digits, then read ours back.
+			const frame = `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`;
+			await window.webContents.executeJavaScript(`(async () => {
+				const deadline = Date.now() + 3000;
+				while (document.querySelector('.device-pairing-popover h2')?.textContent !== 'Computer paired') {
+					if (Date.now() > deadline) { throw new Error('Approving did not pair'); }
+					await new Promise(resolve => requestAnimationFrame(resolve));
+				}
+			})()`);
+			await driver.screenshot('devices-pairing-paired');
+			await window.webContents.executeJavaScript(`(() => {
+				document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+				browserTests.browserScenarios.importFixtureInvitation();
+			})()`);
+			await window.webContents.executeJavaScript(frame);
+			await driver.screenshot('devices-import-choose');
+			await window.webContents.executeJavaScript(`(async () => {
+				await browserTests.browserScenarios.openFixtureInvitationFile();
+				const boxes = [...document.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
+				if (boxes.length !== 3) { throw new Error('The opened invitation did not ask for three digits'); }
+				[...'04'].forEach((digit, index) => {
+					boxes[index].focus();
+					boxes[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
+				});
+			})()`);
+			await window.webContents.executeJavaScript(frame);
+			await driver.screenshot('devices-import-code');
+			await window.webContents.executeJavaScript(`(async () => {
+				const box = document.querySelectorAll('.device-pairing-field .code-input-digit')[2];
+				box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '2', bubbles: true, cancelable: true }));
+				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+				const deadline = Date.now() + 3000;
+				while (!document.querySelector('.device-pairing-popover .device-pairing-code:not([hidden])')) {
+					if (Date.now() > deadline) { throw new Error('Pairing did not show the reverse code'); }
+					await new Promise(resolve => requestAnimationFrame(resolve));
+				}
+			})()`);
+			await driver.screenshot('devices-import-confirm');
 		} finally {
 			await window.webContents.executeJavaScript(`browserTests.browserScenarios.clearDeviceFixture()`);
 			nativeTheme.themeSource = theme;
@@ -310,6 +367,9 @@ class SmokeSuite {
 				}
 				if (name === 'context-menu') {
 					await this.verifyContextMenuThemes(window, driver);
+				}
+				if (name === 'remote-desktop-session') {
+					await this.verifyDesktopLayouts(window, driver);
 				}
 			}
 		}
@@ -413,7 +473,7 @@ class SmokeSuite {
 				await window.webContents.executeJavaScript(`window.driver.configuration.updateValue('appearance.theme', ${JSON.stringify(theme)})`);
 				for (const width of [1200, 760]) {
 					window.setSize(width, 820);
-					for (const category of ['general', 'appearance', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
+					for (const category of ['general', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
 						const layout: unknown = await window.webContents.executeJavaScript(`new Promise(resolve => {
        document.querySelector('[data-section-id="${category}"]').click();
        requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -486,7 +546,9 @@ class SmokeSuite {
       }
       sidebar.querySelector('[data-section-id="devices"]').click();
       if (document.querySelector('.home-content > main') !== devices) throw new Error('Devices view was discarded');
-      await settled(() => deviceActions() === 2, 'Device actions did not return on Devices');
+      // Pairing is on the Devices page itself; the titlebar holds none of it.
+      if (deviceActions() !== 0) throw new Error('Pairing actions are in the titlebar');
+      if (!devices.querySelector('.device-pairing-choice, .device-pairing-button')) throw new Error('Pairing is not on the Devices page');
       if (sidebar.querySelector('[data-section-id="devices"] .vnilink-icon').dataset.icon !== 'devices') throw new Error('Wrong Devices artwork');
       if (sidebar.querySelector('[data-section-id="desktop"] .vnilink-icon').dataset.icon !== 'remoteDesktop') throw new Error('Wrong Remote Desktop artwork');
       return { labels, settings: sidebar.querySelector('.sidebar-heading').textContent,
@@ -495,8 +557,8 @@ class SmokeSuite {
         actions: [...document.querySelectorAll('.view-action')].map(action => action.getAttribute('aria-label')) };
     })()`);
 		assert.deepEqual(result, {
-			labels: ['Devices', 'General', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
-			settings: 'Settings', fullHeight: true, selected: 'devices', actions: ['Open an invitation', 'Invite another computer'],
+			labels: ['Devices', 'General', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
+			settings: 'Settings', fullHeight: true, selected: 'devices', actions: [],
 		});
 	}
 
@@ -524,7 +586,7 @@ class SmokeSuite {
 		try {
 			window.setSize(760, 520);
 			const layout: unknown = await window.webContents.executeJavaScript(`new Promise(resolve => {
-      document.querySelector('[data-section-id="appearance"]').click();
+      document.querySelector('[data-section-id="general"]').click();
       requestAnimationFrame(() => {
         const content = document.querySelector('.home-content');
         const picker = document.querySelector('.theme-mode-picker');
@@ -533,11 +595,11 @@ class SmokeSuite {
         resolve({ choices: choices.length, selected: picker.querySelector('input:checked').value,
           overflow: content.scrollWidth > content.clientWidth,
           contained: choices.every(choice => { const rect = choice.getBoundingClientRect(); return rect.left >= bounds.left && rect.right <= bounds.right; }),
-          headingVisible: document.querySelector('.appearance-page h1').getBoundingClientRect().top >= bounds.top,
-          switch: document.querySelectorAll('.appearance-page [role="switch"]').length });
+          headingVisible: document.querySelector('.general-page h1').getBoundingClientRect().top >= bounds.top,
+          inGeneral: !!picker.closest('.general-page [data-section="appearance"]') });
       });
     })`);
-			assert.deepEqual(layout, { choices: 3, selected: 'dark', overflow: false, contained: true, headingVisible: true, switch: 0 });
+			assert.deepEqual(layout, { choices: 3, selected: 'dark', overflow: false, contained: true, headingVisible: true, inGeneral: true });
 		} finally {
 			window.setSize(size[0], size[1]);
 		}
@@ -604,7 +666,8 @@ class SmokeSuite {
         strip: region('.tabs-scrollable'), container: region('.tabs-container'), tab: region('.tab'),
         close: tab.querySelector('.tab-close') !== null, action: document.querySelector('.view-action') ? region('.view-action') : null };
     })()`);
-		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: 'no-drag' });
+		// Home has no titlebar actions now that pairing is on the Devices page; the tabs scenario checks an action's drag region.
+		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: null });
 		const surfaces: unknown = await window.webContents.executeJavaScript(`(() => {
       const color = selector => getComputedStyle(document.querySelector(selector)).backgroundColor;
       return { mode: document.documentElement.dataset.windowMaterial, titlebar: color('.part.titlebar'), sidebar: color('.sidebar'), content: color('.home-content') };

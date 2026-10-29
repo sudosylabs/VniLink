@@ -67,7 +67,6 @@ function createWorkbenchPreview(mode: 'light' | 'dark'): HTMLElement {
 	const titlebar = append(surface, $('span.preview-titlebar'));
 	append(titlebar, $('span.preview-controls', undefined, ...marks(3)));
 	append(titlebar, $('span.preview-tab', undefined, ...marks(1)));
-	append(titlebar, $('span.preview-actions', undefined, ...marks(2)));
 	const body = append(surface, $('span.preview-body'));
 	const sidebar = append(body, $('span.preview-sidebar'));
 	for (let index = 0; index < 4; index++) {

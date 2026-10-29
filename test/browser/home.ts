@@ -16,7 +16,7 @@ import { ContextKeyService } from '../../src/platform/contextkey/browser/context
 import { IContextKeyService } from '../../src/platform/contextkey/common/contextkey.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { ILogService, NullLogService } from '../../src/platform/log/common/log.js';
-import { ActiveTabContext, RestartRequiredContext } from '../../src/workbench/contextkeys.js';
+import { ActiveTabContext, EngineAvailableContext, RestartRequiredContext } from '../../src/workbench/contextkeys.js';
 import { ViewActionsMenu } from '../../src/workbench/parts/titlebar/viewActionsToolbar.js';
 import { IDevicePairingPopover } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
 import { CommandService } from '../../src/workbench/services/commands/commandService.js';
@@ -138,18 +138,16 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		required.set(false);
 		assert(restartActions().length === 0, 'Restart action survived reverted configuration');
 		const deviceActions = () => menu.getActions().flatMap(([, actions]) => actions).map(action => action.id).filter(id => id.startsWith('vnilink.devices.'));
-		assert(deviceActions().length === 0, 'Pairing actions shown on a Settings page');
 		back.click();
-		assert(deviceActions().join() === 'vnilink.devices.importInvitation,vnilink.devices.createInvitation', `Pairing actions missing on Devices: ${deviceActions().join()}`);
-		const anchor = document.createElement('button');
-		const pairingActions = menu.getActions({ shouldForwardArgs: true }).flatMap(([, actions]) => actions).filter(action => action.id.startsWith('vnilink.devices.'));
-		for (const action of pairingActions) {
-			await action.run({ anchor });
+		EngineAvailableContext.bindTo(contextKeys).set(true);
+		assert(deviceActions().length === 0, `Pairing actions still in the titlebar: ${deviceActions().join()}`);
+		const pairingButtons = [...devicesPage.querySelectorAll<HTMLButtonElement>('.device-pairing-choice')];
+		for (const button of pairingButtons) {
+			button.click();
 		}
-		assert(popovers.join() === 'import,create' && popoverAnchors.every(each => each === anchor), `Pairing actions did not open their popover at the button: ${JSON.stringify(popovers)}`);
-		activeTab.set('remote-session');
-		assert(deviceActions().length === 0, 'Pairing actions shown outside Home');
-		activeTab.set(HomeView.ID);
+		// The command service runs a command once its activation settles.
+		await new Promise(resolve => setTimeout(resolve, 0));
+		assert(popovers.join() === 'create,import' && popoverAnchors.length === 2 && popoverAnchors.every((each, index) => each === pairingButtons[index]), `Pairing buttons did not open their popover at the button: ${JSON.stringify(popovers)}`);
 		connection.click();
 		menu.dispose();
 		await service.refresh(new AbortController().signal);

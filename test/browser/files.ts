@@ -380,6 +380,8 @@ export async function verifyFiles(): Promise<void> {
 		assert(headings.join(',') === 'Now,Earlier', `Wrong groups: ${headings.join(',')}`);
 		const actions = [...activity.querySelectorAll('.files-activity-item button')].map(node => node.textContent).join(',');
 		assert(actions === 'Resume', `Wrong actions: ${actions}`);
+		const marks = [...activity.querySelectorAll<HTMLElement>('.files-activity-item')].map(item => `${item.dataset.state ?? ''}:${item.querySelector('.files-ring') ? 'ring' : item.querySelector<HTMLElement>('.files-mark')?.dataset.tone ?? 'none'}`);
+		assert(marks.join() === 'Interrupted:ring,Complete:landed', `A finished transfer still shows a progress ring, or a stopped one lost it: ${marks.join()}`);
 		press(activity, 'Escape', 27);
 		assert(view.element.querySelector<HTMLElement>('.files-activity')?.hidden === true && document.activeElement === summary, 'Escape did not close the list and return to the status bar');
 		session.set([]);

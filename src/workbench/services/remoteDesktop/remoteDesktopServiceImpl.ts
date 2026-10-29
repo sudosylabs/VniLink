@@ -6,6 +6,8 @@ import { DataChannelClient } from '../../../platform/engine/electron-browser/dat
 import { createWebCodecsDecoder, webCodecsSupport } from '../camera/webCodecsDecoder.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
+import { INativeRuntimeService } from '../nativeRuntime/nativeRuntimeService.js';
+import { recordingStartFailure, type RecordingStartFailure } from '../recording/sessionRecording.js';
 import { EngineDesktopSession, type DesktopVideoChannel } from './engineDesktopSession.js';
 import { probeWindowDecoders, type DecoderSupport } from './windowDecoders.js';
 import { type DesktopFailure, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
@@ -52,6 +54,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
 		@IDeviceService private readonly devices: IDeviceService,
+		@INativeRuntimeService private readonly nativeRuntime: INativeRuntimeService,
 	) {
 		this.openChannel = (request, consume, onError) => DataChannelClient.open(engine, request, consume, onError);
 	}
@@ -122,6 +125,19 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 			await this.engine.execute({ type: 'setWindowDecoders', decoders });
 		} catch {
 			// The offer falls back to the engine's own decoders.
+		}
+	}
+
+	public async startRecording(deviceId: string): Promise<{ readonly failure: RecordingStartFailure } | { readonly recording: string }> {
+		const session = await activeControllerSession(this.engine, deviceId);
+		if (!session) {
+			return { failure: 'disconnected' };
+		}
+		try {
+			const status = await this.nativeRuntime.startRecording({ ...session, source: 'desktop' }, {});
+			return { recording: status.id };
+		} catch (error) {
+			return { failure: recordingStartFailure(error) };
 		}
 	}
 

@@ -46,6 +46,8 @@ pub(crate) const STATUS_OK: u8 = 0;
 pub(crate) const STATUS_DENIED: u8 = 2;
 pub(crate) const STATUS_STALE: u8 = 3;
 pub(crate) const STATUS_ERROR: u8 = 4;
+/// The peer's job is held by a step that has not ended; asking again succeeds.
+pub(crate) const STATUS_BUSY: u8 = 5;
 
 /// Controller offers an upload: the manifest is fully hashed and offered.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +180,7 @@ pub(crate) fn error_for_status(status: u8) -> Error {
     match status {
         STATUS_DENIED => Error::TransferDenied,
         STATUS_STALE => Error::StaleSession,
+        STATUS_BUSY => Error::Busy,
         _ => Error::InvalidSetting("the peer refused the job request"),
     }
 }

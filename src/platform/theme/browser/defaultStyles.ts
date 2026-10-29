@@ -1,4 +1,5 @@
 import type { IButtonStyles } from '../../../base/browser/ui/button/button.js';
+import type { ICodeInputStyles } from '../../../base/browser/ui/codeInput/codeInput.js';
 import type { IDialogStyles } from '../../../base/browser/ui/dialog/dialog.js';
 import type { IInputBoxStyles } from '../../../base/browser/ui/inputbox/inputBox.js';
 import type { IListStyles } from '../../../base/browser/ui/list/listWidget.js';
@@ -21,6 +22,13 @@ export const defaultButtonStyles: IButtonStyles = {
 	buttonSecondaryBackground: 'transparent',
 	buttonSecondaryHoverBackground: 'var(--surface-hover)',
 	buttonSecondaryBorder: 'var(--line)',
+};
+
+export const defaultCodeInputStyles: ICodeInputStyles = {
+	background: 'var(--canvas)',
+	foreground: 'var(--text)',
+	border: 'var(--line)',
+	focusBorder: 'var(--accent)',
 };
 
 export const defaultInputBoxStyles: IInputBoxStyles = {

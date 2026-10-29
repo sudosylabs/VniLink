@@ -39,6 +39,10 @@ import terminalOutlined from '@phosphor-icons/core/assets/regular/terminal-windo
 import terminalFilled from '@phosphor-icons/core/assets/fill/terminal-window-fill.svg';
 import audioOutlined from '@phosphor-icons/core/assets/regular/speaker-high.svg';
 import audioFilled from '@phosphor-icons/core/assets/fill/speaker-high-fill.svg';
+import audioMutedOutlined from '@phosphor-icons/core/assets/regular/speaker-slash.svg';
+import audioMutedFilled from '@phosphor-icons/core/assets/fill/speaker-slash-fill.svg';
+import privacyOutlined from '@phosphor-icons/core/assets/regular/eye-slash.svg';
+import privacyFilled from '@phosphor-icons/core/assets/fill/eye-slash-fill.svg';
 import recordingOutlined from '@phosphor-icons/core/assets/regular/record.svg';
 import recordingFilled from '@phosphor-icons/core/assets/fill/record-fill.svg';
 import powerOutlined from '@phosphor-icons/core/assets/regular/power.svg';
@@ -116,6 +120,8 @@ const assets: Record<IconId, Record<IconVariant, string>> = {
 	files: { outlined: filesOutlined, filled: filesFilled },
 	terminal: { outlined: terminalOutlined, filled: terminalFilled },
 	audio: { outlined: audioOutlined, filled: audioFilled },
+	audioMuted: { outlined: audioMutedOutlined, filled: audioMutedFilled },
+	privacy: { outlined: privacyOutlined, filled: privacyFilled },
 	recording: { outlined: recordingOutlined, filled: recordingFilled },
 	power: { outlined: powerOutlined, filled: powerFilled },
 	importInvitation: { outlined: importInvitationOutlined, filled: importInvitationFilled },

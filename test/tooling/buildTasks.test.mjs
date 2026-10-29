@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { define, execute, parallel, series } from '../../build/lib/task.ts';
 import { ProcessRunner } from '../../build/lib/processes.ts';
 import { assertNativeFresh, compileNative, stageNative } from '../../build/lib/native.ts';
-import { agentSides, launchAgentSide, selectPeer, selectServices, testkitServices } from '../../build/lib/test.ts';
+import { agentSides, launchAgentSide, selectPeer, selectRuns, selectServices, testkitServices } from '../../build/lib/test.ts';
 
 test('series runs in order, parallel settles every task, and failures stop later steps', async () => {
 	const events = [];
@@ -149,6 +149,13 @@ test('each service with a suite in the test kit runs alone, and a service withou
 	assert.deepEqual(selectServices(tests, ['files']), ['files']);
 	assert.deepEqual(selectServices(tests, []), tests);
 	assert.throws(() => selectServices(tests, ['files', 'fax']), /No suite for fax\. Services: .*files/);
+});
+
+test('--times sets how often a suite is stressed, and what is left names the services', () => {
+	assert.deepEqual(selectRuns(['files']), { times: 25, services: ['files'] });
+	assert.deepEqual(selectRuns(['--times', '3', 'files']), { times: 3, services: ['files'] });
+	assert.throws(() => selectRuns(['files', '--times']), /positive whole number/);
+	assert.throws(() => selectRuns(['--times', '0']), /positive whole number/);
 });
 
 test('--peer and --peer-check name the agent a suite runs against, and nothing else is taken for a service', () => {

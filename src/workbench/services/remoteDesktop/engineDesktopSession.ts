@@ -1,6 +1,6 @@
 import { Emitter, type Event } from '../../../base/common/event.js';
 import { Disposable, MutableDisposable } from '../../../base/common/lifecycle.js';
-import type { DataPacket, DesktopCursor, DesktopCursorImage, DesktopDecoderReport, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
+import type { DataPacket, DesktopAudioOperation, DesktopAudioStatus, DesktopCursor, DesktopCursorImage, DesktopDecoderReport, DesktopMediaStatus } from '../../../platform/engine/common/dataChannel.js';
 import { record, videoCodecNames, type DesktopInputCommand, type DisplayInfo, type VideoCodec } from '../../../platform/engine/common/engine.js';
 import type { CameraDecoder, CameraDecoderFactory } from '../camera/engineCameraStream.js';
 import { avcCodec } from '../camera/h264.js';
@@ -91,6 +91,8 @@ export interface DesktopVideoChannel {
 	readonly onCursor: Event<DesktopCursor>;
 	requestKeyframe(): void;
 	mediaStatus(decoder: DesktopDecoderReport): Promise<DesktopMediaStatus | undefined>;
+	/** The other computer's sound, which plays here with its screen. */
+	desktopAudio(operation: DesktopAudioOperation): Promise<DesktopAudioStatus>;
 	close(): void;
 }
 
@@ -202,7 +204,15 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		const status = await video.mediaStatus({ decodeUs, software: this.software, recoveries: this.recoveries, stillsShown: this.stillsShown });
 		const skipped = this.skippedPictures;
 		this.skippedPictures = 0;
-		return status && { status, codec, latency: this.latency.take(), skipped };
+		return status && { status, codec, softwareDecoder: this.software, latency: this.latency.take(), skipped };
+	}
+
+	public async audio(operation: DesktopAudioOperation): Promise<DesktopAudioStatus | undefined> {
+		const video = this.channels?.video;
+		if (!video || this.ended) {
+			return undefined;
+		}
+		return await video.desktopAudio(operation);
 	}
 
 	public send(input: DesktopInput): void {

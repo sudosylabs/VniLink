@@ -7,6 +7,11 @@ import type { IScreenSnapshotService } from '../../src/workbench/services/screen
 import { DevicesPage } from '../../src/workbench/contrib/devices/devicesPage.js';
 import { DevicePairingPopover, IDevicePairingPopover, type PairingPopoverKind } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
 import { ICommandService, type ICommandEvent } from '../../src/platform/commands/common/commands.js';
+import { ContextKeyService } from '../../src/platform/contextkey/browser/contextKeyService.js';
+import { IContextKeyService, type IContextKey } from '../../src/platform/contextkey/common/contextkey.js';
+import { EngineAvailableContext } from '../../src/workbench/contextkeys.js';
+import { CreateInvitationAction, ImportInvitationAction } from '../../src/workbench/contrib/devices/deviceActions.js';
+import { FakeConfigurationService } from './settingsFixture.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { IDevicePairingService } from '../../src/workbench/services/devices/devicePairingService.js';
 import { DevicePairingService } from '../../src/workbench/services/devices/devicePairingServiceImpl.js';
@@ -14,7 +19,7 @@ import { InstantiationService } from '../../src/platform/instantiation/common/in
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import { IDeviceService as IDeviceServiceId } from '../../src/workbench/services/devices/deviceService.js';
 import { IScreenSnapshotService as IScreenSnapshotServiceId } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
-import { ISystemActionService, type SystemActionProgress } from '../../src/workbench/services/systemActions/systemActionService.js';
+import { ISystemActionService, type SystemActionProgress, type SystemPrivacyResult } from '../../src/workbench/services/systemActions/systemActionService.js';
 
 function assert(value: unknown, message: string): asserts value {
 	if (!value) {
@@ -57,6 +62,14 @@ class FixtureSystemActions implements ISystemActionService {
 	public cancel(): Promise<void> {
 		return Promise.resolve();
 	}
+
+	public privacy(): Promise<SystemPrivacyResult> {
+		return Promise.resolve({ privacy: { displayPrivate: false, inputBlocked: false } });
+	}
+
+	public setPrivacy(_deviceId: string, enabled: boolean): Promise<SystemPrivacyResult> {
+		return Promise.resolve({ privacy: { displayPrivate: enabled, inputBlocked: enabled } });
+	}
 }
 
 /** Explicit test data; the production page always receives the real service. */
@@ -77,7 +90,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public readonly popover: IDevicePairingPopover;
 	public readonly popoverPairing: IDevicePairingService;
 	private readonly host = document.createElement('div');
-	/** Stand-ins for the titlebar buttons the popover hangs from. */
+	/** Stand-ins for the page's pairing buttons, which run commands this fixture records rather than the popover. */
 	private readonly anchors = document.createElement('div');
 	public connects: string[] = [];
 	/** Commands the inspector ran, with their arguments. */
@@ -87,6 +100,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public incoming: ControlRequestInfo | null = null;
 	public readonly snapshots: FixtureSnapshots;
 	public readonly systemActions = new FixtureSystemActions();
+	public readonly engineAvailable: IContextKey<boolean>;
 
 	constructor(state: DeviceFixtureState = 'populated', snapshots?: FixtureSnapshots) {
 		super();
@@ -109,7 +123,11 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 				return Promise.resolve(undefined);
 			},
 		};
+		const contextKeys = this._register(new ContextKeyService(new FakeConfigurationService()));
+		this.engineAvailable = EngineAvailableContext.bindTo(contextKeys);
+		this.engineAvailable.set(true);
 		const collection = new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots], [ICommandService, commands],
+			[IContextKeyService, contextKeys],
 			[ISystemActionService, this.systemActions],
 			[IDevicePairingService, new SyncDescriptor(DevicePairingService)], [IDevicePairingPopover, new SyncDescriptor(DevicePairingPopover)]);
 		const services = this._register(new InstantiationService(collection, true));
@@ -201,7 +219,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 		this.availabilityChanged.fire(id);
 	}
 
-	/** The fixture's button for `kind`, standing in for the titlebar action. */
+	/** The fixture's button for `kind`, standing in for the page's pairing button. */
 	public anchor(kind: PairingPopoverKind): HTMLButtonElement {
 		const anchor = this.anchors.querySelector<HTMLButtonElement>(`[data-kind="${kind}"]`);
 		assert(anchor, `No ${kind} anchor`);
@@ -304,6 +322,7 @@ export async function verifyDevices(): Promise<void> {
 		page.querySelector<HTMLButtonElement>('.device-close')?.click();
 		assert(document.activeElement === list && listRow(rows()[1]).classList.contains('focused') && page.querySelector<HTMLElement>('.device-panel')?.hidden, 'Close did not restore list focus');
 		await verifyInspector(fixture, rows);
+		verifyPairingButtons();
 		fixture.update(fixture.devices.map(device => ({ ...device, presence: 'disconnected' })));
 		rows()[1].click();
 		assert(![...page.querySelectorAll('.device-panel button')].some(button => button.textContent === 'Connect'), 'The removed Connect button is still offered');
@@ -353,6 +372,40 @@ export async function verifyDevices(): Promise<void> {
 }
 
 /** Read-only service rows, the details list and their updates for the selected computer. */
+/** Pairing starts on the page: quiet buttons beside a list, two described choices on an empty page. */
+function verifyPairingButtons(): void {
+	const shown = (element: HTMLElement | null): boolean => !!element && element.checkVisibility();
+	const populated = new DevicePageFixture();
+	const empty = new DevicePageFixture('empty');
+	const unavailable = new DevicePageFixture('unavailable');
+	try {
+		const page = populated.page.element;
+		const compact = [...page.querySelectorAll<HTMLButtonElement>('.devices-heading .device-pairing-button')];
+		assert(compact.map(button => button.textContent).join() === 'Invite another computer,Open an invitation' && compact.every(shown), 'Pairing buttons missing beside the device list heading');
+		assert(!shown(page.querySelector('.device-pairing-choices')), 'Empty-page pairing choices shown beside a device list');
+		compact[0].click();
+		compact[1].click();
+		const ran = populated.commands.map(([id, context]) => [id, (context as { anchor?: unknown } | undefined)?.anchor]);
+		assert(ran.length === 2 && ran[0][0] === CreateInvitationAction.ID && ran[0][1] === compact[0] && ran[1][0] === ImportInvitationAction.ID && ran[1][1] === compact[1], 'Pairing buttons did not run their commands from themselves');
+		populated.engineAvailable.set(false);
+		assert(compact.every(button => button.disabled), 'Pairing offered without the engine');
+		populated.engineAvailable.set(true);
+		assert(compact.every(button => !button.disabled), 'Pairing stayed off after the engine returned');
+		const emptyPage = empty.page.element;
+		const choices = [...emptyPage.querySelectorAll<HTMLButtonElement>('.device-empty .device-pairing-choice')];
+		assert(choices.length === 2 && choices.every(shown) && choices[0].classList.contains('primary') && !choices[1].classList.contains('primary'), 'Empty page lacks its pairing buttons, inviting first');
+		assert(!shown(emptyPage.querySelector('.devices-heading .device-pairing-actions')), 'Heading pairing buttons shown on an empty page');
+		assert(!emptyPage.querySelector('[role="status"] .device-pairing-choice'), 'Pairing choices sit inside the status announcement');
+		choices[1].click();
+		assert(empty.commands.at(-1)?.[0] === ImportInvitationAction.ID, 'Empty-page choice did not run its command');
+		assert(!shown(unavailable.page.element.querySelector('.device-pairing-choices')), 'Pairing choices offered while devices are unavailable');
+	} finally {
+		populated.dispose();
+		empty.dispose();
+		unavailable.dispose();
+	}
+}
+
 async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLElement[]): Promise<void> {
 	const page = fixture.page.element;
 	const services = (): Record<string, string> => Object.fromEntries([...page.querySelectorAll('.device-service')].map(row => [row.querySelector('.device-service-label')?.textContent ?? '', row.querySelector('.device-service-status')?.textContent ?? '']));
@@ -430,19 +483,30 @@ async function until(condition: () => boolean, message: string): Promise<void> {
 }
 
 /** Pairing from the titlebar popovers: create, approve an incoming request, and open an invitation. */
+/** Types `code` into a code input one digit at a time, as a keyboard does. */
+function typeCode(boxes: readonly HTMLInputElement[], code: string): void {
+	for (let index = 0; index < code.length; index++) {
+		const box = boxes[index];
+		box.focus();
+		box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: code.charAt(index), bubbles: true, cancelable: true }));
+	}
+}
+
 export async function verifyPairingPopover(): Promise<void> {
 	const fixture = new DevicePageFixture('empty');
 	const popover = (): HTMLElement | null => document.querySelector('.device-pairing-popover');
 	const text = (selector: string): string => popover()?.querySelector<HTMLElement>(`${selector}:not([hidden])`)?.textContent ?? '';
-	const primary = (): HTMLElement | null => popover()?.querySelector<HTMLElement>('.device-pairing-foot .monaco-button.primary:not([hidden])') ?? null;
+	const primary = (): HTMLButtonElement | null => popover()?.querySelector<HTMLButtonElement>('.device-pairing-foot .monaco-button.primary:not([hidden])') ?? null;
 	const confirmation = (): string => fixture.confirmation;
-	const digits = (): HTMLInputElement | null => popover()?.querySelector<HTMLInputElement>('.device-pairing-field:not([hidden]) input') ?? null;
+	const boxes = (): HTMLInputElement[] => [...popover()?.querySelectorAll<HTMLInputElement>('.device-pairing-field:not([hidden]) .code-input-digit') ?? []];
+	const step = (): string => text('.device-pairing-progress');
 	try {
 		const create = fixture.anchor('create');
 		create.click();
 		await until(() => text('.device-pairing-code') === '042', 'The invitation code did not appear');
 		const dialog = popover();
 		assert(dialog?.getAttribute('role') === 'dialog' && dialog.getAttribute('aria-labelledby') === dialog.querySelector('h2')?.id && dialog.querySelector('h2')?.textContent === 'Invite another computer', 'The popover is not a labelled dialog');
+		assert(step() === '1 of 2', 'The invitation is not shown as the first of two steps');
 		assert(/^Expires in 1[45]:[0-5][0-9]$/.test(text('.device-pairing-expiry')), `Expiry is missing: ${text('.device-pairing-expiry')}`);
 		assert(primary()?.textContent === 'Save…' && dialog.contains(document.activeElement), 'Save… is missing or focus stayed outside the popover');
 		pressKey(primary() ?? dialog, 'Escape', 27);
@@ -450,36 +514,47 @@ export async function verifyPairingPopover(): Promise<void> {
 		create.click();
 		await until(() => text('.device-pairing-code') === '042', 'Reopening lost the live invitation');
 		fixture.incoming = { endpoint_id: 'test-computer', check: '731' };
-		await until(() => digits() !== null, 'An incoming request did not ask for its digits');
-		assert(popover()?.querySelector('h2')?.textContent === 'Approve this computer' && !text('.device-pairing-code'), 'Approval disclosed the code or kept the invitation heading');
+		await until(() => boxes().length === 3, 'An incoming request did not ask for its digits');
+		assert(popover()?.querySelector('h2')?.textContent === 'Approve this computer' && !text('.device-pairing-code') && step() === '2 of 2', 'Approval disclosed the code or kept the invitation heading');
 		fixture.incoming = null;
 		await until(() => text('.device-pairing-code') === '042', 'A lapsed request did not return to the invitation');
 		assert(text('.device-feedback') === 'The other computer stopped waiting. It will ask again while this invitation lasts.', 'A lapsed request was not explained');
 		fixture.incoming = { endpoint_id: 'test-computer', check: '731' };
-		await until(() => digits() !== null, 'The renewed request did not ask for its digits');
-		const approve = digits();
-		assert(approve && document.activeElement === approve, 'Approval did not focus the digits');
-		approve.value = '731';
-		pressKey(approve, 'Enter', 13);
-		await until(() => text('.device-feedback').startsWith('Computer paired'), 'Approving did not pair');
-		assert(confirmation() === '731', 'Approval sent the wrong digits');
+		await until(() => boxes().length === 3, 'The renewed request did not ask for its digits');
+		assert(document.activeElement === boxes()[0], 'Approval did not focus the first digit');
+		assert(primary()?.classList.contains('disabled') === true, 'Approve was offered before the whole code was typed');
+		typeCode(boxes(), '73');
+		assert(document.activeElement === boxes()[2], 'Typing a digit did not move to the next box');
+		pressKey(boxes()[2], 'Backspace', 8);
+		assert(document.activeElement === boxes()[1] && boxes().map(box => box.value).join() === '7,,', 'Backspace on an empty box did not return and clear the previous digit');
+		const pasted = new DataTransfer();
+		pasted.setData('text/plain', ' 7-3-1 ');
+		boxes()[1].dispatchEvent(new ClipboardEvent('paste', { clipboardData: pasted, bubbles: true, cancelable: true }));
+		assert(boxes().map(box => box.value).join('') === '731' && primary()?.classList.contains('disabled') === false, 'A pasted code did not fill every box and enable Approve');
+		pressKey(boxes()[2], 'Enter', 13);
+		await until(() => popover()?.querySelector('h2')?.textContent === 'Computer paired', 'Approving did not pair');
+		assert(confirmation() === '731' && !text('.device-pairing-progress'), 'Approval sent the wrong digits or the outcome counted as a step');
 		document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
 		assert(!popover(), 'Pressing outside did not close the popover');
 		const open = fixture.anchor('import');
 		open.click();
-		assert(popover()?.querySelector('h2')?.textContent === 'Pair with an invitation' && primary()?.textContent === 'Choose invitation…', 'A finished pairing was shown again instead of the chooser');
-		await fixture.popoverPairing.openInvitation(new File(['VNLF'], 'office-pc.vnl'));
-		await settle();
-		const code = digits();
-		assert(code && text('.device-pairing-file') === 'office-pc.vnl' && !text('.device-pairing-code'), 'Opening an invitation did not ask for the creator\'s digits');
-		code.value = '42';
-		pressKey(code, 'Enter', 13);
+		const importing = popover();
+		assert(importing && importing.querySelector('h2')?.textContent === 'Open an invitation' && step() === '1 of 3' && primary()?.textContent === 'Choose invitation…', 'A finished pairing was shown again instead of the chooser');
+		const dropped = new DataTransfer();
+		dropped.items.add(new File(['VNLF'], 'office-pc.vnl'));
+		importing.querySelector('h2')?.dispatchEvent(new DragEvent('drop', { dataTransfer: dropped, bubbles: true, cancelable: true }));
+		await until(() => boxes().length === 3, 'Dropping an invitation did not ask for the creator\'s digits');
+		assert(text('.device-pairing-file-name') === 'office-pc.vnl' && !text('.device-pairing-code') && step() === '2 of 3', 'The opened invitation was not shown with its code entry');
+		typeCode(boxes(), '42');
+		pressKey(boxes()[2], 'Enter', 13);
 		await settle();
 		assert(confirmation() === '731' && text('.device-feedback') === 'Enter the three digits shown on the other computer.', 'An incomplete code was submitted');
-		code.value = '042';
-		pressKey(code, 'Enter', 13);
+		assert(popover()?.querySelector('.device-feedback.error') !== null, 'A refused code was not shown as an error');
+		boxes()[0].focus();
+		typeCode(boxes(), '042');
+		pressKey(boxes()[2], 'Enter', 13);
 		await until(() => text('.device-pairing-code') === '731', 'Pairing did not show the reverse code');
-		assert(confirmation() === '042', 'Pairing sent the wrong digits');
+		assert(confirmation() === '042' && step() === '3 of 3' && !!text('.device-pairing-waiting'), 'Pairing sent the wrong digits or did not wait for approval');
 		open.click();
 		assert(!popover(), 'The anchor did not toggle its popover closed');
 	} finally {

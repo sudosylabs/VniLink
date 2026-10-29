@@ -1,11 +1,11 @@
 import * as nls from '../../../nls.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { engineErrorCategory, type SystemActionKind, type SystemOperation } from '../../../platform/engine/common/engine.js';
+import { engineErrorCategory, type EngineCommand, type SystemActionKind, type SystemOperation } from '../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { activeControllerSession, type ControllerSession } from '../devices/controllerSession.js';
-import { ISystemActionService, type SystemActionProgress } from './systemActionService.js';
+import { ISystemActionService, type SystemActionProgress, type SystemPrivacyResult } from './systemActionService.js';
 
 /** How often a counting-down restart or shutdown is read again. */
 const followInterval = 1000;
@@ -137,6 +137,31 @@ export class SystemActionService extends Disposable implements ISystemActionServ
 			}
 		} catch (error) {
 			this.end(deviceId, followed.operation.action, systemRequestMessage(error));
+		}
+	}
+
+	public privacy(deviceId: string): Promise<SystemPrivacyResult> {
+		return this.askPrivacy(deviceId, session => ({ type: 'systemPrivacy', sessionId: session.id, generation: session.generation }));
+	}
+
+	public setPrivacy(deviceId: string, enabled: boolean): Promise<SystemPrivacyResult> {
+		return this.askPrivacy(deviceId, session => ({ type: 'setSystemPrivacy', sessionId: session.id, generation: session.generation, enabled }));
+	}
+
+	private async askPrivacy(deviceId: string, command: (session: ControllerSession) => EngineCommand): Promise<SystemPrivacyResult> {
+		const session = await activeControllerSession(this.engine, deviceId);
+		if (!session) {
+			return { error: nls.localize('system.requestDisconnected', 'Not connected') };
+		}
+		try {
+			const reply = await this.engine.execute(command(session));
+			if (reply.type !== 'systemPrivacy') {
+				throw new Error('Invalid system privacy reply');
+			}
+			return { privacy: reply.privacy };
+		} catch (error) {
+			// Another computer holding it is the busy case: say so rather than "try again".
+			return { error: engineErrorCategory(error) === 'Busy' ? nls.localize('system.privacyHeld', 'Another computer has privacy mode on') : systemRequestMessage(error) };
 		}
 	}
 
