@@ -278,6 +278,11 @@ impl Reader {
             && attested == self.last_attested
             && cursor == self.last_cursor
             && !frame.changed().is_some_and(|changes| changes.share > 0.0);
+        let frame = if changed_where_unsaid(attested, self.last_attested, frame.changed()) {
+            frame.with_changed(None)
+        } else {
+            frame
+        };
         if !unchanged
             || self
                 .last_published
@@ -315,6 +320,19 @@ impl Reader {
         };
         Ok(())
     }
+}
+
+/// Whether a source attests a new picture its read said nothing changed
+/// in: it changed where the read cannot say. Told as nowhere, a viewer
+/// would redraw none of it; a moved cursor alone keeps its attestation.
+fn changed_where_unsaid(
+    attested: Option<Instant>,
+    last_attested: Option<Instant>,
+    read: Option<&crate::Changes>,
+) -> bool {
+    attested.is_some()
+        && attested != last_attested
+        && read.is_some_and(|changes| changes.share == 0.0)
 }
 
 #[cfg(test)]
@@ -430,5 +448,46 @@ mod capture_time_tests {
             .checked_sub(CAPTURE_AGE_LIMIT + Duration::from_millis(1))
             .unwrap();
         assert_eq!(capture_time(Some(stale), read), read);
+    }
+}
+
+#[cfg(test)]
+mod changed_where_unsaid_tests {
+    use super::*;
+
+    #[test]
+    fn a_new_attestation_the_read_said_nothing_of_changed_somewhere_unsaid() {
+        let before = Instant::now();
+        let after = before + Duration::from_millis(100);
+        let nothing = crate::Changes::none();
+        let clock = crate::Changes {
+            share: 0.01,
+            regions: Some(vec![vnilink::Region {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            }]),
+        };
+        assert!(changed_where_unsaid(
+            Some(after),
+            Some(before),
+            Some(&nothing)
+        ));
+        // The read says where, or the picture is the one attested before
+        // (a cursor that moved alone), or the read says nothing either way.
+        assert!(!changed_where_unsaid(
+            Some(after),
+            Some(before),
+            Some(&clock)
+        ));
+        assert!(!changed_where_unsaid(
+            Some(before),
+            Some(before),
+            Some(&nothing)
+        ));
+        assert!(!changed_where_unsaid(Some(after), Some(before), None));
+        // A source that does not attest says through its reads alone.
+        assert!(!changed_where_unsaid(None, None, Some(&nothing)));
     }
 }
