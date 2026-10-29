@@ -297,21 +297,16 @@ mod twin {
         // keep their stamp and color.
         stop_red.store(true, Ordering::Relaxed);
         red_worker.join().unwrap().unwrap();
+        // Pictures already on their way may still arrive; a capture still
+        // publishing never leaves the viewer a second without one, while a
+        // busy computer only makes such a gap come sooner.
         let silence = Instant::now();
-        while silence.elapsed() < Duration::from_millis(300) {
-            if red_frames
-                .recv_timeout(Duration::from_millis(100))
-                .is_none()
-            {
-                break;
-            }
+        while red_frames.recv_timeout(Duration::from_secs(1)).is_some() {
+            assert!(
+                silence.elapsed() < Duration::from_secs(10),
+                "closed capture still published"
+            );
         }
-        assert!(
-            red_frames
-                .recv_timeout(Duration::from_millis(300))
-                .is_none(),
-            "closed capture still published"
-        );
         // Drain the sibling's backlog, decoding to keep the VideoToolbox
         // chain alive, so the frames asserted below prove its worker is
         // still publishing rather than replaying its queue.

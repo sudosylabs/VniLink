@@ -1,7 +1,7 @@
 //! Shared capture: one reader, independent encoders.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use vnilink::{
@@ -57,18 +57,62 @@ impl vnilink::HostCapture for Source {
     }
 }
 
+/// A gate a test holds a thread at for as long as it likes, and sees it
+/// held there: work held at it proves what goes on without it, on a
+/// computer of any speed.
+#[derive(Default)]
+struct Gate {
+    /// Whether the gate is closed, and how many threads it holds.
+    state: Mutex<(bool, usize)>,
+    changed: Condvar,
+}
+
+impl Gate {
+    fn close(&self) {
+        self.state.lock().unwrap().0 = true;
+    }
+
+    fn open(&self) {
+        self.state.lock().unwrap().0 = false;
+        self.changed.notify_all();
+    }
+
+    /// Passes, once the gate is open.
+    fn pass(&self) {
+        let mut state = self.state.lock().unwrap();
+        if !state.0 {
+            return;
+        }
+        state.1 += 1;
+        self.changed.notify_all();
+        while state.0 {
+            state = self.changed.wait(state).unwrap();
+        }
+        state.1 -= 1;
+    }
+
+    /// Waits until the gate holds a thread, and says whether it does.
+    fn holds_one(&self, within: Duration) -> bool {
+        let state = self.state.lock().unwrap();
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, within, |state| state.1 == 0)
+            .unwrap();
+        state.1 > 0
+    }
+}
+
 struct Encoder {
-    slow: bool,
+    /// Where this encoder is held before each picture, if it is.
+    held: Option<Arc<Gate>>,
     encodes: Arc<AtomicUsize>,
     opens: Arc<AtomicUsize>,
 }
 
 impl VideoEncoder for Encoder {
     fn encode(&mut self, frame: &RawFrame, params: &EncodeParams) -> Result<EncodedSample, Error> {
-        // Far slower than a shared CI runner's capture loop, so a fast viewer
-        // held behind it would show as a count near its own.
-        if self.slow {
-            std::thread::sleep(Duration::from_millis(400));
+        if let Some(gate) = &self.held {
+            gate.pass();
         }
         self.encodes.fetch_add(1, Ordering::Relaxed);
         if frame.width() != 64 || frame.height() != 64 {
@@ -203,6 +247,7 @@ fn shared_capture_workload(idle: bool) {
     let fast_encodes = Arc::new(AtomicUsize::new(0));
     let slow_encodes = Arc::new(AtomicUsize::new(0));
     let live_encoders = Arc::new(AtomicUsize::new(0));
+    let slow_gate = Arc::new(Gate::default());
     let stop = Arc::new(AtomicBool::new(false));
     let worker_host = Arc::clone(&host);
     let worker_stop = Arc::clone(&stop);
@@ -211,6 +256,7 @@ fn shared_capture_workload(idle: bool) {
     let worker_fast = Arc::clone(&fast_encodes);
     let worker_slow = Arc::clone(&slow_encodes);
     let worker_live = Arc::clone(&live_encoders);
+    let worker_gate = Arc::clone(&slow_gate);
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let result = crate::serve_shared_capture(
@@ -231,7 +277,7 @@ fn shared_capture_workload(idle: bool) {
                 }
                 worker_live.fetch_add(1, Ordering::Relaxed);
                 Ok(Encoder {
-                    slow: target.id == slow_target,
+                    held: (target.id == slow_target).then(|| Arc::clone(&worker_gate)),
                     encodes: if target.id == slow_target {
                         Arc::clone(&worker_slow)
                     } else {
@@ -293,24 +339,35 @@ fn shared_capture_workload(idle: bool) {
         .expect("slow viewer frame");
     assert!(parse_annex_b(&first_slow.payload).unwrap().has_idr());
 
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_millis(1200) {
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    let fast_count = fast_encodes.load(Ordering::Relaxed);
-    let slow_count = slow_encodes.load(Ordering::Relaxed);
-    let read_count = frames.load(Ordering::Relaxed);
-    assert!(read_count >= 8, "reader produced {read_count} frames");
-    assert!(slow_count >= 1, "slow encoder did not run");
+    // The slow viewer's encoder is held at its next picture for as long as
+    // the test likes: the reader and the fast viewer go on without it.
+    slow_gate.close();
     assert!(
-        fast_count > slow_count * 2,
-        "fast {fast_count} encodes, slow {slow_count}"
+        slow_gate.holds_one(Duration::from_secs(5)),
+        "the slow encoder was not given another picture"
     );
-    assert!(
-        read_count > slow_count * 2,
-        "reader {read_count} was held behind the slow encoder {slow_count}"
+    let slow_count = slow_encodes.load(Ordering::Relaxed);
+    let fast_before = fast_encodes.load(Ordering::Relaxed);
+    let read_before = frames.load(Ordering::Relaxed);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while fast_encodes.load(Ordering::Relaxed) < fast_before + 8
+        || frames.load(Ordering::Relaxed) < read_before + 8
+    {
+        assert!(
+            Instant::now() < deadline,
+            "held behind the slow encoder: fast {} encodes, reader {} frames",
+            fast_encodes.load(Ordering::Relaxed) - fast_before,
+            frames.load(Ordering::Relaxed) - read_before
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        slow_encodes.load(Ordering::Relaxed),
+        slow_count,
+        "the slow encoder ran while held"
     );
     assert!(!wrong_thread.load(Ordering::Relaxed));
+    slow_gate.open();
 
     slow_handle.close();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -319,14 +376,14 @@ fn shared_capture_workload(idle: bool) {
         std::thread::sleep(Duration::from_millis(10));
     }
     let after_close = fast_encodes.load(Ordering::Relaxed);
-    let resume = Instant::now();
-    while resume.elapsed() < Duration::from_millis(400) {
-        std::thread::sleep(Duration::from_millis(30));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fast_encodes.load(Ordering::Relaxed) <= after_close {
+        assert!(
+            Instant::now() < deadline,
+            "the remaining viewer stopped when its sibling closed"
+        );
+        std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(
-        fast_encodes.load(Ordering::Relaxed) > after_close,
-        "the remaining viewer stopped when its sibling closed"
-    );
     assert_eq!(host.video_targets().unwrap().len(), 1);
     assert_eq!(
         fast.controller_session(fast_parent.id).unwrap().phase,
@@ -446,7 +503,7 @@ fn twin_captures_serve_selected_and_default_targets_without_flapping() {
                     }
                     opens.fetch_add(1, Ordering::Relaxed);
                     Ok(Encoder {
-                        slow: false,
+                        held: None,
                         encodes: Arc::new(AtomicUsize::new(0)),
                         opens: Arc::new(AtomicUsize::new(0)),
                     })
@@ -617,7 +674,7 @@ fn pinned_capture_revision_survives_topology_advance() {
                     return Err(Error::InvalidSetting("encoder parameters are invalid"));
                 }
                 Ok(Encoder {
-                    slow: false,
+                    held: None,
                     encodes: Arc::new(AtomicUsize::new(0)),
                     opens: Arc::new(AtomicUsize::new(0)),
                 })
@@ -701,7 +758,7 @@ fn lone_capture_serves_unselected_viewers_before_any_selection() {
                     return Err(Error::InvalidSetting("encoder parameters are invalid"));
                 }
                 Ok(Encoder {
-                    slow: false,
+                    held: None,
                     encodes: Arc::new(AtomicUsize::new(0)),
                     opens: Arc::new(AtomicUsize::new(0)),
                 })
@@ -717,9 +774,11 @@ fn lone_capture_serves_unselected_viewers_before_any_selection() {
     worker.join().unwrap().unwrap();
 }
 
-/// A source that attests its pixels and never changes them.
+/// A source that attests its pixels and never changes them, and whose
+/// reads a test can hold.
 struct Still {
     at: Instant,
+    held: Arc<Gate>,
 }
 
 impl FrameSource for Still {
@@ -728,6 +787,7 @@ impl FrameSource for Still {
     }
 
     fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+        self.held.pass();
         Ok(Some(solid(64, 64, timestamp)))
     }
 
@@ -767,12 +827,21 @@ fn an_unchanged_screen_is_sent_once_a_second_and_a_keyframe_still_comes() {
         .unwrap();
     let frames = handle.subscribe_video().unwrap();
     let encodes = Arc::new(AtomicUsize::new(0));
+    let reads = Arc::new(Gate::default());
     let stop = Arc::new(AtomicBool::new(false));
-    let (worker_stop, worker_host, worker_encodes) =
-        (Arc::clone(&stop), Arc::clone(&host), Arc::clone(&encodes));
+    let (worker_stop, worker_host, worker_encodes, worker_reads) = (
+        Arc::clone(&stop),
+        Arc::clone(&host),
+        Arc::clone(&encodes),
+        Arc::clone(&reads),
+    );
+    let serving = Instant::now();
     let worker = std::thread::spawn(move || {
         crate::serve_shared_capture(
-            &Still { at: Instant::now() },
+            &Still {
+                at: Instant::now(),
+                held: worker_reads,
+            },
             &worker_host,
             &worker_stop,
             false,
@@ -780,7 +849,7 @@ fn an_unchanged_screen_is_sent_once_a_second_and_a_keyframe_still_comes() {
             |_| {},
             move |_, _, _, _, _| {
                 Ok(Encoder {
-                    slow: false,
+                    held: None,
                     encodes: Arc::clone(&worker_encodes),
                     opens: Arc::new(AtomicUsize::new(0)),
                 })
@@ -791,27 +860,35 @@ fn an_unchanged_screen_is_sent_once_a_second_and_a_keyframe_still_comes() {
         .recv_timeout(Duration::from_secs(5))
         .expect("first picture");
     assert!(first.keyframe);
+    // The screen is read at the frame rate; what is encoded is once a
+    // second at the most, so a busy computer that stretched this wait
+    // allows more.
     std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(
-        encodes.load(Ordering::Relaxed),
-        1,
-        "an unchanged screen was encoded again within a second"
+    let encoded = encodes.load(Ordering::Relaxed);
+    let seconds = serving.elapsed().as_secs() as usize;
+    assert!(
+        encoded <= 1 + seconds,
+        "an unchanged screen was encoded {encoded} times in {seconds} s"
+    );
+    // With the screen's reads held, no picture newer than the last and no
+    // keepalive can come: the keyframe asked for is made from the last
+    // picture, not from the next read.
+    reads.close();
+    assert!(
+        reads.holds_one(Duration::from_secs(5)),
+        "the screen was not read again"
     );
     handle.request_keyframe().unwrap();
-    let asked = Instant::now();
     let keyframe = loop {
         let frame = frames
             .recv_timeout(Duration::from_secs(5))
-            .expect("the keyframe asked for");
+            .expect("the keyframe waited for the screen to change");
         if frame.keyframe {
             break frame;
         }
     };
     assert!(keyframe.keyframe);
-    assert!(
-        asked.elapsed() < Duration::from_millis(500),
-        "the keyframe waited for the screen to change"
-    );
+    reads.open();
     stop.store(true, Ordering::Relaxed);
     worker.join().unwrap().unwrap();
 }
@@ -866,7 +943,10 @@ fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
         (Arc::clone(&stop), Arc::clone(&host), Arc::clone(&encodes));
     let worker = std::thread::spawn(move || {
         crate::serve_shared_capture(
-            &Still { at: Instant::now() },
+            &Still {
+                at: Instant::now(),
+                held: Arc::default(),
+            },
             &worker_host,
             &worker_stop,
             false,
@@ -874,7 +954,7 @@ fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
             |_| {},
             move |_, _, _, _, _| {
                 Ok(Refining(Encoder {
-                    slow: false,
+                    held: None,
                     encodes: Arc::clone(&worker_encodes),
                     opens: Arc::new(AtomicUsize::new(0)),
                 }))
@@ -1183,7 +1263,7 @@ fn frames_of(
             |_| {},
             move |_, _, _, _, _| {
                 Ok(Encoder {
-                    slow: false,
+                    held: None,
                     encodes: Arc::new(AtomicUsize::new(0)),
                     opens: Arc::new(AtomicUsize::new(0)),
                 })
@@ -1292,7 +1372,13 @@ struct Pushing {
     seen: std::sync::atomic::AtomicU64,
     arrivals: Mutex<Vec<Instant>>,
     reads: Mutex<Vec<Instant>>,
+    /// Each read's timestamp, on the reader's own clock, and whether the
+    /// wait before it ended on a picture rather than on its deadline.
+    stamps: Mutex<Vec<(Duration, bool)>>,
+    woken: AtomicBool,
     waits: AtomicUsize,
+    /// The longest any wait for a picture was asked to last.
+    longest_wait: Mutex<Duration>,
 }
 
 impl Pushing {
@@ -1302,7 +1388,10 @@ impl Pushing {
             seen: std::sync::atomic::AtomicU64::new(0),
             arrivals: Mutex::new(Vec::new()),
             reads: Mutex::new(Vec::new()),
+            stamps: Mutex::new(Vec::new()),
+            woken: AtomicBool::new(false),
             waits: AtomicUsize::new(0),
+            longest_wait: Mutex::new(Duration::ZERO),
         }
     }
 
@@ -1328,13 +1417,23 @@ impl FrameSource for Pushing {
         self.seen
             .store(self.channel.generation(), Ordering::Release);
         self.reads.lock().unwrap().push(Instant::now());
+        self.stamps.lock().unwrap().push((
+            Duration::from_micros(timestamp),
+            self.woken.swap(false, Ordering::AcqRel),
+        ));
         Ok(self.channel.try_latest()?.map(|_| solid(64, 64, timestamp)))
     }
 
     fn wait_frame(&self, deadline: Instant) -> crate::FrameWait {
         self.waits.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut longest = self.longest_wait.lock().unwrap();
+            *longest = (*longest).max(deadline.saturating_duration_since(Instant::now()));
+        }
         let seen = self.seen.load(Ordering::Acquire);
-        crate::FrameWait::from_arrived(self.channel.wait_newer(seen, deadline) != seen)
+        let arrived = self.channel.wait_newer(seen, deadline) != seen;
+        self.woken.store(arrived, Ordering::Release);
+        crate::FrameWait::from_arrived(arrived)
     }
 
     fn attested_at(&self) -> Option<Instant> {
@@ -1343,12 +1442,12 @@ impl FrameSource for Pushing {
 }
 
 /// Serves `source` to one viewer and runs `body` once its first picture has
-/// arrived, with the stop flag and the frame period. Returns the number of
-/// pictures encoded while `body` ran and how long the worker took to end
-/// after `stop`.
+/// arrived, with the stop flag, the frame period and the count of pictures
+/// encoded so far. Returns the number of pictures encoded while `body` ran
+/// and how long the worker took to end after `stop`.
 fn serve_pushing(
     source: &Arc<Pushing>,
-    body: impl FnOnce(&AtomicBool, Duration),
+    body: impl FnOnce(&AtomicBool, Duration, &AtomicUsize),
 ) -> (usize, Duration) {
     let host = Arc::new(boot());
     let viewer = boot();
@@ -1403,7 +1502,7 @@ fn serve_pushing(
                 },
                 move |_, _, _, _, _| {
                     Ok(Encoder {
-                        slow: false,
+                        held: None,
                         encodes: Arc::clone(&encodes),
                         opens: Arc::new(AtomicUsize::new(0)),
                     })
@@ -1419,7 +1518,7 @@ fn serve_pushing(
         .expect("first picture");
     let period = *period.lock().unwrap();
     let before = encodes.load(Ordering::Relaxed);
-    body(&stop, period);
+    body(&stop, period, &encodes);
     let during = encodes.load(Ordering::Relaxed) - before;
     let asked = Instant::now();
     stop.store(true, Ordering::Release);
@@ -1437,66 +1536,68 @@ fn irregular(period: Duration, count: usize) -> Vec<Duration> {
 #[test]
 fn a_picture_is_read_when_it_arrives_not_on_a_timer() {
     let source = Arc::new(Pushing::new());
-    serve_pushing(&source, |_, period| {
+    serve_pushing(&source, |_, period, _| {
+        source.stamps.lock().unwrap().clear();
         source.arrivals.lock().unwrap().clear();
         for gap in irregular(period, 14) {
             std::thread::sleep(gap);
             source.arrive();
         }
-        std::thread::sleep(period);
+        // The last picture is read before the stream stops.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while source.channel.generation() != source.seen.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline, "the last picture was not read");
+            std::thread::sleep(Duration::from_millis(1));
+        }
     });
-    let arrivals = source.arrivals.lock().unwrap().clone();
-    let reads = source.reads.lock().unwrap().clone();
-    let mut delays: Vec<Duration> = arrivals
-        .iter()
-        .map(|arrival| {
-            reads
-                .iter()
-                .find(|read| *read >= arrival)
-                .expect("every picture is read")
-                .duration_since(*arrival)
-        })
-        .collect();
-    delays.sort();
-    // A timer would add up to a period (16 ms at 60 fps), so three in four
-    // pictures would wait longer than 2 ms. The rest may wait out
-    // preemptions of the reader's thread on a busy computer.
-    assert!(
-        delays[delays.len() * 3 / 4] < Duration::from_millis(2),
-        "delays {delays:?}"
-    );
+    let stamps = source.stamps.lock().unwrap().clone();
+    let arrivals = source.arrivals.lock().unwrap().len();
+    // What woke each read says what drove it: a reader on a timer reads
+    // when its deadline passes, picture or not, and a busy computer only
+    // makes such reads rarer. A keepalive may read a still screen once a
+    // second.
+    assert!(!stamps.is_empty() && stamps.len() <= arrivals, "{stamps:?}");
+    for (index, (at, woken)) in stamps.iter().enumerate() {
+        let after_a_second = index
+            .checked_sub(1)
+            .is_some_and(|before| *at >= stamps[before].0 + Duration::from_secs(1));
+        assert!(
+            *woken || after_a_second,
+            "read {index} came on a deadline, not a picture: {stamps:?}"
+        );
+    }
 }
 
 #[test]
 fn pictures_faster_than_the_frame_rate_are_read_no_faster_than_it() {
     let source = Arc::new(Pushing::new());
     let mut observed = Duration::ZERO;
-    serve_pushing(&source, |_, period| {
+    serve_pushing(&source, |_, period, _| {
         observed = period;
-        source.reads.lock().unwrap().clear();
+        source.stamps.lock().unwrap().clear();
         let end = Instant::now() + Duration::from_millis(900);
         while Instant::now() < end {
             source.arrive();
             std::thread::sleep(period / 4);
         }
     });
-    let reads = source.reads.lock().unwrap().clone();
-    let closest = reads
-        .windows(2)
-        .map(|pair| pair[1].duration_since(pair[0]))
-        .min()
-        .unwrap();
-    // A read may come a quarter of a period early at the most.
-    assert!(
-        closest + Duration::from_micros(500) >= observed.mul_f64(0.75),
-        "reads {closest:?} apart at a period of {observed:?}"
-    );
-    let span = reads.last().unwrap().duration_since(reads[0]);
+    // Read on the reader's own clock, which a busy computer can only
+    // spread further apart: reads follow a grid a period apart, one at
+    // most a quarter of a period before its place.
+    let stamps: Vec<Duration> = source
+        .stamps
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(at, _)| *at)
+        .collect();
+    assert!(stamps.len() >= 2, "{stamps:?}");
+    let span = *stamps.last().unwrap() - stamps[0];
     let allowed = (span.as_secs_f64() / observed.as_secs_f64()) as usize + 2;
     assert!(
-        reads.len() <= allowed,
+        stamps.len() <= allowed,
         "{} reads in {span:?} at a period of {observed:?}",
-        reads.len()
+        stamps.len()
     );
 }
 
@@ -1504,7 +1605,7 @@ fn pictures_faster_than_the_frame_rate_are_read_no_faster_than_it() {
 fn pictures_just_above_the_frame_rate_do_not_spin_the_reader() {
     let source = Arc::new(Pushing::new());
     let mut observed = Duration::ZERO;
-    serve_pushing(&source, |_, period| {
+    serve_pushing(&source, |_, period, _| {
         observed = period;
         source.reads.lock().unwrap().clear();
         source.waits.store(0, Ordering::Relaxed);
@@ -1525,17 +1626,26 @@ fn pictures_just_above_the_frame_rate_do_not_spin_the_reader() {
 fn a_still_screen_is_kept_alive_once_a_second_without_polling_at_the_frame_rate() {
     let source = Arc::new(Pushing::new());
     let mut still = Duration::ZERO;
-    let (encodes, _) = serve_pushing(&source, |_, _| {
+    let (encodes, _) = serve_pushing(&source, |_, _, encodes| {
         source.reads.lock().unwrap().clear();
+        let before = encodes.load(Ordering::Relaxed);
         let started = Instant::now();
-        std::thread::sleep(Duration::from_millis(2_500));
+        // Two keepalives, however long a busy computer takes to make them.
+        while encodes.load(Ordering::Relaxed) < before + 2 {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "a still screen was not kept alive"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         still = started.elapsed();
     });
     // Measured against the time the screen actually stayed still, which a
-    // busy computer stretches past the sleep asked for.
+    // busy computer stretches: polling at the frame rate reads dozens of
+    // times a second.
     let seconds = still.as_secs_f64();
     assert!(
-        (2..=seconds as usize + 2).contains(&encodes),
+        encodes <= seconds as usize + 2,
         "{encodes} pictures in {still:?} of a still screen"
     );
     let reads = source.reads.lock().unwrap().len();
@@ -1548,8 +1658,20 @@ fn a_still_screen_is_kept_alive_once_a_second_without_polling_at_the_frame_rate(
 #[test]
 fn stop_is_seen_while_waiting_for_a_picture() {
     let source = Arc::new(Pushing::new());
-    let (_, ended) = serve_pushing(&source, |_, _| {
-        std::thread::sleep(Duration::from_millis(100));
+    let (_, ended) = serve_pushing(&source, |_, _, _| {
+        // The reader waits on an empty channel meanwhile.
+        let waits = source.waits.load(Ordering::Relaxed);
+        while source.waits.load(Ordering::Relaxed) < waits + 2 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
     });
-    assert!(ended < Duration::from_millis(200), "ended after {ended:?}");
+    // A wait that ran on until a picture would never see stop: each is
+    // asked to end within a few milliseconds, and a busy computer only
+    // leaves less of that when it begins.
+    let longest = *source.longest_wait.lock().unwrap();
+    assert!(
+        longest <= Duration::from_millis(100),
+        "a wait for a picture was asked to last {longest:?}"
+    );
+    assert!(ended < Duration::from_secs(10), "ended after {ended:?}");
 }

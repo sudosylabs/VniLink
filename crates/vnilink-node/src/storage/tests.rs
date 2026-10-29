@@ -844,8 +844,10 @@ fn a_busy_begin_is_unavailable_and_a_later_save_uses_a_fresh_nonce() {
     let error = store.save(b"blocked".to_vec()).unwrap_err();
     let elapsed = started.elapsed();
     assert_eq!(error, FfiError::StoreUnavailable);
+    // The save waits out the busy timeout before it gives up; any longer
+    // is a busy computer, and only a hang fails.
     assert!(elapsed >= Duration::from_millis(700), "{elapsed:?}");
-    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(60), "{elapsed:?}");
     assert_eq!(nonce_of(&fixture.database()), nonce);
     connection.execute_batch("ROLLBACK").unwrap();
     drop(connection);

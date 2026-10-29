@@ -107,7 +107,7 @@ test('binary output is ordered and a slow consumer cannot grow the IPC queue', (
 	}
 });
 
-test('the other pointer travels beside the picture, checked, and only on a picture channel', async () => {
+test('the other pointer travels beside the picture, checked, and only on a picture channel', async t => {
 	const f = fixture();
 	try {
 		f.cursors.push(
@@ -128,16 +128,19 @@ test('the other pointer travels beside the picture, checked, and only on a pictu
 	}
 	const terminal = fixture('terminal');
 	try {
+		// A second of the channel's timers runs at once, however busy the computer.
+		t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
 		terminal.cursors.push({ x: 1, y: 1, visible: true });
 		terminal.host.start(terminal.native);
-		await new Promise(resolve => setTimeout(resolve, 40));
+		t.mock.timers.tick(1000);
 		assert.equal(terminal.cursors.length, 1, 'a terminal asked for a pointer');
 	} finally {
 		terminal.host.close();
+		t.mock.timers.reset();
 	}
 });
 
-test('a picture channel reads when the engine says a picture is ready, not every few milliseconds', async () => {
+test('a picture channel reads when the engine says a picture is ready, not every few milliseconds', t => {
 	const f = fixture();
 	let ready;
 	let reads = 0;
@@ -149,12 +152,15 @@ test('a picture channel reads when the engine says a picture is ready, not every
 	f.native.onReady = callback => {
 		ready = callback;
 	};
+	// The channel's timers run a second at once: a reader on a timer would
+	// read hundreds of times in it, however busy the computer.
+	t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
 	try {
 		f.host.start(f.native);
 		assert.equal(typeof ready, 'function', 'the channel did not ask to be woken');
 		const before = reads;
-		await new Promise(resolve => setTimeout(resolve, 60));
-		assert(reads - before <= 1, `an empty channel was read ${String(reads - before)} times in 60 ms`);
+		t.mock.timers.tick(1000);
+		assert(reads - before <= 1, `an empty channel was read ${String(reads - before)} times in a second`);
 		f.packets.push({ kind: 'video', data: Buffer.from([1]), metadata: '{}' });
 		ready();
 		assert.equal(f.messages.filter(m => m.type === 'data').length, 1, 'a ready picture waited');

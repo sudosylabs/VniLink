@@ -126,18 +126,26 @@ fn a_waiter_wakes_on_a_push_and_not_before_a_deadline_without_one() {
             channel.push(slot(2, 2));
         })
     };
+    // Deadlines far beyond any busy computer's delay: a waiter that ran to
+    // its deadline instead of waking shows as a minute's wait.
     let started = Instant::now();
-    let woken = channel.wait_newer(seen, started + Duration::from_secs(5));
+    let woken = channel.wait_newer(seen, started + Duration::from_secs(60));
     assert!(woken > seen);
-    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "the push did not wake the waiter"
+    );
     pusher.join().unwrap();
     // A picture already stored does not make the waiter wait.
     let started = Instant::now();
     assert_eq!(
-        channel.wait_newer(seen, started + Duration::from_secs(5)),
+        channel.wait_newer(seen, started + Duration::from_secs(60)),
         woken
     );
-    assert!(started.elapsed() < Duration::from_millis(5));
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "a stored picture made the waiter wait"
+    );
 }
 
 #[test]

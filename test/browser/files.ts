@@ -334,10 +334,13 @@ export async function verifyFiles(): Promise<void> {
 		assert(view.element.querySelector('.files-status-transfers')?.textContent.startsWith('Copying to Studio PC') === true, 'The status bar does not sum up the copy');
 		// A change the watch sees and a file landing, together, list the folder once; what follows waits a second.
 		const listed = remoteDisk.lists.length;
+		const watched = performance.now();
 		remoteDisk.watchers.get('2:Users/someone/Downloads')?.();
 		session.set(session.jobs.map(item => ({ ...item, files_done: '1' })));
-		await new Promise(resolve => setTimeout(resolve, 600));
-		assert(remoteDisk.lists.length === listed + 1, `The watch and a landing listed the folder ${String(remoteDisk.lists.length - listed)} times`);
+		await until(() => remoteDisk.lists.length > listed && remote.querySelector('.files-row.arriving .files-cell-modified')?.textContent === '1 of 2 files', 'The watch and a landing were not both seen');
+		// The listing that follows comes a second after the first: only a computer that took that long to show the landing may have it already.
+		const lists = remoteDisk.lists.length - listed;
+		assert(lists === 1 || (lists === 2 && performance.now() - watched >= 1000), `The watch and a landing listed the folder ${String(lists)} times`);
 		// What lands shows on the receiving side without reloading it, tinted for a moment.
 		for (const item of session.copies[0].items) {
 			remoteDisk.land(session.copies[0].to, entry(item.name, 'file', 1000));
