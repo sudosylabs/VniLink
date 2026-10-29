@@ -417,6 +417,10 @@ test('windows remember only known UI state, in its own shape, in the state file'
 		assert.deepEqual(await channel.call('window:1', 'get', { key: lastFolder }), folderValue);
 		assert.equal(await channel.call('window:1', 'get', { key: 'files.showHidden' }), true);
 		assert.equal(await channel.call('window:1', 'get', { key: 'files.lastFolder.other.local' }), undefined);
+		// A remote desktop remembers, for each computer, whether it exchanges Control and Command.
+		await channel.call('window:1', 'set', { key: 'desktop.swapModifiers.studio', value: false });
+		assert.equal(await channel.call('window:1', 'get', { key: 'desktop.swapModifiers.studio' }), false);
+		await assert.rejects(channel.call('window:1', 'set', { key: 'desktop.swapModifiers.studio', value: 'off' }), /Invalid UI state value/);
 
 		// The main process's own keys, unknown keys and malformed values are refused, and nothing is written for them.
 		for (const key of ['windowsState', 'files.lastFolder.studio.both', 'files.lastFolder..local', 'files.lastFolder.a/b.local', `files.lastFolder.${'x'.repeat(129)}.local`, 'files.showHidden.extra', 42]) {

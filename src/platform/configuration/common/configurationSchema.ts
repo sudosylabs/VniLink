@@ -219,10 +219,17 @@ registerSettings('user', {
 			title: nls.localize('input.mapping', 'Typing'),
 		},
 		'input.swapModifiers': {
-			type: 'boolean',
-			default: false,
+			type: 'string',
+			enum: ['automatic', 'always', 'never'],
+			enumItemLabels: [nls.localize('input.swapAutomatic', 'Between a Mac and a PC'), nls.localize('input.swapAlways', 'Always'), nls.localize('input.swapNever', 'Never')],
+			enumDescriptions: [
+				nls.localize('input.swapAutomaticHelp', 'Control on a PC is Command on a Mac, and the reverse, so shortcuts such as copy and undo work.'),
+				nls.localize('input.swapAlwaysHelp', 'Exchanges them with every computer.'),
+				nls.localize('input.swapNeverHelp', 'Each key reaches the other computer as itself.'),
+			],
+			default: 'automatic',
 			title: nls.localize('input.swap', 'Swap Control and Command'),
-			description: nls.localize('input.swapHelp', 'For moving between a Mac and Windows or Linux.'),
+			description: nls.localize('input.swapHelp', 'A remote desktop’s menu changes it for one computer.'),
 		},
 		'input.pointerSensitivity': {
 			type: 'integer',

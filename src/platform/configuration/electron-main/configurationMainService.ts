@@ -32,7 +32,8 @@ function engineCommands(group: string, values: Values): EngineCommand[] {
 		case 'input': {
 			const mode = keyboardModes.find(candidate => candidate === values['input.keyboardMode']) ?? 'Character';
 			const pointer = { sensitivity_percent: Number(values['input.pointerSensitivity']), reverse_wheel: values['input.reverseWheel'] === true, swap_buttons: values['input.swapMouseButtons'] === true };
-			return [{ type: 'setInputDefaults', mode, swap: values['input.swapModifiers'] === true, pointer }];
+			// Automatic is decided for each desktop as it opens, by the window that shows it.
+			return [{ type: 'setInputDefaults', mode, swap: values['input.swapModifiers'] === 'always', pointer }];
 		}
 		case 'media.camera':
 			return [{ type: 'setNativeCameraSources', ids: sourceIds(values['media.camera']) }];

@@ -68,10 +68,10 @@ test('settings.json holds only changed settings, keeps unknown keys and survives
 	try {
 		await settings.initialize();
 		assert.deepEqual(settings.values, settingDefaults('user'));
-		await Promise.all([settings.update('appearance.theme', 'dark'), settings.update('input.swapModifiers', true)]);
+		await Promise.all([settings.update('appearance.theme', 'dark'), settings.update('input.swapModifiers', 'always')]);
 		assert.equal(changes, 2);
-		assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { 'future.setting': { kept: true }, 'appearance.theme': 'dark', 'input.swapModifiers': true });
-		await settings.update('input.swapModifiers', false);
+		assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { 'future.setting': { kept: true }, 'appearance.theme': 'dark', 'input.swapModifiers': 'always' });
+		await settings.update('input.swapModifiers', 'automatic');
 		assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { 'future.setting': { kept: true }, 'appearance.theme': 'dark' });
 		assert.deepEqual(await readdir(dir), ['settings.json']);
 		const quality = { max_bitrate_kbps: 5000, max_frame_rate: 30, max_width: 1920, max_height: 1080 };

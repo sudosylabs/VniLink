@@ -1,4 +1,5 @@
 import { Emitter } from '../../src/base/common/event.js';
+import { isMacintosh } from '../../src/base/common/platform.js';
 import { DisposableStore } from '../../src/base/common/lifecycle.js';
 import type { DesktopAudioOperation, DesktopAudioStatus, DesktopCondition, DesktopMediaStatus, DesktopRateLimit } from '../../src/platform/engine/common/dataChannel.js';
 import type { DisplayInfo } from '../../src/platform/engine/common/engine.js';
@@ -146,7 +147,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 				return Promise.resolve();
 			},
 		}],
-		[IConfigurationService, { _serviceBrand: undefined, getValue: (key: string) => key === 'desktop.pictureSize' ? 'fit' : undefined }],
+		[IConfigurationService, { _serviceBrand: undefined, getValue: (key: string) => key === 'desktop.pictureSize' ? 'fit' : undefined, onDidChangeConfiguration: disposables.add(new Emitter<never>()).event }],
 		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
 		[IRemoteDesktopService, {
 			_serviceBrand: undefined,
@@ -322,8 +323,12 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		grip.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
 		assert(corner() === 'topLeft', 'The arrow keys did not move the overlay');
 
+		// The session starts by saying whether Control and Command are exchanged: by default
+		// with this Windows PC from a Mac, not from another PC. Held keys go first, as one refuses it.
+		const opening = [{ type: 'releaseSessionInput' }, { type: 'swapSessionModifiers', enabled: isMacintosh }];
+		assert(JSON.stringify(sessions[0].sent.slice(0, 2)) === JSON.stringify(opening), `The keyboard exchange did not open the session: ${JSON.stringify(sessions[0].sent.slice(0, 2))}`);
 		// The pointer's display is chosen once, before anything else is sent.
-		assert(JSON.stringify(sessions[0].sent[0]) === JSON.stringify({ type: 'selectDisplays', ids: ['7'] }), `The shown display was not selected: ${JSON.stringify(sessions[0].sent[0])}`);
+		assert(JSON.stringify(sessions[0].sent[2]) === JSON.stringify({ type: 'selectDisplays', ids: ['7'] }), `The shown display was not selected: ${JSON.stringify(sessions[0].sent[2])}`);
 		// Keys go by where they are, with what they type; a held key repeats; a shortcut types nothing; a dead key composes.
 		press(canvas, 'keydown', 'KeyA', 'a');
 		press(canvas, 'keydown', 'KeyA', 'a', { repeat: true });
@@ -447,7 +452,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		sessions[0].picture();
 		await frame();
 		await frame();
-		assert(!sessions[0].sent.some((input, index) => index > 0 && input.type === 'selectDisplays' && input.ids[0] === '7'), 'A picture of the old display took the choice back');
+		assert(!sessions[0].sent.some((input, index) => index > 2 && input.type === 'selectDisplays' && input.ids[0] === '7'), 'A picture of the old display took the choice back');
 		sessions[0].picture('changed', '#1d4b6c', undefined, undefined, '8');
 		await until(() => displays.getAttribute('aria-label') === 'Display: Display 2', 'The new display is not named', 3000);
 		pick(displays, 'Display 1 · 1920 × 1080');
@@ -482,7 +487,17 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		// More: recording, then the computer's own actions and diagnostics, then this tab's.
 		const more = control('More');
 		more.click();
-		assert(fakes.lastMenu().join() === 'Record Screen,-,Lock Screen,Restart or Shut Down…,-,Export Diagnostics…,Open Logs Folder,-,Show Picture Details,Disconnect', `Wrong More menu: ${fakes.lastMenu().join()}`);
+		// Swapping Control and Command is offered between a Mac and this PC, or wherever it is on.
+		const swapItem = isMacintosh ? 'Swap Control and Command,' : '';
+		assert(fakes.lastMenu().join() === `Record Screen,${swapItem}-,Lock Screen,Restart or Shut Down…,-,Export Diagnostics…,Open Logs Folder,-,Show Picture Details,Disconnect`, `Wrong More menu: ${fakes.lastMenu().join()}`);
+		if (isMacintosh) {
+			// Turned off for this computer, it is remembered and sent once the keys are let go.
+			pick(more, 'Swap Control and Command');
+			assert(JSON.stringify(sessions[0].sent.slice(-2)) === JSON.stringify([{ type: 'releaseSessionInput' }, { type: 'swapSessionModifiers', enabled: false }]), `Turning the exchange off was not sent: ${JSON.stringify(sessions[0].sent.slice(-2))}`);
+			await until(() => fakes.uiState.get('desktop.swapModifiers.studio') === false, 'The choice was not remembered for this computer');
+			more.click();
+			assert(fakes.menus.at(-1)?.actions.find(item => item.label === 'Swap Control and Command')?.checked === false, 'The menu still shows the exchange on');
+		}
 		pick(more, 'Record Screen');
 		const recordingButton = (): HTMLButtonElement | undefined => [...view.element.querySelectorAll<HTMLButtonElement>('.desktop-bar-recording')].find(button => !button.hidden);
 		await until(() => recordingButton()?.textContent === '0:00', 'The recording does not show in the bar');
@@ -501,6 +516,7 @@ export async function verifyRemoteDesktopSession(): Promise<void> {
 		assert(!drawn() && canvas.style.cursor === 'none', 'A hidden pointer still shows');
 		// Leaving the screen lets go of everything held there.
 		// A test window has no focus of its own to lose, so the blur is dispatched as the system would.
+		press(canvas, 'keydown', 'ShiftLeft', 'Shift', { shiftKey: true });
 		canvas.dispatchEvent(new FocusEvent('blur'));
 		assert(sessions[0].sent.at(-1)?.type === 'releaseSessionInput', 'Leaving the screen did not let go of the keys');
 
@@ -597,7 +613,7 @@ export async function showDesktopFixture(state: DesktopFixtureState): Promise<{ 
 		[INativeHostService, {
 			_serviceBrand: undefined, onDidChangeWindowState: disposables.add(new Emitter<IWindowState>()).event, setFullScreen: () => Promise.resolve(),
 		}],
-		[IConfigurationService, { _serviceBrand: undefined, getValue: () => undefined }],
+		[IConfigurationService, { _serviceBrand: undefined, getValue: () => undefined, onDidChangeConfiguration: disposables.add(new Emitter<never>()).event }],
 		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
 		[IRemoteDesktopService, {
 			_serviceBrand: undefined,

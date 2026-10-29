@@ -768,6 +768,14 @@ enum Command {
         generation: String,
         ids: Vec<String>,
     },
+    /// Whether this desktop exchanges Control and Command, sent in order
+    /// with its keys; refused while a key is held.
+    SwapSessionModifiers {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        generation: String,
+        enabled: bool,
+    },
     StartNativeScreenSharing {
         #[serde(rename = "displayId")]
         display_id: u32,
@@ -2116,7 +2124,8 @@ impl EngineBridge {
             | Command::SubmitText { .. }
             | Command::SubmitLocalKey { .. }
             | Command::ReleaseSessionInput { .. }
-            | Command::SelectDisplays { .. } => Err(Error::new(
+            | Command::SelectDisplays { .. }
+            | Command::SwapSessionModifiers { .. } => Err(Error::new(
                 Status::InvalidArg,
                 "Desktop input goes on its data channel",
             )),
@@ -2311,6 +2320,7 @@ impl CommandShape {
                 &["type", "sessionId", "generation", "dx", "dy"]
             }
             "submitText" => &["type", "sessionId", "generation", "text"],
+            "swapSessionModifiers" => &["type", "sessionId", "generation", "enabled"],
             "submitLocalKey" => &[
                 "type",
                 "sessionId",

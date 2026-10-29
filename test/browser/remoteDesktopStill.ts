@@ -67,7 +67,7 @@ export async function verifyRemoteDesktopStill(): Promise<void> {
 		[ITabService, tabService],
 		[IDeviceService, { _serviceBrand: undefined, devices: [device] }],
 		[INativeHostService, { _serviceBrand: undefined, onDidChangeWindowState: Event.None, setFullScreen: () => Promise.resolve() }],
-		[IConfigurationService, { _serviceBrand: undefined, getValue: () => undefined }],
+		[IConfigurationService, { _serviceBrand: undefined, getValue: () => undefined, onDidChangeConfiguration: Event.None }],
 		[IRemoteDesktopService, {
 			_serviceBrand: undefined,
 			open: (_deviceId: string, control: boolean) => {

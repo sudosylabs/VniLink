@@ -120,7 +120,9 @@ export type DesktopInput =
 	| { readonly type: 'submitPreciseWheel'; readonly dx: number; readonly dy: number }
 	| { readonly type: 'releaseSessionInput' }
 	/** The display the pointer lands on; the other computer takes the pointer only there. */
-	| { readonly type: 'selectDisplays'; readonly ids: string[] };
+	| { readonly type: 'selectDisplays'; readonly ids: string[] }
+	/** Whether Control and Command are exchanged; send `releaseSessionInput` first, as a held key refuses it. */
+	| { readonly type: 'swapSessionModifiers'; readonly enabled: boolean };
 
 /** How the picture is doing: the engine's view of it, and the codec it arrives in. */
 export interface DesktopStats {

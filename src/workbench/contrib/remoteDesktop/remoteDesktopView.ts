@@ -8,10 +8,11 @@ import { IConfigurationService } from '../../../platform/configuration/common/co
 import { IMenuService } from '../../../platform/actions/common/actions.js';
 import { IContextKeyService } from '../../../platform/contextkey/common/contextkey.js';
 import type { DesktopAudioStatus } from '../../../platform/engine/common/dataChannel.js';
-import type { DisplayInfo, RecordingStatus } from '../../../platform/engine/common/engine.js';
+import type { DisplayInfo, OperatingSystem, RecordingStatus } from '../../../platform/engine/common/engine.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
+import { desktopSwapModifiersKey } from '../../../platform/state/common/uiState.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { INativeRuntimeService } from '../../services/nativeRuntime/nativeRuntimeService.js';
 import { formatElapsed, SessionRecording, type RecordingStartFailure } from '../../services/recording/sessionRecording.js';
@@ -217,6 +218,15 @@ function problemAdvice(name: string, problem: DesktopProblem): string {
 }
 
 /**
+ * Whether Control and Command are exchanged with a computer running `other`
+ * by default: when exactly one of the two is a Mac, whose Command does what
+ * Control does elsewhere. An unknown system keeps each key as itself.
+ */
+function automaticSwap(other: OperatingSystem | null): boolean {
+	return other !== null && other !== 'other' && isMacintosh !== (other === 'macos');
+}
+
+/**
  * Why the other computer's sound isn't heard, from the engine's error
  * category and whether this computer's own output failed.
  */
@@ -323,6 +333,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	 */
 	private heldControl = false;
 	private phantomControl = false;
+	/** Whether this desktop exchanges Control and Command, as last sent. */
+	private swapModifiers = false;
+	/** The exchange chosen from this desktop's menu for this computer, remembered between runs. */
+	private swapChosen: boolean | undefined;
 
 	constructor(
 		private readonly device: DeviceSummary,
@@ -331,7 +345,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		@IRemoteDesktopService private readonly remoteDesktop: IRemoteDesktopService,
 		@ITabService private readonly tabService: ITabService,
 		@INativeHostService private readonly nativeHost: INativeHostService,
-		@IConfigurationService configurationService: IConfigurationService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@ISystemActionService private readonly systemActions: ISystemActionService,
 		@IMenuService private readonly menuService: IMenuService,
@@ -388,6 +402,19 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		void this.uiState.get('desktop.showStats').then(shown => {
 			this.stats.shown = shown !== false;
 		});
+		if (control) {
+			void this.uiState.get(desktopSwapModifiersKey(device.id)).then(chosen => {
+				if (!this._store.isDisposed) {
+					this.swapChosen = chosen;
+					this.applySwap();
+				}
+			});
+			this._register(configurationService.onDidChangeConfiguration(event => {
+				if (event.affectsConfiguration('input.swapModifiers')) {
+					this.applySwap();
+				}
+			}));
+		}
 		this.registerViewControls();
 		this.updateBar();
 		if (control) {
@@ -507,6 +534,19 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		];
 		const computer = this.menuService.getMenuActions(RemoteDesktopMenu, this.contextKeyService, { arg: this.device.id, shouldForwardArgs: true })
 			.flatMap(([, actions]) => [new Separator(), ...actions]);
+		// Offered where the keyboards differ, and wherever the exchange is on, so it can be turned off.
+		if (this.control && (automaticSwap(this.device.os) || this.swapModifiers)) {
+			own.push(toAction({
+				id: 'desktop.swapModifiers',
+				label: nls.localize('desktop.swapModifiers', 'Swap Control and Command'),
+				checked: this.swapModifiers,
+				run: () => {
+					this.swapChosen = !this.swapModifiers;
+					void this.uiState.set(desktopSwapModifiersKey(this.device.id), this.swapChosen);
+					this.applySwap();
+				},
+			}));
+		}
 		return [
 			...own,
 			...computer,
@@ -705,6 +745,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.showProblem(end, true);
 		}));
 		this.session.value = session;
+		this.applySwap(true);
 		this.stills.reset();
 		this.remotePointer = undefined;
 		this.showPointer();
@@ -1047,6 +1088,27 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.wheel = { dx: this.wheel.dx - dx, dy: this.wheel.dy - dy };
 			this.session.value?.send({ type: 'submitPreciseWheel', dx, dy });
 		}
+	}
+
+	/**
+	 * Sends whether Control and Command are exchanged: as chosen here for
+	 * this computer, else as the setting says. A key held refuses the change,
+	 * so held input is released first. `always` sends it to a new session.
+	 */
+	private applySwap(always = false): void {
+		const session = this.session.value;
+		if (!this.control || !session) {
+			return;
+		}
+		const setting = this.configurationService.getValue<unknown>('input.swapModifiers');
+		const swap = this.swapChosen ?? (setting === 'always' || (setting !== 'never' && automaticSwap(this.device.os)));
+		if (swap === this.swapModifiers && !always) {
+			return;
+		}
+		this.swapModifiers = swap;
+		this.pressed = true;
+		this.releaseInput();
+		session.send({ type: 'swapSessionModifiers', enabled: swap });
 	}
 
 	/** Lets go of every key and button held on the other computer. */

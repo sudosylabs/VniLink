@@ -663,6 +663,7 @@ impl DataChannel {
                 | Command::SubmitLocalKey { .. }
                 | Command::ReleaseSessionInput { .. }
                 | Command::SelectDisplays { .. }
+                | Command::SwapSessionModifiers { .. }
         ) {
             return Err(Error::from_reason("Not an interactive input command"));
         }
@@ -705,6 +706,9 @@ impl DataChannel {
                 ..
             } => service.submit_local_key(usage, down, text, composing),
             Command::ReleaseSessionInput { .. } => service.release_input(),
+            Command::SwapSessionModifiers { enabled, .. } => {
+                service.set_swap_control_and_command(enabled)
+            }
             // The display the pointer lands on, sent in order with it.
             Command::SelectDisplays { ids, .. } => service.select_displays(
                 ids.iter()
