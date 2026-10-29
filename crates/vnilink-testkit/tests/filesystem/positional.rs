@@ -39,7 +39,7 @@ fn positional_volumes_change_files_by_fingerprint_and_never_delete_folders() -> 
         let volume = match ScratchVolume::new(fs) {
             Ok(volume) => volume,
             Err(reason) => {
-                eprintln!("{fs:?} not exercised: {reason}");
+                vnilink_media::needs::needs(&format!("a {fs:?} volume"), Err(reason));
                 continue;
             }
         };

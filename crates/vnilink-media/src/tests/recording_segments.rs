@@ -388,18 +388,12 @@ fn concurrent_recorders_sweep_only_their_own_stem_and_spare_live_partials() {
 
 /// Finished segments decode with independent tooling: ffprobe (not our
 /// remuxer) must see an H.264 64x64 stream with exactly the pushed frames
-/// and the right keyframe cadence in every segment. Skips loudly when
-/// ffprobe is absent; both project gates install it.
+/// and the right keyframe cadence in every segment.
 #[test]
 fn rolled_segments_decode_with_independent_tooling() {
-    let probe = std::process::Command::new("ffprobe")
-        .arg("-version")
-        .output();
-    let Ok(version) = probe else {
-        eprintln!("ffprobe not installed; skipping independent decode");
+    if !crate::needs::needs("ffprobe", crate::needs::tool("ffprobe", &["-version"])) {
         return;
-    };
-    assert!(version.status.success());
+    }
     let dir = scratch("ffprobe");
     let mut writer = SegmentWriter::create(
         &dir.join("talk.mkv"),

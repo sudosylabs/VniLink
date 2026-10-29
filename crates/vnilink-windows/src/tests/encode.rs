@@ -999,9 +999,8 @@ fn a_captured_picture_is_converted_on_the_cpu_when_the_gpu_cannot() {
             let quality = psnr(&reference, &decoded);
             assert!(quality > 25.0, "{}: {quality:.1} dB", candidate.name);
         }
-        // An encoder that has not been refused converts on the GPU, when the
-        // computer has one: a virtual machine without one converts on the CPU.
-        if adapter_devices().is_empty() {
+        // An encoder that has not been refused converts on the GPU.
+        if !vnilink_media::needs::needs("a GPU", gpu_present()) {
             continue;
         }
         let mut encoder = WindowsEncoder::open_candidate(
@@ -1054,6 +1053,16 @@ fn a_picture_on_the_software_renderer_is_encoded() {
 }
 
 /// A device on each hardware adapter, with its description.
+/// `Ok` when this computer has a GPU, not only Microsoft's software
+/// renderer, as a virtual machine has.
+fn gpu_present() -> Result<(), String> {
+    if adapter_devices().is_empty() {
+        Err("this computer has only Microsoft's software renderer".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
 fn adapter_devices() -> Vec<(
     String,
     windows::Win32::Graphics::Direct3D11::ID3D11Device,
@@ -1154,8 +1163,11 @@ fn an_encoder_opened_on_the_capture_device_reads_its_textures() {
     use vnilink_media::measure::{psnr, text_page};
     use vnilink_media::{HostVideo, PumpOutput, Quality};
     let page = text_page(1280, 720, 0);
-    // Empty on a computer without a GPU; Microsoft's software renderer is
-    // covered by `a_picture_on_the_software_renderer_is_encoded`.
+    // Microsoft's software renderer is covered by
+    // `a_picture_on_the_software_renderer_is_encoded`.
+    if !vnilink_media::needs::needs("a GPU", gpu_present()) {
+        return;
+    }
     let devices = adapter_devices();
     for (name, device, context) in devices {
         let gpu = crate::gpu::GpuDevice::new(device.clone());

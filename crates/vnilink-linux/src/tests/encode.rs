@@ -62,8 +62,10 @@ fn vaapi_encodes_a_synthetic_picture_when_a_render_node_is_open() {
         vnilink::YuvMatrix::Bt709,
     ) {
         Ok(encoder) => encoder,
-        // No hardware encoder on this computer: nothing to exercise.
-        Err(Error::Unsupported(_)) => return,
+        Err(Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(err) => panic!("VA-API failed to open: {err}"),
     };
     let params = vnilink_media::EncodeParams {
@@ -127,8 +129,9 @@ fn assert_red_picture(annex_b: &[u8], width: u16, height: u16) {
         .output()
     {
         Ok(output) => output,
-        Err(_) => {
+        Err(error) => {
             let _ = std::fs::remove_file(&path);
+            vnilink_media::needs::needs("ffmpeg", Err(error.to_string()));
             return;
         }
     };
@@ -163,8 +166,10 @@ fn higher_bitrate_changes_the_hardware_output_budget() {
             vnilink::YuvMatrix::Bt709,
         ) {
             Ok(encoder) => encoder,
-            // No hardware encoder on this computer: nothing to exercise.
-            Err(Error::Unsupported(_)) => return None,
+            Err(Error::Unsupported(why)) => {
+                vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+                return None;
+            }
             Err(error) => panic!("encoder failed: {error}"),
         };
         let mut total = 0;

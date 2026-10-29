@@ -533,10 +533,14 @@ fn a_refused_publication_keeps_the_original_and_resumes() -> TestResult {
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o555))?;
-        // Running as root writes through permissions: nothing to prove.
+        // Root writes through permissions.
         if std::fs::write(destination.join("probe.txt"), b"p").is_ok() {
             let _ = std::fs::remove_file(destination.join("probe.txt"));
             std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))?;
+            vnilink_media::needs::needs(
+                "an account without root",
+                Err("root writes into a read-only folder".to_owned()),
+            );
             return Ok(());
         }
     }

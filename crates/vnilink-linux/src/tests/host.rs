@@ -42,8 +42,10 @@ fn the_platform_encoder_plugs_into_the_generic_session() {
         )
     }) {
         Ok(session) => session,
-        // No hardware encoder on this computer: nothing to exercise.
-        Err(Error::Unsupported(_)) => return,
+        Err(Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(err) => panic!("VA-API failed to open: {err}"),
     };
     assert_eq!(session.capture_size(), (64, 64));

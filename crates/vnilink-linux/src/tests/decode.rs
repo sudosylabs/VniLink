@@ -421,7 +421,10 @@ fn vaapi_decodes_what_it_encoded() {
         vnilink::YuvMatrix::Bt709,
     ) {
         Ok(encoder) => encoder,
-        Err(vnilink_media::Error::Unsupported(_)) => return,
+        Err(vnilink_media::Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(error) => panic!("VA-API failed to open: {error}"),
     };
     let mut decoder = crate::decode::LinuxDecoder::new();
@@ -466,7 +469,10 @@ fn vaapi_decodes_what_it_encoded() {
         vnilink::YuvMatrix::Bt709,
     ) {
         Ok(encoder) => encoder,
-        Err(vnilink_media::Error::Unsupported(_)) => return,
+        Err(vnilink_media::Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(error) => panic!("VA-API failed to open: {error}"),
     };
     let small = small_encoder
@@ -501,7 +507,10 @@ fn vaapi_high_round_trips_where_the_entrypoint_exists() {
         vnilink::YuvMatrix::Bt709,
     ) {
         Ok(encoder) => encoder,
-        Err(vnilink_media::Error::Unsupported(_)) => return,
+        Err(vnilink_media::Error::Unsupported(why)) => {
+            vnilink_media::needs::needs("a VA-API encoder", Err(why.to_owned()));
+            return;
+        }
         Err(error) => panic!("VA-API High failed to open: {error}"),
     };
     let mut decoder = crate::decode::LinuxDecoder::new();

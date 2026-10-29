@@ -41,6 +41,9 @@ pub use recording_segments::{
 /// Pictures and comparisons for the platform encoders' measurements.
 #[doc(hidden)]
 pub mod measure;
+/// What a test needs of the computer it runs on, and how it says it skipped.
+#[doc(hidden)]
+pub mod needs;
 mod recovery;
 pub use recovery::{RecoveryQp, RECOVERY_KEYFRAME_FRAMES};
 mod recording_worker;
