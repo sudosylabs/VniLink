@@ -47,24 +47,15 @@ const pages: readonly ISettingsPageDescriptor[] = [
 	{
 		id: 'general',
 		title: nls.localize('home.general', 'General'),
-		description: nls.localize('general.description', 'How VniLink starts and stays reachable.'),
+		description: nls.localize('general.description', 'How VniLink starts, looks and stays reachable.'),
 		icon: Icons.settings,
 		...form,
 		// Start at login is read from the operating system, which can change it too.
 		refresh: SettingsRefresh.Interval,
 		sections: [
 			{ id: 'availability', settings: ['application.acceptConnections', 'application.openAtLogin', 'application.runInBackground'] },
+			{ id: 'appearance', title: nls.localize('home.appearance', 'Appearance'), settings: ['appearance.theme'] },
 			{ id: 'diagnostics', title: nls.localize('diagnostics.title', 'Diagnostics'), settings: ['diagnostics.engineLog', 'diagnostics.applicationLog'] },
-		],
-	},
-	{
-		id: 'appearance',
-		title: nls.localize('home.appearance', 'Appearance'),
-		description: nls.localize('appearance.description', 'Choose how VniLink looks.'),
-		icon: Icons.appearance,
-		...form,
-		sections: [
-			{ id: 'theme', title: nls.localize('appearance.theme', 'Theme'), settings: ['appearance.theme'] },
 		],
 	},
 	{

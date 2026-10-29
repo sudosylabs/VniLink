@@ -1,11 +1,7 @@
-.appearance-page {
-	--appearance-surface: var(--surface-raised);
-	--appearance-hover: var(--surface-hover);
+.theme-mode-picker {
 	--appearance-accent: var(--accent);
 	--appearance-selection: var(--selection-surface);
-}
 
-.theme-mode-picker {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 14px;
@@ -257,11 +253,6 @@
 }
 
 @media (width <= 900px) {
-	.appearance-form {
-		margin-right: 28px;
-		margin-left: 28px;
-	}
-
 	.theme-mode-picker {
 		gap: 10px;
 	}

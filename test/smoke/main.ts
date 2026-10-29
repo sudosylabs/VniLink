@@ -413,7 +413,7 @@ class SmokeSuite {
 				await window.webContents.executeJavaScript(`window.driver.configuration.updateValue('appearance.theme', ${JSON.stringify(theme)})`);
 				for (const width of [1200, 760]) {
 					window.setSize(width, 820);
-					for (const category of ['general', 'appearance', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
+					for (const category of ['general', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
 						const layout: unknown = await window.webContents.executeJavaScript(`new Promise(resolve => {
        document.querySelector('[data-section-id="${category}"]').click();
        requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -495,7 +495,7 @@ class SmokeSuite {
         actions: [...document.querySelectorAll('.view-action')].map(action => action.getAttribute('aria-label')) };
     })()`);
 		assert.deepEqual(result, {
-			labels: ['Devices', 'General', 'Appearance', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
+			labels: ['Devices', 'General', 'Connection', 'Access & Security', 'Remote Desktop', 'Keyboard & Mouse', 'Terminal', 'Audio & Camera', 'Recording', 'Power'],
 			settings: 'Settings', fullHeight: true, selected: 'devices', actions: ['Open an invitation', 'Invite another computer'],
 		});
 	}
@@ -524,7 +524,7 @@ class SmokeSuite {
 		try {
 			window.setSize(760, 520);
 			const layout: unknown = await window.webContents.executeJavaScript(`new Promise(resolve => {
-      document.querySelector('[data-section-id="appearance"]').click();
+      document.querySelector('[data-section-id="general"]').click();
       requestAnimationFrame(() => {
         const content = document.querySelector('.home-content');
         const picker = document.querySelector('.theme-mode-picker');
@@ -533,11 +533,11 @@ class SmokeSuite {
         resolve({ choices: choices.length, selected: picker.querySelector('input:checked').value,
           overflow: content.scrollWidth > content.clientWidth,
           contained: choices.every(choice => { const rect = choice.getBoundingClientRect(); return rect.left >= bounds.left && rect.right <= bounds.right; }),
-          headingVisible: document.querySelector('.appearance-page h1').getBoundingClientRect().top >= bounds.top,
-          switch: document.querySelectorAll('.appearance-page [role="switch"]').length });
+          headingVisible: document.querySelector('.general-page h1').getBoundingClientRect().top >= bounds.top,
+          inGeneral: !!picker.closest('.general-page [data-section="appearance"]') });
       });
     })`);
-			assert.deepEqual(layout, { choices: 3, selected: 'dark', overflow: false, contained: true, headingVisible: true, switch: 0 });
+			assert.deepEqual(layout, { choices: 3, selected: 'dark', overflow: false, contained: true, headingVisible: true, inGeneral: true });
 		} finally {
 			window.setSize(size[0], size[1]);
 		}
