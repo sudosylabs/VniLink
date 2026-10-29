@@ -81,9 +81,10 @@ impl Traced {
         self.named(message)
             .into_iter()
             .filter(|event| {
-                fields
-                    .iter()
-                    .all(|(field, value)| event[*field].as_str() == Some(*value))
+                fields.iter().all(|(field, value)| match &event[*field] {
+                    serde_json::Value::String(text) => text == value,
+                    other => other.to_string() == *value,
+                })
             })
             .collect()
     }

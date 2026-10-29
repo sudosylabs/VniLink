@@ -137,9 +137,20 @@ fn a_camera_opens_for_one_viewer_at_a_time_and_frees_on_close() -> TestResult {
         .close_controller_service(owner.id, owner.generation)?;
     second.core.forget_controller_service(owner.id)?;
     // The host frees a camera before it records the stream's end, so once
-    // both closed streams have ended (beside the refused one) it opens at
-    // the first try.
-    trace.wait_for_records("camera stream ended", 3);
+    // both closed streams have ended it opens at the first try. Each is
+    // waited for by its own service: a count of every end would also take
+    // the refused open's.
+    for service in ["1", "3"] {
+        trace.wait_for_records_with(
+            "camera stream ended",
+            &[
+                ("engine", "host"),
+                ("service", service),
+                ("ended", "viewer closed"),
+            ],
+            1,
+        );
+    }
     let taken = open(&second, &to_second, "one")?;
     taken.close();
     // The host's side alone: a viewer's record of a camera it closed is

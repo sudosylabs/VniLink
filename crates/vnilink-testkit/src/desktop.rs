@@ -108,8 +108,15 @@ impl FrameSource for ScriptedScreen {
     fn attested_at(&self) -> Option<Instant> {
         match &self.script {
             Script::Still => Some(self.started),
+            // The screen as last read, as a capture attests the picture it
+            // returned: the clock may have ticked since.
             Script::Ticking { every, .. } => {
-                Some(self.started + *every * u32::try_from(self.tick()).unwrap_or(u32::MAX))
+                let read = *self
+                    .read
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let tick = read.unwrap_or_else(|| self.tick());
+                Some(self.started + *every * u32::try_from(tick).unwrap_or(u32::MAX))
             }
         }
     }

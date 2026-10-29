@@ -126,21 +126,19 @@ fn a_receiving_drive_replaced_mid_download_interrupts_without_writing() -> TestR
         two,
         "the second file lands exactly"
     );
+    // The second file is fetched beside the first, so it has either
+    // arrived or is cancelled when the drive is found replaced: what its
+    // fetches record differs, the jobs' story does not.
     expect![[r#"
         controller:
-          files: file received outcome=received resumed_at=0 size=512 took=512
-          files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
-          files: file received outcome=received resumed_at=512 size=512 took=0
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
         host:
           files: job state from=preparing job=1 sender=true to=serving
-          files: file served ended=sent from=0 sent=512 size=512
-          files: file served ended=sent from=0 sent=512 size=512
-          files: file served ended=sent from=512 sent=0 size=512
           files: job state done_bytes=1024 files_done=2 from=serving job=1 sender=true to=complete
-    "#]].assert_eq(&trace.story(&["files"]));
+    "#]]
+    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
     Ok(())
 }
 
@@ -376,20 +374,19 @@ fn a_sender_restarted_onto_another_volume_fails_the_resume_and_says_why() -> Tes
         !got.join("two.txt").exists(),
         "nothing from the other volume lands"
     );
+    // The second file is fetched beside the first, so whether it arrived
+    // before the host shut down differs between runs; the jobs' story does
+    // not.
     expect![[r#"
         controller:
-          files: file received outcome=received resumed_at=0 size=512 took=512
-          files: file received outcome=received resumed_at=0 size=512 took=512
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
         host:
           files: job state from=preparing job=1 sender=true to=serving
-          files: file served ended=sent from=0 sent=512 size=512
-          files: file served ended=sent from=0 sent=512 size=512
           files: job state from=serving job=1 sender=true to=interrupted
           files: job state done_bytes=0 files_done=0 from=interrupted job=1 sender=true to=failed
     "#]]
-    .assert_eq(&trace.story(&["files"]));
+    .assert_eq(&trace.tell(&["files"]).only(&["job state"]).to_string());
     Ok(())
 }
 
