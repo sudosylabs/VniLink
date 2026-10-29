@@ -144,20 +144,6 @@
 	background: var(--preview-muted);
 }
 
-.preview-actions {
-	display: flex;
-	align-self: center;
-	gap: 5px;
-	margin-left: auto;
-}
-
-.preview-actions i {
-	width: 4px;
-	height: 4px;
-	border: 1px solid var(--preview-muted);
-	border-radius: 1px;
-}
-
 .preview-body {
 	display: flex;
 	flex: 1;
