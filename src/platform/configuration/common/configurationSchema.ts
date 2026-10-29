@@ -500,7 +500,7 @@ registerSettings('sharing', {
 		...sharing('terminal', nls.localize('sharing.terminal', 'Terminal')),
 		...sharing('camera', nls.localize('sharing.camera', 'Camera')),
 		...sharing('microphone', nls.localize('sharing.microphone', 'Microphone')),
-		...sharing('systemAudio', nls.localize('sharing.audio', 'System audio')),
+		...sharing('systemAudio', nls.localize('sharing.audio', 'System audio'), nls.localize('sharing.audioHelp', 'Turns on with screen viewing. Turn it off to share the picture without sound.')),
 		...sharing('clipboard', nls.localize('sharing.clipboard', 'Clipboard'), nls.localize('sharing.clipboardHelp', 'During remote desktop sessions.')),
 		...sharing('recording', nls.localize('sharing.recording', 'Record desktop sessions')),
 		...sharing('systemActions', nls.localize('sharing.actions', 'System actions'), nls.localize('sharing.actionsHelp', 'Only the actions turned on under Remote actions.')),

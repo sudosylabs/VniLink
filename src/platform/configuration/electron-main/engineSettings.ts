@@ -126,9 +126,13 @@ const terminal: PolicyBinding = {
 	},
 };
 
-/** `sharing.screen` grants viewing and control together. */
+/**
+ * `sharing.screen` grants viewing and control together, and the screen's
+ * sound with them: turning `sharing.systemAudio` off afterwards shares the
+ * picture alone. A setting reads as its first field.
+ */
 const sharingFields: Readonly<Record<string, readonly (keyof SharingPolicy)[]>> = {
-	'sharing.screen': ['view', 'control'],
+	'sharing.screen': ['view', 'control', 'system_audio'],
 	'sharing.files': ['files'],
 	'sharing.terminal': ['terminal'],
 	'sharing.camera': ['camera'],

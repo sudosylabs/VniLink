@@ -221,7 +221,7 @@ test('engine policies read whole and write through a read-modify-write with read
 		await assert.rejects(settings.update('terminal.replaySize', 2048), /Replay can’t be larger than the history limit/);
 		assert.deepEqual([state.terminal.max_sessions, state.terminal.max_sessions_per_peer], [4, 4]);
 		await settings.update('sharing.screen', true);
-		assert.deepEqual(state.commands.filter(command => command.type === 'setSharingPolicy').at(-1).policy, { view: true, control: true });
+		assert.deepEqual(state.commands.filter(command => command.type === 'setSharingPolicy').at(-1).policy, { view: true, control: true, system_audio: true }, 'Screen sharing did not bring its sound');
 		assert.equal(state.sharing.clipboard, true, 'Sharing write replaced unrelated consent');
 		assert.equal(settings.values['sharing.screen'], true);
 	} finally {
