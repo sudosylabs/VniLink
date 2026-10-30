@@ -377,8 +377,14 @@ Use concise commit messages describing the outcome. Maintainers may request
 changes to scope, design, tests, security, accessibility, or documentation.
 Review and merge timing depends on maintainer availability.
 
-The Rust workspace declares Apache-2.0 licensing. Preserve applicable copyright
-and license notices and only contribute material you have the right to submit
-under the destination's license. Identify the source and license of copied or
-adapted material; the [Code of Conduct](CODE_OF_CONDUCT.md) has its own stated
-license.
+VniLink is licensed under the GNU Affero General Public License, version 3
+only ([LICENSE](LICENSE)), and a contribution is submitted under that license.
+Every source file starts with its license notice, which `npm run check:license`
+verifies; `.agents/skills/licensing/SKILL.md` says which notice a file takes, how
+to add a file copied from another project, and what stays outside the project's
+license (`vendor/`, the VS Code copies' own notice). Run
+`node build/run.ts license:apply --write` to add the notice to new files.
+Preserve applicable copyright and license notices and only contribute material
+you have the right to submit under the destination's license. Identify the
+source and license of copied or adapted material; the
+[Code of Conduct](CODE_OF_CONDUCT.md) has its own stated license.

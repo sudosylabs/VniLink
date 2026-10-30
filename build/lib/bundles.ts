@@ -64,6 +64,7 @@ export function resources(root: string, outputDirectory = join(root, 'out')): Re
 		['node_modules/@xterm/xterm/LICENSE', 'licenses/xterm.txt'],
 		['node_modules/@xterm/addon-webgl/LICENSE', 'licenses/xterm-addon-webgl.txt'],
 		['node_modules/@xterm/addon-unicode11/LICENSE', 'licenses/xterm-addon-unicode11.txt'],
+		['LICENSE', 'licenses/vnilink.txt'],
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],
 		['ThirdPartyNotices.vscode.txt', 'licenses/vscode-third-party.txt'],
 		['assets/licenses', 'licenses/native-codecs'],

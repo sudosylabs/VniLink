@@ -63,7 +63,7 @@ Outputs live in `dist/installers/<platform>-<architecture>/` with version/OS/arc
 
 Windows/Linux checksums alone do not establish installation, upgrade, uninstall or runtime behavior. Those checks remain native-host gates. Linux currently uses electron-builder's default Electron dependency lists: these must be audited/extended against the linked Rust addon and tested on the supported distribution baselines before distribution. RPM generation does not imply support for a particular RPM-based distribution. Windows minimum-version enforcement and OS invitation associations remain separate integration work.
 
-All outputs in this step are unsigned development artifacts. macOS Developer ID signing, hardened runtime entitlements, nested native-module signing, notarization and stapling are the next stage. No update feed, upload or publishing is configured. The app's own source has no distribution license declared at the repository root; staged metadata uses `UNLICENSED`, without changing the licenses or notices of bundled third-party components.
+All outputs in this step are unsigned development artifacts. macOS Developer ID signing, hardened runtime entitlements, nested native-module signing, notarization and stapling are the next stage. No update feed, upload or publishing is configured. The app's own source is licensed under AGPL-3.0-only (see [License](#14-license)); staged metadata says so, without changing the licenses or notices of bundled third-party components.
 
 The configuration follows the pinned builder's [prepackaged CLI](https://www.electron.build/v26/docs/cli/), [DMG](https://www.electron.build/v26/docs/dmg/), [NSIS](https://www.electron.build/v26/docs/nsis/) and [Linux](https://www.electron.build/v26/docs/linux/) targets. Like VS Code's platform packaging tasks, compilation/assembly and installer generation are separate stages; VniLink uses these builder targets rather than copying VS Code's Inno Setup and bespoke Linux packaging toolchain.
 
@@ -393,3 +393,16 @@ Consult current primary documentation when implementing version-dependent behavi
 Pin selected dependencies and document the actual supported versions. Replace proposed build layout and instructions with verified commands as implementation lands. Put detailed decisions and evidence in the corresponding docs directories, and keep this README as the entry point describing the final product and remaining scope.
 
 The removed native apps previously implemented background window-close, login startup and sharing controls. Those behaviors are not yet integrated into Electron. Startup sharing, permission onboarding and background hosting must be restored through the retained Rust engines and reviewed application services before claiming parity. Earlier native cursor/viewer results above are historical evidence for those implementations, not validation of the new Electron viewer.
+
+## 14. License
+
+VniLink is licensed under the GNU Affero General Public License, version 3 only ([LICENSE](LICENSE)). Anyone who interacts with a modified version of the program over a network is entitled to its source, as section 13 of the license provides.
+
+Each source file starts with a notice that says which license covers it, and `npm run check:license` verifies it:
+
+- Files written for this project carry the project's AGPL-3.0-only notice.
+- Files copied from VS Code keep Microsoft's MIT notice ([LICENSE.vscode.txt](LICENSE.vscode.txt), [ThirdPartyNotices.vscode.txt](ThirdPartyNotices.vscode.txt)). A copy that this project changed carries the project's modification notice after it.
+- `vendor/` holds third-party sources under their own licenses. Each directory keeps its license files, and `VNILINK.md` records the local patches.
+- Data, markup, images and other files that cannot carry a comment are covered by [REUSE.toml](REUSE.toml).
+
+The packaged application includes the licenses of what it bundles in its `licenses/` folder.

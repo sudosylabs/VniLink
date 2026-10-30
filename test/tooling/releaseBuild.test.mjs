@@ -198,7 +198,7 @@ test('release publication inventories only complete payloads, cleans failures an
 		for (const directory of ['src', 'build', 'scripts', 'assets']) {
 			await mkdir(join(root, directory), { recursive: true });
 		}
-		for (const path of ['package-lock.json', 'tsconfig.json', 'src/tsconfig.json', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
+		for (const path of ['package-lock.json', 'tsconfig.json', 'src/tsconfig.json', 'LICENSE', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
 			await put(root, path);
 		}
 		await put(root, 'product.json', JSON.stringify(product));
