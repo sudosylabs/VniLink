@@ -1,0 +1,8 @@
+# Commits that only add license notices. `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+# makes `git blame` skip them; GitHub reads this file by itself.
+# Rust sources
+8e89b0ec4463ef735e8f82db3c4877a238c5810c
+# Copies of VS Code that VniLink changed
+c0afc40cc3bc73de193a48cfc3d113b60b1d3982
+# TypeScript, stylesheets and scripts
+2d19b2f593f642e9946baa8d0af235a5c96a9622
