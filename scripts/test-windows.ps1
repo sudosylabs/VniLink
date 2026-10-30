@@ -1,3 +1,10 @@
+# ---------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Sudosy Labs. All rights reserved.
+# Licensed under the GNU Affero General Public License, version 3 only.
+# See LICENSE in the project root for license information.
+# SPDX-License-Identifier: AGPL-3.0-only
+# ---------------------------------------------------------------------------------------------
+
 param([string]$MsysRoot = 'C:\msys64', [switch]$SkipInstall)
 # The full Windows suite (CI and `npm run test:windows`): install, check what
 # the tasks need with `npm run doctor`, then the checks, Rust tests and UI tests.

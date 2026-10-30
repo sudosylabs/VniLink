@@ -1,3 +1,10 @@
+/* ---------------------------------------------------------------------------------------------
+ * Copyright (c) 2026 Sudosy Labs. All rights reserved.
+ * Licensed under the GNU Affero General Public License, version 3 only.
+ * See LICENSE in the project root for license information.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * --------------------------------------------------------------------------------------------- */
+
 /* The other computer's screen in the tab, sized as chosen with dark margins
  * around it or scrolling when larger. Nothing else takes room from it: the
  * picture's details float over it and the controls come down from the top

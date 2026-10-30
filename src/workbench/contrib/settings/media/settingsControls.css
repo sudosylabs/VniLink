@@ -1,3 +1,10 @@
+/* ---------------------------------------------------------------------------------------------
+ * Copyright (c) 2026 Sudosy Labs. All rights reserved.
+ * Licensed under the GNU Affero General Public License, version 3 only.
+ * See LICENSE in the project root for license information.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * --------------------------------------------------------------------------------------------- */
+
 /* The row every setting uses: the title and its help on the left, the control on the right. */
 .setting-row {
 	display: flex;
