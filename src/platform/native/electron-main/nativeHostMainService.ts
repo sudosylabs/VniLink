@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: native window controls, window state, folder picking, message boxes, displays, allowlisted links, clipboard and logs.
+ *  Adapted for VniLink: window controls and state, folder picking, message boxes, displays, allowlisted links, clipboard, logs and remote keyboard.
  *--------------------------------------------------------------------------------------------*/
 
 import { clipboard, ClipboardItem, dialog, screen, shell } from 'electron';

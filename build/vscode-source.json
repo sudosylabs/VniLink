@@ -1434,7 +1434,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "6e630036a5ac7744afc433d93d0847f0f0a4b92c787ec65efecffcdf9358067b",
+      "sha256": "63f06f071f95918863de1aa18d7cfc2f8bb9b301afd403639d01f1c1ff0d0aaa",
       "adapted": true
     },
     {
@@ -1447,7 +1447,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "2cef28eb80caf323d9d3f093dba9463dce6fb74261818694ae11d4d5af216bf6"
+      "sha256": "2a0da52ef636ebc7a083b35b74700cb989da6bba03e94d81acc54d08c47789a0"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
