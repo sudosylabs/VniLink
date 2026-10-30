@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { checkHygiene, findHygieneViolations, hygieneRules, productIdentity } from '../../build/lib/hygiene.ts';
+import { checkHygiene, findCommentViolations, findHygieneViolations, hygieneRules, productIdentity } from '../../build/lib/hygiene.ts';
 import { readProduct } from '../../build/lib/product.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -86,6 +86,8 @@ test('the check fails on a seeded repository, listing each finding, and passes o
 	try {
 		await copyFile(join(root, 'product.json'), join(directory, 'product.json'));
 		await mkdir(join(directory, 'vendor'));
+		await mkdir(join(directory, 'build'));
+		await writeFile(join(directory, 'build', 'vscode-source.json'), '{"files":[]}');
 		await writeFile(join(directory, 'vendor', 'notes.md'), home('', 'Users', 'jane'));
 		await writeFile(join(directory, 'README.md'), 'VniLink.\n');
 		await git('init', '--quiet');
@@ -94,8 +96,10 @@ test('the check fails on a seeded repository, listing each finding, and passes o
 		await checkHygiene(directory);
 		await writeFile(join(directory, 'README.md'), `VniLink.\nBuilt in ${home('', 'Users', 'jane')} by Lovelace.\n`);
 		await writeFile(join(directory, 'new.ts'), `const id = '${product.appId}';\n`);
+		await writeFile(join(directory, 'cited.rs'), '// Licensed under the project.\n\n//! Rules are in `PAIRING.md`.\n');
 		await assert.rejects(checkHygiene(directory), error => {
-			assert.match(error.message, /see "Writing about the project" in \.agents\/skills\/error-doc-voice\/SKILL\.md/);
+			assert.match(error.message, /see "Writing about the project" in the error-doc-voice skill/);
+			assert.match(error.message, /cited\.rs:3: comment cites a markdown document "PAIRING\.md"/);
 			assert.match(error.message, /README\.md:2: home directory/);
 			assert.match(error.message, /README\.md:2: git author's handle "Lovelace"/);
 			assert.match(error.message, /new\.ts:1: product identity/);
@@ -105,4 +109,36 @@ test('the check fails on a seeded repository, listing each finding, and passes o
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
+});
+
+test('comments name code, never a document, a skill or a plan', () => {
+	const cited = [
+		['//! The keyboard steps are in `crates/vnilink/KEYBOARD.md`.', /markdown document "crates\/vnilink\/KEYBOARD\.md"/],
+		['/// Session lifecycle from the README.', /project document "README"/],
+		['\t// Written as .agents/skills/error-doc-voice asks.', /skill or documentation folder/],
+		[' * See docs/architecture/files.', /skill or documentation folder/],
+		[`let x = 1; // done in ${'phase'} 2`, /cites a plan/],
+	];
+	for (const [line, message] of cited) {
+		const findings = findCommentViolations('src/a.ts', line);
+		assert.equal(findings.length, 1, line);
+		assert.match(findings[0].message, message);
+	}
+	for (const line of [`// ${'This'} laptop's camera: a 4:3 sensor.`, `/// A pause that took 0.8 s ${'here'} (2026-10-23).`, `// Measured with an ${'RTX'} 5060.`, `// On an ${'Apple'} M1.`]) {
+		const findings = findCommentViolations('src/a.rs', line);
+		assert.equal(findings.length, 1, line);
+		assert.match(findings[0].message, /one contributor's computer|one GPU or chip model/);
+	}
+	const clean = [
+		'// A hybrid laptop whose panel is on the integrated GPU (2026-10-22).',
+		'// On Apple silicon the encoder is hardware.',
+		'const url = "https://example.com/README"; ',
+		'// Reads the stage 1 output of `decode` and the step size.',
+		'let value = *pointer * 2; // the number of steps',
+		'//! Pairing: see [`Core::confirm_control_request`].',
+		'const name = "LATENCY.md";',
+		'let readme = 1;',
+	];
+	assert.deepEqual(clean.flatMap(line => findCommentViolations('src/a.ts', line)), []);
+	assert.deepEqual(findCommentViolations('src/a.ts', 'x\n\n// see CONTRIBUTING').map(finding => finding.line), [3]);
 });

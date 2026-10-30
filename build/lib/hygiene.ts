@@ -7,14 +7,18 @@
 
 /**
  * Keeps the repository about the project rather than a contributor's computer
- * or account, as `.agents/skills/error-doc-voice` describes: no home
- * directories other than the placeholders, no git author's handle, and the
- * product's identity only where `product.json` and the contact documents hold it.
+ * or account: no home directories other than the placeholders, no git
+ * author's handle, and the product's identity only where `product.json` and
+ * the contact documents hold it. It also keeps comments in the project's own
+ * Rust and TypeScript sources about code: a comment names symbols and the
+ * behaviour they implement, never a document, a skill or a plan, which can
+ * stay behind when the code changes.
  */
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { noticeKindOf, readCopies } from './license.ts';
 import { isCopyrightNotice } from './licenseNotice.ts';
 import { readProduct, type Product } from './product.ts';
 
@@ -104,6 +108,45 @@ export function findHygieneViolations(path: string, text: string, rules: Hygiene
 	return findings;
 }
 
+/** The text of the comment on a source line: a whole-line comment, or one after code. */
+function commentOf(line: string): string | undefined {
+	const whole = /^\s*(?:\/\/[/!]?|\/\*+|\*(?=\s))\s?(.*)$/.exec(line);
+	if (whole) {
+		return whole[1];
+	}
+	return /\s\/\/[/!]?\s(.*)$/.exec(line)?.[1];
+}
+
+/** What a comment may not say, and what to write instead. */
+const commentRules: readonly { readonly pattern: RegExp; readonly message: (match: string) => string }[] = [
+	// `summary.md` is a file a measurement writes, not a document of the project.
+	{ pattern: /(?<![\w-])(?!summary\.md\b)[\w./-]*\.md\b/, message: match => `comment cites a markdown document "${match}": name the code it describes instead` },
+	{ pattern: /\b(?:README|CONTRIBUTING)\b/, message: match => `comment cites a project document "${match}": name the code it describes instead` },
+	{ pattern: /\.agents\/|\bdocs\/[\w.-]/, message: match => `comment cites a skill or documentation folder "${match}": name the code it describes instead` },
+	{ pattern: /\b(?:step|phase|slice|milestone)s? \d+\b/i, message: match => `comment cites a plan "${match}": name the code it describes instead` },
+	// A measurement keeps its hardware class, not one contributor's computer.
+	{ pattern: /\b(?:this|my) (?:laptop|desktop computer)\b|\b(?:took|ran|measured) .{0,30}\bhere \(\d{4}-\d{2}-\d{2}\)/i, message: match => `comment describes one contributor's computer ("${match}"): state the hardware class and where the evidence lives` },
+	{ pattern: /\b(?:RTX|GTX) ?\d{3,4}\b|\bRadeon RX ?\d{3,4}\b|\bApple M\d\b/, message: match => `comment names one GPU or chip model "${match}": state the hardware class` },
+];
+
+/** What in the comments of `text`, the contents of the source file `path`, points at a document or a plan, or at one contributor's computer. */
+export function findCommentViolations(path: string, text: string): HygieneFinding[] {
+	const findings: HygieneFinding[] = [];
+	for (const [index, line] of text.split('\n').entries()) {
+		const comment = commentOf(line);
+		if (comment === undefined) {
+			continue;
+		}
+		for (const { pattern, message } of commentRules) {
+			const match = pattern.exec(comment);
+			if (match) {
+				findings.push({ path, line: index + 1, message: message(match[0]) });
+			}
+		}
+	}
+	return findings;
+}
+
 // A git hook's GIT_DIR and GIT_INDEX_FILE name the repository committing, not necessarily `root`'s.
 async function git(root: string, args: readonly string[]): Promise<string> {
 	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
@@ -115,6 +158,7 @@ export async function checkHygiene(root: string): Promise<void> {
 	const product = await readProduct(root);
 	const authors = (await git(root, ['log', '--format=%an%x00%ae'])).split('\n').filter(line => line.length > 0);
 	const rules = hygieneRules(product, authors);
+	const copies = await readCopies(root);
 	const paths = (await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).split('\0')
 		.filter(path => path.length > 0 && !excludedDirectories.some(directory => path.startsWith(directory)));
 	const findings: HygieneFinding[] = [];
@@ -130,11 +174,16 @@ export async function checkHygiene(root: string): Promise<void> {
 			throw error;
 		}
 		if (!contents.includes(0)) {
-			findings.push(...findHygieneViolations(path, contents.toString('utf8'), rules));
+			const text = contents.toString('utf8');
+			findings.push(...findHygieneViolations(path, text, rules));
+			// Upstream copies keep their own comments.
+			if (/\.(?:rs|ts|mjs)$/.test(path) && noticeKindOf(path, text, copies) === 'original') {
+				findings.push(...findCommentViolations(path, text));
+			}
 		}
 	}
 	if (findings.length > 0) {
-		throw new Error(`Personal details in the repository; see "Writing about the project" in .agents/skills/error-doc-voice/SKILL.md:\n${findings.map(finding => `  ${finding.path}:${String(finding.line)}: ${finding.message}`).join('\n')}`);
+		throw new Error(`Personal details or document citations in the repository; see "Writing about the project" in the error-doc-voice skill:\n${findings.map(finding => `  ${finding.path}:${String(finding.line)}: ${finding.message}`).join('\n')}`);
 	}
-	console.log(`Hygiene: ${String(paths.length)} files name no home directory, author handle or product identity outside product.json and the contact documents.`);
+	console.log(`Hygiene: ${String(paths.length)} files name no home directory, author handle or product identity outside product.json and the contact documents, and no source comment cites a document, a plan or one contributor's computer.`);
 }

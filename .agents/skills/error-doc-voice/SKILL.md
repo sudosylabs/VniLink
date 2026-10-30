@@ -33,4 +33,4 @@ Comments, docs, skills and fixtures describe the project, so they read true in a
 
 Name what a contributor supplies by its role: "a VS Code checkout at the ref in `build/vscode-source.json`", "the remote computer's SSH destination". Fixtures use neutral placeholders: `/Users/someone`, `C:\Users\someone`, `/home/someone`, and a device such as `Studio PC`. Product identity (app id, publisher, repository, support address) is read from `product.json`; only the contact documents `SECURITY.md`, `CODE_OF_CONDUCT.md` and `CONTRIBUTING.md` spell it out.
 
-`npm run check:hygiene` rejects home directories other than the placeholders, git authors' handles and product identity outside those files.
+`npm run check:hygiene` rejects home directories other than the placeholders, git authors' handles and product identity outside those files, and comments in the project's own Rust and TypeScript that cite a markdown document, the README, a skill or `docs/`, or a step or phase.

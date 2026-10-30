@@ -7,8 +7,8 @@
 
 /**
  * The text of the per-file license notices and the comment syntax each source
- * language carries them in; `license.ts` applies and checks them, and
- * `.agents/skills/licensing/SKILL.md` says which file gets which.
+ * language carries them in; `license.ts` applies and checks them and decides
+ * which file gets which.
  */
 
 /** How a language writes a comment that holds a notice. */

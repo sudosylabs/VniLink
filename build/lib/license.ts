@@ -6,8 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Keeps the licensing of the source in one state, as `.agents/skills/licensing/SKILL.md`
- * describes: a file written here carries the project's notice, a file copied from
+ * Keeps the licensing of the source in one state: a file written here carries the project's notice, a file copied from
  * VS Code keeps VS Code's, and one copied and changed carries both. The provenance
  * manifest decides which files were copied; a copy that is not in it is recognised
  * by the notice it already carries.
