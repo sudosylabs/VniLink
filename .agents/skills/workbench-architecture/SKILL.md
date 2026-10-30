@@ -87,6 +87,7 @@ Rules:
 - An adapted file names its adaptation in its header.
 - `--upstream-style` keeps VS Code's formatting and lint baseline for infrastructure.
 - `npm run check:upstream` must pass.
+- A changed copy also takes the modification notice (`license:apply --write`); `licensing` owns the notices.
 - Copy only what a consumer in the same change uses.
 
 ## Review bar
