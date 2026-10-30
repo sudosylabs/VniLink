@@ -28,6 +28,7 @@ VS Code is the TypeScript architectural reference. Read the corresponding upstre
 
 ## Placement and skills
 
+- `ARCHITECTURE.md` — contracts that span modules (pairing, consent, reconnect, desktop, files) and the code that implements each; how a module works is documented in the module itself.
 - `src/AGENTS.md` — TypeScript layers and file placement; `workbench-architecture` — how views, services, contributions and IPC are written, with `src/workbench/contrib/devices` as the reference; `recipes` — step lists for common additions.
 - `crates/AGENTS.md` — Rust ownership and dependency direction; `engine-bridge` and `ffi-boundary` — control and binary contracts.
 - `build/AGENTS.md`, `test/AGENTS.md` — maintained build/test infrastructure; `build-test-infrastructure` — build tasks as functions, runners and fixtures; `smoke-tests` — running scenarios and validating UI changes.

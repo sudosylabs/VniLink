@@ -118,7 +118,7 @@ See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md) and the [Code of Co
 | Linux arm64; Linux desktops other than GNOME | Unverified |
 | macOS on Intel (x64) | Unsupported; the packaging target above is not validated |
 
-Supported means the project develops and tests there; §12 lists the evidence each still needs before a feature counts as complete.
+Supported means the project develops and tests there; §11 lists the evidence each still needs before a feature counts as complete.
 
 ### Proposed defaults for implementation
 
@@ -155,7 +155,7 @@ Relay mode is either the public default or the installation's custom relay URLs.
 
 Pairing must require a deliberate local action and authenticate the exchanged identities. After pairing, the target owner may enable unattended access for that specific controller. Pairing alone should not silently enable remote control or transfer privileges.
 
-The first pairing can start from a `.vnl` file, moved by AirDrop, a message, email, or a USB stick. The computer that will be controlled writes it and shows three digits. The other computer opens it and types those digits. On Connect, the controlled computer types the three digits shown on the controller before control is granted. Clipboard and file transfer stay off. After that, Connect uses the saved device. `crates/vnilink/PAIRING.md` is the step list.
+The first pairing can start from a `.vnl` file, moved by AirDrop, a message, email, or a USB stick. The computer that will be controlled writes it and shows three digits. The other computer opens it and types those digits. On Connect, the controlled computer types the three digits shown on the controller before control is granted. Clipboard and file transfer stay off. After that, Connect uses the saved device. The pairing section of [ARCHITECTURE.md](ARCHITECTURE.md) is the step list.
 
 During a session show the remote desktop, connection state, direct/relay path when known, display selection when implemented, quality controls, and disconnect. The host must show an active-session indicator and provide a local stop action. Local input should remain usable; exclusive control is a separate future decision.
 
@@ -245,7 +245,7 @@ Use Iroh endpoints on each device. Prefer direct connections; retain encrypted r
 
 Each installation keeps its own relay setting. Pairing and later address refresh include the current home relay URL so the peer can dial it. Dialing uses that URL from the peer address. An open custom relay can be reached by a peer that remains on the public default, when the URL is reachable. A relay that requires a credential is different: Iroh attaches that credential from the dialer's own relay map. Installations that should fall back through a credentialed relay must each be configured with that relay and its credential. Recheck this against the pinned release. Knowing a relay or an address never authorizes a session.
 
-The library pins iroh 1.3.0. Public mode keeps n0 address lookup. Custom mode clears it, so endpoint identity alone does not make a custom-relay peer dialable. The signed invitation carries that peer's current relay URLs and direct addresses. After a session is accepted, each computer sends its current home relay URLs and direct addresses on the authenticated control stream. The receiver stores that list for that peer only. The announcement has no relay credential and does not change grants. A later dial, including a reconnect after a dropped link, uses the stored list. The new session has a new generation and does not send input queued for the old one. `crates/vnilink/RECONNECT.md` is the step list.
+The library pins iroh 1.3.0. Public mode keeps n0 address lookup. Custom mode clears it, so endpoint identity alone does not make a custom-relay peer dialable. The signed invitation carries that peer's current relay URLs and direct addresses. After a session is accepted, each computer sends its current home relay URLs and direct addresses on the authenticated control stream. The receiver stores that list for that peer only. The announcement has no relay credential and does not change grants. A later dial, including a reconnect after a dropped link, uses the stored list. The new session has a new generation and does not send input queued for the old one. The reconnect section of [ARCHITECTURE.md](ARCHITECTURE.md) is the step list.
 
 Choose either explicit paired-device address publication or a small authenticated directory. Add a directory only when the discovery design requires one. Keep directory trust separate from permission to control.
 
@@ -334,19 +334,7 @@ Measure idle CPU/RAM, host capture/encode cost, controller decode/render cost, s
 
 A proposed initial operating profile is 1080p at up to 30 fps with adjustable bitrate, plus idle reduction. This is a baseline to test, not a guaranteed capability or final project requirement. Derive numerical performance acceptance targets from measurements and project goals before asserting the app is lightweight.
 
-## 11. Implementation sequence and completion gates
-
-1. **Platform feasibility:** establish capture, authorized input, codec availability, and permission persistence on each supported platform. Deliver a supported-state matrix with evidence for lock/reboot/headless behavior and blockers.
-2. **Core and binding contract:** establish library lifecycle, capability/event API, trust persistence, session states, bindings, and versioned protocol. Complete when native hosts can start/stop the core and receive ordered bounded state updates safely.
-3. **Networking and pairing:** authenticated pairing, target-local grants, discovery, direct and forced-relay connections, rejection/revocation. Complete when every directed pair of supported operating systems connects across distinct networks on the public-relay default, a custom relay URL works without rebuilding, and unauthorized peers are rejected.
-4. **First usable remote desktop:** one monitor, negotiated encoded video, keyboard/mouse, local disconnect, indicator, input cleanup. Complete when every direction performs real interactive desktop tasks; mock adapters alone do not satisfy this gate.
-5. **Unattended reliability:** platform startup, UI-independent hosting, network changes, crash/restart recovery, sleep/resume, permission loss, display changes. Complete for the documented supported desktop states with reproducible tests.
-6. **Additional features:** clipboard, transfer, audio, multiple monitors, and wake behavior according to project priority. Each feature needs negotiated permissions and independent completion evidence.
-7. **Packaging and operations:** signed platform packages where applicable, permission/setup guides, pinned bindings/dependencies, repeatable platform builds, an optional custom-relay runbook, compatibility documentation, and measured resource results. The default install uses the public relays and ships without a relay deployment.
-
-Keep implemented, tested, proposed, unsupported, and blocked items distinct in documentation. A compiling shell or passing model test is not a finished remote desktop app.
-
-## 12. Verification matrix
+## 11. Verification matrix
 
 Test Mac→Windows, Mac→Linux, Windows→Mac, Windows→Linux, Linux→Mac, and Linux→Windows. For each, record actual device/OS versions and direct versus forced-relay outcomes. Run the internet cases on the public-relay default, and again with a custom relay configured on the installations under test.
 
@@ -377,7 +365,7 @@ platform and role. A successful Linux-host/Mac-viewer run therefore does not pro
 Mac-host/Linux-viewer or Windows behavior. Each direction needs native codec,
 capture, permission, input, reconnect and display-scaling validation.
 
-## 13. References and maintenance
+## 12. References and maintenance
 
 Consult current primary documentation when implementing version-dependent behavior:
 
@@ -390,11 +378,11 @@ Consult current primary documentation when implementing version-dependent behavi
 - [Microsoft SendInput restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
 - [XDG RemoteDesktop portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html)
 
-Pin selected dependencies and document the actual supported versions. Replace proposed build layout and instructions with verified commands as implementation lands. Put detailed decisions and evidence in the corresponding docs directories, and keep this README as the entry point describing the final product and remaining scope.
+Pin selected dependencies and document the actual supported versions.
 
-The removed native apps previously implemented background window-close, login startup and sharing controls. Those behaviors are not yet integrated into Electron. Startup sharing, permission onboarding and background hosting must be restored through the retained Rust engines and reviewed application services before claiming parity. Earlier native cursor/viewer results above are historical evidence for those implementations, not validation of the new Electron viewer.
+Startup sharing, permission onboarding and background hosting are not yet integrated into Electron. They must be restored through the retained Rust engines and reviewed application services before claiming parity with the removed native apps. Earlier native cursor/viewer results above are historical evidence for those implementations, not validation of the new Electron viewer.
 
-## 14. License
+## 13. License
 
 VniLink is licensed under the GNU Affero General Public License, version 3 only ([LICENSE](LICENSE)). Anyone who interacts with a modified version of the program over a network is entitled to its source, as section 13 of the license provides.
 

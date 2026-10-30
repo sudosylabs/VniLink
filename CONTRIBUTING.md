@@ -165,13 +165,10 @@ revocation, session-generation checks, reconnect cleanup, and bounded input and
 media handling intact. File writes must stay inside the selected transfer
 directory and preserve the explicit replacement policy.
 
-Read the relevant [pairing](crates/vnilink/PAIRING.md),
-[keyboard](crates/vnilink/KEYBOARD.md),
-[reconnect](crates/vnilink/RECONNECT.md),
-[clipboard](crates/vnilink/CLIPBOARD.md), and
-[transfer](crates/vnilink/TRANSFER.md) contracts before changing those paths.
-Update contracts and regression coverage in the same pull request when
-behavior changes.
+Read the relevant section of [ARCHITECTURE.md](ARCHITECTURE.md) (pairing,
+consent, reconnect, desktop, files) and the header comment of the module you
+change before changing those paths. Update the documentation and regression
+coverage in the same pull request when behavior changes.
 
 ## TypeScript, CSS and formatting
 
