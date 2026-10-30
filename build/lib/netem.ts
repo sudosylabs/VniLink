@@ -5,7 +5,54 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-/** Network impairment profiles and the two-namespace veth link that applies them. */
+/**
+ * Network impairment profiles and the two-namespace veth link that applies
+ * them, for the impaired-network harness (`impaired.ts`).
+ *
+ * # Profiles
+ *
+ * `NETEM_PROFILES` is the catalog: `clean`; `loss-0.5`, `loss-1`, `loss-2`
+ * and `loss-5` (random loss at that percentage); `loss-burst`
+ * (Gilbert-Elliott loss, about 2% overall in runs of about 4 packets);
+ * `delay-20`, `delay-50` and `delay-100` (that round trip, with jitter up to
+ * a fifth of it); `rate-2`, `rate-5` and `rate-10` (that many Mb/s each way
+ * with about 250 ms of queue). `quick` selects `clean`, `loss-1`, `loss-5`,
+ * `loss-burst`, `delay-50` and `rate-5`.
+ *
+ * # How the link works
+ *
+ * Namespaces `vnl-host` and `vnl-view` are joined by one veth pair with a
+ * netem qdisc at each end.
+ *
+ * The engines send UDP GSO batches, which a qdisc sees as one packet of up to
+ * 64 KiB, so netem would drop or pace the whole batch. A 10 Gb/s token-bucket
+ * root, which never shapes at these rates, has a 2000-byte burst and splits
+ * every batch into wire-sized segments before they reach netem, so loss, rate
+ * and queue limits apply per packet. The veth counters may still count
+ * batches; the netem counters count segments.
+ *
+ * The test cores bind `127.0.0.1` in direct mode. Each namespace keeps that
+ * address on loopback, and a policy rule sends locally sent traffic for
+ * `127.0.0.1` out through the veth, while received packets still match the
+ * local table. The unchanged loopback fixtures therefore reach each other
+ * only through the impaired link, and the veth counters show it.
+ *
+ * Each scenario boots each core on a thread that first enters its namespace
+ * with `setns`, so the core's runtime, worker threads and endpoint socket are
+ * created inside it.
+ *
+ * # Relay mode
+ *
+ * A relay serves plain HTTP inside `vnl-host` on `RELAY_PATH`. The host core
+ * reaches it over its own loopback; the viewer's core reaches it from a third
+ * loopback address across the veth, so each relayed packet crosses netem once,
+ * as a direct one does. Only the viewer's leg is impaired, and the relay's
+ * TCP connection, not QUIC, carries that leg's loss recovery. A `clsact`
+ * egress filter on each veth drops every UDP packet before the netem qdisc,
+ * so the cores can reach each other only over the relay; the `udpBlocked`
+ * counter reports what it kept off the link. In direct mode the cores keep a
+ * relay on `127.0.0.1:9`, where nothing listens.
+ */
 import { execFile } from 'node:child_process';
 import { chmod, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';

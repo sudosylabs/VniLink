@@ -8,4 +8,4 @@ Build definitions, resources and native artifact selection are shared by the one
 
 `node build/run.ts check:license` (`build/lib/license.ts`) owns the per-file license notices, as `licensing` describes. `build/vscode-source.json` and `node build/run.ts check:upstream` own copied-source provenance; `workbench-architecture` defines permitted upstream adaptations. `build/lint/vscode` holds verbatim VS Code lint rules. Toolchain changes also require `cross-platform-validation`.
 
-`IMPAIRED_NETWORK.md` documents the Linux netem measurement harness (`npm run measure:impaired`), its profiles and what its evidence does not cover. `LATENCY.md` documents the glass-to-glass measurement (`npm run measure:latency`) and the limits of its evidence.
+The measurement harnesses document themselves at the top of their tasks: the Linux netem harness (`npm run measure:impaired`) in `build/lib/impaired.ts` and `build/lib/netem.ts`, and the glass-to-glass measurement (`npm run measure:latency`) in `build/lib/latency.ts`, each with what its evidence does not cover.

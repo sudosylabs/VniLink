@@ -6,13 +6,115 @@
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Impaired-network measurement: two VniLink engines in separate network
- * namespaces, joined by a `tc netem` veth pair, run the transfer matrix, the
- * desktop stream and the stream beside a large upload under each selected
- * profile.
+ * Impaired-network measurement (`npm run measure:impaired`): file transfer
+ * and desktop video between two VniLink engines under controlled loss, delay
+ * and rate limits. Use it to record numbers before and after a transfer or
+ * video change.
  *
- * This is Linux protocol and engine evidence only. It says nothing about
- * macOS or Windows capture, encoding, scheduling or network stacks.
+ * # What it proves and what it does not
+ *
+ * Two engines run in a Linux network namespace pair joined by a `tc netem`
+ * link (`netem.ts`). The results show how the Rust engines behave over an
+ * impaired link on Linux: the transport, the job engine, the datagram video
+ * path, keyframe requests and adaptation.
+ *
+ * It does not show macOS or Windows behaviour. The video source and encoder
+ * are synthetic, so it says nothing about ScreenCaptureKit, VideoToolbox,
+ * Media Foundation, the renderer or WebCodecs. A container on macOS or
+ * Windows runs in a virtual machine, so absolute throughput reflects that
+ * machine and the CPU contention between the two engines. Compare runs made
+ * on the same machine, never with a number from elsewhere.
+ *
+ * # Running it
+ *
+ * `measure:impaired` builds the project image (`build/containers/Dockerfile.linux`),
+ * mounts the checkout into a privileged container and runs
+ * `measure:impaired:linux` there; on a Linux host that task runs directly as
+ * root. Arguments pass through, for example `--profiles quick`. Evidence
+ * lands in `.build/impaired-network/<time>/` (`--output` names another
+ * directory for the inner task):
+ * - `summary.md`: one table per scenario;
+ * - `results.json`: options, profiles, every scenario result, and veth and
+ *   qdisc counters for each run;
+ * - `environment.txt`: kernel, toolchain, `tc` version, CPU count, memory;
+ * - `<profile>/<scenario>.json`: the raw scenario output.
+ *
+ * The release test build is cached in a volume per checkout, and so are the
+ * Node dependencies the task runner loads, so two checkouts never run each
+ * other's binaries. A run refuses to start while another is in progress: two
+ * runs on one machine compete for its CPUs. The image builds with one cargo
+ * job unless `CARGO_BUILD_JOBS` is set on the host.
+ *
+ * | Option | Default | Meaning |
+ * |---|---|---|
+ * | `--profiles` | `all` | Comma-separated profile names, `quick` or `all`. |
+ * | `--scenarios` | `transfer,video` | `transfer`, `video`, `combined`, `combined-download` or `stills`. |
+ * | `--seed` | `17` | netem loss seed: the same seed drops the same packet positions. |
+ * | `--small-files`, `--small-size` | `1000`, `4096` | The many-small-files case. |
+ * | `--large-size` | `1GiB` | The large-file case, e.g. `256MiB` or `10GiB`; the combined scenarios move a file this size. |
+ * | `--transfer-timeout` | `120` | Seconds per case from submit; at the deadline the job is cancelled on both sides and reported as far as it got. |
+ * | `--driver` | `tight` | `tight` advances the receiver back to back; `background` uses only the app's background job driver. |
+ * | `--video-seconds`, `--bursts`, `--burst-ms` | `30`, `5`, `250` | Stream length and the blackouts inside it. |
+ * | `--viewer` | `passive` | `passive` is the product viewer; `request-while-corrupt` asks for a keyframe on every corrupt picture. |
+ * | `--path` | `direct` | `direct` lets the cores reach each other only directly; `relay` makes every byte cross a local iroh relay. |
+ *
+ * A case the engine refuses, such as one past its free-space admission, is
+ * recorded as `refused` with the engine's error; it is not a harness failure.
+ *
+ * # Scenarios
+ *
+ * Each runs as an ignored test of the named crate (`SCENARIOS`), which
+ * documents its workload and report; a small version of each runs in
+ * ordinary `cargo test` over plain loopback to keep the scenario code
+ * working.
+ * - `transfer`: the viewer's core uploads 1,000 small files, one large file
+ *   and a mixed tree through the job engine; each complete case is compared
+ *   byte for byte with its source (`impaired_transfer_matrix`).
+ * - `video`: the real shared-capture fanout with a synthetic source and
+ *   encoder, blacked out for each burst; reports time to a clean picture
+ *   after each burst, keyframes by cause, delivery and clean ratios, viewer
+ *   keyframe requests and one-way latency (`impaired_desktop_stream`).
+ * - `combined`, `combined-download`: the video scenario while one large file
+ *   moves between the cores, uploaded by the viewer or downloaded from the
+ *   host, the video's way. Also report the longest freeze and the session's
+ *   interruptions and round trip.
+ * - `stills`: a screen that alternates still and moving, streamed without
+ *   still pictures and then with them.
+ *
+ * Each case also reports the selected path of every core, once connected and
+ * once finished. A run fails unless every core finishes on a connection over
+ * the expected path, in either mode.
+ *
+ * A video scenario also fails when the conditions the viewer held
+ * (`vnilink::Condition`) miss the profile's expectation
+ * (`expectedConditions`): none on `clean` and `delay-*`; link loss from 2%
+ * random or burst loss; congestion held at some point on `rate-2`; a held
+ * blackout when `--burst-ms` is 2500 or more; and the relayed path in relay
+ * mode, where loss on the relay's TCP leg shows as a relay backlog. `loss-0.5`
+ * and `loss-1` sit under the rate controller's loss threshold, so their
+ * conditions are recorded, not asserted.
+ *
+ * # Relay mode
+ *
+ * `--path relay` measures the relay fallback. `netem.ts` explains how the
+ * link carries it. Beyond the path check above, the harness records the
+ * relay's evidence:
+ * - the relay (`examples/impaired_relay.rs` of `vnilink`) prints cumulative
+ *   counters once a second; each run's `relay` entry in `results.json` and
+ *   the summary's Relay table give their difference over the run: datagram
+ *   frames taken and written, frames dropped for a gone recipient or a
+ *   failed write, frames its per-client queues discarded (derived, give or
+ *   take one queue), and client connections opened and closed;
+ * - once a second `ss -tin` samples every TCP connection to or from the
+ *   relay into `<profile>/<scenario>.relay-sockets.jsonl` (Send-Q, TCP round
+ *   trip, congestion window, retransmissions); the summary gives each leg's
+ *   peak Send-Q and round trip. A backlog queued inside the clients, ahead
+ *   of their sockets, shows instead as the QUIC round trip in the transfer
+ *   scenario's `files_paths`.
+ *
+ * The relay is local, on the same host as both engines and over netem: it
+ * says nothing about public relays, their load or distance, TLS, or
+ * internet paths.
  */
 import { execFile } from 'node:child_process';
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';

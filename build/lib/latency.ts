@@ -6,19 +6,164 @@
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Glass-to-glass latency on one Mac, Windows or Linux computer: a host and
- * a viewer, each a temporary VniLink with its own identity, stream this
- * computer's screen to each other over loopback. The host shows a strip
- * carrying its frame time across the top of the main display; the viewer
- * shows the stream below it; a reader (ScreenCaptureKit on macOS, Desktop
- * Duplication on Windows, the ScreenCast portal on Linux) decodes both
- * strips from the same picture.
+ * Glass-to-glass latency (`npm run measure:latency`): how long a change on
+ * a computer's screen takes to appear in a VniLink viewer. It runs on
+ * macOS, Windows and Linux, on one computer: host, viewer and reader all run
+ * on it. Use it to record numbers before and after a capture, encode,
+ * transport, decode or drawing change. A second computer (`--peer`) is
+ * optional and never required.
  *
- * It proves capture-to-composited-picture latency through the real path:
- * the platform's capture and encoder, QUIC, the utility process, WebCodecs
- * and the canvas. It does not cover a network, panel response (both strips
- * share it), another computer or another operating system, and host and
- * viewer share one CPU and GPU.
+ * # How it works
+ *
+ * Two temporary VniLink instances, each with its own identity and profile,
+ * pair and stream over loopback:
+ * - the host hosts the screen from a temporary engine that may capture, and
+ *   opens a stimulus window across the top of the main display; on every
+ *   animation frame the stimulus draws a strip of black and white cells
+ *   carrying that frame's time in ms (`test/latency/stimulus.ts`, whose
+ *   layout is `vnilink_media::measure::timecode`);
+ * - the viewer shows the host's screen in a real workbench window below the
+ *   strip, so its picture contains a copy of the strip, older by the
+ *   latency;
+ * - the reader captures the display and decodes every strip in each picture
+ *   (`vnilink_media::measure::glass`). It is the `glass_latency` example of
+ *   `vnilink-macos` (ScreenCaptureKit, timing a picture by its
+ *   `displayTime`), `vnilink-windows` (Desktop Duplication, `LastPresentTime`)
+ *   or `vnilink-linux` (the ScreenCast portal, when PipeWire handed the
+ *   picture over). The live strip and its copy come from the same
+ *   composited picture, so their difference is the latency, with no clocks
+ *   to align; the display's scan-out and the reader's own capture delay are
+ *   shared by both strips and cancel out.
+ *
+ * The viewer shows the display it is on, so its picture holds smaller
+ * copies of itself. Those are older still, and the reader ignores them.
+ *
+ * # What it proves and what it does not
+ *
+ * It proves the time from a picture on this screen to the same picture shown
+ * by a viewer through the product's path: the platform's capture and encoder
+ * on the host (ScreenCaptureKit and VideoToolbox; Desktop Duplication and
+ * Media Foundation; the RemoteDesktop portal, PipeWire and VA-API or a
+ * software encoder), QUIC on loopback, the utility process, WebCodecs and
+ * the canvas in the viewer, and the compositor.
+ *
+ * It does not cover a network (loopback has none; the impaired-network
+ * harness adds that), panel response (both strips share it), another
+ * computer or operating system (each run measures the one it ran on), or
+ * independent hardware: host and viewer share one CPU, GPU and media engine,
+ * which inflates encode and decode times compared with two computers. The
+ * result is quantised to the display's refresh period (16.7 ms at 60 Hz), so
+ * read percentiles over many samples, not single readings.
+ *
+ * # Running it
+ *
+ * At the computer, in its signed-in desktop or graphical session, after
+ * `npm run build`. `npm run doctor` says what it can check beforehand.
+ * - macOS: both sides start through LaunchServices (`open`), so macOS asks
+ *   Screen Recording of the development VniLink (`.build/electron`) and not
+ *   of the terminal that started the task. On the first run the host asks and
+ *   stops; allow it in System Settings > Privacy & Security > Screen & System
+ *   Audio Recording, then run again. macOS grants an ad-hoc signed
+ *   application by its code hash, so each copy needs its own grant; `--app`
+ *   names an application that already has one. It only hosts Electron: the
+ *   code it runs is this checkout's `out/`. The host's engine prepares video
+ *   only, so the viewer cannot control the host, and only the host prepares
+ *   native video: a viewer engine that also did, on the same computer, slowed
+ *   the host's capture reads, a cost of measuring both sides on one computer.
+ *   Keep the display awake and uncovered.
+ * - Windows: Desktop Duplication captures only the signed-in user's desktop
+ *   and fails in a session that has none, such as a service or a remote
+ *   shell, so run it from a terminal on that desktop. Windows asks no
+ *   permission.
+ * - Linux: the sides and the reader need the graphical session's bus and
+ *   the desktop portal. The portal asks someone at the computer twice on
+ *   the first run, once for the host and once for the reader (choose the
+ *   display both times; each waits up to five minutes). The answers are kept
+ *   as restore tokens in `.build/latency` (`host-screen-grant`,
+ *   `reader-screen-grant`, readable by this user only) and later runs share
+ *   the display without asking; delete them to be asked again. The sides run
+ *   under XWayland, because a Wayland window cannot place itself. Silence
+ *   notifications first: a banner across the top of the display covers the
+ *   strip and no picture can be read. The reader times a picture by when
+ *   PipeWire delivered it, which both strips share, so the latency is
+ *   unaffected but hold mode's showing times are a little late.
+ *
+ * # Hold mode
+ *
+ * `--hold <seconds>` measures still pictures: when one shows after the
+ * screen stops changing, and whether the first change after it is held up.
+ * Nothing on the captured display may change during a hold, so the
+ * stimulus fills the display with its strip above a panel of coloured text
+ * (what a still is for: the host sends one only when it beats 4:2:0) and
+ * covers the menu bar and Dock; the viewer covers the lower half and is
+ * hidden while the stimulus holds, still receiving and decoding; its status
+ * bar, which changes every second, is hidden; and it runs at the Smooth
+ * preset, whose budget a 1080p still of this panel fits. Another
+ * application's window above everything keeps the screen from holding. It
+ * is measured on macOS and Linux; on Windows it runs the same but is
+ * unmeasured.
+ *
+ * # Two computers
+ *
+ * `--peer <file.vnl> --peer-check <digits>` runs one side here and the other
+ * on a second computer, so each side has its own CPU, GPU and media engine
+ * and the stream crosses a real network. No screen shows both strips, so
+ * there is no glass-to-glass total and no reader. Each side reports itself
+ * once a second instead: the host's capture and encode times (scaling and
+ * copies are inside the encode time), encoder, keyframes, reopens and drops
+ * (`host-stages.jsonl`), and the viewer's stage times and status line
+ * (`stages.jsonl`) and pipeline (`viewer-pipeline.jsonl`). The network leg
+ * is the round trip, since the clocks differ. Both viewers prepare native
+ * video, as the product's do.
+ *
+ * The other computer runs the test agent, built from the same commit
+ * (`node build/run.ts testkit:agent --allow screen`; the sides show and read
+ * its real screen, so the agent refuses them without `--allow screen`). The
+ * agent prints digits; the run prints three of its own; the person at the
+ * agent types them on its terminal, and nothing is approved without that.
+ * The agent starts its side from its own checkout (`testkit:launch`, the
+ * launch a run on one computer uses), in folders of its own that it removes
+ * when the run stops, and only when `out/latency.cjs` there is exactly what
+ * its sources build. A run names only the side and its numbers
+ * (`agentLatencyVariables`); the agent refuses any other variable and is
+ * never given a path or a program. The two sides' rendezvous files travel as
+ * messages over the paired connection (`agentSideTakes`), each checked
+ * again by the agent. A host on the agent's computer shows its screen only
+ * to the viewer the run names, and only to be seen. Stopping the run, the
+ * agent losing it, or Ctrl-C on the agent ends the side: the agent writes
+ * `done`, gives it 30 s to quit, then ends its process group (on Windows,
+ * the job object it runs in). A macOS or Windows agent starts a side the
+ * same way as a Linux one, but only a Linux agent has been exercised across
+ * two computers.
+ *
+ * # Evidence
+ *
+ * `.build/latency/<time>/` (or `--output`) holds `summary.md` (glass-to-
+ * glass percentiles and the viewer's stage times), `samples.jsonl` (one
+ * line per captured picture), `stages.jsonl`, `host-start.log` and
+ * `viewer-start.log` (what each side saw while the stream started),
+ * `host.log`, `viewer.log`, `host-pipeline.json` (the encoder, whether it is
+ * hardware, what it read pictures from, keyframes, reopens and drops) and
+ * `run.json` (the options and machine); hold mode adds `schedule.json` and
+ * `stills.jsonl`. The reader prints the p50, p95, p99 and maximum when it
+ * finishes.
+ *
+ * # Options
+ *
+ * - `--seconds` (20): how long the reader samples; `--settle` (3): seconds
+ *   between the first picture and sampling; `--output`: where the evidence
+ *   goes.
+ * - `--app` (macOS): the `.app` that runs both sides; by default this
+ *   checkout's development VniLink.
+ * - `--hold` (0, off): hold mode, seconds the stimulus holds after each 2 s
+ *   of motion.
+ * - `--fps` and `--bitrate` (12000 kb/s; 50000 is Automatic): the viewer's
+ *   frame rate at 1920x1080, and its bitrate limit with `--fps`.
+ * - `--peer`, `--peer-check`, `--hosts` (`here`, or `peer`): the second
+ *   computer, the digits its agent printed, and which one hosts its screen.
+ * - `--busy` (with `--peer`): the stimulus fills the host's work area with
+ *   detail that changes every frame, so the stream uses the bitrate it is
+ *   given; without it the strip is nearly all that changes.
  */
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync } from 'node:fs';
@@ -28,7 +173,7 @@ import { parseArgs } from 'node:util';
 import { assertBundleFresh } from './bundles.ts';
 import { electronExecutable } from './electron.ts';
 import { assertNativeFresh, defaultNativeOptions } from './native.ts';
-import { osName } from './platform.ts';
+import { isLinux, isMacintosh, isWindows, osName } from './platform.ts';
 import { type LaunchedProcess, ProcessRunner } from './processes.ts';
 import { agentPeer, openAgentSession, type AgentPeer, type AgentSession } from './remote.ts';
 
@@ -39,10 +184,10 @@ export interface LatencyOptions {
 	readonly settleSeconds: number;
 	readonly output: string;
 	/**
-	 * macOS: a development VniLink that already holds Screen Recording, such
-	 * as another checkout's. macOS grants an ad-hoc signed copy by its code
-	 * hash, so each checkout's copy needs its own grant. The application
-	 * only hosts Electron; the code it runs is this checkout's `out/`.
+	 * macOS: a development VniLink that already holds Screen Recording.
+	 * macOS grants an ad-hoc signed copy by its code hash, so each copy needs
+	 * its own grant. The application only hosts Electron; the code it runs is
+	 * this checkout's `out/`.
 	 */
 	readonly app: string | undefined;
 	/**
@@ -499,7 +644,7 @@ interface LatencyPlatform {
 /** `app`: on macOS, the `.app` that runs the sides; this checkout's development VniLink when undefined. */
 async function latencyPlatform(root: string, app: string | undefined, processes: ProcessRunner, signal: AbortSignal): Promise<LatencyPlatform> {
 	const entry = join(root, 'out/latency.cjs');
-	if (process.platform === 'darwin') {
+	if (isMacintosh) {
 		// .../VniLink.app/Contents/MacOS/Electron
 		const bundle = app ?? dirname(dirname(dirname(await electronExecutable(root, signal))));
 		return {
@@ -530,9 +675,9 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 			closeSync(output);
 		}
 	};
-	if (process.platform === 'win32') {
+	if (isWindows) {
 		// Windows asks no permission to capture; Desktop Duplication needs the
-		// signed-in desktop, which a process started over SSH is not in.
+		// signed-in desktop, which a service or a remote shell is not in.
 		const { target } = defaultNativeOptions();
 		return {
 			readerCrate: 'vnilink-windows',
@@ -541,7 +686,7 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 			launch: direct(() => []),
 		};
 	}
-	if (process.platform === 'linux') {
+	if (isLinux) {
 		// The portal asks someone at this computer twice, for the host's
 		// screen and for the reader's, and needs the graphical session's
 		// bus. The sides run under XWayland: a Wayland client cannot place
