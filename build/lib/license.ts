@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 /**
  * Keeps the licensing of the source in one state, as `.agents/skills/licensing/SKILL.md`
  * describes: a file written here carries the project's notice, a file copied from
@@ -96,7 +103,9 @@ function withNotice(path: string, text: string, kind: 'original' | 'derived', ho
 	if (microsoft === undefined) {
 		throw new Error('is copied from VS Code but does not start with its notice');
 	}
-	const notice = renderNotice(style, modificationNotice(holder));
+	// Stylelint wants an empty line before the second comment of a stylesheet.
+	const separator = style === 'css' ? '\n' : '';
+	const notice = `${separator}${renderNotice(style, modificationNotice(holder))}`;
 	const current = microsoft.replace('See License.txt in the project root', 'See LICENSE.vscode.txt in the project root');
 	if (body.startsWith(`${current}${notice}`)) {
 		return undefined;

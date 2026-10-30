@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -127,6 +134,7 @@ test('the notice is added to what lacks one, once, around a shebang or a batch f
 		'scripts/run.sh': '#!/usr/bin/env bash\nset -e\n',
 		'scripts/run.bat': '@echo off\nsetlocal\n',
 		'src/ui.css': '.a { color: red; }\n',
+		'src/copied.css': `${microsoftNotice('css')}\n.b { color: blue; }\n`,
 		'src/vs/copied.ts': copied,
 		'src/vs/changed.ts': adapted,
 		'data.json': '{}\n',
@@ -135,7 +143,7 @@ test('the notice is added to what lacks one, once, around a shebang or a batch f
 	try {
 		const recorded = [];
 		const options = { record: async paths => void recorded.push(...paths) };
-		assert.deepEqual((await applyLicense(directory, options)).sort(), ['crates/x/src/lib.rs', 'scripts/run.bat', 'scripts/run.sh', 'src/a.ts', 'src/ui.css', 'src/vs/changed.ts'], 'a dry run lists the files');
+		assert.deepEqual((await applyLicense(directory, options)).sort(), ['crates/x/src/lib.rs', 'scripts/run.bat', 'scripts/run.sh', 'src/a.ts', 'src/copied.css', 'src/ui.css', 'src/vs/changed.ts'], 'a dry run lists the files');
 		assert.equal(await readFile(join(directory, 'src/a.ts'), 'utf8'), 'import "./b.js";\n');
 		await applyLicense(directory, { ...options, write: true });
 		const own = style => renderNotice(style, originalNotice(holder));
@@ -144,6 +152,8 @@ test('the notice is added to what lacks one, once, around a shebang or a batch f
 		assert.equal(await readFile(join(directory, 'scripts/run.sh'), 'utf8'), `#!/usr/bin/env bash\n${own('hash')}\nset -e\n`);
 		assert.equal(await readFile(join(directory, 'scripts/run.bat'), 'utf8'), `@echo off\n${own('rem')}\nsetlocal\n`);
 		assert.equal(await readFile(join(directory, 'src/ui.css'), 'utf8'), `${own('css')}\n.a { color: red; }\n`);
+		// A stylesheet's second comment follows an empty line.
+		assert.equal(await readFile(join(directory, 'src/copied.css'), 'utf8'), `${microsoftNotice('css')}\n${renderNotice('css', modificationNotice(holder))}\n.b { color: blue; }\n`);
 		// Copied as it is: untouched. Copied and changed: VS Code's notice, corrected, then ours.
 		assert.equal(await readFile(join(directory, 'src/vs/copied.ts'), 'utf8'), copied);
 		assert.equal(await readFile(join(directory, 'src/vs/changed.ts'), 'utf8'), `${microsoftNotice('slash', ['Adapted for VniLink: nothing.'])}${renderNotice('slash', modificationNotice(holder))}\nchanged();\n`);
