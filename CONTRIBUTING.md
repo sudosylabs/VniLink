@@ -72,7 +72,6 @@ Some tasks need more:
 | `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:latency` | Screen Recording for the development VniLink: Run the task; on its first run macOS asks and the run stops. Allow VniLink in System Settings > Privacy & Security > Screen & System Audio Recording, then run it again; A second computer (optional) |
-| `npm run measure:perceived` | Screen Recording for the application running the task: Allow that application in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen it; Accessibility for the application running the task: Allow that application in System Settings > Privacy & Security > Accessibility; FFmpeg: `brew install ffmpeg`; A second computer (optional) |
 | `npm run assets:tray` | rsvg-convert: `brew install librsvg` |
 
 ### Windows
@@ -319,12 +318,12 @@ behavior on its real OS. Capture/input checks can access devices or request
 OS permissions; use a test environment you control.
 
 Every task runs on one computer. The measurements
-(`npm run measure:latency`, `npm run measure:perceived`, `npm run measure:impaired`)
+(`npm run measure:latency`, `npm run measure:impaired`)
 run on this computer by default; `--peer` adds a second computer, running the
-test agent, to the latency and perceived-quality runs and is never required. `npm run doctor`
+test agent, to the latency run and is never required. `npm run doctor`
 reports the OS permissions a task needs, as granted, missing, or unknown until
-the run asks for them. [LATENCY.md](build/LATENCY.md) and
-[PERCEIVED.md](build/PERCEIVED.md) describe each run and what it proves.
+the run asks for them. [LATENCY.md](build/LATENCY.md) describes the latency
+run and what it proves.
 
 A service's suites (`node build/run.ts test:service <service>` and
 `bench:service <service>`) run both engines on this computer. With
@@ -348,10 +347,10 @@ agent says on its terminal when the disk is shared and when that ends, and
 uploads land in a folder of the scenario's own that the agent names and
 removes when the scenario stops. Other suites
 refuse `--peer`. A peer run is saved apart from this computer's runs and
-reports regressions without failing. The latency and perceived-quality
-measurements reach the same agent through `vnilink-testkit bridge`, and the
-agent starts their other side from its own checkout; the latency sides show
-its real screen, so they run only when the agent was started with
+reports regressions without failing. The latency measurement reaches the same
+agent through `vnilink-testkit bridge`, and the agent starts its other side
+from its own checkout; the latency sides show its real screen, so they run
+only when the agent was started with
 `--allow screen`. `--allow` repeats or takes a comma list
 (`--allow screen,terminal,files`).
 

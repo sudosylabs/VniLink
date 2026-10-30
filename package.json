@@ -39,7 +39,6 @@
     "test:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows.ps1",
     "measure:impaired": "node build/run.ts measure:impaired",
     "measure:latency": "node build/run.ts measure:latency",
-    "measure:perceived": "node build/run.ts measure:perceived",
     "test:ui": "node build/lib/preLaunch.ts && node build/run.ts test:ui",
     "test:native": "node --test test/native/*.test.mjs",
     "prepare": "husky",

@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The per-OS setup section of CONTRIBUTING.md, generated from
+ * The per-OS setup section of the contributor guide, generated from
  * `build/prerequisites.json` so the instructions and the checks cannot
  * disagree. `node build/run.ts docs:prerequisites` rewrites it; `--check`
  * (and the tooling tests) fail when it is stale.
@@ -23,7 +23,7 @@ const end = '<!-- prerequisites:end -->';
 const coreTasks = ['build', 'start', 'test:ui', 'test:rust'];
 
 /** Tasks whose extra needs are listed separately. */
-const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'measure:perceived', 'package:installers', 'assets:tray', 'sandbox:linux'];
+const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'package:installers', 'assets:tray', 'sandbox:linux'];
 
 function applies(requirement: Requirement, platform: Platform): boolean {
 	return !requirement.platforms || requirement.platforms.includes(platform);
@@ -182,7 +182,7 @@ async function rendered(root: string): Promise<string> {
 	return renderPrerequisites(manifest, node, rust);
 }
 
-/** CONTRIBUTING.md with the section replaced by the current rendering. */
+/** The contributor guide with the section replaced by the current rendering. */
 export async function contributingWithPrerequisites(root: string): Promise<{ readonly current: string; readonly updated: string }> {
 	const current = await readFile(join(root, 'CONTRIBUTING.md'), 'utf8');
 	const from = current.indexOf(start);

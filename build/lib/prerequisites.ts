@@ -454,30 +454,6 @@ async function secretService(host: Host, probe: Probe): Promise<Outcome> {
 	return { status: 'unknown', detail: 'busctl is unavailable to ask the session bus' };
 }
 
-/**
- * Whether macOS grants the application this task runs under a permission,
- * asked without prompting: the preflight functions only read the grant,
- * where their requesting counterparts would ask. macOS attributes a child
- * process to the application that started the chain (the terminal or
- * editor), so osascript's answer is the one a driver started by the task
- * gets. Undefined when osascript does not answer.
- */
-async function macPermission(probe: Probe, framework: string, preflight: string): Promise<boolean | undefined> {
-	const script = `ObjC.import('${framework}'); ObjC.bindFunction('${preflight}', ['bool', []]); $.${preflight}()`;
-	const result = await probe.run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script]);
-	const answer = result.stdout.trim();
-	return result.ok && (answer === 'true' || answer === 'false') ? answer === 'true' : undefined;
-}
-
-function macPermissionOutcome(granted: boolean | undefined): Outcome {
-	if (granted === undefined) {
-		return { status: 'unknown', detail: 'macOS did not answer whether the application running this task has it' };
-	}
-	return granted
-		? { status: 'ready', detail: 'granted to the application running this task' }
-		: { status: 'missing', detail: 'not granted to the application running this task (the terminal or editor that started it)' };
-}
-
 /** Files in which `measure:latency` keeps the desktop portal's answers, host's and reader's. */
 export function latencyPortalGrants(root: string): string[] {
 	return ['host-screen-grant', 'reader-screen-grant'].map(name => posix.join(root, '.build/latency', name));
@@ -621,8 +597,6 @@ const customChecks: Readonly<Record<string, CustomCheck>> = {
 			? { status: 'ready' }
 			: { status: 'missing', detail: 'apparmor_parser is missing', ...host.distribution === 'debian' ? { packages: ['apparmor'] } : {} };
 	},
-	'screen-recording': async (_requirement, _manifest, _host, probe) => macPermissionOutcome(await macPermission(probe, 'CoreGraphics', 'CGPreflightScreenCaptureAccess')),
-	accessibility: async (_requirement, _manifest, _host, probe) => macPermissionOutcome(await macPermission(probe, 'ApplicationServices', 'AXIsProcessTrusted')),
 	// macOS asks for the development application by its own identity, and
 	// only that application can ask whether it holds the grant.
 	'vnilink-screen-recording': () => Promise.resolve({ status: 'unknown', detail: 'macOS asks for the development VniLink when a run starts; nothing here can read its grant beforehand' }),

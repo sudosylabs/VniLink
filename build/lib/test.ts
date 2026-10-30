@@ -14,7 +14,6 @@ import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
 import { launchLatencySide } from './latency.ts';
 import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
-import { launchPerceivedStimulus } from './perceived.ts';
 import { ProcessRunner } from './processes.ts';
 
 /** Runs the selected browser and integration scenarios in Electron with a temporary profile. */
@@ -177,7 +176,7 @@ export async function runTestkitAgent(root: string, signal: AbortSignal, args: r
 }
 
 /** The measurement sides the test agent starts from this checkout (`testkit:launch <side>`). */
-export const agentSides = ['latency-host', 'latency-viewer', 'perceived-stimulus'] as const;
+export const agentSides = ['latency-host', 'latency-viewer'] as const;
 
 /**
  * Starts one side of a measurement for the test agent, which runs this task
@@ -195,11 +194,7 @@ export async function launchAgentSide(root: string, signal: AbortSignal, args: r
 		process.stdin.resume();
 	});
 	try {
-		if (side === 'perceived-stimulus') {
-			await launchPerceivedStimulus(root, signal, stopped);
-		} else {
-			await launchLatencySide(root, signal, side === 'latency-host' ? 'host' : 'viewer', stopped);
-		}
+		await launchLatencySide(root, signal, side === 'latency-host' ? 'host' : 'viewer', stopped);
 	} finally {
 		process.stdin.destroy();
 	}

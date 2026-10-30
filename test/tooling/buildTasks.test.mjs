@@ -187,6 +187,6 @@ test('the agent starts only the measurement sides compiled into it, one at a tim
 	}
 	const signal = new AbortController().signal;
 	for (const args of [[], ['latency-sender'], ['latency-host', 'latency-viewer'], ['../latency-host']]) {
-		await assert.rejects(launchAgentSide('/root', signal, args), /testkit:launch takes one of latency-host, latency-viewer, perceived-stimulus/, JSON.stringify(args));
+		await assert.rejects(launchAgentSide('/root', signal, args), /testkit:launch takes one of latency-host, latency-viewer/, JSON.stringify(args));
 	}
 });

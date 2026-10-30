@@ -32,7 +32,7 @@ test('release entry points exclude tests and compile with production configurati
 		const outputDirectory = join(root, 'release-app');
 		const options = bundleOptions(root, { production: true, outputDirectory });
 		assert.equal(options.length, 6);
-		assert.equal(bundleOptions(root).length, 10);
+		assert.equal(bundleOptions(root).length, 9);
 		await put(root, 'tsconfig.json', '{}');
 		for (const option of options) {
 			await put(root, option.entryPoints[0], 'console.log(process.env.NODE_ENV);');

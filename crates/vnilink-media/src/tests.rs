@@ -25,8 +25,6 @@ mod impaired_video_tests;
 mod measure_tests;
 #[path = "tests/nv12.rs"]
 mod nv12_tests;
-#[path = "tests/perceived.rs"]
-mod perceived_tests;
 #[path = "tests/pump.rs"]
 mod pump_tests;
 #[path = "tests/rate.rs"]

@@ -246,16 +246,13 @@ impl From<vnilink::Error> for PeerError {
 /// misreading each other. Line endings are ignored, as a Windows checkout
 /// writes them differently.
 pub fn revision() -> String {
-    const SOURCES: [&str; 20] = [
+    const SOURCES: [&str; 17] = [
         include_str!("../../../build/lib/latency.ts"),
-        include_str!("../../../build/lib/perceived.ts"),
         include_str!("../../../build/lib/remote.ts"),
         include_str!("../../../build/lib/test.ts"),
         include_str!("../../../test/latency/across.ts"),
         include_str!("../../../test/latency/main.ts"),
         include_str!("../../../test/latency/stimulus.ts"),
-        include_str!("../../../test/perceived/main.ts"),
-        include_str!("../../../test/perceived/stimulus.ts"),
         include_str!("peer.rs"),
         include_str!("peer/agent.rs"),
         include_str!("peer/clock.rs"),

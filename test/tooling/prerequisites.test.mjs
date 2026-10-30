@@ -328,38 +328,9 @@ test('prerequisites.ts imports only Node modules, so preinstall and the Linux im
 	}
 });
 
-/** The osascript call that asks macOS, without prompting, whether this task's application holds a permission. */
-function preflight(framework, name) {
-	return `/usr/bin/osascript -l JavaScript -e ObjC.import('${framework}'); ObjC.bindFunction('${name}', ['bool', []]); $.${name}()`;
-}
-
 const mac = host({ platform: 'darwin', architecture: 'arm64', hardwareArchitecture: 'arm64', osName: 'macOS 27.0', distribution: undefined });
 
-test('macOS permissions are read without prompting, and say how to grant them', async () => {
-	for (const [id, framework, name, pane] of [
-		['screen-recording', 'CoreGraphics', 'CGPreflightScreenCaptureAccess', 'Screen & System Audio Recording'],
-		['accessibility', 'ApplicationServices', 'AXIsProcessTrusted', 'Accessibility'],
-	]) {
-		const granted = fakeProbe({ runs: { [preflight(framework, name)]: 'true\n' } });
-		assert.deepEqual(await checkRequirement(id, manifest, mac, granted), {
-			id, title: manifest.requirements[id].title, kind: 'permission', status: 'ready', optional: false,
-			detail: 'granted to the application running this task', fix: [], packages: [],
-		});
-		// Only the preflight ran: nothing that would ask.
-		assert.deepEqual(granted.ran, [preflight(framework, name)]);
-		const refused = await checkRequirement(id, manifest, mac, fakeProbe({ runs: { [preflight(framework, name)]: 'false\n' } }));
-		assert.equal(refused.status, 'missing');
-		assert.match(refused.detail, /not granted to the application running this task \(the terminal or editor that started it\)/);
-		assert.equal(refused.fix.length, 1);
-		assert.match(refused.fix[0], new RegExp(`System Settings > Privacy & Security > ${pane}`));
-		// An answer other than true or false is no answer.
-		for (const runs of [{}, { [preflight(framework, name)]: 'maybe\n' }]) {
-			const silent = await checkRequirement(id, manifest, mac, fakeProbe({ runs }));
-			assert.equal(silent.status, 'unknown', id);
-			assert.match(silent.fix[0], new RegExp(pane));
-		}
-	}
-	// The development VniLink's own grant only macOS's prompt at the run can settle.
+test('the development VniLink\'s screen recording grant is only settled by the prompt at the run', async () => {
 	const vnilink = await checkRequirement('vnilink-screen-recording', manifest, mac, fakeProbe());
 	assert.equal(vnilink.status, 'unknown');
 	assert.equal(vnilink.kind, 'permission');
@@ -391,51 +362,32 @@ test('Linux, Windows and root permissions are checked where they can be', async 
 	assert.match(impaired.reason, /Root/);
 });
 
-/** This Mac with everything `measure:perceived` needs, but for the preflight answers given. */
-function perceivedMac(answers) {
-	const runs = {
-		'rustup toolchain list': '1.91.0-aarch64-apple-darwin\n', 'xcode-select -p': '/Library/Developer/CommandLineTools\n', 'xcrun --find clang': '/usr/bin/clang\n',
-		...answers,
-	};
+/** A Mac with everything the build needs, so a task's own requirements decide its status. */
+function toolsMac() {
 	return fakeProbe({
 		contents: repoFiles,
-		files: ['/usr/bin/rustup', '/usr/bin/git', '/usr/bin/curl', '/usr/bin/cmake', '/usr/bin/ffmpeg', '/repo/node_modules/@vnilink/elg/prebuilds/darwin-arm64/node.napi.node'],
-		runs,
+		files: ['/usr/bin/rustup', '/usr/bin/git', '/usr/bin/curl', '/usr/bin/cmake', '/repo/node_modules/@vnilink/elg/prebuilds/darwin-arm64/node.napi.node'],
+		runs: { 'rustup toolchain list': '1.91.0-aarch64-apple-darwin\n', 'xcode-select -p': '/Library/Developer/CommandLineTools\n', 'xcrun --find clang': '/usr/bin/clang\n' },
 	});
 }
 
 test('a task is ready only when it can run here; a second computer is optional and never needed', async () => {
-	const granted = { [preflight('CoreGraphics', 'CGPreflightScreenCaptureAccess')]: 'true\n', [preflight('ApplicationServices', 'AXIsProcessTrusted')]: 'true\n' };
-	const [ready] = await checkTasks(manifest, mac, perceivedMac(granted), ['measure:perceived']);
-	assert.equal(ready.status, 'ready');
-	assert.equal(ready.reason, undefined);
-	const other = ready.results.find(result => result.id === 'second-computer');
+	// The latency harness on macOS: ready but for the grant only its run can show.
+	const [latency] = await checkTasks(manifest, mac, toolsMac(), ['measure:latency']);
+	assert.equal(latency.status, 'unknown');
+	assert.equal(latency.reason, 'cannot be checked before it runs: Screen Recording for the development VniLink');
+	const other = latency.results.find(result => result.id === 'second-computer');
 	assert.deepEqual(other, {
 		id: 'second-computer', title: 'A second computer', kind: 'computer', status: 'unknown', optional: true,
 		detail: '--peer runs a suite or a measurement\'s other side against `vnilink-testkit agent` there, built from the same commit, once a person types this computer\'s digits on its terminal; every task runs on this computer without it', fix: [], packages: [],
 	});
-	assert.equal(ready.results.find(result => result.id === 'ssh'), undefined, 'no task reaches another computer over SSH');
-	// Before, the task was ready with neither permission: the driver then failed.
-	const refused = { ...granted, [preflight('CoreGraphics', 'CGPreflightScreenCaptureAccess')]: 'false\n' };
-	const [missing] = await checkTasks(manifest, mac, perceivedMac(refused), ['measure:perceived']);
-	assert.equal(missing.status, 'missing');
-	assert.equal(missing.reason, 'Screen Recording for the application running the task');
-	const [silent] = await checkTasks(manifest, mac, perceivedMac({ [preflight('CoreGraphics', 'CGPreflightScreenCaptureAccess')]: 'true\n' }), ['measure:perceived']);
-	assert.equal(silent.status, 'unknown');
-	assert.equal(silent.reason, 'cannot be checked before it runs: Accessibility for the application running the task');
-	// FFmpeg scores every run, so it is required.
-	const complete = perceivedMac(granted);
-	const [noFfmpeg] = await checkTasks(manifest, mac, { ...complete, exists: async path => path !== '/usr/bin/ffmpeg' && await complete.exists(path) }, ['measure:perceived']);
-	assert.equal(noFfmpeg.status, 'missing');
-	assert.equal(noFfmpeg.reason, 'FFmpeg');
-	// The latency harness on macOS: ready but for the grant only its run can show.
-	const [latency] = await checkTasks(manifest, mac, perceivedMac({}), ['measure:latency']);
-	assert.equal(latency.status, 'unknown');
-	assert.equal(latency.reason, 'cannot be checked before it runs: Screen Recording for the development VniLink');
-	const text = formatDoctor([ready, latency], 'header', [], []);
-	assert.match(text, /\n\nPermissions\n {2}ok {10}Screen Recording for the application running the task: granted/);
+	assert.equal(latency.results.find(result => result.id === 'ssh'), undefined, 'no task reaches another computer over SSH');
+	const [build] = await checkTasks(manifest, mac, toolsMac(), ['build']);
+	assert.equal(build.status, 'ready');
+	assert.equal(build.reason, undefined);
+	const text = formatDoctor([build, latency], 'header', [], []);
 	assert.match(text, /\n\nOther computers\n {2}optional {4}A second computer: --peer runs a suite or a measurement's other side/);
-	assert.match(text, /\nTasks\n {2}ready {7}measure:perceived\n {2}unknown {5}measure:latency: cannot be checked before it runs: Screen Recording for the development VniLink$/m);
+	assert.match(text, /\nTasks\n {2}ready {7}build\n {2}unknown {5}measure:latency: cannot be checked before it runs: Screen Recording for the development VniLink$/m);
 });
 
 test('requirement and task entries have only known fields, and every task can run on one computer', () => {
@@ -463,8 +415,6 @@ test('requirement and task entries have only known fields, and every task can ru
 		'license:apply': ['git'],
 		'vscode': ['git'],
 		'measure:impaired:linux': ['root', 'network-namespaces'],
-		// The driver compiles vnilink-macos, which builds the media crates.
-		'measure:perceived': [...taskRequirements(manifest, 'build'), 'screen-recording', 'accessibility', 'ffmpeg'],
 		'measure:latency': ['vnilink-screen-recording', 'screen-portal', 'signed-in-desktop'],
 	};
 	for (const [task, ids] of Object.entries(needs)) {
@@ -475,7 +425,7 @@ test('requirement and task entries have only known fields, and every task can ru
 	// --peer runs reach the test agent on a second computer, which is optional, and nothing uses SSH.
 	assert.equal(manifest.requirements.ssh, undefined, 'no requirement for SSH');
 	assert.equal(manifest.requirements['second-computer'].optional, true);
-	for (const task of ['test:service', 'bench:service', 'measure:latency', 'measure:perceived']) {
+	for (const task of ['test:service', 'bench:service', 'measure:latency']) {
 		assert.ok(taskRequirements(manifest, task).includes('second-computer'), `${task} lists the second computer`);
 	}
 });

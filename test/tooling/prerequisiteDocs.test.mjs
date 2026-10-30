@@ -20,7 +20,7 @@ test('CONTRIBUTING.md carries the setup section generated from the manifest', as
 	assert.match(current, /sudo dnf install .*pipewire-devel/);
 	assert.match(current, /Intel Macs cannot build VniLink/);
 	// A second computer is listed as optional, never as a need, and nothing reaches it over SSH.
-	for (const line of current.split('\n').filter(line => /^\| `npm run measure:(latency|perceived)` \|/.test(line))) {
+	for (const line of current.split('\n').filter(line => /^\| `npm run measure:latency` \|/.test(line))) {
 		assert.match(line, /A second computer \(optional\)/, line);
 		assert.doesNotMatch(line, /OpenSSH/, line);
 	}
