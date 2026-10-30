@@ -5,6 +5,12 @@
  *  native menus on macOS and VniLink's themed menus elsewhere, as its dialogs are, rather than
  *  a `window.menuStyle` setting; no telemetry, notification or keybinding service.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import { type IAction, Separator, SubmenuAction } from '../../../../base/common/actions.js';
 import * as dom from '../../../../base/browser/dom.js';

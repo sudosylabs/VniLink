@@ -4,6 +4,12 @@
 # Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
 # Adapted from VS Code 1.141.0 scripts/test.sh.
 # ---------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------
+# Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+# Modifications licensed under the GNU Affero General Public License, version 3 only.
+# See LICENSE in the project root for license information.
+# SPDX-License-Identifier: AGPL-3.0-only AND MIT
+# ---------------------------------------------------------------------------------------------
 
 # Runs the UI scenarios from a checkout in any state, after VS Code's
 # scripts/test.sh: build/lib/preLaunch.ts installs and builds what is missing,

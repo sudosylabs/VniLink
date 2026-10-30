@@ -4,6 +4,13 @@
  *  Adapted for VniLink: native window controls, window state and view tabs.
  *-------------------------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------------------------
+ * Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+ * Modifications licensed under the GNU Affero General Public License, version 3 only.
+ * See LICENSE in the project root for license information.
+ * SPDX-License-Identifier: AGPL-3.0-only AND MIT
+ * --------------------------------------------------------------------------------------------- */
+
 .part.titlebar {
 	position: relative;
 	flex-shrink: 0;

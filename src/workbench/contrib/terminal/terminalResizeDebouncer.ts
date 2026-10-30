@@ -3,6 +3,12 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *  Adapted from VS Code 1.141.0 src/vs/workbench/contrib/terminal/browser/terminalResizeDebouncer.ts.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import type { Terminal } from '@xterm/xterm';
 import { getWindow, runWhenWindowIdle } from '../../../base/browser/dom.js';

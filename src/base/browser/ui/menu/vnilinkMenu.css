@@ -4,6 +4,13 @@
  *  Adapted from VS Code 1.141.0 src/vs/base/browser/ui/menu/menu.ts.
  *-------------------------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------------------------
+ * Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+ * Modifications licensed under the GNU Affero General Public License, version 3 only.
+ * See LICENSE in the project root for license information.
+ * SPDX-License-Identifier: AGPL-3.0-only AND MIT
+ * --------------------------------------------------------------------------------------------- */
+
 /*
  * The rules VS Code's menu writes into a style element (`getMenuWidgetCSS` in
  * menu.ts). VniLink's CSP refuses injected style elements, so they live here,

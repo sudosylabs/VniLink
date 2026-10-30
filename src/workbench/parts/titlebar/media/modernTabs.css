@@ -5,6 +5,13 @@
  *  Modern tab presentation: selectors target VniLink's titlebar; theme tokens use its chrome palette.
  *-------------------------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------------------------
+ * Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+ * Modifications licensed under the GNU Affero General Public License, version 3 only.
+ * See LICENSE in the project root for license information.
+ * SPDX-License-Identifier: AGPL-3.0-only AND MIT
+ * --------------------------------------------------------------------------------------------- */
+
 .part.titlebar {
 	overflow: clip;
 
