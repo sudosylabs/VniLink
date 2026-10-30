@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Input on a desktop: what the host's desktop applies, what it lifts when
 //! the desktop's connection ends, what it reports when its operating system
 //! refuses an event or is slow to take one, and what it holds when input is

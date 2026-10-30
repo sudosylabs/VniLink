@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Nonvisual source and playback contracts. Native UI remains deferred.
 use crate::{error::map_error, BackendStartup, FfiError, FfiServiceInfo, VnilinkCore};
 use std::sync::{Arc, Mutex};

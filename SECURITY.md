@@ -60,10 +60,9 @@ Reports are particularly relevant when they involve:
 - Bypasses of operating-system capture or input permissions, or incorrect
   assumptions about locked, elevated, pre-login, or Wayland sessions.
 
-The current contracts are documented in [pairing](crates/vnilink/PAIRING.md),
-[reconnect](crates/vnilink/RECONNECT.md),
-[clipboard](crates/vnilink/CLIPBOARD.md), and
-[file transfer](crates/vnilink/TRANSFER.md). These describe intended boundaries;
+The current contracts for pairing, consent, reconnect, clipboard and file
+transfer are summarised in [ARCHITECTURE.md](ARCHITECTURE.md) and documented in
+the modules that implement them. These describe intended boundaries;
 they do not replace investigation of a reported failure.
 
 ## Handling and disclosure

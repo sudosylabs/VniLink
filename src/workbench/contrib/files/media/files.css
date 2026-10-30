@@ -1,3 +1,10 @@
+/* ---------------------------------------------------------------------------------------------
+ * Copyright (c) 2026 Sudosy Labs. All rights reserved.
+ * Licensed under the GNU Affero General Public License, version 3 only.
+ * See LICENSE in the project root for license information.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * --------------------------------------------------------------------------------------------- */
+
 /* The Files tab: two panes edge to edge with the copy column between them
  * and the status bar below. Rows look like the system's own file lists:
  * dense, with the accent selection only in the pane being worked in. A

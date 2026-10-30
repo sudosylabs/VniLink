@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Independent per-source capture owners for Linux hosting.
 //!
 //! Each shared display (one X11 CRTC, or the single portal grant) runs under

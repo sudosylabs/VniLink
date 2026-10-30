@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Which cameras a viewer may open: the host's grant lists them, each opens
 //! for one viewer at a time, a camera that fails to open says so where the
 //! host's availability is read, and recording follows the host's consent.

@@ -1,4 +1,11 @@
 @echo off
+REM ---------------------------------------------------------------------------------------------
+REM Copyright (c) 2026 Sudosy Labs. All rights reserved.
+REM Licensed under the GNU Affero General Public License, version 3 only.
+REM See LICENSE in the project root for license information.
+REM SPDX-License-Identifier: AGPL-3.0-only
+REM ---------------------------------------------------------------------------------------------
+
 setlocal
 
 :: Runs the UI scenarios from a checkout in any state, after VS Code's

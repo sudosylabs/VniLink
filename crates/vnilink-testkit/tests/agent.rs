@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The test agent as a person runs it (`vnilink-testkit agent`): it writes
 //! a pairing file and its digits, approves one computer by the digits typed
 //! on its terminal, serves that computer's suite, refuses every other

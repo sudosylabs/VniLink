@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Still pictures: one AV1 4:4:4 keyframe of a screen that stopped
 //! changing, sharp where the stream's 4:2:0 blurs coloured text. The viewer
 //! shows it until the screen changes ([`vnilink::FrameRole::Still`]).

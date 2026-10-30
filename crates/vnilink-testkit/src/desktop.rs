@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! What the desktop suites share: a host serving a scripted screen through
 //! its real picture pipeline (`vnilink_media::serve_shared_capture`: reads,
 //! changes, stills, the send gate) with a stand-in encoder, a desktop that

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! This computer's own shortcuts, taken by its platform's keyboard hook while
 //! a desktop it controls has the keyboard, and sent to that desktop as the
 //! physical keys they are. Linux has no hook yet: there the window keeps

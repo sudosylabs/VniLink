@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Presence links: one idle neutral connection to every paired computer.
 //!
 //! A computer is reachable when this side holds a live neutral link to it.
@@ -6,6 +13,11 @@
 //! by itself, and the host does not count it as someone connected.
 //! The supervisor redials with backoff, sooner when the peer dials us or the
 //! user asks for the link, and stops for unpaired computers.
+//!
+//! The link's session phase maps to [`DevicePresence`]: active is connected,
+//! reconnecting is reconnecting, and a link that ended is disconnected. A
+//! host that refused the link because it stopped hosting reports
+//! [`DevicePresence::NotAccepting`] until a link is active again.
 // trace: records every ignored failure
 
 use std::collections::HashMap;

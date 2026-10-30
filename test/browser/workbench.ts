@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 import { Event } from '../../src/base/common/event.js';
 import { IWorkbenchConfigurationService } from '../../src/workbench/services/configuration/configurationService.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! `vnilink-testkit bridge`: the suite's side of a run against the agent
 //! for a build script, which speaks JSON lines over this process's input
 //! and output instead of linking the kit. It pairs with the agent as a

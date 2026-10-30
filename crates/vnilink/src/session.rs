@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 use crate::error::Error;
 use crate::events::{CoreEvent, EventHub};
 use crate::protocol::Quality;
@@ -9,7 +16,7 @@ pub enum SessionRole {
     Host,
 }
 
-/// Session lifecycle from the README. `Idle` is the absence of a session.
+/// Session lifecycle. `Idle` is the absence of a session.
 /// The controller enters `Reconnecting` after a dropped link, before the next
 /// dial. The host closes the old generation first, then accepts the new one.
 #[derive(Debug, Clone, PartialEq, Eq)]

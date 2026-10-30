@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! A strip of black and white cells carrying a 20-bit time, drawn by a
 //! stimulus on screen and read back from a screen capture, for glass-to-glass
 //! latency. It must survive H.264 at low bitrate and any scale, so cells are

@@ -1,4 +1,23 @@
-//! Authorize, connect, disconnect, and the controller dial loop.
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
+//! Connect, disconnect, unpair, and the controller dial loop.
+//!
+//! One neutral link per paired peer: [`Core::begin_connect_services`] starts
+//! it or returns the live one, and admission implies no service. The loop
+//! dials with the peer's stored addresses, sends its own address
+//! announcement once the host accepts, and then reads the host's control
+//! stream until the session stops, the host closes it or the connection
+//! drops. The rules for which endings dial again are in [`crate::reconnect`].
+//!
+//! Each admitted connection raises the session generation. A controller
+//! session that is redialing keeps its jobs to retry; one that ended
+//! interrupts them. Announcements from the host replace the stored addresses
+//! of that peer only.
 // trace: records every ignored failure
 
 use super::*;
@@ -290,6 +309,10 @@ pub(super) fn start_outgoing(
     Ok(pending)
 }
 
+/// Dials until the session ends. `drops` counts consecutive redials against
+/// [`reconnect::ATTEMPTS`]; a link that lasted resets it. A refusal before the
+/// host first admitted this session, or any error [`reconnect::retries`]
+/// rejects, fails the session instead of dialing again.
 pub(super) async fn run_controller(
     shared: Arc<Shared>,
     local_id: u64,

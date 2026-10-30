@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Retention and publication authority is an open file, never a reusable filename.
 //! Move the candidate atomically into an exclusively created private namespace
 //! before inspecting it. Public-name churn cannot race the eventual unlink or publish.

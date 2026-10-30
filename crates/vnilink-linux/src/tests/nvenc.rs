@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 use vnilink::{VideoCodec, YuvMatrix};
 use vnilink_media::{
     bgra_to_nv12, nv12_to_bgra, parse_annex_b, RawFrame, SoftwareDecoder, VideoDecoder, VideoSignal,

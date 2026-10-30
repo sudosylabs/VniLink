@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 use std::fmt;
 
 use crate::address;
@@ -63,7 +70,7 @@ pub(crate) const MAX_ADDRESS_FRAME: usize = address::MAX_FRAME;
 /// is installed. File transfer is true once at least one file root is set.
 /// `h264_encode` is true once the platform reports a usable H.264 encoder
 /// (VA-API on Linux); `h264_decode` is true once it reports a usable H.264
-/// decoder. Those grants stay off until `authorize` sets them. Audio stays false.
+/// decoder. Those grants stay off until the sharing policy allows them. Audio stays false.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
     pub desktop_capture: bool,

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Shared control library for VniLink.
 //!
 //! Native applications host this crate. It owns installation identity, relay
@@ -19,7 +26,7 @@
 //! chord in its own layout. [`RemoteDesktopService::submit_text`] types a
 //! finished string, and [`Core::set_swap_control_and_command`] exchanges
 //! Control and Command on the desktops opened after it.
-//! The keyboard steps are in `crates/vnilink/KEYBOARD.md`.
+//! The keyboard modes are documented in the `keyboard` module.
 //!
 //! # Relay
 //!
@@ -46,7 +53,8 @@
 //! importing computer after its owner confirms [`Core::control_check`].
 //! Pairing does not grant services; [`Core::change_sharing_policy`] sets
 //! installation-wide consent. The session uses the relays already
-//! configured for this installation. The steps are in `crates/vnilink/PAIRING.md`.
+//! configured for this installation. The flow is documented in the `pairing`
+//! module and in `core::pairing`.
 //!
 //! # Reconnect
 //!
@@ -54,7 +62,7 @@
 //! has a new generation, and input queued for the old one is discarded. While
 //! a session is up, each side stores the other's current home relay URLs and
 //! direct addresses. A local disconnect or a host close does not redial.
-//! The rules are in `crates/vnilink/RECONNECT.md`.
+//! The rules are documented in the `reconnect` module.
 //!
 //! # Clipboard
 //!
@@ -63,7 +71,7 @@
 //! [`RemoteDesktopService::submit_clipboard`] sends it to the host, and
 //! [`Core::publish_desktop_clipboard`] sends the host's text to one
 //! Desktop. Neither call reads or writes the operating-system clipboard.
-//! The steps are in `crates/vnilink/CLIPBOARD.md`.
+//! The pipe is documented in the `clipboard` module.
 //!
 //! # File transfer
 //!
@@ -71,8 +79,8 @@
 //! owner shares the whole disk with [`Core::enable_filesystem_access`]; the
 //! peer browses it through a Files service ([`RemoteFilesService`]) and
 //! moves bytes with its resumable transfer jobs (`files_service_upload`/
-//! `files_service_download`, `job_poll`). The steps are in
-//! `crates/vnilink/TRANSFER.md`.
+//! `files_service_download`, `job_poll`). The jobs are documented in
+//! `core::jobs`.
 //!
 //! # Threading
 //!

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Checked native RGB32 rows, and the camera format nearest a request.
 use vnilink_media::{Error, RawFrame};
 
@@ -194,8 +201,8 @@ mod tests {
     }
     #[test]
     fn a_camera_keeps_its_sensors_shape_and_is_only_scaled_down() {
-        // This laptop's camera: a 4:3 sensor whose 16:9 modes it letterboxes.
-        let laptop = [
+        // A 4:3 sensor whose 16:9 modes it letterboxes.
+        let letterboxed = [
             (2592, 1944, 30),
             (2592, 1944, 15),
             (2560, 1440, 30),
@@ -208,7 +215,7 @@ mod tests {
             (320, 240, 30),
         ];
         assert_eq!(
-            choose_mode(&laptop, 1280, 30),
+            choose_mode(&letterboxed, 1280, 30),
             Some(CameraMode {
                 native: 0,
                 width: 1280,

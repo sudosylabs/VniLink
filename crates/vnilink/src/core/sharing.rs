@@ -1,4 +1,35 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Global sharing transactions. Persist consent before revoking any live work.
+//!
+//! [`SharingPolicy`] belongs to the installation, not to a device: one
+//! consent covers every paired device, including ones paired later. The
+//! default allows nothing. Services are screen view and control, files,
+//! terminal, camera, microphone, system audio, clipboard, recording and system
+//! actions. A remembered identity is still required (`Trust::granted`), so
+//! enabling a service never admits an unpaired computer, and enabling never
+//! starts work. Native permissions, backend availability and remote action
+//! rules are separate gates that also apply.
+//!
+//! [`Core::change_sharing_policy`] applies a partial update atomically;
+//! [`Core::set_sharing_policy`] replaces the whole policy. Updates are
+//! serialised. The new policy is saved first, and a failed save restores the
+//! previous one and touches no live work. After a successful save, disabling a
+//! service reconciles each paired device's grants (releasing held input when
+//! control or view goes), closes the affected hosted service owners as
+//! [`CloseCause::Revoked`] across all devices, and ends what depended on
+//! it: file pipes and jobs, terminals, system privacy. Disabling recording
+//! advances the recording epoch and closes recording taps, so earlier
+//! recording leases stop; unrelated services stay connected. Each paired
+//! device gets [`CoreEvent::DeviceAuthorized`].
+//!
+//! Forgetting a device ([`Core::unpair`]) removes its identity and ends its
+//! connections without changing this policy.
 use super::*;
 use crate::{CloseCause, ServicePhase, SharingPolicy};
 

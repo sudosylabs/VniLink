@@ -1,9 +1,15 @@
-//! `latency-host`, `latency-viewer` and `perceived-stimulus`: one side of a
-//! measurement, started from the agent's own checkout as a measurement
-//! starts it on one computer, through `node build/run.ts testkit:launch`
-//! and the helpers in `build/lib/latency.ts` and `build/lib/perceived.ts`.
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
+//! `latency-host` and `latency-viewer`: one side of the latency
+//! measurement, started from the agent's own checkout as the measurement
+//! starts it on one computer, through `node build/run.ts testkit:launch`.
 //! The checkout is the one the agent was built from, the program is its
-//! development Electron with `out/latency.cjs` or `out/perceived.cjs`, and
+//! development Electron with `out/latency.cjs`, and
 //! the suite chooses neither: it may set only the variables in
 //! [`LATENCY_VARIABLES`], to whole numbers in their ranges.
 //!
@@ -60,7 +66,6 @@ const END_WAIT: Duration = Duration::from_secs(5);
 pub(crate) enum Side {
     LatencyHost,
     LatencyViewer,
-    PerceivedStimulus,
 }
 
 impl Side {
@@ -69,16 +74,14 @@ impl Side {
         match self {
             Self::LatencyHost => "latency-host",
             Self::LatencyViewer => "latency-viewer",
-            Self::PerceivedStimulus => "perceived-stimulus",
         }
     }
 
-    /// The latency measurement's role, for its sides.
-    fn latency_role(self) -> Option<&'static str> {
+    /// The side's role in the latency measurement.
+    fn role(self) -> &'static str {
         match self {
-            Self::LatencyHost => Some("host"),
-            Self::LatencyViewer => Some("viewer"),
-            Self::PerceivedStimulus => None,
+            Self::LatencyHost => "host",
+            Self::LatencyViewer => "viewer",
         }
     }
 }
@@ -105,7 +108,7 @@ impl Launched {
 
     /// Ends the side and removes its folders.
     fn teardown(&mut self) {
-        if let (Some(folders), Some(_)) = (self.folders.as_mut(), self.side.latency_role()) {
+        if let Some(folders) = self.folders.as_mut() {
             // The sides quit when they see `done`, as on one computer. The
             // suite may have given it already.
             let _ = folders.put("done.json", b"{}");
@@ -132,21 +135,14 @@ fn checkout() -> PathBuf {
 }
 
 /// The variables the suite asked for in `params["env"]`, each one of
-/// [`LATENCY_VARIABLES`] set to a whole number, for a latency side; none
-/// for the stimulus.
-pub(crate) fn requested_variables(
-    side: Side,
-    params: &Value,
-) -> Result<Vec<(String, String)>, String> {
+/// [`LATENCY_VARIABLES`] set to a whole number.
+pub(crate) fn requested_variables(params: &Value) -> Result<Vec<(String, String)>, String> {
     let Some(requested) = params.get("env").filter(|value| !value.is_null()) else {
         return Ok(Vec::new());
     };
     let requested = requested
         .as_object()
         .ok_or("env names variables and their values")?;
-    if side.latency_role().is_none() && !requested.is_empty() {
-        return Err("the perceived stimulus takes no variables".to_owned());
-    }
     requested
         .iter()
         .map(|(name, value)| {
@@ -283,7 +279,7 @@ fn screen_grant(checkout: &Path) -> Result<PathBuf, String> {
 
 impl Scenario for Launched {
     fn start(&mut self, _host: &Engine, params: &Value) -> Result<Value, String> {
-        let requested = requested_variables(self.side, params)?;
+        let requested = requested_variables(params)?;
         self.viewer_key = match self.side {
             Side::LatencyHost => Some(
                 params["viewer_key"]
@@ -320,18 +316,16 @@ impl Scenario for Launched {
                 command.env_remove(name);
             }
         }
-        if let Some(role) = self.side.latency_role() {
-            command
-                .env("VNILINK_LATENCY_ROLE", role)
-                .env("VNILINK_LATENCY_DIR", folders.rendezvous())
-                .env("VNILINK_LATENCY_OUTPUT", folders.output())
-                .env("VNILINK_LATENCY_SCREEN_GRANT", screen_grant(&checkout)?)
-                .env("VNILINK_TEST_PROFILE", folders.profile())
-                // Started by the agent, the side's other half is on another
-                // computer: it runs no reader and shows its screen only to be seen.
-                .env("VNILINK_LATENCY_ACROSS", "1")
-                .envs(requested);
-        }
+        command
+            .env("VNILINK_LATENCY_ROLE", self.side.role())
+            .env("VNILINK_LATENCY_DIR", folders.rendezvous())
+            .env("VNILINK_LATENCY_OUTPUT", folders.output())
+            .env("VNILINK_LATENCY_SCREEN_GRANT", screen_grant(&checkout)?)
+            .env("VNILINK_TEST_PROFILE", folders.profile())
+            // Started by the agent, the side's other half is on another
+            // computer: it runs no reader and shows its screen only to be seen.
+            .env("VNILINK_LATENCY_ACROSS", "1")
+            .envs(requested);
         if let Some(key) = &self.viewer_key {
             eprintln!(
                 "this screen is shared, to be seen and not controlled, with the suite's viewer {key}"
@@ -367,8 +361,8 @@ impl Scenario for Launched {
     fn poll(&mut self) -> Result<Polled, String> {
         let running = self.process.as_ref().is_some_and(SideProcess::running);
         let files = match self.folders.as_mut() {
-            Some(folders) if self.side.latency_role().is_some() => folders.poll()?,
-            _ => Vec::new(),
+            Some(folders) => folders.poll()?,
+            None => Vec::new(),
         };
         Ok(Polled { files, running })
     }
@@ -504,12 +498,11 @@ fn kill_on_close(child: &Child) -> std::io::Result<std::os::windows::io::OwnedHa
 mod tests {
     use super::*;
 
-    /// A suite sets only the whitelisted variables, to whole numbers, and
-    /// none for the stimulus; hold mode is not among them.
+    /// A suite sets only the whitelisted variables, to whole numbers; hold
+    /// mode is not among them.
     #[test]
     fn a_suite_sets_only_whitelisted_variables_to_whole_numbers() {
         let accepted = requested_variables(
-            Side::LatencyViewer,
             &json!({ "env": { "VNILINK_LATENCY_FPS": "60", "VNILINK_LATENCY_CONSENT_MS": "600000", "VNILINK_LATENCY_BITRATE": "0" } }),
         );
         assert_eq!(
@@ -521,10 +514,7 @@ mod tests {
             ]),
             "whitelisted whole numbers in range pass"
         );
-        assert_eq!(
-            requested_variables(Side::LatencyHost, &json!({})),
-            Ok(Vec::new())
-        );
+        assert_eq!(requested_variables(&json!({})), Ok(Vec::new()));
         for env in [
             json!({ "VNILINK_LATENCY_DIR": "/tmp" }),
             json!({ "VNILINK_LATENCY_ROLE": "host" }),
@@ -545,18 +535,10 @@ mod tests {
             json!(["VNILINK_LATENCY_FPS"]),
         ] {
             assert!(
-                requested_variables(Side::LatencyHost, &json!({ "env": env })).is_err(),
+                requested_variables(&json!({ "env": env })).is_err(),
                 "{env} is refused"
             );
         }
-        assert!(
-            requested_variables(
-                Side::PerceivedStimulus,
-                &json!({ "env": { "VNILINK_LATENCY_FPS": "60" } })
-            )
-            .is_err(),
-            "the stimulus takes none"
-        );
     }
 
     fn token(key: &str) -> String {
@@ -627,7 +609,6 @@ mod tests {
                 r#"{"token":"t","endpoint":"e","extra":1}"#,
             ),
             (Side::LatencyViewer, "anything.json", "{}"),
-            (Side::PerceivedStimulus, "read.json", r#"{"seconds":20}"#),
             (Side::LatencyHost, "done.json", "[]"),
             (Side::LatencyHost, "done.json", "not json"),
         ] {

@@ -1,9 +1,36 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The live link and the address refresh both roles share.
 //!
 //! The host and the controller each store the connection on the session and
 //! exchange home relay URLs and direct addresses on the authenticated control
 //! stream. The receiver keeps that list for that peer only; a later dial,
 //! including a reconnect after a dropped link, uses the stored list.
+//!
+//! # Metadata
+//!
+//! The pairing file carries the writer's [`crate::OperatingSystem`] and
+//! hostname. After pairing, the authenticated Hello and Accept messages carry
+//! both again, and each side stores what the other reports for that paired
+//! peer only. A name never creates trust: an unknown peer is ignored, an
+//! absent name keeps the previous one, and a failed save puts the previous
+//! value back. The operating system is descriptive metadata, never
+//! authorization.
+//!
+//! # Presence
+//!
+//! [`presence()`] reports [`crate::DevicePresence`] from sessions that exist,
+//! never from cached addresses. While the application supervises links (see
+//! [`Core::set_presence_links`]) presence is the supervisor's last observation
+//! of the neutral link: reachability, not use. Without supervision, an active
+//! session in either direction wins over older closed records, then
+//! reconnecting, then connecting. Changes publish
+//! [`crate::CoreEvent::PresenceChanged`].
 // trace: records every ignored failure
 
 use super::*;
@@ -273,8 +300,9 @@ fn session_path(path: &iroh::endpoint::Path<'_>) -> SessionPath {
     }
 }
 
-/// Multiple services and directions may share a peer. A live connection wins
-/// over an older finished record; no relay or cached-address guess is involved.
+/// Presence of one peer. Multiple services and directions may share a peer;
+/// a live connection wins over an older finished record, and no relay or
+/// cached-address guess is involved.
 pub(super) fn presence(state: &State, peer: &str) -> crate::DevicePresence {
     // While links are supervised, presence is reachability, not use.
     if state.presence_links {

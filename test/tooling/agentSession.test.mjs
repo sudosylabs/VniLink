@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -107,12 +114,12 @@ test('a side runs only a script built from the sources the agent\'s revision cov
 	const root = fileURLToPath(new URL('../../', import.meta.url));
 	const directory = await mkdtemp(join(tmpdir(), 'vnilink-bundle-'));
 	try {
-		await assert.rejects(assertBundleFresh(root, 'perceived.cjs', directory), /missing or was not built from these sources/, 'none built');
-		const options = bundleOptions(root, { outputDirectory: directory }).find(candidate => candidate.outfile === join(directory, 'perceived.cjs'));
+		await assert.rejects(assertBundleFresh(root, 'latency.cjs', directory), /missing or was not built from these sources/, 'none built');
+		const options = bundleOptions(root, { outputDirectory: directory }).find(candidate => candidate.outfile === join(directory, 'latency.cjs'));
 		await build({ ...options, logLevel: 'silent' });
-		await assertBundleFresh(root, 'perceived.cjs', directory);
-		await writeFile(join(directory, 'perceived.cjs'), `${await readFile(join(directory, 'perceived.cjs'), 'utf8')}\n// another commit\n`);
-		await assert.rejects(assertBundleFresh(root, 'perceived.cjs', directory), /not built from these sources/, 'a changed script');
+		await assertBundleFresh(root, 'latency.cjs', directory);
+		await writeFile(join(directory, 'latency.cjs'), `${await readFile(join(directory, 'latency.cjs'), 'utf8')}\n// another commit\n`);
+		await assert.rejects(assertBundleFresh(root, 'latency.cjs', directory), /not built from these sources/, 'a changed script');
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

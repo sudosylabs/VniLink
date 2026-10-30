@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 /**
  * The one entry point for build, packaging, verification and test tasks:
  * `node build/run.ts <task> [arguments]`. Interrupting the process aborts the
@@ -9,9 +16,9 @@ import { DevelopmentSession, startApplication } from './lib/development.ts';
 import { doctor } from './lib/doctor.ts';
 import { allowLinuxSandbox } from './lib/electron.ts';
 import { checkHygiene } from './lib/hygiene.ts';
+import { applyLicenseCommand, checkLicense } from './lib/license.ts';
 import { measureImpaired, measureImpairedInContainer } from './lib/impaired.ts';
 import { measureLatency } from './lib/latency.ts';
-import { comparePerceived, measurePerceived } from './lib/perceived.ts';
 import { buildInstallers } from './lib/installers.ts';
 import { renderTrayAssets } from './lib/trayAssets.ts';
 import { packageApplication } from './lib/package.ts';
@@ -50,9 +57,10 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'measure:impaired': (root, signal, args) => measureImpairedInContainer(root, signal, args),
 	'measure:impaired:linux': (root, signal, args) => measureImpaired(root, signal, args),
 	'measure:latency': (root, signal, args) => measureLatency(root, signal, args),
-	'measure:perceived': (root, signal, args) => args[0] === '--compare' ? comparePerceived(args.slice(1)) : measurePerceived(root, signal, args),
 	'check:product': root => checkProduct(root),
 	'check:hygiene': root => checkHygiene(root),
+	'check:license': root => checkLicense(root),
+	'license:apply': (root, _signal, args) => applyLicenseCommand(root, args),
 	'assets:tray': (root, signal) => renderTrayAssets(root, signal),
 	'check:upstream': () => verifyUpstream(),
 	'format': (_root, _signal, args) => formatFiles(args),

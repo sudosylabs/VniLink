@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Which adapter and output Desktop Duplication opens.
 //!
 //! An output can be duplicated only through a device on the adapter it is
@@ -5,9 +12,9 @@
 //! on a hybrid laptop whose panel is on the integrated GPU. DXGI's adapter
 //! order does not say which adapter that is. It usually lists the adapter
 //! with the primary display first, but a process given the high-performance
-//! GPU, or one in session 0 over SSH, saw the discrete GPU first on a
-//! hybrid Intel + NVIDIA laptop (2026-10-22), and that adapter had no
-//! outputs. So every output of every adapter is listed and the one the host
+//! GPU, or one in session 0 (a service or a remote shell), saw the discrete
+//! GPU first on a hybrid Intel + NVIDIA laptop (2026-10-22), and that
+//! adapter had no outputs. So every output of every adapter is listed and the one the host
 //! captures is chosen by what it shows ([`primary`]).
 
 /// One output of one adapter, as DXGI describes it.

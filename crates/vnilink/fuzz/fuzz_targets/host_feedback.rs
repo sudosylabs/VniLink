@@ -1,5 +1,15 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! `HostFeedback::decode` on the host's feedback, and the viewer's
 //! adaptation loop on what decodes, beside its own measurements.
+//!
+//! Feedback decodes back to its bytes, and no feedback leads the loop to a
+//! quality outside the agreed limits or above the viewer's ceiling.
 #![no_main]
 
 use arbitrary::Arbitrary;

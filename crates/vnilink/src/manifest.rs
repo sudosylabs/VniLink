@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Transfer manifests: bounded file/folder descriptions for jobs.
 //!
 //! A manifest maps relative paths to sizes, modification times and
@@ -67,7 +74,7 @@ impl Manifest {
 }
 
 /// A scanned source tree: paths, sizes and mtimes.
-/// `root_rel` is the root-relative path (e.g. `docs/sub/a.txt`) used to
+/// `root_rel` is the root-relative path (e.g. `photos/sub/a.txt`) used to
 /// re-open the file through directory handles when it is sent; `ino` (the
 /// Windows file index there) identifies it so a file renamed over it is
 /// refused.

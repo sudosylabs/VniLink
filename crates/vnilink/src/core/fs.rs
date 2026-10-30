@@ -1,11 +1,37 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The shared disk and filesystem operations.
+//!
+//! Files shares this computer's whole disk or nothing:
+//! [`Core::enable_filesystem_access`] shares `/` on Unix and every mounted
+//! drive on Windows, within the process's own permissions, and there is no
+//! narrower mode. [`Capabilities::file_transfer`](crate::Capabilities) is
+//! true once that is done. Sharing the disk is not enough for a peer: each
+//! operation also needs Files sharing (the `Transfer` grant, the
+//! `SharingPolicy`'s `files` switch), and withdrawing it closes the Files
+//! services and the files connections and interrupts the peer's jobs
+//! (`Core::set_sharing_policy`). A pairing never widens into disk access.
 //!
 //! The `Core` methods here execute against this installation's own disks
 //! (the local pane). The other computer's disk is reached through a Files
-//! service (`service_stream.rs`), whose requests this host serves here:
-//! each carries the versioned wire codec with the link's generation, and
-//! the host re-checks generation and Files sharing per request before
-//! touching its disks.
+//! service ([`super::service_stream`]), whose requests this host serves
+//! here: each carries the versioned wire codec with the link's generation,
+//! and the host re-checks generation and Files sharing per request, under
+//! the same hold as the change, before touching its disks.
+//!
+//! Every listed entry carries an `EntryToken` that a rename, delete or move
+//! to the Trash hands back, so a change made from a stale listing is
+//! refused rather than applied to whatever took the entry's place. The
+//! token guards against a stale listing, not against the peer: Files
+//! sharing alone decides what a peer may change. What a token proves, and
+//! the stricter rules on FAT and exFAT, are described with [`fs`]. An
+//! entry that an active job reads or writes is refused a rename, delete or
+//! trash (`jobs::rename_blocked`).
 // trace: records every ignored failure
 
 use super::*;

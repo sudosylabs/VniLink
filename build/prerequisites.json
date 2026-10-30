@@ -534,18 +534,6 @@
         }
       }
     },
-    "ffmpeg": {
-      "title": "FFmpeg",
-      "platforms": ["darwin"],
-      "purpose": "Scores the sharpness of the test card in every perceived-quality run.",
-      "check": {
-        "commands": {
-          "ffmpeg": {
-            "darwin": "`brew install ffmpeg`"
-          }
-        }
-      }
-    },
     "root": {
       "title": "Root",
       "kind": "permission",
@@ -556,30 +544,6 @@
       },
       "fix": {
         "default": "Run it as root (`sudo node build/run.ts measure:impaired:linux`), or run `npm run measure:impaired`, which runs it in a container."
-      }
-    },
-    "screen-recording": {
-      "title": "Screen Recording for the application running the task",
-      "kind": "permission",
-      "platforms": ["darwin"],
-      "purpose": "The perceived-quality driver captures the display as the application that started the task, a terminal or an editor.",
-      "check": {
-        "custom": "screen-recording"
-      },
-      "fix": {
-        "default": "Allow that application in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen it."
-      }
-    },
-    "accessibility": {
-      "title": "Accessibility for the application running the task",
-      "kind": "permission",
-      "platforms": ["darwin"],
-      "purpose": "The perceived-quality driver moves the pointer and types with Core Graphics events, which macOS delivers only from an application allowed to control the computer.",
-      "check": {
-        "custom": "accessibility"
-      },
-      "fix": {
-        "default": "Allow that application in System Settings > Privacy & Security > Accessibility."
       }
     },
     "vnilink-screen-recording": {
@@ -763,12 +727,6 @@
         "second-computer"
       ]
     },
-    "measure:perceived": {
-      "description": "Measure what this Mac shows and how fast it answers input",
-      "platforms": ["darwin"],
-      "same": "build",
-      "requires": ["screen-recording", "accessibility", "ffmpeg", "second-computer"]
-    },
     "check:product": {
       "description": "Check the product metadata",
       "requires": ["node"]
@@ -779,6 +737,14 @@
     },
     "check:hygiene": {
       "description": "Reject personal details in the repository",
+      "requires": ["node", "git"]
+    },
+    "check:license": {
+      "description": "Check the license notice of every source file",
+      "requires": ["node", "git"]
+    },
+    "license:apply": {
+      "description": "Add the license notice to source files that lack it",
       "requires": ["node", "git"]
     },
     "assets:tray": {

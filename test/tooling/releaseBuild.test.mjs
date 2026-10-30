@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
@@ -25,7 +32,7 @@ test('release entry points exclude tests and compile with production configurati
 		const outputDirectory = join(root, 'release-app');
 		const options = bundleOptions(root, { production: true, outputDirectory });
 		assert.equal(options.length, 6);
-		assert.equal(bundleOptions(root).length, 10);
+		assert.equal(bundleOptions(root).length, 9);
 		await put(root, 'tsconfig.json', '{}');
 		for (const option of options) {
 			await put(root, option.entryPoints[0], 'console.log(process.env.NODE_ENV);');
@@ -198,7 +205,7 @@ test('release publication inventories only complete payloads, cleans failures an
 		for (const directory of ['src', 'build', 'scripts', 'assets']) {
 			await mkdir(join(root, directory), { recursive: true });
 		}
-		for (const path of ['package-lock.json', 'tsconfig.json', 'src/tsconfig.json', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
+		for (const path of ['package-lock.json', 'tsconfig.json', 'src/tsconfig.json', 'LICENSE', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
 			await put(root, path);
 		}
 		await put(root, 'product.json', JSON.stringify(product));

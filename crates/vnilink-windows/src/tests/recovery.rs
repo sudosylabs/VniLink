@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Recovery keyframes and still-screen refinement on each of Media
 //! Foundation's H.264 encoder transforms on this machine, the twin of the
 //! VideoToolbox measurements. Windows only; run with

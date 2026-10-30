@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -28,6 +35,7 @@ test('the pre-commit hook checks staged files only; the full suite is opt-in bef
 	const preCommit = await readFile(join(root, '.husky/pre-commit'), 'utf8');
 	assert.doesNotMatch(preCommit, /npm (test|run (check|validate|precommit)\b(?!:))/);
 	assert.match(preCommit, /npm run check:hygiene/);
+	assert.match(preCommit, /npm run check:license/);
 	assert.match(preCommit, /lint-staged/);
 	const { default: stages } = await import('../../.lintstagedrc.mjs');
 	const typescript = stages['{src,test,build}/**/*.ts'];

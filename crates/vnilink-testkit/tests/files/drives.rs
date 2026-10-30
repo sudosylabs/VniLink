@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! A drive taken out or replaced under a transfer, as a stick is on
 //! Windows: what is interrupted, refused or kept, and what resumes. A
 //! transfer is pinned to the drive it began on, so another volume at the

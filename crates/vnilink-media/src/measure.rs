@@ -1,10 +1,16 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Pictures and comparisons for encoder measurements on each platform, so
 //! VideoToolbox and Media Foundation are measured on the same screen.
 
 use crate::RawFrame;
 
 pub mod glass;
-pub mod perceived;
 pub mod timecode;
 
 /// A page of text-like glyphs from a fixed alphabet on white, with a

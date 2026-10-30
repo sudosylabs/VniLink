@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 /** The application's bundles and resources, shared by the one-shot, release and watch builds. */
 import { build, type BuildOptions } from 'esbuild';
 import { cp, mkdir, readFile, rm } from 'node:fs/promises';
@@ -26,7 +33,7 @@ export function bundleOptions(root: string, { production = false, outputDirector
 		node('src/preload.ts', 'preload.cjs'),
 		// The restart notice: its own page, bundle and preload, apart from the workbench's IPC.
 		node('src/noticePreload.ts', 'noticePreload.cjs'),
-		...(!production ? [node('test/smoke/main.ts', 'smoke.cjs'), node('test/latency/main.ts', 'latency.cjs'), node('test/perceived/main.ts', 'perceived.cjs')] : []),
+		...(!production ? [node('test/smoke/main.ts', 'smoke.cjs'), node('test/latency/main.ts', 'latency.cjs')] : []),
 		browser('src/renderer.ts', 'renderer/renderer.js'),
 		browser('src/notice.ts', 'renderer/notice.js'),
 		...(!production ? [browser('test/browser/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' })] : []),
@@ -64,6 +71,7 @@ export function resources(root: string, outputDirectory = join(root, 'out')): Re
 		['node_modules/@xterm/xterm/LICENSE', 'licenses/xterm.txt'],
 		['node_modules/@xterm/addon-webgl/LICENSE', 'licenses/xterm-addon-webgl.txt'],
 		['node_modules/@xterm/addon-unicode11/LICENSE', 'licenses/xterm-addon-unicode11.txt'],
+		['LICENSE', 'licenses/vnilink.txt'],
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],
 		['ThirdPartyNotices.vscode.txt', 'licenses/vscode-third-party.txt'],
 		['assets/licenses', 'licenses/native-codecs'],

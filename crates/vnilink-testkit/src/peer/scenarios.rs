@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The scenarios compiled into the agent: each the host half of a suite or
 //! a measurement. A scenario shares only its own service while it runs and
 //! works only in the agent's own folders; the suite names it and passes
@@ -6,8 +13,8 @@
 //! it runs; the paths it hands the suite name only its own folder.
 //!
 //! `files`, `desktop`, `camera` and `terminal` serve a suite on the agent's
-//! engine; `latency-host`, `latency-viewer` and `perceived-stimulus` start
-//! one side of a measurement from the agent's own checkout ([`launch`]).
+//! engine; `latency-host` and `latency-viewer` start
+//! one side of the latency measurement from the agent's own checkout ([`launch`]).
 //! A scenario that reaches beyond the agent's engine runs only with its
 //! owner's allowance ([`needs`]).
 
@@ -28,14 +35,13 @@ use super::Polled;
 use crate::Engine;
 
 /// Every scenario's name, for the agent's refusal of another.
-pub(crate) const NAMES: [&str; 7] = [
+pub(crate) const NAMES: [&str; 6] = [
     "files",
     "desktop",
     "camera",
     "terminal",
     "latency-host",
     "latency-viewer",
-    "perceived-stimulus",
 ];
 
 /// The host half of one scenario, run by the agent between Start and Stop.
@@ -84,9 +90,6 @@ pub(crate) fn named(name: &str) -> Option<Box<dyn Scenario>> {
         "terminal" => Some(Box::new(terminal::TerminalHost::default())),
         "latency-host" => Some(Box::new(launch::Launched::new(launch::Side::LatencyHost))),
         "latency-viewer" => Some(Box::new(launch::Launched::new(launch::Side::LatencyViewer))),
-        "perceived-stimulus" => Some(Box::new(launch::Launched::new(
-            launch::Side::PerceivedStimulus,
-        ))),
         _ => None,
     }
 }

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The file transfer protocol, `vnilink/files/1`.
 //!
 //! Jobs move file bytes over a connection of their own: the receiver dials
@@ -12,7 +19,11 @@
 //! that segment again, not the file, and a resume continues after the last
 //! journaled segment without either side reading earlier bytes again. The
 //! bytes of the next segment that already arrived are kept and named in the
-//! request, so an interrupted attempt costs only what was in flight.
+//! request, so an interrupted attempt costs only what was in flight. A link
+//! that keeps dropping still progresses, where restarting the segment would
+//! lose up to [`SEGMENT_LEN`] each time; a source that changed drops the held
+//! bytes. The last segment is checked but not journaled: the file publishes
+//! as soon as it checks.
 //!
 //! Through a relay the receiver holds its connection's receive window to
 //! what the path carries, so a transfer yields to the desktop session

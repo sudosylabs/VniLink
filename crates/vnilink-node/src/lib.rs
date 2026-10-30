@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Node-API control bridge. Input, session, and video-frame polling cross
 //! here as JSON; callers transfer frame bytes as base64. Poll stateful video
 //! subscriptions instead of holding pollers in JavaScript.

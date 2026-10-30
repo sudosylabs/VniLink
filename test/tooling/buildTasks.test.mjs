@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
@@ -180,6 +187,6 @@ test('the agent starts only the measurement sides compiled into it, one at a tim
 	}
 	const signal = new AbortController().signal;
 	for (const args of [[], ['latency-sender'], ['latency-host', 'latency-viewer'], ['../latency-host']]) {
-		await assert.rejects(launchAgentSide('/root', signal, args), /testkit:launch takes one of latency-host, latency-viewer, perceived-stimulus/, JSON.stringify(args));
+		await assert.rejects(launchAgentSide('/root', signal, args), /testkit:launch takes one of latency-host, latency-viewer/, JSON.stringify(args));
 	}
 });

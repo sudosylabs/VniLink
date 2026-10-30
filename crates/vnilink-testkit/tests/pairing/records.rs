@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Opening an installation: a store that cannot be read or holds no valid
 //! record is left as it was, a first save that fails keeps no identity,
 //! an engine without a store saves nothing, and the relay a saved change

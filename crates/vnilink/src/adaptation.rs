@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Measured per-Desktop adaptation. Only local monotonic intervals are used;
 //! remote capture timestamps are not assumed synchronized with this computer.
 use crate::bitrate::{self, RateLimit, FLOOR_KBPS, RELAY_KBPS};

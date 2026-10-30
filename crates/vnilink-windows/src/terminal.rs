@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Host-selected ConPTY. Pipe I/O and teardown have independent workers so
 //! pending writes can be cancelled and output remains drained during Close.
 //! Each worker blocks on its pipe, queue or handles, so input and output move

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Headless soak: connecting, opening a desktop, driving a frame and a key
 //! through it, and closing everything again, so the host releases the held
 //! key on its cleanup worker, many times over, leaves no residue. The registries are the leak checks: controller services,

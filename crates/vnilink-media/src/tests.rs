@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 #[path = "tests/annexb.rs"]
 mod annexb_tests;
 #[path = "tests/channel.rs"]
@@ -18,8 +25,6 @@ mod impaired_video_tests;
 mod measure_tests;
 #[path = "tests/nv12.rs"]
 mod nv12_tests;
-#[path = "tests/perceived.rs"]
-mod perceived_tests;
 #[path = "tests/pump.rs"]
 mod pump_tests;
 #[path = "tests/rate.rs"]

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 /** The Linux installers: Debian and RPM packages with a desktop entry matching the application id. */
 import type { BuilderConfiguration } from './package.ts';
 import type { Product } from './product.ts';

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Media Foundation H.264 capability probe. Opening a tiny encoder proves
 //! the platform transform exists; a failure registers cleared bits, never
 //! assumed ones. Decode is reported alongside encode: both ride the same

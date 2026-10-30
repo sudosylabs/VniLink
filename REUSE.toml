@@ -1,0 +1,43 @@
+version = 1
+
+# Files that cannot carry a license comment, and the project's own files that
+# would only be noise with one. Source files carry their notice themselves
+# (`npm run check:license`); a notice a file already carries wins over these.
+#
+# Not covered here, because each keeps its own license: everything in vendor/,
+# assets/licenses/, the VS Code notices (LICENSE.vscode.txt,
+# ThirdPartyNotices.vscode.txt), the vendored JavaScript and its sidecar files
+# in src/base/browser/dompurify and src/base/common/marked, and the Code of
+# Conduct, which states its own license.
+
+[[annotations]]
+path = [
+    "*.json",
+    "*.md",
+    "*.toml",
+    "*.lock",
+    ".*",
+    ".agents/**",
+    ".cargo/**",
+    ".github/**",
+    ".husky/**",
+    ".vscode/**",
+    "build/**",
+    "crates/**",
+    "scripts/**",
+    "test/**",
+    "src/tsconfig.json",
+    "src/AGENTS.md",
+    "src/workbench/*.html",
+    "assets/*.png",
+    "assets/*.svg",
+    "assets/android/**",
+    "assets/apple/**",
+    "assets/desktop/**",
+    "assets/linux/**",
+    "assets/tray/**",
+    "assets/windows/**",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 Sudosy Labs"
+SPDX-License-Identifier = "AGPL-3.0-only"

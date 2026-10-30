@@ -3,6 +3,12 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *  Adapted for VniLink: core services for one native window and the workbench that uses them.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import { mainWindow } from '../base/browser/window.js';
 import { Disposable } from '../base/common/lifecycle.js';

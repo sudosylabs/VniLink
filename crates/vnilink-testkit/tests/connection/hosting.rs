@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! What ends a hosted session and what it leaves: stopping hosting, the
 //! controller disconnecting, the host revoking or unpairing it, and control
 //! withdrawn mid-session; each says what a later connect meets, and each

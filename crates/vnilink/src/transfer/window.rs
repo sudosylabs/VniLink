@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! How much a file receiver lets its sender have in flight, so a transfer
 //! yields to what else crosses the link.
 //!
@@ -12,6 +19,16 @@
 //! queue, and the window moves to keep that queue near [`TARGET_QUEUE`].
 //! The queue is shared, so the transfer sees the very delay it would add to
 //! the session, and yields without knowing it is there.
+//!
+//! A connection is dialed with [`INITIAL_WINDOW`], not the endpoint's full
+//! window, so the sender cannot have the whole window in flight before the
+//! path is known. At most once a round trip the window then grows by up to an
+//! eighth while no queue shows, eases down as the queue passes
+//! [`TARGET_QUEUE`], and halves once the queue reaches four times it. It
+//! never falls below [`MIN_WINDOW`] and never grows past twice what the path
+//! carried in a base round trip plus the target, so a fast path with no
+//! queue opens to the full window and a slow one stays near where it began
+//! until queueing shows.
 
 use std::collections::VecDeque;
 use std::time::Duration;

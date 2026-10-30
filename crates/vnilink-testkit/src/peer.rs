@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! A host on another computer: the test agent (`vnilink-testkit agent`)
 //! runs a scenario's host half on its own engine, and a suite on this
 //! computer runs the controller half against it through a [`RemoteHost`].
@@ -239,16 +246,13 @@ impl From<vnilink::Error> for PeerError {
 /// misreading each other. Line endings are ignored, as a Windows checkout
 /// writes them differently.
 pub fn revision() -> String {
-    const SOURCES: [&str; 20] = [
+    const SOURCES: [&str; 17] = [
         include_str!("../../../build/lib/latency.ts"),
-        include_str!("../../../build/lib/perceived.ts"),
         include_str!("../../../build/lib/remote.ts"),
         include_str!("../../../build/lib/test.ts"),
         include_str!("../../../test/latency/across.ts"),
         include_str!("../../../test/latency/main.ts"),
         include_str!("../../../test/latency/stimulus.ts"),
-        include_str!("../../../test/perceived/main.ts"),
-        include_str!("../../../test/perceived/stimulus.ts"),
         include_str!("peer.rs"),
         include_str!("peer/agent.rs"),
         include_str!("peer/clock.rs"),

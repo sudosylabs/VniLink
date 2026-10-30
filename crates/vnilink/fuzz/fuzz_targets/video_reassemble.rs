@@ -1,6 +1,17 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The viewer's reassembler on a sequence of datagrams: forged ones mixed
 //! with honest fragments of frames, some lost and out of order; and, for
 //! each honest frame alone, whether enough shards rebuild it.
+//!
+//! Forged and honest fragments never panic; an honest frame comes back
+//! exactly when at least its data count of shards arrived. Whatever
+//! completes goes on to the video body parser, `decode_video_body`.
 #![no_main]
 
 use arbitrary::Arbitrary;

@@ -72,7 +72,6 @@ Some tasks need more:
 | `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:latency` | Screen Recording for the development VniLink: Run the task; on its first run macOS asks and the run stops. Allow VniLink in System Settings > Privacy & Security > Screen & System Audio Recording, then run it again; A second computer (optional) |
-| `npm run measure:perceived` | Screen Recording for the application running the task: Allow that application in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen it; Accessibility for the application running the task: Allow that application in System Settings > Privacy & Security > Accessibility; FFmpeg: `brew install ffmpeg`; A second computer (optional) |
 | `npm run assets:tray` | rsvg-convert: `brew install librsvg` |
 
 ### Windows
@@ -166,13 +165,10 @@ revocation, session-generation checks, reconnect cleanup, and bounded input and
 media handling intact. File writes must stay inside the selected transfer
 directory and preserve the explicit replacement policy.
 
-Read the relevant [pairing](crates/vnilink/PAIRING.md),
-[keyboard](crates/vnilink/KEYBOARD.md),
-[reconnect](crates/vnilink/RECONNECT.md),
-[clipboard](crates/vnilink/CLIPBOARD.md), and
-[transfer](crates/vnilink/TRANSFER.md) contracts before changing those paths.
-Update contracts and regression coverage in the same pull request when
-behavior changes.
+Read the relevant section of [ARCHITECTURE.md](ARCHITECTURE.md) (pairing,
+consent, reconnect, desktop, files) and the header comment of the module you
+change before changing those paths. Update the documentation and regression
+coverage in the same pull request when behavior changes.
 
 ## TypeScript, CSS and formatting
 
@@ -319,12 +315,12 @@ behavior on its real OS. Capture/input checks can access devices or request
 OS permissions; use a test environment you control.
 
 Every task runs on one computer. The measurements
-(`npm run measure:latency`, `npm run measure:perceived`, `npm run measure:impaired`)
+(`npm run measure:latency`, `npm run measure:impaired`)
 run on this computer by default; `--peer` adds a second computer, running the
-test agent, to the latency and perceived-quality runs and is never required. `npm run doctor`
+test agent, to the latency run and is never required. `npm run doctor`
 reports the OS permissions a task needs, as granted, missing, or unknown until
-the run asks for them. [LATENCY.md](build/LATENCY.md) and
-[PERCEIVED.md](build/PERCEIVED.md) describe each run and what it proves.
+the run asks for them. The documentation at the top of `build/lib/latency.ts`
+describes the latency run and what it proves.
 
 A service's suites (`node build/run.ts test:service <service>` and
 `bench:service <service>`) run both engines on this computer. With
@@ -348,10 +344,10 @@ agent says on its terminal when the disk is shared and when that ends, and
 uploads land in a folder of the scenario's own that the agent names and
 removes when the scenario stops. Other suites
 refuse `--peer`. A peer run is saved apart from this computer's runs and
-reports regressions without failing. The latency and perceived-quality
-measurements reach the same agent through `vnilink-testkit bridge`, and the
-agent starts their other side from its own checkout; the latency sides show
-its real screen, so they run only when the agent was started with
+reports regressions without failing. The latency measurement reaches the same
+agent through `vnilink-testkit bridge`, and the agent starts its other side
+from its own checkout; the latency sides show its real screen, so they run
+only when the agent was started with
 `--allow screen`. `--allow` repeats or takes a comma list
 (`--allow screen,terminal,files`).
 
@@ -377,8 +373,14 @@ Use concise commit messages describing the outcome. Maintainers may request
 changes to scope, design, tests, security, accessibility, or documentation.
 Review and merge timing depends on maintainer availability.
 
-The Rust workspace declares Apache-2.0 licensing. Preserve applicable copyright
-and license notices and only contribute material you have the right to submit
-under the destination's license. Identify the source and license of copied or
-adapted material; the [Code of Conduct](CODE_OF_CONDUCT.md) has its own stated
-license.
+VniLink is licensed under the GNU Affero General Public License, version 3
+only ([LICENSE](LICENSE)), and a contribution is submitted under that license.
+Every source file starts with its license notice, which `npm run check:license`
+verifies; `.agents/skills/licensing/SKILL.md` says which notice a file takes, how
+to add a file copied from another project, and what stays outside the project's
+license (`vendor/`, the VS Code copies' own notice). Run
+`node build/run.ts license:apply --write` to add the notice to new files.
+Preserve applicable copyright and license notices and only contribute material
+you have the right to submit under the destination's license. Identify the
+source and license of copied or adapted material; the
+[Code of Conduct](CODE_OF_CONDUCT.md) has its own stated license.

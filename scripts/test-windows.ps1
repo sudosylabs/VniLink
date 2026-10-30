@@ -1,3 +1,10 @@
+# ---------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Sudosy Labs. All rights reserved.
+# Licensed under the GNU Affero General Public License, version 3 only.
+# See LICENSE in the project root for license information.
+# SPDX-License-Identifier: AGPL-3.0-only
+# ---------------------------------------------------------------------------------------------
+
 param([string]$MsysRoot = 'C:\msys64', [switch]$SkipInstall)
 # The full Windows suite (CI and `npm run test:windows`): install, check what
 # the tasks need with `npm run doctor`, then the checks, Rust tests and UI tests.
@@ -22,11 +29,6 @@ try {
     # preinstall refuses an unsupported Node; postinstall installs the Rust
     # toolchain and its GNU target.
     if (-not $SkipInstall) { Invoke-Check $Npm @('ci') }
-    # Use the repository-selected toolchain directly; Windows rustup proxy
-    # executables may be unavailable in an SSH session after self-update.
-    $CargoPath = & rustup which cargo
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the repository Rust toolchain.' }
-    $env:PATH = (Split-Path -Parent $CargoPath) + [IO.Path]::PathSeparator + $env:PATH
     Invoke-Check $Npm @('run', 'doctor', '--', '--require', 'build,test:rust,test:ui')
     Invoke-Check $Npm @('run', 'check')
     Invoke-Check 'cargo' @('fmt', '--all', '--', '--check')

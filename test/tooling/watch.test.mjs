@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, mkdir, writeFile, readFile, rename, rm, access } from 'node:fs/promises';
@@ -21,7 +28,7 @@ test('desktop watcher rebuilds TS/CSS, handles atomic resource saves and leaves 
 		await mkdir(dirname(filename), { recursive: true });
 		await writeFile(filename, text);
 	}
-	const paths = ['src/main.ts', 'src/preload.ts', 'src/noticePreload.ts', 'src/notice.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/main.ts', 'test/latency/main.ts', 'test/perceived/main.ts', 'test/browser/index.ts'];
+	const paths = ['src/main.ts', 'src/preload.ts', 'src/noticePreload.ts', 'src/notice.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/main.ts', 'test/latency/main.ts', 'test/browser/index.ts'];
 	let watcher;
 	try {
 		await put('tsconfig.json', '{}');

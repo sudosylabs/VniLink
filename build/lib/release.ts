@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 /** Produces a clean application payload; Electron assembly, signing and installers are later stages. */
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -14,7 +21,7 @@ async function sourceFingerprint(root: string): Promise<string> {
 			files.push({ ...entry, path: `${directory}/${entry.path}` });
 		}
 	}
-	for (const path of ['package.json', 'package-lock.json', 'product.json', 'tsconfig.json', 'src/tsconfig.json', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
+	for (const path of ['package.json', 'package-lock.json', 'product.json', 'tsconfig.json', 'src/tsconfig.json', 'LICENSE', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
 		files.push({ path, sha256: createHash('sha256').update(await readFile(join(root, path))).digest('hex') });
 	}
 	return createHash('sha256').update(JSON.stringify(files)).digest('hex');
@@ -59,7 +66,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		await (options.buildApplication ?? buildApplication)(root, signal, { production: true, outputDirectory: app, native });
 		signal.throwIfAborted();
 		const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as PackageJson;
-		await writeFile(join(app, 'package.json'), JSON.stringify({ name: product.applicationName, productName: product.nameLong, version: packageJson.version, private: true, main: 'main.cjs', type: 'module', author: product.publisherName, description: 'Cross-platform remote access through paired computers.', homepage: product.repositoryUrl, desktopName: product.platforms.linux.desktopFileName, license: 'UNLICENSED' }, null, 2) + '\n');
+		await writeFile(join(app, 'package.json'), JSON.stringify({ name: product.applicationName, productName: product.nameLong, version: packageJson.version, private: true, main: 'main.cjs', type: 'module', author: product.publisherName, description: 'Cross-platform remote access through paired computers.', homepage: product.repositoryUrl, desktopName: product.platforms.linux.desktopFileName, license: 'AGPL-3.0-only' }, null, 2) + '\n');
 		await writeFile(join(app, 'product.json'), JSON.stringify(product, null, 2) + '\n');
 		const artwork = process.platform === 'darwin' ? [platform.icon, product.platforms.darwin.fallbackIconSource] : [platform.icon];
 		for (const asset of artwork) {

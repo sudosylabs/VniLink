@@ -194,7 +194,7 @@
     {
       "path": "src/base/browser/ui/contextview/contextview.ts",
       "upstreamPath": "src/vs/base/browser/ui/contextview/contextview.ts",
-      "sha256": "f517782e36e4bf9ad0379848dc7815e700317f3ae8dad9ac9803700aba4d24c2",
+      "sha256": "f0490b4906c4efe4d341cb7bdc6d847bfbfda5da46a135b635c2a231db9654a9",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -333,7 +333,7 @@
     {
       "path": "src/base/browser/ui/menu/menu.ts",
       "upstreamPath": "src/vs/base/browser/ui/menu/menu.ts",
-      "sha256": "f429a6bd639d9fa069cf99cd3d8e8a7b6796ae43ced8a34d73a1379841500c2e",
+      "sha256": "0904a7bf81b302aad2ce2a6c8955fe893832ecf0530537d307c5cae8ece4d69c",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -586,14 +586,14 @@
     {
       "path": "src/base/common/glob.ts",
       "upstreamPath": "src/vs/base/common/glob.ts",
-      "sha256": "ba3b4dd506c34e3363fa9af12f49b649a30bb9237dfef6e1bcf1bb57ff07ce1e",
+      "sha256": "df3be3af058c446eefe34da338695de8a992efc3f8190d20abeb7800684451c9",
       "adapted": true,
       "upstreamStyle": true
     },
     {
       "path": "src/base/common/hash.ts",
       "upstreamPath": "src/vs/base/common/hash.ts",
-      "sha256": "aff9064e078dd4fe23b33027e1f619cdbdde3654c677102b56e822aa45e74f90",
+      "sha256": "74aa2da168a1fe4560ba401af5b24a8656eff31bc1700d43e5794257bdcbcae5",
       "adapted": true
     },
     {
@@ -1145,7 +1145,7 @@
     {
       "path": "src/base/parts/ipc/electron-main/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipc.electron.ts",
-      "sha256": "441c9d8f60f6f49b57e566b8718b5c09630ae431a3227866bba7313b15a58f39",
+      "sha256": "d0d7147f74b506c33149fc5c79af6737ef9e87d3b3579fb2503b0b4818e67691",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -1158,7 +1158,7 @@
     {
       "path": "src/base/parts/ipc/electron-main/ipcMain.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipcMain.ts",
-      "sha256": "584ce69aaebb9ee8e43d23f4146becd3d3101cb27fc543af185accd1e6025d59",
+      "sha256": "3fed867620a3b03c5f660d2409972cab907e9822316885c684e8bcbf19ef64ac",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -1227,12 +1227,12 @@
       "upstreamPath": "src/vs/platform/actions/common/menuService.ts",
       "adapted": true,
       "upstreamStyle": true,
-      "sha256": "2cb04588cee35783a4e54df25e15812d02473b896a1e05ce54e24ce5472e0446"
+      "sha256": "df2cb32815bc93670554b3677a08132874d16acd9cde610c4a64e7dffba6d2b5"
     },
     {
       "path": "src/platform/clipboard/common/clipboardService.ts",
       "upstreamPath": "src/vs/platform/clipboard/common/clipboardService.ts",
-      "sha256": "83d38b8e3f09f243d9ffc7e0bb32bd3c56b6335414aeb14d4e9fc8dcb8c71dfd",
+      "sha256": "774d558b6c87fcf8180eda0c7b7479764d3d8d5a12788cedebb43c66a143613d",
       "adapted": true
     },
     {
@@ -1252,7 +1252,7 @@
       "upstreamPath": "src/vs/platform/configuration/common/configurationRegistry.ts",
       "adapted": true,
       "upstreamStyle": true,
-      "sha256": "52d7ee7b444f88da62ba3f7b2714dc64ba95d0681352f499d73c5241499fcca4"
+      "sha256": "a3d3fc54522517fe3792143a2e7ff9a9d406bb107ab33bc4702d0ef53a234d5b"
     },
     {
       "path": "src/platform/contextkey/browser/contextKeyService.ts",
@@ -1281,14 +1281,14 @@
     {
       "path": "src/platform/contextview/browser/contextMenuHandler.ts",
       "upstreamPath": "src/vs/platform/contextview/browser/contextMenuHandler.ts",
-      "sha256": "9490d678ca39cf13d4f88219ea1963854d9eabc3267238121152aaeed9aced06",
+      "sha256": "38fa68ee92288eb285626a4cdd30a4ea694c08649ff772ecd2db832f4452adf2",
       "adapted": true,
       "upstreamStyle": true
     },
     {
       "path": "src/platform/contextview/browser/contextMenuService.ts",
       "upstreamPath": "src/vs/platform/contextview/browser/contextMenuService.ts",
-      "sha256": "238b08674542db00ecbea7e59ccd09d15857d2867730bdfd9b9d249ee8b4f8d2",
+      "sha256": "6c51857b757261d53b90e6f9f049a8d7e3eaba3a30b6cc6b05e9f21fee228b29",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -1427,27 +1427,27 @@
     {
       "path": "src/platform/log/node/spdlogLog.ts",
       "upstreamPath": "src/vs/platform/log/node/spdlogLog.ts",
-      "sha256": "bb1db688fed4609598c0b56a6ed912bd2a5fffb129ac42f995039cba088ac210",
+      "sha256": "08aa0a3ac2098bdaad93b726e2ed7223f626a490b9c0e7d0e0a1e2c922f00e65",
       "adapted": true,
       "upstreamStyle": true
     },
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "63f06f071f95918863de1aa18d7cfc2f8bb9b301afd403639d01f1c1ff0d0aaa",
+      "sha256": "8ad15cb3dade35a22e171382878956406edd3e82f8bd307c3ba747f071b93d2a",
       "adapted": true
     },
     {
       "path": "src/platform/native/common/nativeHostService.ts",
       "upstreamPath": "src/vs/platform/native/common/nativeHostService.ts",
       "adapted": true,
-      "sha256": "280440d90cb65737fc55c3938474b69b63d90a0ab00918ca94156e7577786eb5"
+      "sha256": "ae5ed0c78856b8a8e965de6d1522d09411f5f1fea7973e700ae031aa2cafc765"
     },
     {
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "2a0da52ef636ebc7a083b35b74700cb989da6bba03e94d81acc54d08c47789a0"
+      "sha256": "7b9a32cdff1ab57e912eb3a49123e0609b9750ba59b32401556b53d9de7f825d"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -1464,7 +1464,7 @@
     {
       "path": "src/platform/state/node/stateService.ts",
       "upstreamPath": "src/vs/platform/state/node/stateService.ts",
-      "sha256": "94dfb8ea8c7852e74f5375f25ce6374916c754e54fdb381b8112c16664206f30",
+      "sha256": "4e5d2898641e1939ada82505956670715743a2369da2b450782367516b2f2efb",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -1478,34 +1478,32 @@
       "path": "src/platform/theme/browser/themeService.ts",
       "upstreamPath": "src/vs/workbench/services/themes/browser/workbenchThemeService.ts",
       "adapted": true,
-      "sha256": "9deef7d380c72d132714aa49a66ab8c1390aebf97cca63dd9d8a399e0f6f7ab8",
+      "sha256": "155383f1227e175601ac1665dcbd4b47079c8d4d009816fcdf9e48b3f9e44920",
       "adaptation": "New system-theme adapter using the upstream theme-service registration pattern."
     },
     {
       "path": "src/platform/theme/common/themeService.ts",
       "upstreamPath": "src/vs/platform/theme/common/themeService.ts",
-      "sha256": "9415e9b5f6c34d115abb4e387cbbcfa256c45b9a7b08a44ec13256dd7363d461",
-      "changedImports": 0,
+      "sha256": "d527d898f1b5bdf97c69a7fbe761061b9806f95df59d43aebc54988d84b3c10a",
       "adapted": true
     },
     {
       "path": "src/platform/window/common/window.ts",
       "upstreamPath": "src/vs/platform/window/common/window.ts",
-      "sha256": "caea024af8c8760dca3e331cf57e68ffd48f2af381fddb469ecc886e507ea9c4",
-      "changedImports": 0,
+      "sha256": "a4008a5b091fa90812c8618bf04fe2c66183cd40d27465d0441b04414d68820d",
       "adapted": true
     },
     {
       "path": "src/platform/windows/electron-main/windowImpl.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windowImpl.ts",
       "adapted": true,
-      "sha256": "53cdf5373c2b6126f7978bcbedb4c55e149a13154d069bbb8a492a390fd718a7"
+      "sha256": "45b8fefd11aa2e00d05ba656577584f64a83b5082821e09794b5550cdf786da3"
     },
     {
       "path": "src/platform/windows/electron-main/windows.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
       "adapted": true,
-      "sha256": "4c84f88bedd18722f8c7a5a51fc8f5250af6e06f26569e61fb5bdd8c60d57d77"
+      "sha256": "d56a1fba3997b90095d288ec175638be45d5093abef41664d6d9bdbcb9c5bfd0"
     },
     {
       "path": "src/platform/workspace/common/workspace.ts",
@@ -1516,8 +1514,7 @@
     {
       "path": "src/typings/base-common.d.ts",
       "upstreamPath": "src/typings/base-common.d.ts",
-      "sha256": "42df13345002aa1175da2b03d283690b027ee1ea0804126a831666f916e819f9",
-      "changedImports": 0,
+      "sha256": "884582c1701dd622bc1b35789b3e99d972574098ad28d0190fef87efa5743f48",
       "adapted": true
     },
     {
@@ -1548,58 +1545,58 @@
       "path": "src/workbench/contributions.ts",
       "upstreamPath": "src/vs/workbench/common/contributions.ts",
       "adapted": true,
-      "sha256": "6cdad0fa84a70051755eadc695f605fbbcac308f0f5d0c74c79341ca787de72d",
+      "sha256": "4ef13fde05fb625a614553cbd6dbe447cd6dd8dacaa49e1f53f8b1a90e0ecadc",
       "upstreamStyle": true
     },
     {
       "path": "src/workbench/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "2ed7e8acc10e2dce4791c2867d1aad9c8c0af3eca41c5f8927fd37b52740a95a"
+      "sha256": "ece52d7b86f2ff19cb73a422d1f52134defb267e5d2f869dfdbcb11ccbd49173"
     },
     {
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
-      "sha256": "94587403b17188e7aeff3a30917522a0ece143ac5c1563e1cbaee3c95938307d",
+      "sha256": "7807447b1cb48ac22a743dd9cfabf6528cb6a94dbd89febc5979b795f9d0ff2b",
       "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders."
     },
     {
       "path": "src/workbench/parts/titlebar/media/titlebarpart.css",
       "upstreamPath": "src/vs/workbench/browser/parts/titlebar/media/titlebarpart.css",
-      "sha256": "adc27fa0da78708fdeecc5ed43697fc5af6f7d57f78e9578a682be45a6b6e179",
+      "sha256": "1c74cac18dc1ea33399f3f8de4a89987e678d3f399c7726a8471d0cdc8716745",
       "adapted": true
     },
     {
       "path": "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "cf7f5d8af9fd49d20600f4206f1802c0f8c1b76fdfaabf4a4c3c4566677c7802",
+      "sha256": "656651d806e971df4d516d61b3b18ec1856a159dc151ba1802c04de092199a31",
       "adapted": true
     },
     {
       "path": "src/workbench/parts/titlebar/titlebarPart.ts",
       "upstreamPath": "src/vs/workbench/browser/parts/titlebar/titlebarPart.ts",
-      "sha256": "2c6373ef9594f71dd7e3b8e18de2f13d6fbe73b4b5838db1d4bb92797eecdc39",
+      "sha256": "7c0663212a05d3d7854f97ffab9a1b67bb6c6c38c1ef6d00e397463028a02b19",
       "adapted": true
     },
     {
       "path": "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
       "upstreamPath": "src/vs/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
-      "sha256": "7fa090d9e14acc4ee9655230a053bd6f202c0de2982996c2f05f2d2f9474f5e7",
+      "sha256": "e106f317b3fcc66252e25f8336c884d3c13e5da67e11f1f66a00110394eea382",
       "adapted": true,
       "upstreamStyle": true
     },
     {
       "path": "src/workbench/services/host/host.ts",
       "upstreamPath": "src/vs/workbench/services/host/browser/host.ts",
-      "sha256": "0d56be28c2c1bd4a9b62485605e2b32f8853e3096e91aa294d73dad9e3c399d6",
+      "sha256": "59af27338604cb65091ff82fc5328fdb5e230ccbcd46cc5251c793ab6a1c9b94",
       "adapted": true
     },
     {
       "path": "src/workbench/services/host/nativeHostService.ts",
       "upstreamPath": "src/vs/workbench/services/host/electron-browser/nativeHostService.ts",
       "adapted": true,
-      "sha256": "87da5cf0c654994d6fa1c6fb5920508f87fc801bb3359d197f38edbdafe9533a"
+      "sha256": "67d4f1bb8028d9b18f0992f31509dbeabee839a578c63f041d329d55c78d31f5"
     },
     {
       "path": "src/workbench/services/lifecycle/lifecycle.ts",

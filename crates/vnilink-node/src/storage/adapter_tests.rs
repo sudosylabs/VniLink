@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Core behavior through the encrypted store, not only [`vnilink::MemoryStore`].
 //! Fixtures use a private directory and an in-memory key. They do not read the
 //! production keychain entry or the production database.

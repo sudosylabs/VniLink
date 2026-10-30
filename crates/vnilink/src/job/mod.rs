@@ -1,10 +1,18 @@
-//! Transfer job records (Stage C).
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
+//! Transfer job records: the states, choices and snapshots a job exposes.
 //!
-//! Jobs move whole manifests in either direction with staging,
-//! conflict choices, cancellation and restartable progress. Each side
-//! polls its own records; senders learn completion by asking the
-//! receiver, so both directions complete honestly without either side
-//! dialing blindly. Records persist as JSON beside the blob store.
+//! Jobs move whole manifests in either direction with staging, conflict
+//! choices, cancellation and restartable progress. Each side polls its own
+//! records; senders learn completion by asking the receiver, so both
+//! directions complete honestly without either side dialing blindly.
+//! Records persist in per-job journals (`core::job_journal`); scheduling and
+//! resume are `core::jobs`.
 
 mod wire;
 

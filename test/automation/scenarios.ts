@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 /** Validated selectors shared by the CLI launcher and Electron suite. */
 export const browserScenarioNames = ['workbench', 'access', 'camera', 'connection', 'context-menu', 'data-channels', 'decoder-colour', 'devices', 'dialogs', 'files', 'device-pairing', 'device-screenshot', 'home', 'icons', 'media-settings', 'remote-desktop', 'remote-desktop-session', 'remote-desktop-still', 'settings', 'tabs', 'terminal'];
 
