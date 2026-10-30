@@ -1,6 +1,8 @@
 # Staged files only: lint, format and type-check the TypeScript, CSS and JSON
 # that changed and check Rust formatting (.lintstagedrc.mjs); then reject
-# personal details anywhere in the repository (under a second). CI runs the
+# personal details anywhere in the repository and any source file without its
+# license notice (each under a second). CI runs the
 # full suite; `git config vnilink.prePush full` runs it before each push.
 npx --no-install lint-staged
 npm run check:hygiene
+npm run check:license

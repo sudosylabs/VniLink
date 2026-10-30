@@ -35,6 +35,7 @@ test('the pre-commit hook checks staged files only; the full suite is opt-in bef
 	const preCommit = await readFile(join(root, '.husky/pre-commit'), 'utf8');
 	assert.doesNotMatch(preCommit, /npm (test|run (check|validate|precommit)\b(?!:))/);
 	assert.match(preCommit, /npm run check:hygiene/);
+	assert.match(preCommit, /npm run check:license/);
 	assert.match(preCommit, /lint-staged/);
 	const { default: stages } = await import('../../.lintstagedrc.mjs');
 	const typescript = stages['{src,test,build}/**/*.ts'];

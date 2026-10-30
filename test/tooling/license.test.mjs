@@ -215,3 +215,7 @@ test('hygiene allows the copyright line of a notice to name the publisher, and n
 	assert.equal(findHygieneViolations('src/a.ts', `// Published by ${holder}.`, rules).length, 1);
 	assert.deepEqual(findHygieneViolations('REUSE.toml', `SPDX-FileCopyrightText = "${holder}"`, rules), []);
 });
+
+test('every source file in this repository carries the notice its kind requires', async () => {
+	await checkLicense(root);
+});
