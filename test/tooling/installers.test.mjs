@@ -118,6 +118,29 @@ test('installer publication preserves previous output on failure and rejects che
 	}
 });
 
+test('the builder packages a copy, so what it adds there leaves the verified application unchanged', async () => {
+	const f = await fixture();
+	try {
+		const before = await packageInventory(f.application);
+		await buildInstallers(f.root, new AbortController().signal, {
+			runBuilder: async (_processes, args) => {
+				// As electron-builder's deb target adds the sandbox's AppArmor profile to the application it packages.
+				const prepackaged = args[args.indexOf('--prepackaged') + 1];
+				assert(!prepackaged.startsWith(f.application), 'The builder was given the verified application itself');
+				await writeFile(join(prepackaged, 'added-by-builder'), 'builder resource');
+				const config = JSON.parse(await readFile(args[args.indexOf('--config') + 1], 'utf8'));
+				await mkdir(config.directories.output);
+				for (const ext of installerExtensions(process.platform)) {
+					await writeFile(join(config.directories.output, `VniLink-test${ext}`), 'installer artifact');
+				}
+			},
+		});
+		assert.deepEqual(await packageInventory(f.application), before, 'The verified application changed');
+	} finally {
+		await rm(f.root, { recursive: true, force: true });
+	}
+});
+
 test('installer generation respects an active assembly lock and cancellation prevents publication', async () => {
 	const f = await fixture();
 	try {

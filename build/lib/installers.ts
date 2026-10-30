@@ -1,6 +1,6 @@
 /** Installer generation: input integrity, cancellation and publication of the host's installers. */
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { extname, join } from 'node:path';
 import * as darwin from './package.darwin.ts';
@@ -58,7 +58,11 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 		const buildOutput = join(work, 'output');
 		const configPath = join(work, 'builder.json');
 		await writeFile(configPath, JSON.stringify(installerConfiguration(root, stage, buildOutput, product, manifest), null, 2));
-		const prepackaged = process.platform === 'darwin' ? join(application, `${product.nameLong}.app`) : application;
+		// The builder packages a copy: on Linux it adds the sandbox's AppArmor
+		// profile to what it packages, and the verified application stays as verified.
+		const copy = join(work, 'application');
+		await cp(application, copy, { recursive: true, verbatimSymlinks: true });
+		const prepackaged = process.platform === 'darwin' ? join(copy, `${product.nameLong}.app`) : copy;
 		const args = ['--config', configPath, '--prepackaged', prepackaged, builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'];
 		await (options.runBuilder ?? runElectronBuilder)(processes, args, root);
 		const artifacts: InstallerArtifact[] = [];
