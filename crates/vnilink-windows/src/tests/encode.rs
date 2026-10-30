@@ -706,7 +706,7 @@ fn capture_to_encode_cost() {
 /// 1) and reading NV12 from memory (path 3). Prints the time to open, to
 /// drop the old one, and to encode the first pictures; the picture freezes
 /// that long. Listing every adapter's encoders before opening the first
-/// took 0.8 to 1 s here (2026-10-23), now the capture adapter's are tried
+/// took 0.8 to 1 s on a hybrid Intel + NVIDIA laptop (2026-10-23), now the capture adapter's are tried
 /// before the next adapter is asked. Needs the interactive session:
 /// `cargo test -p vnilink-windows --release --lib reopen_cost -- --ignored --nocapture`.
 #[test]

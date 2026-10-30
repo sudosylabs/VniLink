@@ -15,8 +15,8 @@
 //! copy, or with the cheapest one; ties on an adapter keep Media
 //! Foundation's merit order. Adapters are asked one by one, by LUID.
 //! `MFTEnumEx` over all of them put NVIDIA's first on a hybrid Intel+NVIDIA
-//! laptop whose panel is on Intel's GPU (2026-10-22), in the signed-in
-//! desktop and over SSH alike, so an encoder that did not read the captured
+//! laptop whose panel is on Intel's GPU (2026-10-22), in a signed-in
+//! desktop and in a remote shell alike, so an encoder that did not read the captured
 //! texture went to the other GPU.
 //!
 //! What a transform does with a recovery keyframe, a still screen and a new
@@ -51,9 +51,9 @@ pub(crate) enum Vendor {
     Other,
 }
 
-/// Measured 2026-10-22 on Windows 11 26H2 with NVIDIA's (RTX 5060 Laptop),
-/// Intel's (UHD, Raptor Lake) and Microsoft's transforms, one GPU of each
-/// on one hybrid laptop; other GPU generations of those vendors are assumed
+/// Measured 2026-10-22 on Windows 11 with NVIDIA's (a discrete RTX-class
+/// laptop GPU), Intel's (an integrated UHD-class GPU) and Microsoft's
+/// transforms, one GPU of each on one hybrid laptop; other GPU generations of those vendors are assumed
 /// to behave the same. AMD and other hardware are not measured and keep
 /// the settings that are harmless where ignored. The measurements are
 /// `recovery_tests` (`cargo test -p vnilink-windows --release --lib

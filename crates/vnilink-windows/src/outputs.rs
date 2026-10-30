@@ -12,9 +12,9 @@
 //! on a hybrid laptop whose panel is on the integrated GPU. DXGI's adapter
 //! order does not say which adapter that is. It usually lists the adapter
 //! with the primary display first, but a process given the high-performance
-//! GPU, or one in session 0 over SSH, saw the discrete GPU first on a
-//! hybrid Intel + NVIDIA laptop (2026-10-22), and that adapter had no
-//! outputs. So every output of every adapter is listed and the one the host
+//! GPU, or one in session 0 (a service or a remote shell), saw the discrete
+//! GPU first on a hybrid Intel + NVIDIA laptop (2026-10-22), and that
+//! adapter had no outputs. So every output of every adapter is listed and the one the host
 //! captures is chosen by what it shows ([`primary`]).
 
 /// One output of one adapter, as DXGI describes it.
