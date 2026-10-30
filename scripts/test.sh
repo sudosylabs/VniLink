@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# ---------------------------------------------------------------------------------------------
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+# Adapted from VS Code 1.141.0 scripts/test.sh.
+# ---------------------------------------------------------------------------------------------
+
 # Runs the UI scenarios from a checkout in any state, after VS Code's
 # scripts/test.sh: build/lib/preLaunch.ts installs and builds what is missing,
 # then `node build/run.ts test:ui` runs the scenarios. Arguments select them,

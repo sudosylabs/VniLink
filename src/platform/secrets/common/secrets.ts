@@ -1,3 +1,9 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/platform/secrets/common/secrets.ts.
+ *--------------------------------------------------------------------------------------------*/
+
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { Event } from '../../../base/common/event.js';
 

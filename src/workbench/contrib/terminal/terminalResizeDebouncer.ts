@@ -1,3 +1,9 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/workbench/contrib/terminal/browser/terminalResizeDebouncer.ts.
+ *--------------------------------------------------------------------------------------------*/
+
 import type { Terminal } from '@xterm/xterm';
 import { getWindow, runWhenWindowIdle } from '../../../base/browser/dom.js';
 import { RunOnceScheduler } from '../../../base/common/async.js';

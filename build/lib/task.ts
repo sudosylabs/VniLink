@@ -1,4 +1,10 @@
 /*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 build/lib/gulp/task.ts.
+ *--------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------------------------
  *  Adapted from VS Code build/lib/gulp/task.ts (MIT): the same define/series/parallel
  *  composition without gulp, with an AbortSignal passed to every task.
  *--------------------------------------------------------------------------------------------*/

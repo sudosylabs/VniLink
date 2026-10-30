@@ -1,3 +1,9 @@
+/* ---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/base/browser/ui/menu/menu.ts.
+ *-------------------------------------------------------------------------------------------- */
+
 /*
  * The rules VS Code's menu writes into a style element (`getMenuWidgetCSS` in
  * menu.ts). VniLink's CSP refuses injected style elements, so they live here,

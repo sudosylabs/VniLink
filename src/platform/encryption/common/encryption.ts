@@ -1,3 +1,9 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/platform/encryption/common/encryptionService.ts.
+ *--------------------------------------------------------------------------------------------*/
+
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 
 export const IEncryptionMainService = createDecorator<IEncryptionMainService>('encryptionMainService');

@@ -1,3 +1,9 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/workbench/contrib/terminal/browser/xterm/xtermTerminal.ts.
+ *--------------------------------------------------------------------------------------------*/
+
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';

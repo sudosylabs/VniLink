@@ -1,3 +1,9 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/platform/theme/browser/defaultStyles.ts.
+ *--------------------------------------------------------------------------------------------*/
+
 import type { IButtonStyles } from '../../../base/browser/ui/button/button.js';
 import type { ICodeInputStyles } from '../../../base/browser/ui/codeInput/codeInput.js';
 import type { IDialogStyles } from '../../../base/browser/ui/dialog/dialog.js';
