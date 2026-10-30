@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The test kit's command: `vnilink-testkit agent` runs the host half of
 //! suites and measurements on this computer for a suite on another
 //! (`node build/run.ts testkit:agent`); `vnilink-testkit bridge` is the

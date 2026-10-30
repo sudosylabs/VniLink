@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! What the files suites share: deterministic file contents, exact tree
 //! comparison, jobs driven as the application drives them, paths inside a
 //! test's own folders on a shared disk, and the folders an engine watches.

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! What 4:4:4 buys coloured text, and what it costs, with the codec held
 //! fixed: libaom AV1 at 4:2:0 (Main) and at 4:4:4 (High), at the same target
 //! bitrates, on `measure::colour_text_page`, plus 4:2:0 with no codec at all.

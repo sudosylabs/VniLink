@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Perceived quality read from the viewing computer's own screen: the page
 //! in `test/perceived/stimulus.ts`, shown full screen on the computer being
 //! controlled, comes back through whichever remote desktop application is

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Length-prefixed frames on the streams beside the control channel: a
 //! service's pipe, a Desktop's clipboard pipe, a file request. Each stream
 //! keeps its own length limit and codec; the 4-byte big-endian prefix is

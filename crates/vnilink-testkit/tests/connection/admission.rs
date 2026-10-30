@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Who a host admits: pairing alone admits a connection and grants
 //! nothing, a grant runs one way, invitations are bounded and never widen
 //! or narrow what was granted, a connection opens only to a hosting host,

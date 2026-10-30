@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Takes this PC's own shortcuts, such as Alt-Tab and the Windows key,
 //! while it controls another computer, through a low-level keyboard hook on
 //! a dedicated message loop. [`vnilink::SystemKeys`] decides which keys are

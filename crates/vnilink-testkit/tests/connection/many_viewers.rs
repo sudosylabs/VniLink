@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! One host, several peers at once: each has its own connection, a viewer
 //! that never reads slows no other, and what ends one peer's connection
 //! leaves the others'. Which desktop holds control is the desktop suite's

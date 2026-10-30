@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Diagnostics: what an engine's snapshot says of its live connections,
 //! services and pictures, and of failures it ignored, peers only by
 //! fingerprint and nothing a user owns; and that sessions opened and

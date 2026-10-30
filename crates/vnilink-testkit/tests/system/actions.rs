@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! A controller's lock, restart and shutdown: what the host's grant, policy
 //! and backend let run, the notice a restart waits out, who may cancel it,
 //! and what a connection keeps of its operations.

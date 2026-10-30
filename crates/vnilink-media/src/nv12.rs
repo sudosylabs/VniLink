@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! BGRA to limited-range NV12 in the session's matrix
 //! ([`crate::VideoSignal::stream`]), and back from NV12 in the colour a stream
 //! says. Media Foundation and VA-API take this layout. The software codecs

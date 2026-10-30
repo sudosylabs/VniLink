@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! A performance suite's results: written as JSON to
 //! `.build/bench/<service>/<run>.json` (or under `VNILINK_BENCH_DIR`), and
 //! compared with the previous run on this computer, so "slower than

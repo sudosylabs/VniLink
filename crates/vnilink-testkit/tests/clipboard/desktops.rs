@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Text copied through a Remote Desktop service: each desktop has its own
 //! clipboard pipe, acknowledged both ways, fenced from the desktops before
 //! and beside it, and a host's slow clipboard holds up neither the engine

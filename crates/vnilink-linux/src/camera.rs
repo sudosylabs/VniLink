@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! V4L2 single-planar camera capture with bounded polling and VA-API encoding.
 //! Serial-less approvals bind the enumerated *instance*, not just its
 //! facts: the factory holds an open descriptor per approved serial-less

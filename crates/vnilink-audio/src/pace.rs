@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! How much sound an output keeps queued ahead of its device, and how it
 //! gets back there: one small target, nudged by a slight speed change for
 //! clock drift and met at once by dropping a block when far behind. The

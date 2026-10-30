@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! `camera`: the agent shares a stand-in camera (`crate::camera`) and,
 //! once the suite opens it, sends the pictures `params` ask for at a steady
 //! rate, each stamped with the agent's clock when sent

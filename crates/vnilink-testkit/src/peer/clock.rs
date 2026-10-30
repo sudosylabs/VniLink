@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Times across the two computers. Each process states a time as
 //! microseconds on its own monotonic clock ([`now_us`]); the suite
 //! estimates how far the agent's clock is from its own by asking the agent

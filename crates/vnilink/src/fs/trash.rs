@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Moving an entry to this computer's Trash: the delete that can be undone
 //! from the Trash or Recycle Bin. The entry is checked as delete checks it,
 //! still the object that was listed, and then handed to the system's own

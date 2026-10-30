@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Handle-scoped Power Requests, independent from the worker thread's lifetime.
 // trace: records every ignored failure
 use vnilink::power::{HostPowerFactory, PowerInhibitor, PowerKind};

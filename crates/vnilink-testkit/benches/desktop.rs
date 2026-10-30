@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! How fast the Remote Desktop service brings the host's screen to a viewer
 //! on this computer, through the host's real picture pipeline with a
 //! stand-in encoder: how long a change takes to arrive, the host's part of

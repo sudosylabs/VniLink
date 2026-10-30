@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The test agent's channel: a second protocol on this engine's endpoint,
 //! [`AGENT_ALPN`], through which a suite on one computer runs a scenario's
 //! host half on another (`vnilink-testkit agent`). The channel carries

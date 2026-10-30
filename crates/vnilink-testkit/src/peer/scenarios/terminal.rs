@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! `terminal`: the agent shares its engine's real shell
 //! (`crate::terminal::open_shell`), working in a scratch folder of the
 //! scenario's own, so a suite measures a typed key's echo and a busy

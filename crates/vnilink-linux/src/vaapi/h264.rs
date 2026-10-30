@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! H.264 for the VA-API encoder: Constrained Baseline or High, one slice,
 //! each picture predicted from the one before it. The driver writes the
 //! slice header from these numbers; `crate::parameter_set` writes the SPS

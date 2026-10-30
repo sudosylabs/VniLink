@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! `latency-host`, `latency-viewer` and `perceived-stimulus`: one side of a
 //! measurement, started from the agent's own checkout as a measurement
 //! starts it on one computer, through `node build/run.ts testkit:launch`

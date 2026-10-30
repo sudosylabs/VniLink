@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The reference pictures of `src/workbench/services/camera/decoderColour.ts`:
 //! one flat 256x256 keyframe per codec family and matrix, BGR 200, 120, 40
 //! converted and declared in that matrix by VniLink's own encoders

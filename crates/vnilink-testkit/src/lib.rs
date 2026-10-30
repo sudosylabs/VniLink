@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! VniLink's service test kit: engines on one computer, and for each
 //! service a functional suite (`tests/<service>.rs`) and a performance
 //! suite (`benches/<service>.rs`) that run alone.

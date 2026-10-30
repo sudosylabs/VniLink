@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Running counts for one desktop picture stream, for diagnostics: how
 //! frames were lost, how often a keyframe was asked for and sent, and how
 //! often the encoder was opened again. Counts only, never picture bytes.

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Read the latency strips on a monitor through the ScreenCast portal
 //! (`vnilink_media::measure::glass`). A picture is timed by when PipeWire
 //! handed it over: the compositor's presentation time is not read, so a

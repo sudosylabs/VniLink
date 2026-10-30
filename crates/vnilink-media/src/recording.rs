@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Narrow Matroska/AVC remuxer. No capture, decode, UI or filesystem selection.
 //! Each complete Cluster is independently recoverable after a truncated tail.
 use crate::recording_format::RecordingFormat;

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! A host's side of one viewer's desktop input: whether an input may act
 //! under the lease it was sent with ([`admit`]), what became of it
 //! ([`InputOutcome`], recorded by [`record`] so no input is dropped

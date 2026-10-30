@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! Diagnostic: whether VideoToolbox's encoder here is hardware, as the host
 //! reports it to viewers, and how long a picture takes to encode into a
 //! 1080p stream. A picture larger than 1080p is scaled first, as the host

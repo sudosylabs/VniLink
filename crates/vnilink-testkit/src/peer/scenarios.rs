@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
 //! The scenarios compiled into the agent: each the host half of a suite or
 //! a measurement. A scenario shares only its own service while it runs and
 //! works only in the agent's own folders; the suite names it and passes
