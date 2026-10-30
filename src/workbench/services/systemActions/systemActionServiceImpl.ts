@@ -72,6 +72,8 @@ export function systemRequestMessage(error: unknown): string {
 		// Reached, but still doing an earlier action or slow to answer.
 		case 'Busy': return nls.localize('system.requestBusy', 'Busy, try again');
 		case 'Timeout': return nls.localize('system.requestTimeout', 'No answer in time');
+		// Reached, and it cannot do it, as a computer whose system refuses.
+		case 'Unsupported': return nls.localize('system.requestUnsupported', 'Not possible there');
 		default: return nls.localize('system.requestFailed', 'Couldn\'t reach it');
 	}
 }
