@@ -482,7 +482,7 @@ impl DataChannel {
                         .into_iter()
                         .flat_map(f32::to_le_bytes)
                         .collect();
-                    return Ok(Some(DataEvent { kind: "audio".into(), data: Some(bytes.into()), metadata: serde_json::json!({"timestamp":block.timestamp.to_string(),"channels":audio.config().channels,"sampleRate":48000,"concealed":block.concealed}).to_string() }));
+                    return Ok(Some(DataEvent { kind: "audio".into(), data: Some(bytes.into()), metadata: serde_json::json!({"timestamp":block.timestamp.to_string(),"channels":audio.config().channels,"sampleRate":48000}).to_string() }));
                 }
             }
             return Ok(None);

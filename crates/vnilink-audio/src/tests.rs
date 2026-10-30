@@ -1,5 +1,5 @@
 use super::*;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 fn tone(offset: usize, channels: usize) -> Vec<f32> {
     (0..FRAME_SAMPLES)
@@ -72,102 +72,66 @@ fn actual_opus_round_trip_preserves_tone_and_stereo_with_bounded_packets() {
 }
 
 #[test]
-fn jitter_reorders_duplicates_conceals_loss_and_consumes_while_muted() {
-    let now = Instant::now();
-    let frames = packets(8, Format::Mono);
+fn arriving_packets_decode_oldest_first_and_repeats_or_late_ones_are_ignored() {
+    let frames = packets(4, Format::Mono);
     let mut player = AudioPlayback::new(Format::Mono).unwrap();
-    player.push(frames[1].clone(), now).unwrap();
-    player
-        .push(frames[0].clone(), now + Duration::from_millis(5))
-        .unwrap();
-    player.push(frames[1].clone(), now).unwrap();
-    player.push(frames[3].clone(), now).unwrap();
-    assert!(player
-        .poll(now + Duration::from_millis(59))
-        .unwrap()
-        .is_none());
-    assert_eq!(
-        player
-            .poll(now + Duration::from_millis(60))
-            .unwrap()
-            .unwrap()
-            .timestamp,
-        0
-    );
+    assert!(player.poll().unwrap().is_none(), "nothing waits");
+    player.push(frames[1].clone()).unwrap();
+    player.push(frames[0].clone()).unwrap();
+    player.push(frames[1].clone()).unwrap();
+    assert_eq!(player.poll().unwrap().unwrap().timestamp, 0, "oldest first");
     player.set_muted(true);
-    let muted = player
-        .poll(now + Duration::from_millis(80))
-        .unwrap()
-        .unwrap();
+    let muted = player.poll().unwrap().unwrap();
     assert_eq!(muted.timestamp, 960);
-    assert!(muted.samples.iter().all(|&v| v == 0.0));
+    assert!(
+        muted.samples.iter().all(|&v| v == 0.0),
+        "muted sound decodes silent"
+    );
     player.set_muted(false);
-    let lost = player
-        .poll(now + Duration::from_millis(100))
-        .unwrap()
-        .unwrap();
-    assert!(lost.concealed);
-    assert!(lost.samples.iter().all(|v| v.is_finite()));
-    let recovered = player
-        .poll(now + Duration::from_millis(120))
-        .unwrap()
-        .unwrap();
-    assert!(!recovered.concealed);
-    assert_eq!(recovered.timestamp, 2880);
-    assert!(recovered.samples.iter().any(|v| v.abs() > 0.01));
-    player.push(frames[0].clone(), now).unwrap();
+    player.push(frames[0].clone()).unwrap();
+    player.push(frames[3].clone()).unwrap();
+    let after_gap = player.poll().unwrap().unwrap();
+    assert_eq!(
+        after_gap.timestamp, 2880,
+        "a skipped packet is not waited for"
+    );
+    assert!(after_gap.samples.iter().any(|v| v.abs() > 0.01));
     assert_eq!(
         player.stats(),
         PlaybackStats {
             received: 3,
             duplicate: 1,
-            concealed: 1,
             late: 1,
+            discontinuities: 1,
             ..Default::default()
         }
     );
 }
 
 #[test]
-fn playback_bounds_far_future_and_discards_stalled_backlog() {
-    let frames = packets(40, Format::Stereo);
-    let now = Instant::now();
+fn a_backlog_keeps_the_newest_sixty_milliseconds_and_a_restarted_count_plays() {
+    // Two seconds of packets: more than a sender's count can fall behind.
+    let frames = packets(100, Format::Stereo);
     let mut player = AudioPlayback::new(Format::Stereo).unwrap();
     for frame in &frames {
-        player.push(frame.clone(), now).unwrap();
+        player.push(frame.clone()).unwrap();
     }
-    assert_eq!(player.stats().queued, 16);
-    assert_eq!(player.stats().overflow, 24);
-    assert!(player.poll(now + Duration::from_secs(1)).unwrap().is_none());
-    assert_eq!(player.stats().queued, 0);
-    assert_eq!(player.stats().discontinuities, 1);
-    player
-        .push(frames[39].clone(), now + Duration::from_secs(1))
-        .unwrap();
-    let block = player
-        .poll(now + Duration::from_millis(1060))
-        .unwrap()
-        .unwrap();
-    assert_eq!(block.timestamp, 39 * 960);
-    assert!(!block.concealed);
+    assert_eq!(player.stats().queued, 3, "only the newest wait");
+    assert_eq!(player.stats().overflow, 97);
+    assert_eq!(player.poll().unwrap().unwrap().timestamp, 97 * 960);
+    let mut restarted = AudioEncoder::new(Format::Stereo, false).unwrap();
+    player.push(restarted.encode(&tone(0, 2)).unwrap()).unwrap();
+    assert_eq!(
+        player.poll().unwrap().unwrap().timestamp,
+        0,
+        "a sender that counts from zero again is heard, not called late"
+    );
+    assert_eq!(player.stats().late, 0);
 }
 
 #[test]
-fn long_loss_becomes_silence_and_packet_or_sample_format_is_checked() {
+fn packet_and_sample_formats_are_checked() {
     let packet = packets(1, Format::Mono).remove(0);
-    let now = Instant::now();
-    let mut player = AudioPlayback::new(Format::Mono).unwrap();
-    player.push(packet.clone(), now).unwrap();
-    for i in 0..8 {
-        let block = player
-            .poll(now + Duration::from_millis(60 + i * 20))
-            .unwrap()
-            .unwrap();
-        assert_eq!(block.concealed, i != 0);
-        if i >= 4 {
-            assert!(block.samples.iter().all(|&v| v == 0.0));
-        }
-    }
     let wire = packet.encode().unwrap();
     for len in 0..18 {
         assert!(AudioPacket::decode(&wire[..len]).is_err());
@@ -218,29 +182,9 @@ fn sinc_resampling_preserves_frequency_and_stereo_at_44100_and_48000() {
         assert!((output[n * 2 + 1] + actual).abs() < 0.00001);
     }
     assert!(error / power < 0.01, "normalized error {}", error / power);
-    assert!(resampler.set_drift_ppm(200.1).is_err());
+    assert!(resampler.set_drift_ppm(5000.1).is_err());
     assert!(resampler.set_drift_ppm(f64::NAN).is_err());
     assert!(resampler.process(&[0.0; 2]).is_err());
-}
-
-#[test]
-fn bounded_drift_servo_stabilizes_faster_and_slower_device_clocks() {
-    for device_ppm in [-100.0, 100.0] {
-        let target = 2880.0;
-        let mut queued = target;
-        let mut correction = 0.0;
-        for _ in 0..30_000 {
-            // Ten minutes of 20 ms blocks, no wall-clock wait.
-            correction = crate::resample::drift_step(correction, (target - queued) / target);
-            queued += 960.0 * (correction - device_ppm) / 1_000_000.0;
-            assert!((1200.0..=4560.0).contains(&queued));
-            assert!(correction.abs() <= 200.0);
-        }
-        assert!(
-            (correction - device_ppm).abs() < 15.0,
-            "device {device_ppm}, correction {correction}"
-        );
-    }
 }
 
 #[test]
@@ -338,62 +282,32 @@ fn explicit_native_device_loopback_transports_and_decodes_tone() {
 }
 
 #[test]
-fn bursty_system_audio_and_silent_pause_resume_keep_one_capture_clock() {
-    let now = Instant::now();
+fn bursty_system_audio_plays_every_packet_once_and_resumes_after_silence() {
     let frames = packets(10, Format::Stereo);
     let mut player = AudioPlayback::new(Format::Stereo).unwrap();
-    player.allow_silent_gaps();
-    // A native 50 ms callback completes two 20 ms packets and retains 10 ms.
-    // The following callback completes three; no frame is invented in between.
-    let mut received = 0;
+    // A native 50 ms callback completes two 20 ms packets, the next three;
+    // the playback worker polls between arrivals. Nothing is invented or lost.
     let mut decoded = 0;
-    for ms in (0..=200).step_by(10) {
-        let count = match ms {
-            0 => 2,
-            50 => 3,
-            100 => 2,
-            150 => 3,
-            _ => 0,
-        };
-        for _ in 0..count {
-            player
-                .push(frames[received].clone(), now + Duration::from_millis(ms))
-                .unwrap();
-            received += 1;
+    let mut sent = frames.iter();
+    for burst in [2, 3, 2, 3] {
+        for frame in sent.by_ref().take(burst) {
+            player.push(frame.clone()).unwrap();
         }
-        if let Some(block) = player.poll(now + Duration::from_millis(ms)).unwrap() {
-            if !block.concealed {
-                decoded += 1;
-            }
+        while player.poll().unwrap().is_some() {
+            decoded += 1;
         }
     }
-    for ms in (220..=500).step_by(20) {
-        if let Some(block) = player.poll(now + Duration::from_millis(ms)).unwrap() {
-            if !block.concealed {
-                decoded += 1;
-            }
-        }
-    }
-    assert_eq!(decoded, 10, "200 ms of captured PCM must remain 200 ms");
-    assert_eq!(player.stats().received, 10);
+    assert_eq!(decoded, 10, "200 ms of captured sound remains 200 ms");
     assert_eq!(player.stats().late, 0);
-    assert!(player.poll(now + Duration::from_secs(5)).unwrap().is_none());
-    let mut resumed_encoder = AudioEncoder::new(Format::Stereo, false).unwrap();
+    assert!(player.poll().unwrap().is_none(), "silence invents nothing");
+    let mut encoder = AudioEncoder::new(Format::Stereo, false).unwrap();
     let resumed = (0..=10)
-        .map(|_| resumed_encoder.encode(&tone(0, 2)).unwrap())
+        .map(|_| encoder.encode(&tone(0, 2)).unwrap())
         .last()
         .unwrap();
-    let resumed_at = now + Duration::from_secs(5);
-    player.set_muted(true);
-    player.push(resumed, resumed_at).unwrap();
-    let block = player
-        .poll(resumed_at + Duration::from_millis(60))
-        .unwrap()
-        .unwrap();
+    player.push(resumed).unwrap();
     assert!(
-        !block.concealed,
-        "resumed packets must not be classified as stale"
+        player.poll().unwrap().is_some(),
+        "sound after silence plays"
     );
-    assert!(block.samples.iter().all(|sample| *sample == 0.0));
-    assert_eq!(player.stats().late, 0);
 }

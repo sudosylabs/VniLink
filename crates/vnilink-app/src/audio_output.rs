@@ -9,6 +9,10 @@ const OUTPUT_RECOVERY_LIMIT: Duration = Duration::from_secs(1);
 
 pub(crate) trait OutputDevice {
     fn push(&mut self, samples: &[f32]) -> Result<(), Error>;
+    /// How the device is keeping up, where it can say.
+    fn health(&self) -> Option<vnilink_audio::OutputHealth> {
+        None
+    }
 }
 pub(crate) trait OutputBackend {
     type Device: OutputDevice;
@@ -20,6 +24,9 @@ impl OutputDevice for vnilink_audio::NativeOutput {
     fn push(&mut self, samples: &[f32]) -> Result<(), Error> {
         vnilink_audio::NativeOutput::push(self, samples)
             .map_err(|_| Error::Unsupported("native audio output ended"))
+    }
+    fn health(&self) -> Option<vnilink_audio::OutputHealth> {
+        Some(vnilink_audio::NativeOutput::health(self))
     }
 }
 impl OutputBackend for NativeOutputBackend {
@@ -60,6 +67,10 @@ impl<B: OutputBackend> PlaybackOutput<B> {
             format,
             checked: Instant::now(),
         })
+    }
+    /// How the open output is keeping up, where it can say.
+    pub(crate) fn health(&self) -> Option<vnilink_audio::OutputHealth> {
+        self.output.as_ref().and_then(OutputDevice::health)
     }
     pub(crate) fn push(
         &mut self,

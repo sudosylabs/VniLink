@@ -117,17 +117,13 @@ fn ffi_audio_callback_format_mute_owner_and_capability_contract() {
         .start_native_audio_playback(audio.clone(), "invalid-device".into())
         .is_err());
     audio.set_muted(true);
-    // Transport arrival uses a fixed playback clock. Scheduler delays in the
-    // full suite must not exercise the deliberately supported stale-audio skip.
-    let playback_start = Instant::now();
+    // A block is decoded as soon as its packet arrives.
+    let mut muted_block = None;
     wait(|| {
-        assert!(audio.poll_internal_at(playback_start).unwrap().is_none());
-        audio.playback_stats().received == 1
+        muted_block = audio.poll_internal().unwrap();
+        muted_block.is_some()
     });
-    let muted_block = audio
-        .poll_internal_at(playback_start + Duration::from_millis(60))
-        .unwrap()
-        .unwrap();
+    let muted_block = muted_block.unwrap();
     assert_eq!(muted_block.timestamp, 0);
     assert_eq!(muted_block.samples.len(), 1920);
     assert!(muted_block.samples.iter().all(|&s| s == 0.0));
@@ -138,19 +134,13 @@ fn ffi_audio_callback_format_mute_owner_and_capability_contract() {
     assert!(source.publish(wrong).is_err());
     audio.set_muted(false);
     source.publish(next).unwrap();
+    let mut audible = None;
     wait(|| {
-        assert!(audio
-            .poll_internal_at(playback_start + Duration::from_millis(60))
-            .unwrap()
-            .is_none());
-        audio.playback_stats().received == 2
+        audible = audio.poll_internal().unwrap();
+        audible.is_some()
     });
-    let audible = audio
-        .poll_internal_at(playback_start + Duration::from_millis(80))
-        .unwrap()
-        .unwrap();
+    let audible = audible.unwrap();
     assert_eq!(audible.timestamp, 960);
-    assert!(!audible.concealed);
     assert!(audible.samples.iter().any(|v| v.abs() > 0.01));
     assert_eq!(audio.playback_stats().received, 2);
     audio.close();

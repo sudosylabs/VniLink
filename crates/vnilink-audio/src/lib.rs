@@ -6,6 +6,7 @@ mod codec;
 mod jitter;
 #[cfg(feature = "native")]
 mod native;
+mod pace;
 mod packet;
 mod resample;
 
@@ -14,7 +15,9 @@ pub use jitter::{AudioPlayback, PlaybackBlock, PlaybackStats};
 #[cfg(feature = "native")]
 pub use native::{
     audio_devices, default_device_id, AudioDevice, DeviceDirection, NativeCapture, NativeOutput,
+    OutputHealth,
 };
+pub use pace::{Pace, PaceStep, MAX_TARGET, MIN_TARGET};
 pub use packet::AudioPacket;
 pub use resample::AudioResampler;
 

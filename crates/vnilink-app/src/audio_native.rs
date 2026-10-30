@@ -369,6 +369,29 @@ impl HostAudioFactory for NativeFactory {
     }
 }
 
+/// How often playback records how it keeps up.
+const PACE_REPORT: Duration = Duration::from_secs(5);
+
+/// Records how far playback runs behind the sound it receives, so a
+/// delay can be read from the log instead of guessed by ear.
+fn report_pace(output: &crate::audio_output::PlaybackOutput, player: &crate::AudioService) {
+    let stats = player.playback_stats();
+    let Some(health) = output.health() else {
+        return;
+    };
+    tracing::debug!(
+        target: vnilink::trace::AUDIO,
+        queued_ms = health.queued_ms.round(),
+        target_ms = health.target_ms.round(),
+        ppm = health.ppm.round(),
+        underruns = health.underruns,
+        dropped = health.dropped,
+        waiting = stats.queued,
+        overflow = stats.overflow,
+        "playback pace"
+    );
+}
+
 pub struct NativeAudioPlayback {
     error: Arc<Mutex<Option<FfiError>>>,
     stop: Arc<AtomicBool>,
@@ -538,7 +561,12 @@ impl VnilinkCore {
                         "the opener stopped waiting for the sound source",
                         ready.send(Ok(()))
                     );
+                    let mut reported = Instant::now();
                     while !worker_stop.load(Ordering::Acquire) && !player.is_cancelled() {
+                        if reported.elapsed() >= PACE_REPORT {
+                            reported = Instant::now();
+                            report_pace(&output, &player);
+                        }
                         if let Some(block) = player
                             .poll_internal()
                             .map_err(|_| vnilink::Error::Unsupported("audio playback ended"))?

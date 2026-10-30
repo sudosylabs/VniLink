@@ -1,11 +1,12 @@
 //! Explicit-device native PCM I/O. Enumeration does not open a device. No
 //! fallback to the default microphone after unplug or failed authorization.
+use crate::pace::{Pace, PaceStep};
 use crate::{AudioEncoder, AudioPacket, AudioResampler, Error, Format, FRAME_SAMPLES, SAMPLE_RATE};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -166,6 +167,9 @@ struct Buffer {
     failed: AtomicBool,
     failure_reason: AtomicU64,
     underruns: AtomicU64,
+    /// Samples an output waits for before it plays, at the start and after
+    /// running dry, so resumed sound does not stutter.
+    prime: AtomicUsize,
 }
 impl Buffer {
     fn new() -> Arc<Self> {
@@ -173,6 +177,7 @@ impl Buffer {
             failed: AtomicBool::new(false),
             failure_reason: AtomicU64::new(0),
             underruns: AtomicU64::new(0),
+            prime: AtomicUsize::new(0),
         })
     }
 }
@@ -345,11 +350,18 @@ where
     let played = played.channels();
     let mut config = config;
     config.buffer_size = cpal::BufferSize::Fixed(config.sample_rate / 100);
+    let mut priming = true;
     device
         .build_output_stream(
             config,
             move |data: &mut [T], _| {
                 data.fill(T::EQUILIBRIUM);
+                // Silence until enough is queued, so a start or a resume after
+                // running dry plays smoothly instead of in fragments.
+                if priming && consumer.slots() < buffer.prime.load(Ordering::Relaxed) {
+                    return;
+                }
+                priming = false;
                 let mut missing = false;
                 for frame in data.chunks_exact_mut(device_channels) {
                     for sample in &mut frame[..played] {
@@ -362,6 +374,7 @@ where
                 }
                 if missing {
                     buffer.underruns.fetch_add(1, Ordering::Relaxed);
+                    priming = true;
                 }
             },
             move |_| {
@@ -372,6 +385,23 @@ where
         )
         .map_err(|_| Error::DeviceStage("build native stream"))
 }
+/// How an output is keeping up, for the engine's log.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutputHealth {
+    /// Sound queued ahead of the device.
+    pub queued_ms: f64,
+    /// What the output aims to keep queued.
+    pub target_ms: f64,
+    /// The speed change now applied, in parts per million.
+    pub ppm: f64,
+    /// Times the device ran dry.
+    pub underruns: u64,
+    /// Blocks dropped to catch up.
+    pub dropped: u64,
+}
+
+/// Plays decoded blocks as they come, paced by the device's clock: one
+/// queue, kept near a small target by [`Pace`].
 pub struct NativeOutput {
     _stream: cpal::Stream,
     buffer: Arc<Buffer>,
@@ -380,9 +410,10 @@ pub struct NativeOutput {
     capacity: usize,
     input_format: Format,
     output_format: Format,
-    target_samples: usize,
-    drift_ppm: f64,
-    started: bool,
+    pace: Pace,
+    ppm: f64,
+    dropped: u64,
+    per_ms: f64,
 }
 impl NativeOutput {
     pub fn open(id: &str, input: Format) -> Result<Self, Error> {
@@ -391,9 +422,12 @@ impl NativeOutput {
         let output = format(config.channels())?;
         let rate = config.sample_rate();
         let resampler = AudioResampler::new(SAMPLE_RATE, rate, output, FRAME_SAMPLES)?;
+        // Room for the largest target and the margin above it.
         let capacity = (rate / 5) as usize * output.channels();
         let (producer, consumer) = rtrb::RingBuffer::new(capacity);
         let buffer = Buffer::new();
+        let pace = Pace::new(rate, output.channels());
+        buffer.prime.store(pace.target(), Ordering::Relaxed);
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => {
                 output_stream::<f32>(&device, config.config(), output, consumer, buffer.clone())?
@@ -406,6 +440,10 @@ impl NativeOutput {
             }
             _ => return Err(Error::InvalidFormat),
         };
+        // The device plays silence until the first target is queued.
+        stream
+            .play()
+            .map_err(|_| Error::DeviceStage("start playback"))?;
         Ok(Self {
             _stream: stream,
             buffer,
@@ -414,13 +452,15 @@ impl NativeOutput {
             capacity,
             input_format: input,
             output_format: output,
-            target_samples: (rate as usize * 3 / 50) * output.channels(),
-            drift_ppm: 0.0,
-            started: false,
+            pace,
+            ppm: 0.0,
+            dropped: 0,
+            per_ms: f64::from(rate) * output.channels() as f64 / 1000.0,
         })
     }
-    /// One decoded 20 ms block. Muted blocks are zero samples supplied by the
-    /// playback engine; capture and decoding are unaffected by receiver mute.
+    /// One decoded 20 ms block, as soon as it is decoded. Muted blocks are
+    /// zero samples supplied by the playback engine. A block that would
+    /// leave the output too far behind is dropped instead.
     pub fn push(&mut self, samples: &[f32]) -> Result<(), Error> {
         if self.buffer.failed.load(Ordering::Acquire) {
             return Err(Error::DeviceFailed);
@@ -430,6 +470,18 @@ impl NativeOutput {
         {
             return Err(Error::InvalidFormat);
         }
+        let queued = self.capacity - self.producer.slots();
+        let underruns = self.buffer.underruns.load(Ordering::Relaxed);
+        let ppm = match self.pace.step(queued, underruns) {
+            PaceStep::Drop => {
+                self.dropped += 1;
+                return Ok(());
+            }
+            PaceStep::Play { ppm } => ppm,
+        };
+        self.buffer
+            .prime
+            .store(self.pace.target(), Ordering::Relaxed);
         let mut converted = Vec::with_capacity(FRAME_SAMPLES * self.output_format.channels());
         for frame in samples.chunks_exact(self.input_format.channels()) {
             let left = frame[0];
@@ -441,29 +493,19 @@ impl NativeOutput {
                 converted.push(right);
             }
         }
-        let queued = self.capacity - self.producer.slots();
-        // More queued PCM requires fewer output samples, not a sender clock
-        // change. A gentle bounded servo avoids accumulating device-clock drift.
-        let error = (self.target_samples as f64 - queued as f64) / self.target_samples as f64;
-        if self.started {
-            self.drift_ppm = crate::resample::drift_step(self.drift_ppm, error);
-        }
-        self.resampler.set_drift_ppm(self.drift_ppm)?;
+        self.ppm = ppm;
+        self.resampler.set_drift_ppm(ppm)?;
         let out = self.resampler.process(&converted)?;
         if out.len() > self.producer.slots() {
-            return Err(Error::DeviceStage("playback PCM overrun"));
+            // Full: the device stopped taking sound. Losing this block keeps
+            // the next ones current.
+            self.dropped += 1;
+            return Ok(());
         }
         for sample in out {
             self.producer
                 .push(sample)
                 .map_err(|_| Error::DeviceFailed)?;
-        }
-        let ready = self.capacity - self.producer.slots() >= self.target_samples;
-        if !self.started && ready {
-            self._stream
-                .play()
-                .map_err(|_| Error::DeviceStage("start capture"))?;
-            self.started = true;
         }
         Ok(())
     }
@@ -472,6 +514,15 @@ impl NativeOutput {
     }
     pub fn underruns(&self) -> u64 {
         self.buffer.underruns.load(Ordering::Relaxed)
+    }
+    pub fn health(&self) -> OutputHealth {
+        OutputHealth {
+            queued_ms: (self.capacity - self.producer.slots()) as f64 / self.per_ms,
+            target_ms: self.pace.target_ms(),
+            ppm: self.ppm,
+            underruns: self.underruns(),
+            dropped: self.dropped,
+        }
     }
 }
 

@@ -155,16 +155,13 @@ fn desktop_system_audio_mute_disable_retry_and_revocation_are_independent_of_vid
     let first = lock(&opened)[0].clone();
     companion.set_muted(true);
     assert_eq!(companion.status().phase, DesktopAudioPhase::Muted);
-    // Exercise the actual Opus transport and jitter decoder while muted.
-    let start = Instant::now();
+    // Exercise the actual Opus transport and decoder while muted.
+    let mut block = None;
     wait(|| {
-        assert!(first.poll_internal_at(start).unwrap().is_none());
-        first.playback_stats().received == 1
+        block = first.poll_internal().unwrap();
+        block.is_some()
     });
-    let block = first
-        .poll_internal_at(start + Duration::from_millis(60))
-        .unwrap()
-        .unwrap();
+    let block = block.unwrap();
     assert!(block.samples.iter().all(|sample| *sample == 0.0));
     companion.set_enabled(false);
     assert!(first.is_cancelled());
@@ -298,11 +295,7 @@ fn silent_system_audio_stays_connected_without_fabricating_packets() {
     let companion = f.start(opened.clone());
     wait(|| companion.status().phase == DesktopAudioPhase::Playing);
     let audio = lock(&opened)[0].clone();
-    let start = Instant::now();
-    wait(|| {
-        let _ = audio.poll_internal_at(start).unwrap();
-        audio.playback_stats().received == 1
-    });
+    wait(|| audio.poll_internal().unwrap().is_some());
     // Exceeds the transport's three-second packet timeout. Idle keepalives
     // preserve liveness, but never become invented encoded/decoded frames.
     std::thread::sleep(Duration::from_millis(3300));

@@ -1,9 +1,6 @@
 //! Nonvisual source and playback contracts. Native UI remains deferred.
 use crate::{error::map_error, BackendStartup, FfiError, FfiServiceInfo, VnilinkCore};
-use std::{
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiAudioKind {
     System,
@@ -74,7 +71,6 @@ pub struct FfiAudioPacket {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FfiAudioBlock {
     pub timestamp: u64,
-    pub concealed: bool,
     pub samples: Vec<f32>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +79,6 @@ pub struct FfiAudioPlaybackStats {
     pub late: u64,
     pub duplicate: u64,
     pub overflow: u64,
-    pub concealed: u64,
     pub discontinuities: u64,
     pub queued: u32,
 }
@@ -211,7 +206,8 @@ impl AudioService {
             .set_muted(muted);
     }
     /// Called by an existing native playback worker, not a UI/render thread.
-    /// At most one 20 ms block; mute still consumes transport and codec state.
+    /// The oldest 20 ms block that has arrived, decoded; the output paces
+    /// playback. Mute still consumes transport and codec state.
     pub fn poll_playback(&self) -> Result<Option<FfiAudioBlock>, FfiError> {
         if self
             .playback_claimed
@@ -232,7 +228,6 @@ impl AudioService {
             late: s.late,
             duplicate: s.duplicate,
             overflow: s.overflow,
-            concealed: s.concealed,
             discontinuities: s.discontinuities,
             queued: s.queued as u32,
         }
@@ -240,9 +235,6 @@ impl AudioService {
 }
 impl AudioService {
     pub(crate) fn poll_internal(&self) -> Result<Option<FfiAudioBlock>, FfiError> {
-        self.poll_internal_at(Instant::now())
-    }
-    pub(crate) fn poll_internal_at(&self, now: Instant) -> Result<Option<FfiAudioBlock>, FfiError> {
         if self.inner.is_cancelled() {
             return Err(map_error(vnilink::Error::NoSession));
         }
@@ -252,15 +244,14 @@ impl AudioService {
                 break;
             };
             playback
-                .push(packet, now)
+                .push(packet)
                 .map_err(|_| map_error(vnilink::Error::Malformed))?;
         }
         playback
-            .poll(now)
+            .poll()
             .map(|block| {
                 block.map(|b| FfiAudioBlock {
                     timestamp: b.timestamp,
-                    concealed: b.concealed,
                     samples: b.samples,
                 })
             })
@@ -308,12 +299,9 @@ impl VnilinkCore {
             .inner
             .open_audio_service(id, generation, config.into())
             .map_err(map_error)?;
-        let mut playback =
+        let playback =
             vnilink_audio::AudioPlayback::new(inner.config().format().map_err(map_error)?)
                 .map_err(|_| map_error(vnilink::Error::Unsupported("Opus audio decoder")))?;
-        if inner.config().kind == vnilink::audio::AudioKind::System {
-            playback.allow_silent_gaps();
-        }
         Ok(Arc::new(AudioService {
             inner,
             core: self.inner.clone(),

@@ -4,7 +4,8 @@ use rubato::{
 };
 
 /// Band-limited streaming resampler. Fixed input chunks; callers retain only
-/// a bounded remainder. Ratio correction is limited to +/- 200 ppm and ramped.
+/// a bounded remainder. Ratio correction is limited to the pacing's
+/// [`crate::pace::MAX_PPM`] and ramped.
 pub struct AudioResampler {
     inner: SincFixedIn<f32>,
     format: Format,
@@ -26,7 +27,7 @@ impl AudioResampler {
         }
         let inner = SincFixedIn::new(
             output_rate as f64 / input_rate as f64,
-            1.001,
+            1.0 + crate::pace::MAX_PPM / 1_000_000.0,
             SincInterpolationParameters {
                 sinc_len: 128,
                 f_cutoff: 0.95,
@@ -51,7 +52,7 @@ impl AudioResampler {
         self.inner.output_delay()
     }
     pub fn set_drift_ppm(&mut self, ppm: f64) -> Result<(), Error> {
-        if !ppm.is_finite() || ppm.abs() > 200.0 {
+        if !ppm.is_finite() || ppm.abs() > crate::pace::MAX_PPM {
             return Err(Error::InvalidFormat);
         }
         self.inner
@@ -82,9 +83,4 @@ impl AudioResampler {
         }
         Ok(samples)
     }
-}
-
-#[cfg(any(feature = "native", test))]
-pub(crate) fn drift_step(previous: f64, error: f64) -> f64 {
-    (previous * 0.98 + error.clamp(-1.0, 1.0) * 4.0).clamp(-200.0, 200.0)
 }
