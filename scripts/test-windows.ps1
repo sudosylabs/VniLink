@@ -29,11 +29,6 @@ try {
     # preinstall refuses an unsupported Node; postinstall installs the Rust
     # toolchain and its GNU target.
     if (-not $SkipInstall) { Invoke-Check $Npm @('ci') }
-    # Use the repository-selected toolchain directly; Windows rustup proxy
-    # executables may be unavailable in an SSH session after self-update.
-    $CargoPath = & rustup which cargo
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the repository Rust toolchain.' }
-    $env:PATH = (Split-Path -Parent $CargoPath) + [IO.Path]::PathSeparator + $env:PATH
     Invoke-Check $Npm @('run', 'doctor', '--', '--require', 'build,test:rust,test:ui')
     Invoke-Check $Npm @('run', 'check')
     Invoke-Check 'cargo' @('fmt', '--all', '--', '--check')
