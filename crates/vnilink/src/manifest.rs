@@ -74,7 +74,7 @@ impl Manifest {
 }
 
 /// A scanned source tree: paths, sizes and mtimes.
-/// `root_rel` is the root-relative path (e.g. `docs/sub/a.txt`) used to
+/// `root_rel` is the root-relative path (e.g. `photos/sub/a.txt`) used to
 /// re-open the file through directory handles when it is sent; `ino` (the
 /// Windows file index there) identifies it so a file renamed over it is
 /// refused.

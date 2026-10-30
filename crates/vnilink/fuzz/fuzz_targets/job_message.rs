@@ -6,6 +6,10 @@
 // ---------------------------------------------------------------------------------------------
 
 //! The JSON job-control messages either side sends.
+//!
+//! The first input byte picks the message type. A message re-encodes to JSON
+//! that decodes to itself, and a manifest that passes validation can be
+//! summed.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|input: (u8, &[u8])| {

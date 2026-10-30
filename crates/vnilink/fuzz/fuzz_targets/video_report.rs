@@ -6,6 +6,9 @@
 // ---------------------------------------------------------------------------------------------
 
 //! A viewer's loss reports as the host decodes and smooths them.
+//!
+//! Reports decode back to their bytes, and the parity share the host derives
+//! from them stays within its bounds.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|reports: Vec<[u8; 20]>| {

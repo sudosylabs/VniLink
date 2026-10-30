@@ -6,6 +6,8 @@
 // ---------------------------------------------------------------------------------------------
 
 //! `ControlMessage::decode` on any frame a peer sends on the control stream.
+//!
+//! A decoded message encodes to a frame that decodes to the same message.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|bytes: &[u8]| {

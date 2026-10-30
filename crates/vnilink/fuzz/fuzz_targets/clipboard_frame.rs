@@ -6,6 +6,9 @@
 // ---------------------------------------------------------------------------------------------
 
 //! Clipboard frames, file selections included, as a peer sends them.
+//!
+//! Feeds the clipboard frame decoder, which reads a `FileSelection` inside
+//! it. A frame decodes only from the bytes it encodes to.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|payload: &[u8]| {

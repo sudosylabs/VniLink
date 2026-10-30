@@ -6,6 +6,45 @@
 // ---------------------------------------------------------------------------------------------
 
 //! Invitations, pairing files, and the wait for control approval.
+//!
+//! Pairing remembers an identity. It never grants a service: what a paired
+//! device may do comes only from the installation's `SharingPolicy`
+//! (see [`Core::change_sharing_policy`]), and a remembered identity is
+//! required even when sharing is on.
+//!
+//! # Owner confirmation
+//!
+//! 1. [`Core::export_pairing_file`] writes a signed invitation and, with
+//!    `allow_control`, opens one local pairing window that lasts as long as
+//!    the file, at most [`invitation::MAX_TTL`]. The argument names the
+//!    local approval window; it does not grant screen control and is not in
+//!    the file. A later export replaces the window.
+//! 2. The other computer opens the file with [`Core::open_pairing_file`] and
+//!    [`Core::confirm_pairing`] saves the writer (identity, hostname,
+//!    operating system, addresses) when the typed digits match the writer's
+//!    screen. That alone does not let it connect to the writer.
+//! 3. It calls [`Core::begin_connect_services`] and shows
+//!    [`Core::control_check`]. The writer's host sees an unpaired Hello. If
+//!    the window is open, unexpired and allows approval, the Hello parks in
+//!    `wait_for_control_approval` and [`crate::CoreEvent::ControlRequested`]
+//!    carries the same digits. Otherwise the Hello is refused at once with
+//!    [`Error::Unauthorized`].
+//! 4. The writer's owner types the digits into
+//!    [`Core::confirm_control_request`], which remembers that authenticated
+//!    endpoint and consumes the window. A mismatch, a rejection, a closed
+//!    connection, a stop or the `CONTROL_APPROVAL_WAIT` timeout answers the
+//!    parked Hello with a refusal and remembers nothing; only one request can
+//!    wait at a time and a second is refused as [`Error::Busy`]. An approval
+//!    after the window expired is [`Error::InvitationExpired`].
+//!
+//! Once both computers remember each other either can dial again without a
+//! second file, provided it is hosting: admission checks hosting first, so
+//! a computer that is not hosting answers [`Error::NotHosting`].
+//!
+//! Every mutation persists first and puts the previous trust and replay
+//! state back when the save fails, so memory never runs ahead of the store.
+//! An installation remembers each invitation nonce it accepted and refuses
+//! the same invitation a second time.
 // trace: records every ignored failure
 
 use super::*;
@@ -53,8 +92,8 @@ impl Core {
     /// one incoming peer can be remembered after
     /// [`Core::confirm_control_request`]. The returned bytes do not contain
     /// that switch. The app writes them to a file ending in
-    /// [`crate::PAIRING_FILE_EXTENSION`]. The steps are in
-    /// `crates/vnilink/PAIRING.md`.
+    /// [`crate::PAIRING_FILE_EXTENSION`]. The confirmation steps are in the
+    /// module documentation.
     pub fn export_pairing_file(
         &self,
         ttl: Duration,

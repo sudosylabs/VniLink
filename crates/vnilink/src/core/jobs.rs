@@ -5,20 +5,68 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! Transfer job manager (Stage C).
+//! Transfer jobs: scheduling, progress, resume and peer binding.
 //!
-//! Jobs move whole manifests with partial files, conflict choices,
-//! cancellation and restartable progress. Each side polls its own
-//! records; senders learn completion by asking the receiver over the
-//! auxiliary stream, so both directions complete honestly. File bytes
-//! move over `vnilink/files/1` (`crate::transfer`). Records persist in
-//! journals in the transfer directory, beside the partials of arriving
-//! files.
+//! A job moves one manifest between this computer and one peer, with
+//! partial files, conflict choices, cancellation and restartable progress.
+//! Each side keeps its own record and polls it; a sender learns how far its
+//! receiver got by asking it, so both directions complete honestly. File
+//! bytes move over `vnilink/files/1` ([`crate::transfer`], with
+//! [`Core::fetch_job_file`] as the receiver's entry point). The sender
+//! scans its sources into a [`Manifest`] of paths, sizes and modification
+//! times and reads nothing more ahead of time. A download the other
+//! computer takes long to prepare is `Preparing` at once: the host answers
+//! within a second, and the receiver asks for the manifest
+//! (`TAG_JOB_MANIFEST`) until it is ready. A preparation cut short has
+//! nothing to resume from and fails.
 //!
-//! Threading follows the core rule: call from outside the runtime,
-//! preferably off the UI thread. One `job_poll` advances at most one
-//! file; progress is exact between polls. Records persist in per-job
-//! journals (`job_journal`).
+//! Jobs are peer-scoped: a request names a job by the peer's key, so one
+//! peer cannot resume, list or adopt another's. A job a Files service
+//! owns rides that service's connection for its control, and a state change
+//! it cannot survive is decided here, not by the window:
+//!
+//! - Revoking Files sharing interrupts that peer's jobs
+//!   ([`interrupt_peer_jobs`]); a controller session that ends interrupts
+//!   the jobs on it ([`interrupt_controller_jobs`]) rather than replaying
+//!   them; a restart leaves what was in flight `Interrupted`.
+//! - A failure that may clear by itself (a lost or redialing connection, a
+//!   stalled stream, a sender busy or shut down) keeps the job going and
+//!   tries again after about 1, 2, 4, 8, 16, then 30 s ([`retry_pause`]);
+//!   once [`MAX_RETRIES`] tries or [`RETRY_WINDOW`] pass without a byte
+//!   moving, the job is interrupted. An interrupted job says why until it
+//!   resumes.
+//! - A job whose Files owner is gone is interrupted and names which part
+//!   went (see `service_jobs::orphan_reason`); the next owner for that peer
+//!   adopts and resumes it ([`Core::files_service_resume_orphans`]), and
+//!   [`Core::job_resume`] resumes any other.
+//! - Interrupted jobs do not count against [`MAX_ACTIVE_JOBS`] until they
+//!   resume, and resuming re-checks the bound.
+//!
+//! [`Core::start_job_driver`] runs jobs in the background, independent of
+//! any window, with a worker per job that has a step to take: a receiver
+//! takes file after file until it waits on a decision, on admission or on
+//! its peer; a sender asks its receiver how far it got, soon while that
+//! changes and seldom while it does not. [`Core::job_poll`] takes one step
+//! for a caller driving a job itself, and at most one file per call. Calls
+//! come from outside the runtime, preferably off the UI thread.
+//!
+//! While a receiver takes one file it fetches up to [`PREFETCH_FILES`] of
+//! the next small files (one segment or less) ahead into their partials,
+//! stopping once [`PREFETCH_BYTES`] are fetching, so many small files do
+//! not cost a round trip each. They still publish one at a time in manifest
+//! order through the same conflict and permission checks, and a file is
+//! used only if it arrived whole on the files connection still open:
+//! revoking closes that connection, so nothing fetched after a revoke
+//! lands, though a file that had already arrived whole when the revoke
+//! reached this computer may.
+//!
+//! Publication follows the conflict choice and re-checks cancellation,
+//! grant and owner under the commit ([`Core::publish_staged`]). Partials
+//! live under the job's staging in the transfer directory. Complete,
+//! failed and forgotten jobs remove them; cancelled and interrupted jobs
+//! keep them for resume, within the retention policy
+//! ([`crate::job::FileRetentionPolicy`]) applied when jobs load. Records
+//! persist in per-job journals (`job_journal`).
 // trace: records every ignored failure
 
 use super::*;
@@ -1005,7 +1053,7 @@ impl Core {
     /// file until it is blocked, on a decision, on admission or on its peer,
     /// then waits for any job to change. A sender asks its receiver how far
     /// it got, soon again while that changes and ever more seldom while it
-    /// does not ([`SENDER_SOON`], [`SENDER_SELDOM`]); its own answers wake
+    /// does not (`SENDER_SOON`, `SENDER_SELDOM`); its own answers wake
     /// nothing. The driver only starts workers, when a job changes and once
     /// a second. Call once after `set_transfer_directory` from the owning
     /// `Arc<Core>`; the driver and its workers end when the Core shuts down
@@ -1070,7 +1118,7 @@ impl Core {
         }
     }
 
-    /// Advances whenever any job changes; see [`Core::job_changes_since`].
+    /// Advances whenever any job changes.
     pub fn job_revision(&self) -> u64 {
         let _engine = self.engine();
         self.shared.job_revision.load(Ordering::Acquire)
@@ -2217,15 +2265,15 @@ impl Core {
         }
     }
 
-    /// Test hooks for cross-volume pre-staging; see [`PRESTAGE_HOOKS`].
+    /// Test hooks for cross-volume pre-staging; see `PRESTAGE_HOOKS`.
     /// Production leaves them unset.
     #[cfg(any(unix, windows))]
     pub fn set_prestage_hooks(hooks: PrestageHooks) {
         *lock(&PRESTAGE_HOOKS) = hooks;
     }
 
-    /// Identifies this engine to its test hooks: [`PrestageHooks`] on
-    /// Unix and Windows, and [`PREPARE_SCAN_HOOKS`] everywhere.
+    /// Identifies this engine to its test hooks: `PrestageHooks` on
+    /// Unix and Windows, and `PREPARE_SCAN_HOOKS` everywhere.
     #[cfg(any(unix, windows, test, feature = "test-probes"))]
     pub fn prestage_key(&self) -> usize {
         let _engine = self.engine();
@@ -3390,7 +3438,7 @@ pub(super) fn sending_at(
 }
 
 /// Test probe parked by the serving tests: called with the serving
-/// engine ([`Core::engine_key`]) and job after the source opens, before it
+/// engine (`Core::engine_key`) and job after the source opens, before it
 /// is authorized. Production leaves it unset. The probe must return
 /// promptly for jobs it does not recognize: suites run in parallel.
 pub static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn(usize, u64)>> =

@@ -6,6 +6,16 @@
 // ---------------------------------------------------------------------------------------------
 
 //! Translate mode on Linux. The X display opens on the first chord, not in tests.
+//!
+//! Each character is looked up in the X server's keymap
+//! ([`keyboard::find_chord`]) and pressed as its key with Left Shift and/or
+//! Right Alt held for the level it sits on. A character the keymap's group 1
+//! lacks is refused with [`Error::InputFailed`], which leaves the desktop up.
+//! Only this X11 path exists: macOS and Windows have no chord injection, and
+//! a Wayland adapter answers only if it implements
+//! [`HostDesktop::type_chord`](crate::HostDesktop::type_chord). The keymap
+//! lookup is unit-tested against a built map; opening the display and
+//! pressing the keys is not exercised by unit tests.
 // trace: records every ignored failure
 
 use enigo::{Direction, Keyboard};

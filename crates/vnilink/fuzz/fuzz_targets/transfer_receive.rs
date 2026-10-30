@@ -7,6 +7,9 @@
 
 //! The receiver's stream parser on a sender's stream: an honest one for a
 //! small file, then edited, and cut into arbitrary chunks.
+//!
+//! An honest stream lands as the file however it is chunked; an edited one
+//! never lands.
 #![no_main]
 
 use arbitrary::Arbitrary;

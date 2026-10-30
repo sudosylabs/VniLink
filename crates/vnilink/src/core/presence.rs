@@ -13,6 +13,11 @@
 //! by itself, and the host does not count it as someone connected.
 //! The supervisor redials with backoff, sooner when the peer dials us or the
 //! user asks for the link, and stops for unpaired computers.
+//!
+//! The link's session phase maps to [`DevicePresence`]: active is connected,
+//! reconnecting is reconnecting, and a link that ended is disconnected. A
+//! host that refused the link because it stopped hosting reports
+//! [`DevicePresence::NotAccepting`] until a link is active again.
 // trace: records every ignored failure
 
 use std::collections::HashMap;

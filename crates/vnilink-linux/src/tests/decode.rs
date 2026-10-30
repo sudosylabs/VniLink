@@ -5,8 +5,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-// H.264 syntax vectors are pure parsing and run on every platform. The
-// hardware round trip at the end runs only where a VA-API render node exists.
+//! H.264 syntax vectors are pure parsing and run on every platform. The
+//! hardware round trip at the end runs only where a VA-API render node exists.
+//!
+//! The `fixtures` directory holds synthetic 64x64 High-profile access units
+//! from VideoToolbox: an IDR and two predictive frames (`mac-high-64-*.h264`).
+//! They contain no screen capture or user data. Their PPS enables 8x8
+//! transforms, which reproduces the Mac-host/Linux-viewer incompatibility the
+//! parser once rejected. `reference-64-*.bgra` are the pictures an
+//! independent decoder (FFmpeg) produces from the concatenated three access
+//! units with BGRA output; the VA-API test compares all three, so reference
+//! picture reuse is covered, and requires at least 40 dB PSNR.
+//!
+//! Regenerate the access units on macOS with the `interop_fixture` example of
+//! `vnilink-macos`, which writes 64x64 and 1920x1080 sequences into a
+//! directory given as its only argument. The `decode_interop` example of this
+//! crate decodes such a directory through the production VA-API decoder on
+//! Linux and writes the decoded pictures beside the inputs, which is how the
+//! larger sequences are checked; only the 64x64 sequence is committed.
+//! VideoToolbox output varies across hardware and OS versions, so keep the
+//! existing fixtures until they are replaced on purpose;
+//! `mac_encoder_output_is_accepted_by_linux_syntax` checks the current
+//! encoder at both sizes in Baseline and High.
 
 use crate::syntax::{Pps, Slice, Sps};
 

@@ -8,6 +8,10 @@
 //! The viewer's reassembler on a sequence of datagrams: forged ones mixed
 //! with honest fragments of frames, some lost and out of order; and, for
 //! each honest frame alone, whether enough shards rebuild it.
+//!
+//! Forged and honest fragments never panic; an honest frame comes back
+//! exactly when at least its data count of shards arrived. Whatever
+//! completes goes on to the video body parser, `decode_video_body`.
 #![no_main]
 
 use arbitrary::Arbitrary;

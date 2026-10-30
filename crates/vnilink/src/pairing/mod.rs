@@ -23,18 +23,17 @@
 //! 3. The other computer calls [`crate::Core::open_pairing_file`]. Trust is
 //!    unchanged. [`crate::Core::confirm_pairing`] saves the writer when the
 //!    typed digits match the writer's screen. That saves an address book
-//!    entry. It does not grant control of either computer.
+//!    entry. It does not let either computer use a service of the other.
 //! 4. The controller calls [`crate::Core::control_check`] and shows those
-//!    digits, then calls [`crate::Core::connect`]. If the writer's switch was
-//!    on and the file has not expired, the writer sees a control request with
-//!    the same digits. [`crate::Core::confirm_control_request`] grants control.
-//!    Clipboard and file transfer stay off.
+//!    digits, then [`crate::Core::begin_connect_services`]. If the writer's
+//!    switch was on and the file has not expired, the writer sees a control
+//!    request with the same digits and
+//!    [`crate::Core::confirm_control_request`] remembers the controller.
+//!    What either computer may then do is decided by its sharing policy, not
+//!    by pairing.
 //!
-//! `core.rs` forwards here for the file bytes and the digits. The wait for
-//! the host's answer lives next to the session handshake, because that is
-//! where an incoming connection is accepted or rejected.
-//!
-//! The parts that are still open are listed in `crates/vnilink/PAIRING.md`.
+//! The functions behind these steps, and the wait for the host's answer to
+//! the controller's Hello, are in the core's pairing module.
 
 mod check;
 mod file;

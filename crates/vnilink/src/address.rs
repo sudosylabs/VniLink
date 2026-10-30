@@ -13,6 +13,13 @@
 //! and no grants. The receiver stores it on that peer only, because the Iroh
 //! connection already names the sender. A later reconnect dials this stored
 //! list instead of the addresses from the original invitation.
+//!
+//! The relay list is what [`crate::RelaySettings::relay_urls`] reports: empty
+//! while the installation uses the public relays, the configured home relay
+//! URLs otherwise. Direct sockets are the endpoint's current ones. A frame
+//! with more relays or sockets than the invitation allows, a repeated relay
+//! or an unparsable URL is [`Error::Malformed`]. A failed save in the
+//! receiver keeps the previous stored list.
 
 use std::net::SocketAddr;
 
@@ -22,6 +29,7 @@ use crate::invitation::{self, MAX_DIRECT_ADDRS};
 use crate::relay::{self, MAX_CUSTOM_RELAYS};
 use crate::trust::Device;
 
+/// First byte of the announcement on the control stream.
 pub(crate) const TAG: u8 = 6;
 
 /// Largest encoded announcement. Eight relay URLs at the relay module's
@@ -56,7 +64,7 @@ pub(crate) fn canonical(relays: &[String], direct: &[SocketAddr]) -> Result<Anno
     })
 }
 
-/// Replaces dial addresses. Grants and the endpoint id stay as they were.
+/// Replaces dial addresses. Sharing consent and the endpoint id stay as they were.
 pub(crate) fn install(device: &mut Device, announcement: &Announcement) -> Result<(), Error> {
     let announcement = canonical(&announcement.relays, &announcement.direct)?;
     device.relays = announcement.relays;

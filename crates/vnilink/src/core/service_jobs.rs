@@ -5,7 +5,32 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! Files-owned jobs reuse the transfer engine, with an explicit peer owner.
+//! Files-owned jobs: the transfer engine ([`super::jobs`]) with an explicit
+//! owner.
+//!
+//! A job submitted through a Files service ([`Core::files_service_upload`],
+//! [`Core::files_service_download`]) records that service as its owner: the
+//! service id, its generation, and whether this computer hosts it. One
+//! submission is one job for a folder and the entries of it to copy, with a
+//! single manifest. The owner's connection carries the job's control, and
+//! `check_owner` is the gate every poll, resume and publication passes: it
+//! fails once the service is closed, replaced by another generation, or its
+//! connection is no longer active. Scoped actions check the same gate, so a
+//! stale handle cannot act on a job a newer owner holds.
+//!
+//! An owner that goes (the window closed, the connection ended, either
+//! computer shut down, Files sharing withdrawn) leaves its jobs
+//! `Interrupted` with the reason `orphan_reason` derives from the owner's
+//! record; a download still preparing fails instead. Service ids are
+//! process-local, so a restart unbinds every owner. A fresh Files service
+//! for the same peer takes such a job over with
+//! [`Core::files_service_adopt_job`]: the controller asks the host to bind
+//! its record to the new hosted owner (`handle_adopt`) and rebinds its own
+//! only on the host's reply and a durable save, otherwise it keeps the
+//! previous owner. Adoption never resumes; [`Core::files_service_resume_orphans`]
+//! adopts every interrupted job of the peer that has no live owner and
+//! resumes it, and leaves any it cannot claim as it was. Only a job in
+//! `Cancelled`, `Interrupted` or `Failed` with no live owner can be adopted.
 // trace: records every ignored failure
 use super::*;
 use crate::{job, CloseCause, JobSnapshot, JobState, ServiceKind, ServicePhase};

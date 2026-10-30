@@ -6,6 +6,11 @@
 // ---------------------------------------------------------------------------------------------
 
 //! The `vnilink/fs` request, response, listing and places parsers.
+//!
+//! The first input byte picks the parser: `decode_request`,
+//! `decode_response`, `decode_list_body` or `decode_places_body`. Whatever
+//! decodes encodes and decodes again to itself; a response header encodes to
+//! its own bytes.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|input: (u8, &[u8])| {

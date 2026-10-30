@@ -6,6 +6,9 @@
 // ---------------------------------------------------------------------------------------------
 
 //! The reply a host writes for one screen snapshot.
+//!
+//! Feeds `decode_payload` and the image decoder inside it. A reply decodes
+//! only from the bytes the host writes for it.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|bytes: &[u8]| {

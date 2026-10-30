@@ -6,6 +6,9 @@
 // ---------------------------------------------------------------------------------------------
 
 //! The System service's operation, support and privacy replies.
+//!
+//! The first input byte picks the reply decoder. Each reply decodes only
+//! from the bytes it encodes to.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|input: (u8, &[u8])| {

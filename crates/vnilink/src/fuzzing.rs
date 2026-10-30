@@ -11,6 +11,23 @@
 //! what that parser promises of them; a broken promise panics, which the
 //! fuzzer records as a crash. Not an API: present only with the `fuzzing`
 //! feature, which production builds leave off.
+//!
+//! The parsers are private to this crate; these functions are thin wrappers
+//! for the `vnilink-fuzz` crate (`fuzz/`), one target per function family in
+//! `fuzz/fuzz_targets`. Each target's own header names its parser and the
+//! property it checks. `vnilink-fuzz` is not a member of the repository's
+//! workspace: cargo-fuzz builds it with nightly Rust and sanitizer flags, and
+//! it repeats the workspace's `[patch.crates-io]` vendored sources, which are
+//! changed together.
+//!
+//! Setup is `rustup toolchain install nightly --profile minimal` and
+//! `cargo +nightly install cargo-fuzz --locked`. From `crates/vnilink`,
+//! `cargo +nightly fuzz list` names the targets and
+//! `cargo +nightly fuzz run <target> -- -max_total_time=600` runs one for ten
+//! minutes. The corpus and crashes land in the ignored `fuzz/corpus/<target>`
+//! and `fuzz/artifacts/<target>`; replay a crash with
+//! `cargo +nightly fuzz run <target> <file>`. A fix keeps the input as a unit
+//! regression test beside the parser; the artifact itself is not tracked.
 // trace: records every ignored failure
 
 use std::path::PathBuf;

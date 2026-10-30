@@ -13,7 +13,17 @@
 //! follow. Serving finds a request by the sending job and the file's place
 //! in its manifest, so only a live sending job for that peer, under the
 //! Transfer grant, serves anything, and only the file the manifest
-//! describes (`jobs::open_served_file`).
+//! describes (`jobs::open_served_file`), which opens the source through the
+//! job's pinned root by handles, refusing links, and requires it to be the
+//! file that was scanned: the same file id, size and modification time, so a
+//! file renamed over it is refused as changed.
+//!
+//! A sender serves at most [`SERVE_PER_PEER`] files at once to one peer and
+//! [`SERVE_IN_ALL`] in all; a request that finds no slot within
+//! [`SLOT_WITHIN`] is told busy and tried again later. Serving re-checks the
+//! job and the grant every few megabytes, so a cancel or revoke stops a file
+//! mid-way. The receiver's window starts at [`crate::transfer::INITIAL_WINDOW`]
+//! and then follows the path ([`crate::transfer`]).
 
 use super::*;
 
@@ -337,7 +347,9 @@ pub(super) fn peer_addr(shared: &Shared, peer: &[u8; 32]) -> Result<EndpointAddr
 }
 
 /// Fetches one file of a sending job into its partial, continuing after
-/// the bytes it holds; `request` names the job and file, and its offset and
+/// the bytes it holds. A segment that fails its check is requested once
+/// more; a second failure ends the receipt as [`Received::Mismatch`], which
+/// fails the job. `request` names the job and file, and its offset and
 /// held bytes are taken from the partial. `via` learns which connection the
 /// file arrived on. Run where blocking file writes are fine: the caller's
 /// own thread or a blocking worker, never a runtime worker.

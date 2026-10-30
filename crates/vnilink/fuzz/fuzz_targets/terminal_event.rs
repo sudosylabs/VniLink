@@ -6,6 +6,9 @@
 // ---------------------------------------------------------------------------------------------
 
 //! The events a host's terminal sends.
+//!
+//! Feeds the terminal stream's event decoder. An event decodes only from the
+//! bytes it encodes to.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|bytes: &[u8]| {

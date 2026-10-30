@@ -5,11 +5,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! Job-control wire codec (Stage C).
+//! Job-control wire codec.
 //!
 //! Short streams on the auxiliary connection carry one framed message:
 //! a tag byte plus a versioned JSON body. Manifests ride inside these
-//! messages; file bytes never do (they move over blob connections).
+//! messages; file bytes never do (they move over `vnilink/files/1`, see
+//! [`crate::transfer`]).
 //! Every request carries the session generation and is fenced before any
 //! grant check or disk touch, exactly like filesystem requests.
 
@@ -22,7 +23,8 @@ use crate::manifest::Manifest;
 pub const JOB_VERSION: u8 = 1;
 
 /// Largest job-control frame. It holds a whole manifest: up to
-/// `MAX_MANIFEST_FILES` entries of a path, a hash and sizes in JSON.
+/// `MAX_MANIFEST_FILES` entries of a path, a size and a modification
+/// time in JSON.
 pub const MAX_JOB_FRAME: usize = 64 * 1024 * 1024;
 
 // Tag 0x01 carried a files-only session's filesystem requests; a link's

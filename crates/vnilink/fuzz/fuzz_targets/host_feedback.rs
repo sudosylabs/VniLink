@@ -7,6 +7,9 @@
 
 //! `HostFeedback::decode` on the host's feedback, and the viewer's
 //! adaptation loop on what decodes, beside its own measurements.
+//!
+//! Feedback decodes back to its bytes, and no feedback leads the loop to a
+//! quality outside the agreed limits or above the viewer's ceiling.
 #![no_main]
 
 use arbitrary::Arbitrary;

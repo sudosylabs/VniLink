@@ -11,7 +11,7 @@
 //! - [`lifecycle`] — open, shutdown, identity, relay
 //! - [`host`] — hosting and the accept loop
 //! - [`pairing`] — invitations, pairing files, control approval
-//! - [`connect`] — authorize, connect, disconnect, redial
+//! - [`connect`] — connect, disconnect, redial, unpair
 //! - [`keys`] — the input adapter, input defaults, and a session's control stream on the host
 //! - [`link`] — the live link and the address refresh both roles share
 //! - [`clipboard`] — the host's clipboard adapter

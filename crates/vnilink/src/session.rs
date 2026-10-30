@@ -16,7 +16,7 @@ pub enum SessionRole {
     Host,
 }
 
-/// Session lifecycle from the README. `Idle` is the absence of a session.
+/// Session lifecycle. `Idle` is the absence of a session.
 /// The controller enters `Reconnecting` after a dropped link, before the next
 /// dial. The host closes the old generation first, then accepts the new one.
 #[derive(Debug, Clone, PartialEq, Eq)]

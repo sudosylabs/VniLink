@@ -6,6 +6,9 @@
 // ---------------------------------------------------------------------------------------------
 
 //! Cursor shapes and positions as a host sends them.
+//!
+//! Feeds the cursor update decoder. An update decodes only from the bytes it
+//! encodes to.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|bytes: &[u8]| {

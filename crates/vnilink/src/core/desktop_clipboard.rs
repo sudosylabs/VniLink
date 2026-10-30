@@ -6,6 +6,38 @@
 // ---------------------------------------------------------------------------------------------
 
 //! A bounded, acknowledged clipboard pipe owned by one Desktop instance.
+//!
+//! Clipboard text is a separate grant from control: it is allowed only while
+//! `SharingPolicy::clipboard` is on for the host (see
+//! [`Core::change_sharing_policy`]), and the grant is checked on the host for
+//! every text, so a change takes effect on the next paste without ending the
+//! Desktop. A refusal does not end the pipe.
+//!
+//! Each Desktop opens its pipe on its own stream beside its picture and
+//! input, so a paste never waits behind keyboard input and keyboard input
+//! never waits behind a paste. One text is on the wire at a time and one more
+//! may wait behind it; further offers are [`Error::Busy`]. A text with no
+//! answer within [`TIMEOUT`] fails with [`Error::Timeout`]. The call returns
+//! only after the other side answers with a status, so success means the text
+//! was applied.
+//!
+//! Controller to host: [`RemoteDesktopService::submit_clipboard`] sends the
+//! text. The host applies it through the adapter installed with
+//! [`Core::set_clipboard`]; without one, or when the adapter fails, the answer is unsupported, and
+//! without the grant it is [`Error::ClipboardDenied`]. Host to controller:
+//! [`Core::publish_desktop_clipboard`] needs the same grant, and the
+//! controller keeps only the latest text, read with
+//! [`RemoteDesktopService::clipboard_text`]. The controller is told by
+//! [`CoreEvent::DesktopClipboardReceived`], which names the Desktop and
+//! carries no characters.
+//!
+//! Nothing here reads or writes the operating-system clipboard. The pipe
+//! belongs to the Desktop instance, so a Desktop that closes, or whose
+//! connection drops, takes it along: pending requests fail, and the
+//! replacement Desktop starts with an empty pipe and never resends an old
+//! paste. Only the host's text is delivered to a stream whose connection,
+//! peer and remote id match the Desktop; anything else is
+//! [`Error::StaleSession`].
 // trace: records every ignored failure
 use super::desktop_stream::{runtime, DesktopRuntime};
 use super::*;

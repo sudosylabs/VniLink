@@ -6,6 +6,8 @@
 // ---------------------------------------------------------------------------------------------
 
 //! `FileRequest::decode` on the bytes that open a `vnilink/files/1` stream.
+//!
+//! Exactly the request's 28 bytes decode, and back to themselves.
 #![no_main]
 
 libfuzzer_sys::fuzz_target!(|bytes: &[u8]| {
