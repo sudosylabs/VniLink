@@ -84,6 +84,10 @@ mod system;
 #[cfg(windows)]
 pub use system::WindowsSystemActions;
 #[cfg(windows)]
+mod hook_thread;
+#[cfg(windows)]
+mod input_block;
+#[cfg(windows)]
 mod system_keys;
 #[cfg(windows)]
 pub use system_keys::WindowsSystemKeys;

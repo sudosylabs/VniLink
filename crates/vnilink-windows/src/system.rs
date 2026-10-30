@@ -1,16 +1,16 @@
 //! Windows OS actions. `LockWorkStation` needs an interactive session;
 //! restart and shutdown enable the shutdown privilege on this process token
-//! first. `BlockInput` needs elevation and never blocks Ctrl+Alt+Delete, so
-//! it is reported as available but can still fail per call. There is no
-//! display privacy uses an owned window excluded from capture on supported Windows.
+//! first. Input blocking is `BlockInput` for an administrator and low-level
+//! hooks otherwise (see `input_block`); neither blocks Ctrl+Alt+Delete.
+//! Display privacy uses an owned window excluded from capture on supported Windows.
 //!
-//! Blocking binds to its thread: only the blocking thread may unblock or
+//! `BlockInput` binds to its thread: only the blocking thread may unblock or
 //! inject while blocked. Every `set_input_blocked` call runs on the shared
 //! input owner, and blocked-time injection joins it there, so no caller —
 //! Tokio worker, application thread or teardown path — can split the pair.
 // trace: records every ignored failure
 
-use vnilink::system::owner::{make_os_inject_backend, set_blocked, BlockBackend};
+use vnilink::system::owner::{make_os_inject_backend, set_blocked};
 use vnilink::system::{HostSessionState, HostSystemActions, SystemSupport};
 use vnilink::Error;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -23,24 +23,10 @@ use windows::Win32::System::Shutdown::{
     SHTDN_REASON_FLAG_PLANNED,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows::Win32::UI::Input::KeyboardAndMouse::BlockInput;
 
 #[derive(Default)]
 pub struct WindowsSystemActions {
     privacy: crate::privacy::Privacy,
-}
-
-/// Native blocking backend. Every call runs on the shared input owner.
-struct BlockInputBackend;
-
-fn make_block_backend() -> BlockInputBackend {
-    BlockInputBackend
-}
-
-impl BlockBackend for BlockInputBackend {
-    fn set_blocked(&mut self, blocked: bool) -> Result<(), Error> {
-        unsafe { BlockInput(blocked).map_err(|_| Error::Unsupported("input blocking was refused")) }
-    }
 }
 
 impl WindowsSystemActions {
@@ -115,7 +101,11 @@ impl HostSystemActions for WindowsSystemActions {
     fn set_input_blocked(&self, blocked: bool) -> Result<(), Error> {
         // Runs on the shared owner thread with an acknowledged answer; a
         // failed restore retains ownership for the same thread to retry.
-        set_blocked(make_block_backend, make_os_inject_backend, blocked)
+        set_blocked(
+            crate::input_block::InputBlock::default,
+            make_os_inject_backend,
+            blocked,
+        )
     }
 
     fn observed_privacy(&self) -> Option<(bool, bool)> {
