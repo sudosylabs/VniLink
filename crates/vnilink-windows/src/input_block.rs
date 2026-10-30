@@ -51,7 +51,7 @@ enum Blocked {
     /// `BlockInput`, on the input owner's thread, which alone may lift it.
     Everything,
     /// Hooks, while their thread lives.
-    Hooks(HookThread),
+    Hooks { _thread: HookThread },
 }
 
 /// The backend the input owner calls, on its own thread, for every change.
@@ -73,12 +73,14 @@ impl BlockBackend for InputBlock {
                             code = refused.code().0,
                             "Windows refused to block all input to a process that is not administrator; hooks block it"
                         );
-                        Blocked::Hooks(HookThread::start(
-                            "vnilink-input-block",
-                            &[(WH_KEYBOARD_LL, Some(keyboard)), (WH_MOUSE_LL, Some(mouse))],
-                            || {},
-                            || {},
-                        )?)
+                        Blocked::Hooks {
+                            _thread: HookThread::start(
+                                "vnilink-input-block",
+                                &[(WH_KEYBOARD_LL, Some(keyboard)), (WH_MOUSE_LL, Some(mouse))],
+                                || {},
+                                || {},
+                            )?,
+                        }
                     }
                 };
             }
@@ -88,7 +90,7 @@ impl BlockBackend for InputBlock {
                     .map_err(|_| Error::Unsupported("input blocking could not be lifted"))?;
                 self.blocked = Blocked::No;
             }
-            (false, Blocked::Hooks(_)) => self.blocked = Blocked::No,
+            (false, Blocked::Hooks { .. }) => self.blocked = Blocked::No,
             (true, _) | (false, Blocked::No) => {}
         }
         Ok(())
