@@ -74,6 +74,9 @@ test('the notice kind follows the provenance manifest, then the notice a copy al
 	assert.equal(noticeKindOf('src/vs/changed.ts', microsoft, copies), 'derived');
 	assert.equal(noticeKindOf('src/moved.ts', microsoft, copies), 'derived');
 	assert.equal(noticeKindOf('build/lint/vscode/rule.ts', 'code();\n', copies), 'verbatim');
+	// Naming the notice in code does not make a file a copy.
+	assert.equal(noticeKindOf('build/notice.ts', "const owner = 'Copyright (c) Microsoft Corporation';\n", copies), 'original');
+	assert.equal(findNoticeProblem('src/a.ts', "import { isCopyrightNotice } from './b.ts';\n", 'original', holder), 'has no notice');
 	// No notice: data, third-party sources, generated bindings and empty files.
 	assert.equal(noticeKindOf('package.json', '{}\n', copies), undefined);
 	assert.equal(noticeKindOf('vendor/iroh/src/lib.rs', 'code();\n', copies), undefined);

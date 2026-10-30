@@ -54,7 +54,8 @@ function isGenerated(text: string): boolean {
  * data and markup files (covered by `REUSE.toml`), third-party sources and generated files.
  */
 export function noticeKindOf(path: string, text: string, copies: ReadonlyMap<string, ManifestEntry>): NoticeKind | undefined {
-	if (commentStyleOf(path) === undefined || excludedDirectories.some(directory => path.startsWith(directory)) || text.length === 0 || isGenerated(text)) {
+	const style = commentStyleOf(path);
+	if (style === undefined || excludedDirectories.some(directory => path.startsWith(directory)) || text.length === 0 || isGenerated(text)) {
 		return undefined;
 	}
 	const copy = copies.get(path);
@@ -64,7 +65,7 @@ export function noticeKindOf(path: string, text: string, copies: ReadonlyMap<str
 	if (verbatimDirectories.some(directory => path.startsWith(directory))) {
 		return 'verbatim';
 	}
-	return text.includes('Copyright (c) Microsoft Corporation') ? 'derived' : 'original';
+	return leadingMicrosoftNotice(text.slice(prelude(text, style).length), style) === undefined ? 'original' : 'derived';
 }
 
 /** A line before which the notice cannot go: a shebang, or the line that turns a batch file's echo off. */
@@ -86,7 +87,7 @@ function withNotice(path: string, text: string, kind: 'original' | 'derived', ho
 		if (body.startsWith(notice)) {
 			return undefined;
 		}
-		if (/Copyright|SPDX-License-Identifier/.test(body.split('\n').slice(0, 12).join('\n'))) {
+		if (/^\s*(\/\/|\/\*|\*|#|REM)\s*(Copyright|SPDX-License-Identifier)/m.test(body.split('\n').slice(0, 12).join('\n'))) {
 			throw new Error('carries a notice this project did not write');
 		}
 		return `${head}${notice}\n${body}`;
@@ -101,7 +102,7 @@ function withNotice(path: string, text: string, kind: 'original' | 'derived', ho
 		return undefined;
 	}
 	const rest = body.slice(microsoft.length);
-	if (/Modifications Copyright|SPDX-License-Identifier/.test(rest.split('\n').slice(0, 8).join('\n'))) {
+	if (/^\s*(\/\/|\/\*|\*|#|REM)\s*(Modifications Copyright|SPDX-License-Identifier)/m.test(rest.split('\n').slice(0, 8).join('\n'))) {
 		throw new Error('carries a modification notice this project did not write');
 	}
 	return `${head}${current}${notice}${rest}`;
