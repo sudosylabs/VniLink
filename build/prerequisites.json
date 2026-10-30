@@ -781,6 +781,14 @@
       "description": "Reject personal details in the repository",
       "requires": ["node", "git"]
     },
+    "check:license": {
+      "description": "Check the license notice of every source file",
+      "requires": ["node", "git"]
+    },
+    "license:apply": {
+      "description": "Add the license notice to source files that lack it",
+      "requires": ["node", "git"]
+    },
     "assets:tray": {
       "description": "Render the tray icons",
       "requires": ["node", "rsvg-convert"]

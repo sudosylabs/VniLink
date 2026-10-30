@@ -9,6 +9,7 @@ import { DevelopmentSession, startApplication } from './lib/development.ts';
 import { doctor } from './lib/doctor.ts';
 import { allowLinuxSandbox } from './lib/electron.ts';
 import { checkHygiene } from './lib/hygiene.ts';
+import { applyLicenseCommand, checkLicense } from './lib/license.ts';
 import { measureImpaired, measureImpairedInContainer } from './lib/impaired.ts';
 import { measureLatency } from './lib/latency.ts';
 import { comparePerceived, measurePerceived } from './lib/perceived.ts';
@@ -53,6 +54,8 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'measure:perceived': (root, signal, args) => args[0] === '--compare' ? comparePerceived(args.slice(1)) : measurePerceived(root, signal, args),
 	'check:product': root => checkProduct(root),
 	'check:hygiene': root => checkHygiene(root),
+	'check:license': root => checkLicense(root),
+	'license:apply': (root, _signal, args) => applyLicenseCommand(root, args),
 	'assets:tray': (root, signal) => renderTrayAssets(root, signal),
 	'check:upstream': () => verifyUpstream(),
 	'format': (_root, _signal, args) => formatFiles(args),

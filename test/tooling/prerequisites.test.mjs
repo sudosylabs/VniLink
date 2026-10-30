@@ -452,6 +452,8 @@ test('requirement and task entries have only known fields, and every task can ru
 	// What the runners call, by task.
 	const needs = {
 		'check:hygiene': ['git'],
+		'check:license': ['git'],
+		'license:apply': ['git'],
 		'vscode': ['git'],
 		'measure:impaired:linux': ['root', 'network-namespaces'],
 		// The driver compiles vnilink-macos, which builds the media crates.

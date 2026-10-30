@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { isCopyrightNotice } from './licenseNotice.ts';
 import { readProduct, type Product } from './product.ts';
 
 const run = promisify(execFile);
@@ -16,7 +17,7 @@ const run = promisify(execFile);
 const placeholderHomes = new Set(['someone', 'Shared', 'Public']);
 
 /** The contact documents, which spell out the publisher's address and repository for people. */
-const identityFiles = new Set(['product.json', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md']);
+const identityFiles = new Set(['product.json', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md', 'REUSE.toml']);
 
 /** Third-party sources keep their own text. */
 const excludedDirectories = ['vendor/'];
@@ -84,7 +85,8 @@ export function findHygieneViolations(path: string, text: string, rules: Hygiene
 		for (const match of handle ? content.matchAll(handle) : []) {
 			report(`git author's handle "${match[1]}": describe the project, not a contributor`);
 		}
-		if (!identityAllowed) {
+		// A license notice names whoever holds the copyright, in every source file.
+		if (!identityAllowed && !isCopyrightNotice(content)) {
 			const lower = content.toLowerCase();
 			const value = rules.identity.find(value => lower.includes(value));
 			if (value !== undefined) {
