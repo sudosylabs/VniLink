@@ -652,3 +652,25 @@ fn a_declined_dialog_is_a_denial_and_any_other_failure_is_not() {
         Error::CaptureRejected(_)
     ));
 }
+
+#[test]
+fn control_characters_use_a_function_keysym_or_cannot_be_typed() {
+    use super::keysym;
+    assert_eq!(keysym('a'), Some(0x61));
+    assert_eq!(
+        keysym('\u{e9}'),
+        Some(0xe9),
+        "Latin-1 graphics are their own keysyms"
+    );
+    assert_eq!(keysym('\u{8}'), Some(0xff08), "backspace");
+    assert_eq!(keysym('\u{1b}'), Some(0xff1b), "escape");
+    assert_eq!(keysym('\u{7f}'), Some(0xffff), "delete");
+    for control in ['\u{0}', '\u{1}', '\u{1f}', '\u{80}', '\u{9f}'] {
+        assert_eq!(keysym(control), None, "{control:?} names no key");
+    }
+    assert_eq!(
+        keysym('\u{a0}'),
+        Some(0xa0),
+        "the no-break space is graphic"
+    );
+}

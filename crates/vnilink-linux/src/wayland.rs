@@ -111,10 +111,8 @@ impl HostDesktop for WaylandInput {
         }
         let events = text
             .chars()
-            .flat_map(|ch| {
-                let key = keysym(ch);
-                [Notify::Symbol(key, true), Notify::Symbol(key, false)]
-            })
+            .filter_map(keysym)
+            .flat_map(|key| [Notify::Symbol(key, true), Notify::Symbol(key, false)])
             .collect();
         self.send(events)
     }
@@ -691,12 +689,20 @@ fn notifications(
         }
     })
 }
-fn keysym(ch: char) -> i32 {
+/// The X11 keysym that types `ch`, or `None` for a control character that has
+/// none. Latin-1 characters are their own keysyms, but 0x00-0x1f and 0x7f-0x9f
+/// are controls, not graphics: the few that name a key use its function keysym
+/// and the rest cannot be typed.
+fn keysym(ch: char) -> Option<i32> {
     match ch {
-        '\n' | '\r' => 0xff0d,
-        '\t' => 0xff09,
-        ch if u32::from(ch) <= 0xff => ch as i32,
-        ch => (0x0100_0000 | u32::from(ch)) as i32,
+        '\n' | '\r' => Some(0xff0d),
+        '\t' => Some(0xff09),
+        '\u{8}' => Some(0xff08),
+        '\u{1b}' => Some(0xff1b),
+        '\u{7f}' => Some(0xffff),
+        ch if ch.is_control() && u32::from(ch) <= 0xff => None,
+        ch if u32::from(ch) <= 0xff => Some(ch as i32),
+        ch => Some((0x0100_0000 | u32::from(ch)) as i32),
     }
 }
 

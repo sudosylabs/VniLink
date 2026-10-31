@@ -744,7 +744,9 @@ pub(crate) fn choose_bitrate_control(supported: u32) -> Option<u32> {
     }
     // Leaving this attribute unset selects CQP on Intel: bitrate settings
     // then have no effect and every picture uses the fixed initial quantizer.
-    [libva::VA_RC_VBR, libva::VA_RC_CBR]
+    // CBR first: a remote screen is bound by the link, and a rate that may
+    // swing above the target (VBR) queues a keyframe's burst behind itself.
+    [libva::VA_RC_CBR, libva::VA_RC_VBR]
         .into_iter()
         .find(|mode| supported & mode != 0)
 }

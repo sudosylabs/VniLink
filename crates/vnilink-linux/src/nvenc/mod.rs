@@ -703,9 +703,9 @@ impl Encoder {
     /// Releases this session's buffers, then the session.
     fn close(&mut self) {
         let api = self.api;
-        let Ok(_current) = Current::new(api, self.context) else {
-            return;
-        };
+        // A context that cannot be made current still lets the session end:
+        // returning here would leave the session and its buffers allocated.
+        let _current = Current::new(api, self.context).ok();
         // SAFETY: each was created by this session and is not used again.
         unsafe {
             if let (false, Some(destroy)) =
