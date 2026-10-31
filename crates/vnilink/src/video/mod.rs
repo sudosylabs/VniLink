@@ -33,7 +33,9 @@ pub(crate) use datagram::{
     FRAG_HEADER, MAX_PROTECTION,
 };
 pub(crate) use frame::micros_since;
-pub(crate) use frame::{decode_video_body, encode_video_body, VideoBody, VIDEO_HEADER};
+pub(crate) use frame::{
+    decode_video_body, encode_video_body, VideoBody, MAX_REGION_BYTES, VIDEO_HEADER,
+};
 pub use frame::{EncodedFrame, FrameRole, FrameTiming, Region, MAX_REGIONS};
 pub(crate) use in_flight::InFlight;
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};

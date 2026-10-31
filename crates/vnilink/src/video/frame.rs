@@ -25,7 +25,7 @@ pub(crate) const VIDEO_HEADER: usize = 34;
 pub const MAX_REGIONS: usize = 64;
 
 /// The bytes the regions may add after [`VIDEO_HEADER`]: a count, then each.
-const MAX_REGION_BYTES: usize = 1 + MAX_REGIONS * 8;
+pub(crate) const MAX_REGION_BYTES: usize = 1 + MAX_REGIONS * 8;
 use super::VideoCodec;
 
 /// One encoded H.264 frame. Construct it with [`EncodedFrame::h264`].

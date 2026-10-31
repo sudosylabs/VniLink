@@ -81,7 +81,18 @@ const MAGIC: &[u8; 4] = b"DSK1";
 const OPEN_CURSOR: u8 = 1;
 const OPEN_STILLS: u8 = 2;
 const PREFIX: usize = 20;
-const MAX: usize = crate::cursor::MAX_BODY + 64;
+/// The longest message on the desktop's stream: a cursor, or a video message
+/// whose tag, header, regions and payload are each at their largest.
+const MAX: usize = {
+    let video =
+        1 + crate::video::VIDEO_HEADER + crate::video::MAX_REGION_BYTES + crate::MAX_VIDEO_FRAME;
+    let longest = if video > crate::cursor::MAX_BODY {
+        video
+    } else {
+        crate::cursor::MAX_BODY
+    };
+    longest + 64
+};
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
