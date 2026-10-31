@@ -60,16 +60,103 @@ pub struct ManifestEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub entries: Vec<ManifestEntry>,
+    /// What the job asks of the entries at every step, worked out once the
+    /// entries are final.
+    #[serde(skip)]
+    index: Derived,
+}
+
+/// What follows from a manifest's entries, never part of what it says.
+#[derive(Debug, Clone, Default)]
+struct Derived(std::sync::OnceLock<Index>);
+
+impl PartialEq for Derived {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Derived {}
+
+#[derive(Debug, Clone)]
+struct Index {
+    /// The position in `entries` of each file, in order.
+    files: Vec<usize>,
+    /// Bytes of the files before each one, and in all as the last value.
+    before: Vec<u64>,
+    /// The first part of every path with more parts: the folders the
+    /// manifest's items lie in.
+    folders: HashSet<String>,
 }
 
 impl Manifest {
+    pub fn new(entries: Vec<ManifestEntry>) -> Self {
+        Self {
+            entries,
+            index: Derived::default(),
+        }
+    }
+
+    /// The index of the entries as they are now: they are final once the
+    /// manifest is used, so no later change of `entries` shows in it.
+    fn index(&self) -> &Index {
+        self.index.0.get_or_init(|| {
+            let mut files = Vec::new();
+            let mut before = Vec::new();
+            let mut total = 0u64;
+            let mut folders = HashSet::new();
+            for (position, entry) in self.entries.iter().enumerate() {
+                if let Some((top, _)) = entry.path.split_once('/') {
+                    if !folders.contains(top) {
+                        folders.insert(top.to_owned());
+                    }
+                }
+                if !entry.is_dir {
+                    files.push(position);
+                    before.push(total);
+                    total = total.saturating_add(entry.size);
+                }
+            }
+            before.push(total);
+            Index {
+                files,
+                before,
+                folders,
+            }
+        })
+    }
+
     /// Total file payload in bytes.
     pub fn total_bytes(&self) -> u64 {
-        self.entries.iter().map(|entry| entry.size).sum()
+        self.index().before.last().copied().unwrap_or(0)
     }
 
     pub fn file_count(&self) -> usize {
-        self.entries.iter().filter(|entry| !entry.is_dir).count()
+        self.index().files.len()
+    }
+
+    /// File number `number` in entry order, folders not counted.
+    pub fn file(&self, number: usize) -> Option<&ManifestEntry> {
+        let position = *self.index().files.get(number)?;
+        self.entries.get(position)
+    }
+
+    /// The files from number `from` on, with their numbers.
+    pub fn files_from(&self, from: usize) -> impl Iterator<Item = (usize, &ManifestEntry)> {
+        let files = &self.index().files;
+        (from..files.len()).filter_map(|number| Some((number, self.entries.get(files[number])?)))
+    }
+
+    /// Bytes in the files before file number `number`; all of them past the
+    /// last.
+    pub fn bytes_before(&self, number: usize) -> u64 {
+        let before = &self.index().before;
+        before[number.min(before.len() - 1)]
+    }
+
+    /// Whether some path lies inside the folder `name`.
+    pub fn has_folder(&self, name: &str) -> bool {
+        self.index().folders.contains(name)
     }
 }
 
@@ -537,7 +624,7 @@ pub(crate) fn skeleton(scan: &Scan) -> Manifest {
         });
     }
     entries.sort_by(|a, b| a.path.cmp(&b.path));
-    Manifest { entries }
+    Manifest::new(entries)
 }
 
 /// Validates a manifest's shape and limits. Hash presence is checked by
@@ -943,9 +1030,7 @@ mod tests {
             size: 0,
             source_mtime_ms: 0,
         };
-        let valid = Manifest {
-            entries: vec![dir("sub"), file("a.txt"), file("sub/b.txt")],
-        };
+        let valid = Manifest::new(vec![dir("sub"), file("a.txt"), file("sub/b.txt")]);
         manifest::validate(&valid).unwrap();
 
         for entries in [
@@ -966,10 +1051,49 @@ mod tests {
                 .collect(),
         ] {
             assert!(
-                manifest::validate(&Manifest { entries }).is_err(),
+                manifest::validate(&Manifest::new(entries)).is_err(),
                 "bad manifest shape must be rejected"
             );
         }
+    }
+
+    /// The index answers what the job asks at every step without walking
+    /// the entries: files by number past the folders, the bytes before a
+    /// file, and which top-level names are folders.
+    #[test]
+    fn the_index_numbers_files_past_folders() {
+        use crate::manifest::{Manifest, ManifestEntry};
+
+        let entry = |path: &str, is_dir, size| ManifestEntry {
+            path: path.to_owned(),
+            is_dir,
+            size,
+            source_mtime_ms: 0,
+        };
+        let manifest = Manifest::new(vec![
+            entry("a.txt", false, 10),
+            entry("sub", true, 0),
+            entry("sub/b.txt", false, 20),
+            entry("sub/deep/c.txt", false, 40),
+        ]);
+        assert_eq!(manifest.file_count(), 3, "folders are not files");
+        assert_eq!(manifest.total_bytes(), 70);
+        assert_eq!(manifest.file(1).unwrap().path, "sub/b.txt");
+        assert!(manifest.file(3).is_none());
+        let from: Vec<_> = manifest
+            .files_from(1)
+            .map(|(number, entry)| (number, entry.path.as_str()))
+            .collect();
+        assert_eq!(from, [(1, "sub/b.txt"), (2, "sub/deep/c.txt")]);
+        assert_eq!(manifest.files_from(3).count(), 0);
+        let before: Vec<_> = (0..5).map(|number| manifest.bytes_before(number)).collect();
+        assert_eq!(before, [0, 10, 30, 70, 70], "all of them past the last");
+        assert!(manifest.has_folder("sub") && !manifest.has_folder("a.txt"));
+        assert_eq!(
+            manifest,
+            Manifest::new(manifest.entries.clone()),
+            "the index is no part of what a manifest says"
+        );
     }
 
     /// Crashes the `job_message` fuzz target: sizes summing past `u64::MAX`
@@ -984,14 +1108,10 @@ mod tests {
             size,
             source_mtime_ms: 0,
         };
-        let largest = Manifest {
-            entries: vec![file("a", u64::MAX - 1), file("b", 1)],
-        };
+        let largest = Manifest::new(vec![file("a", u64::MAX - 1), file("b", 1)]);
         manifest::validate(&largest).unwrap();
         assert_eq!(largest.total_bytes(), u64::MAX);
-        let past = Manifest {
-            entries: vec![file("a", u64::MAX), file("b", 1)],
-        };
+        let past = Manifest::new(vec![file("a", u64::MAX), file("b", 1)]);
         assert!(manifest::validate(&past).is_err());
     }
 

@@ -252,14 +252,12 @@ impl JobRecord {
             direction: JobDirection::Download,
             sender: false,
             state: JobState::Transferring,
-            manifest: Some(Manifest {
-                entries: vec![ManifestEntry {
-                    path: "file.bin".to_owned(),
-                    is_dir: false,
-                    size,
-                    source_mtime_ms: 0,
-                }],
-            }),
+            manifest: Some(Manifest::new(vec![ManifestEntry {
+                path: "file.bin".to_owned(),
+                is_dir: false,
+                size,
+                source_mtime_ms: 0,
+            }])),
             local_root: 0,
             local_rel: String::new(),
             names: Vec::new(),
@@ -290,8 +288,8 @@ impl JobRecord {
     #[cfg(test)]
     pub(super) fn test_receiver_of(id: u64, files: usize) -> Self {
         let mut record = Self::test_receiver(id, 0);
-        record.manifest = Some(Manifest {
-            entries: (0..files)
+        record.manifest = Some(Manifest::new(
+            (0..files)
                 .map(|index| ManifestEntry {
                     path: format!("file-{index:05}.bin"),
                     is_dir: false,
@@ -299,7 +297,7 @@ impl JobRecord {
                     source_mtime_ms: 0,
                 })
                 .collect(),
-        });
+        ));
         record
     }
 
@@ -406,7 +404,10 @@ impl JobRecord {
         if !self.sender || !matches!(self.state, JobState::Serving | JobState::Transferring) {
             return 0;
         }
-        let before: u64 = self.files().iter().take(file).map(|entry| entry.size).sum();
+        let before = self
+            .manifest
+            .as_ref()
+            .map_or(0, |manifest| manifest.bytes_before(file));
         before.saturating_add(position)
     }
 
@@ -422,7 +423,7 @@ impl JobRecord {
         } else {
             self.file_index
         };
-        self.files().get(index).map(|entry| entry.path.clone())
+        self.file(index).map(|entry| entry.path.clone())
     }
 
     /// Bytes done, including the file arriving now.
@@ -430,17 +431,13 @@ impl JobRecord {
         self.done_bytes.saturating_add(self.in_flight)
     }
 
-    fn files(&self) -> Vec<&ManifestEntry> {
-        self.manifest
-            .as_ref()
-            .map(|manifest| {
-                manifest
-                    .entries
-                    .iter()
-                    .filter(|entry| !entry.is_dir)
-                    .collect()
-            })
-            .unwrap_or_default()
+    /// File number `number` of the manifest, folders not counted.
+    fn file(&self, number: usize) -> Option<&ManifestEntry> {
+        self.manifest.as_ref()?.file(number)
+    }
+
+    fn file_count(&self) -> usize {
+        self.manifest.as_ref().map_or(0, Manifest::file_count)
     }
 
     pub(super) fn snapshot(&self) -> JobSnapshot {
@@ -448,14 +445,14 @@ impl JobRecord {
             .manifest
             .as_ref()
             .map(|manifest| {
-                // A snapshot is taken at every step: no copy of the paths.
-                let mut files = manifest.entries.iter().filter(|entry| !entry.is_dir);
-                let label = match (files.next(), files.count()) {
+                // A snapshot is taken at every step: no walk of the entries.
+                let count = manifest.file_count();
+                let label = match (manifest.file(0), count) {
                     (None, _) => "Transfer".to_owned(),
-                    (Some(first), 0) => first.path.clone(),
-                    (Some(first), rest) => format!("{} +{rest} more", first.path),
+                    (Some(first), 1) => first.path.clone(),
+                    (Some(first), count) => format!("{} +{} more", first.path, count - 1),
                 };
-                (manifest.total_bytes(), manifest.file_count() as u64, label)
+                (manifest.total_bytes(), count as u64, label)
             })
             .unwrap_or((0, 0, "Transfer".to_owned()));
         JobSnapshot {
@@ -475,26 +472,13 @@ impl JobRecord {
             resumed_files: self.resumed_files,
             skipped_files: self.skipped_files,
             skipped_symlinks: self.skipped_symlinks,
-            waiting_file: self.waiting_file.and_then(|index| {
-                self.manifest
-                    .as_ref()?
-                    .entries
-                    .iter()
-                    .filter(|entry| !entry.is_dir)
-                    .nth(index)
-                    .map(|entry| entry.path.clone())
-            }),
+            waiting_file: self
+                .waiting_file
+                .and_then(|index| Some(self.file(index)?.path.clone())),
             current_file: self.current_file(),
             error: self.error.clone(),
             destination: self.destination.as_ref().map(|landing| {
                 // A chosen folder is what the manifest's paths lie under.
-                let folders: std::collections::HashSet<&str> = self
-                    .manifest
-                    .iter()
-                    .flat_map(|manifest| &manifest.entries)
-                    .filter_map(|entry| entry.path.split_once('/'))
-                    .map(|(top, _)| top)
-                    .collect();
                 crate::job::JobDestination {
                     root: landing.root,
                     folder: landing.folder.clone(),
@@ -503,7 +487,10 @@ impl JobRecord {
                         .iter()
                         .map(|name| crate::job::JobItem {
                             name: name.clone(),
-                            folder: folders.contains(name.as_str()),
+                            folder: self
+                                .manifest
+                                .as_ref()
+                                .is_some_and(|manifest| manifest.has_folder(name)),
                         })
                         .collect(),
                 }
@@ -681,9 +668,7 @@ impl Core {
         // so a drive replaced during admission fails the whole offer instead of
         // mixing generations.
         let mut pin = Some(snapshot.pin(src_root)?);
-        let mut manifest = Manifest {
-            entries: Vec::new(),
-        };
+        let mut manifest = Manifest::new(Vec::new());
         let mut skipped_symlinks = 0;
         let mut scanned = HashMap::new();
         for rel in source_rels(src_folder, names) {
@@ -1539,7 +1524,7 @@ impl Core {
                 wire_job_id(record),
                 record.peer_key,
                 record.file_index,
-                record.files().len(),
+                record.file_count(),
             )
         };
         if file_index >= file_count {
@@ -1571,7 +1556,7 @@ impl Core {
         let entry = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
-            record.files().get(file_index).cloned().cloned()
+            record.file(file_index).cloned()
         }
         .ok_or(Error::InvalidSetting(NO_JOB))?;
         // Conflict check before any fetch: the destination wins ties until
@@ -1651,10 +1636,9 @@ impl Core {
         };
         // A partial kept from an earlier attempt resumes where it ended.
         let (staged, segments) = self.stage_paths(id, &entry.path)?;
-        for path in [&staged, &segments] {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|_| Error::InvalidSetting(STAGE_FAILED))?;
-            }
+        // The journal makes its own folder, when a file has one at all.
+        if let Some(parent) = staged.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| Error::InvalidSetting(STAGE_FAILED))?;
         }
         // This file may already be arriving: take it before the next small
         // files start, so no second fetch ever writes its partial.
@@ -1665,8 +1649,6 @@ impl Core {
         let arrived = ahead
             .map(|(_, fetching)| self.runtime.block_on(fetching))
             .and_then(|joined| joined.ok());
-        let (progress, arriving) = std::sync::mpsc::channel();
-        let watcher = follow_arrival(self.shared.jobs.clone(), self.shared.clone(), id, arriving);
         let file = u32::try_from(file_index).map_err(|_| Error::InvalidSetting(NO_JOB))?;
         // A file fetched ahead is used only when it arrived whole, on the
         // connection still kept: revoking closes it, and a file that came
@@ -1676,23 +1658,28 @@ impl Core {
             Some((Ok(done @ Received::Done { .. }), Some(via)))
                 if super::transfer::still_connected(&self.shared, &peer_bytes, via) =>
             {
-                drop(progress);
                 Ok(done)
             }
-            _ => self.fetch_job_file(
-                &peer_bytes,
-                wire_job,
-                file,
-                entry.size,
-                &staged,
-                &segments,
-                progress,
-                stop_rx,
-            ),
+            _ => {
+                let (progress, arriving) = std::sync::mpsc::channel();
+                let watcher =
+                    follow_arrival(self.shared.jobs.clone(), self.shared.clone(), id, arriving);
+                let fetched = self.fetch_job_file(
+                    &peer_bytes,
+                    wire_job,
+                    file,
+                    entry.size,
+                    &staged,
+                    &segments,
+                    progress,
+                    stop_rx,
+                );
+                if watcher.join().is_err() {
+                    tracing::warn!(target: crate::trace::FILES, job = id, "a transfer's progress watcher panicked");
+                }
+                fetched
+            }
         };
-        if watcher.join().is_err() {
-            tracing::warn!(target: crate::trace::FILES, job = id, "a transfer's cancel watcher panicked");
-        }
         // A cancel or interruption during fetch preserves its state even if
         // bytes arrived; a job that stopped and runs again is a later run's,
         // whose cancel handle this fetch leaves in place.
@@ -1754,11 +1741,13 @@ impl Core {
             Ok(None) => return self.job_snapshot(id),
         };
         // The partial is published; its journal describes nothing now.
-        crate::ignored!(
-            crate::trace::FILES,
-            "a staged file left behind is swept with its job's staging",
-            std::fs::remove_file(&segments)
-        );
+        if entry.size > crate::transfer::SEGMENT_LEN {
+            crate::ignored!(
+                crate::trace::FILES,
+                "a staged file left behind is swept with its job's staging",
+                std::fs::remove_file(&segments)
+            );
+        }
         // Skip leaves the destination untouched; anything published lands
         // under its final name for verification.
         let _ = landed;
@@ -1933,6 +1922,38 @@ impl Core {
         Ok(dest)
     }
 
+    /// The receiver's folder `full` for `path` as a directory handle, once
+    /// the job's leg is verified. A folder that is not there yet, or a job
+    /// whose leg is not pinned yet, takes [`Self::receiver_dest`] first,
+    /// which creates the missing levels and pins the leg.
+    #[cfg(any(unix, windows))]
+    fn receiver_dir(
+        &self,
+        id: u64,
+        root: u64,
+        rel: &str,
+        path: &str,
+        full: &str,
+    ) -> Result<vnilink_rename::anchored::Dir, Error> {
+        let pin = {
+            let jobs = lock(&self.shared.jobs);
+            let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
+            let state = lock(&self.shared.state);
+            super::service_jobs::check_owner(&state, record.owner)?;
+            record.local_pin.clone()
+        };
+        if let Some(pin) = pin {
+            let roots = lock(&self.shared.file_roots);
+            // A replaced destination drive fails the leg here too.
+            verify_leg_pin(&roots, root, &mut Some(pin))?;
+            if let Ok(dir) = roots.open_dir_fd(root, full) {
+                return Ok(dir);
+            }
+        }
+        self.receiver_dest(id, root, rel, path)?;
+        lock(&self.shared.file_roots).open_dir_fd(root, full)
+    }
+
     /// The entry `name` (by default the manifest path's own name) in the
     /// receiver's folder for `path`, stated without following a link: its
     /// size when it is a plain file, `u64::MAX` for anything else there, and
@@ -1946,19 +1967,17 @@ impl Core {
         path: &str,
         name: Option<&str>,
     ) -> Result<Option<u64>, Error> {
-        let dest = self.receiver_dest(id, root, rel, path)?;
         let (parent_rel, own) = path.rsplit_once('/').unwrap_or(("", path));
         let name = name.unwrap_or(own);
         #[cfg(any(unix, windows))]
         {
             use vnilink_rename::anchored::AsDir;
-            let _ = dest;
             let full = match (rel.is_empty(), parent_rel.is_empty()) {
                 (true, _) => parent_rel.to_owned(),
                 (_, true) => rel.to_owned(),
                 _ => format!("{rel}/{parent_rel}"),
             };
-            let dir = lock(&self.shared.file_roots).open_dir_fd(root, &full)?;
+            let dir = self.receiver_dir(id, root, rel, path, &full)?;
             match vnilink_rename::anchored::stat_at(dir.as_dir(), name) {
                 Ok(stat) if stat.is_file && !stat.is_symlink => Ok(Some(stat.size)),
                 Ok(_) => Ok(Some(u64::MAX)),
@@ -1968,6 +1987,7 @@ impl Core {
         }
         #[cfg(not(any(unix, windows)))]
         {
+            let dest = self.receiver_dest(id, root, rel, path)?;
             let dest = dest.with_file_name(name);
             Ok(std::fs::symlink_metadata(&dest).ok().map(|meta| {
                 if meta.is_file() {
@@ -2037,7 +2057,11 @@ impl Core {
             let mut count = prefetch.files.len();
             let mut bytes: u64 = prefetch.files.values().map(|(size, _)| size).sum();
             let mut started = Vec::new();
-            for (index, entry) in record.files().iter().enumerate().skip(current + 1) {
+            let files = record
+                .manifest
+                .iter()
+                .flat_map(|m| m.files_from(current + 1));
+            for (index, entry) in files {
                 if count >= PREFETCH_FILES || bytes >= PREFETCH_BYTES {
                     break;
                 }
@@ -2060,10 +2084,9 @@ impl Core {
             let Ok((staged, segments)) = self.stage_paths(id, &path) else {
                 return;
             };
-            let made = [&staged, &segments].into_iter().all(|path| {
-                path.parent()
-                    .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok())
-            });
+            let made = staged
+                .parent()
+                .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok());
             let Ok(file) = u32::try_from(index) else {
                 return;
             };
@@ -3404,7 +3427,7 @@ pub(super) fn still_serving(shared: &Shared, peer: &[u8; 32], job: u64) -> bool 
 
 /// Bytes a sending stream advanced at least before its job hears again,
 /// so progress moves smoothly without taking the jobs lock per chunk.
-const SENT_EVERY: u64 = 1024 * 1024;
+pub(super) const SENT_EVERY: u64 = 1024 * 1024;
 
 /// Records that the peer's sending job `job` has sent file `file` up to
 /// `position`, telling watchers once it moved [`SENT_EVERY`] or finished.
@@ -3464,7 +3487,7 @@ pub(super) fn open_served_file(
             return Err(STATUS_DENIED);
         }
         let record = served_job(&jobs, &state, peer, job).ok_or(STATUS_DENIED)?;
-        let entry = (*record.files().get(file as usize).ok_or(STATUS_DENIED)?).clone();
+        let entry = record.file(file as usize).ok_or(STATUS_DENIED)?.clone();
         (
             record.id,
             record.local_root,
@@ -5036,9 +5059,7 @@ async fn prepare_all(
     names: &[String],
     scan_hooks: manifest::ScanHooks,
 ) -> Result<(Manifest, u64, Vec<u64>), u8> {
-    let mut manifest = Manifest {
-        entries: Vec::new(),
-    };
+    let mut manifest = Manifest::new(Vec::new());
     let mut skipped_symlinks = 0;
     let mut scanned = HashMap::new();
     for rel in source_rels(src_folder, names) {
@@ -5191,14 +5212,12 @@ mod lifecycle_tests {
             direction: JobDirection::Download,
             sender: false,
             state,
-            manifest: Some(Manifest {
-                entries: vec![ManifestEntry {
-                    path: format!("file-{id}"),
-                    size,
-                    source_mtime_ms: 0,
-                    is_dir: false,
-                }],
-            }),
+            manifest: Some(Manifest::new(vec![ManifestEntry {
+                path: format!("file-{id}"),
+                size,
+                source_mtime_ms: 0,
+                is_dir: false,
+            }])),
             local_root: 0,
             local_rel: String::new(),
             names: Vec::new(),
@@ -5561,7 +5580,7 @@ mod retry_tests {
         let mut record = JobRecord::test_receiver_of(1, 3);
         let path = |index: usize| record_path(&record, index);
         fn record_path(record: &JobRecord, index: usize) -> Option<String> {
-            record.files().get(index).map(|entry| entry.path.clone())
+            record.file(index).map(|entry| entry.path.clone())
         }
         let paths: Vec<_> = (0..3).map(path).collect();
         record.enter(JobState::Transferring);
