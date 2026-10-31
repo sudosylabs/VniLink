@@ -162,11 +162,12 @@ impl Partial {
             self.drop_unchecked()?;
             return Ok(false);
         }
-        // The last segment is published as soon as it checks, so only the
-        // segments before it are worth a sync and a journal line: a small
-        // file costs neither, and an interruption repeats one segment.
+        // A checked segment is on disk before anything claims it. The last
+        // segment is published as soon as it checks, so it needs the sync
+        // (a rename would otherwise expose bytes a power loss can still
+        // lose) but no journal line: nothing resumes after it.
+        self.file.sync_data().map_err(failed)?;
         if self.written < self.size {
-            self.file.sync_data().map_err(failed)?;
             self.journal.write_all(&expected).map_err(failed)?;
         }
         self.checked = self.written;
