@@ -15,7 +15,8 @@
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use vnilink::{Grants, JobState};
+use vnilink::probes::PrestageHooks;
+use vnilink::{Core, Grants, JobState};
 use vnilink_testkit::bench::{Better, Report};
 use vnilink_testkit::files::{self, drive, finished, received, write_files};
 use vnilink_testkit::peer::Remote;
@@ -27,6 +28,15 @@ const UPLOAD_WAIT: Duration = Duration::from_secs(600);
 
 /// The round trip the `rtt` cases inject.
 const RTT: Duration = Duration::from_millis(40);
+
+/// Where a case's receiver stages what it receives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Staging {
+    /// Where the application keeps it, on the destination's volume here.
+    Here,
+    /// On another volume than the destination's, so publishing copies.
+    Elsewhere,
+}
 
 /// What a case's files hold.
 #[derive(Clone, Copy)]
@@ -53,10 +63,32 @@ fn write(folder: &std::path::Path, files: &[(&str, usize)], content: Content) {
     }
 }
 
-/// Uploads `files` between two engines on this computer, across a relay
-/// with `rtt` round trip time when given, and returns how long the
-/// receiver took to finish.
-fn upload(files: &[(&str, usize)], content: Content, rtt: Option<Duration>) -> Duration {
+/// How a case differs from the plain one: moving bytes on this computer's
+/// disk, between engines in one process.
+#[derive(Clone, Copy)]
+struct Setup {
+    content: Content,
+    /// The round trip across a relay, when the case has one.
+    rtt: Option<Duration>,
+    staging: Staging,
+}
+
+impl Setup {
+    const PLAIN: Self = Self {
+        content: Content::Random,
+        rtt: None,
+        staging: Staging::Here,
+    };
+}
+
+/// Uploads `files` between two engines on this computer as `setup` says and
+/// returns how long the receiver took to finish.
+fn upload(files: &[(&str, usize)], setup: Setup) -> Duration {
+    let Setup {
+        content,
+        rtt,
+        staging,
+    } = setup;
     let relay = rtt.map(|_| LocalRelay::start());
     let delayed = rtt
         .zip(relay.as_ref())
@@ -75,10 +107,30 @@ fn upload(files: &[(&str, usize)], content: Content, rtt: Option<Duration>) -> D
     let started = Instant::now();
     files::upload(&pair, &service, "set", "inbox").unwrap();
     let receiver = received(&pair.host.core);
+    if staging == Staging::Elsewhere {
+        // The job exists before its first file is whole, so the hook is in
+        // place when that one publishes.
+        Core::set_prestage_hooks(hooks(pair.host.core.prestage_key(), Some(receiver), true));
+    }
     let done = finished(&pair.host.core, receiver, UPLOAD_WAIT);
     let took = started.elapsed();
     assert_eq!(done.state, JobState::Complete, "{done:?}");
+    if staging == Staging::Elsewhere {
+        Core::set_prestage_hooks(hooks(0, None, false));
+    }
     took
+}
+
+/// The publication hooks that force a job's files across volumes, or none.
+fn hooks(engine: usize, job: Option<u64>, cross_volume: bool) -> PrestageHooks {
+    PrestageHooks {
+        engine,
+        job_id: job,
+        force_cross_volume: cross_volume,
+        probe: None,
+        mkdir_probe: None,
+        sync_probe: None,
+    }
 }
 
 /// Uploads `files` to the agent and returns how long until the agent said
@@ -162,75 +214,68 @@ fn main() {
     let only = std::env::args()
         .skip(1)
         .find(|argument| !argument.starts_with('-'));
-    let mut measure =
-        |name: &str, files: Vec<(String, usize)>, content: Content, rtt: Option<Duration>| {
-            if only
-                .as_ref()
-                .is_some_and(|only| !name.contains(only.as_str()))
-            {
-                return;
-            }
-            if remote.is_some() && (rtt.is_some() || matches!(content, Content::Text)) {
-                return;
-            }
-            let bytes: usize = files.iter().map(|(_, size)| size).sum();
-            let named: Vec<(&str, usize)> = files
-                .iter()
-                .map(|(name, size)| (name.as_str(), *size))
-                .collect();
-            let took = match remote.as_mut() {
-                Some(remote) => upload_to(remote, &named),
-                None => upload(&named, content, rtt),
-            }
-            .as_secs_f64();
-            report.record(
-                &format!("{name} throughput"),
-                bytes as f64 / took / 1e6,
-                "MB/s",
-                Better::Higher,
-            );
-            report.record(
-                &format!("{name} files"),
-                files.len() as f64 / took,
-                "files/s",
-                Better::Higher,
-            );
-        };
-    measure(
-        "small",
-        many(1_000, 4 * 1024, "small"),
-        Content::Random,
-        None,
-    );
-    measure(
-        "large",
-        many(1, 256 * 1024 * 1024, "large"),
-        Content::Random,
-        None,
-    );
+    let mut measure = |name: &str, files: Vec<(String, usize)>, setup: Setup| {
+        if only
+            .as_ref()
+            .is_some_and(|only| !name.contains(only.as_str()))
+        {
+            return;
+        }
+        // The agent's receiver runs only the plain case.
+        if remote.is_some()
+            && (setup.rtt.is_some()
+                || matches!(setup.content, Content::Text)
+                || setup.staging == Staging::Elsewhere)
+        {
+            return;
+        }
+        let bytes: usize = files.iter().map(|(_, size)| size).sum();
+        let named: Vec<(&str, usize)> = files
+            .iter()
+            .map(|(name, size)| (name.as_str(), *size))
+            .collect();
+        let took = match remote.as_mut() {
+            Some(remote) => upload_to(remote, &named),
+            None => upload(&named, setup),
+        }
+        .as_secs_f64();
+        report.record(
+            &format!("{name} throughput"),
+            bytes as f64 / took / 1e6,
+            "MB/s",
+            Better::Higher,
+        );
+        report.record(
+            &format!("{name} files"),
+            files.len() as f64 / took,
+            "files/s",
+            Better::Higher,
+        );
+    };
+    let mib = 1024 * 1024;
+    measure("small", many(1_000, 4 * 1024, "small"), Setup::PLAIN);
+    measure("large", many(1, 256 * mib, "large"), Setup::PLAIN);
     let mut mixed = many(500, 4 * 1024, "small");
-    mixed.extend(many(40, 1024 * 1024, "medium"));
-    mixed.extend(many(2, 32 * 1024 * 1024, "large"));
-    measure("mixed", mixed, Content::Random, None);
-    measure("many", many(10_000, 1024, "many"), Content::Random, None);
-    measure(
-        "compressible",
-        many(1, 128 * 1024 * 1024, "text"),
-        Content::Text,
-        None,
-    );
-    measure(
-        "small rtt40",
-        many(200, 4 * 1024, "small"),
-        Content::Random,
-        Some(RTT),
-    );
-    measure(
-        "large rtt40",
-        many(1, 64 * 1024 * 1024, "large"),
-        Content::Random,
-        Some(RTT),
-    );
+    mixed.extend(many(40, mib, "medium"));
+    mixed.extend(many(2, 32 * mib, "large"));
+    measure("mixed", mixed, Setup::PLAIN);
+    measure("many", many(10_000, 1024, "many"), Setup::PLAIN);
+    let text = Setup {
+        content: Content::Text,
+        ..Setup::PLAIN
+    };
+    measure("compressible", many(1, 128 * mib, "text"), text);
+    let far = Setup {
+        staging: Staging::Elsewhere,
+        ..Setup::PLAIN
+    };
+    measure("cross-volume", many(1, 128 * mib, "far"), far);
+    let distant = Setup {
+        rtt: Some(RTT),
+        ..Setup::PLAIN
+    };
+    measure("small rtt40", many(200, 4 * 1024, "small"), distant);
+    measure("large rtt40", many(1, 64 * mib, "large"), distant);
     // The path the connection settled on, once the runs gave it time to.
     if let Some(remote) = remote.as_ref() {
         report.against(remote.bench_peer());
