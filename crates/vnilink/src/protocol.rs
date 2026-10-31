@@ -281,6 +281,14 @@ pub(crate) enum ControlMessage {
         stamp: SessionStamp,
         report: crate::video::VideoReport,
     },
+    /// The newest picture the viewer received on the desktop stream, by the
+    /// number its host gave it: the host sends the next only while the
+    /// oldest unacknowledged is recent. Datagram pictures are not
+    /// acknowledged; their loss report is the viewer's feedback.
+    Received {
+        stamp: SessionStamp,
+        picture: u32,
+    },
 }
 
 /// Session identity stamped on every control message that belongs to one.
@@ -412,6 +420,13 @@ impl ControlMessage {
                 report.encode(&mut bytes);
                 bytes
             }
+            Self::Received { stamp, picture } => {
+                let mut bytes = Vec::with_capacity(21);
+                bytes.push(15);
+                write_stamp(stamp, &mut bytes);
+                bytes.extend_from_slice(&picture.to_be_bytes());
+                bytes
+            }
             Self::SelectDisplays { stamp, displays } => {
                 let mut bytes = Vec::with_capacity(18 + displays.len() * 8);
                 bytes.push(12);
@@ -541,6 +556,10 @@ impl ControlMessage {
                 report: crate::video::VideoReport::decode(
                     bytes[17..].try_into().expect("report length checked"),
                 ),
+            }),
+            15 if bytes.len() == 21 => Ok(Self::Received {
+                stamp: decode_stamp(bytes),
+                picture: u32::from_be_bytes(bytes[17..21].try_into().expect("length checked")),
             }),
             _ => Err(Error::Malformed),
         }

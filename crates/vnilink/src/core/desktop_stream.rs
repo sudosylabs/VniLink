@@ -156,6 +156,12 @@ pub(super) struct DesktopRuntime {
     report: crate::video::ReportTally,
     /// Host: what its viewer reports losing, smoothed.
     viewer_loss: Mutex<crate::video::ViewerLoss>,
+    /// Host: the stream pictures its viewer has not yet acknowledged, which
+    /// pace what the stream is given; datagram pictures are never in it.
+    stream_flight: Mutex<crate::video::InFlight>,
+    /// Viewer: the newest stream picture received, for the send loop to
+    /// acknowledge.
+    stream_received: tokio::sync::watch::Sender<Option<u32>>,
     /// Viewer: its datagrams' reassembly and its outstanding keyframe
     /// request, so losses while one is coming do not ask again.
     pictures: Mutex<crate::video::ViewerPictures>,
@@ -252,6 +258,8 @@ impl DesktopRuntime {
             counters: crate::video::VideoCounters::default(),
             report: Default::default(),
             viewer_loss: Mutex::new(Default::default()),
+            stream_flight: Mutex::new(Default::default()),
+            stream_received: tokio::sync::watch::channel(None).0,
             pictures: Mutex::new(crate::video::ViewerPictures::new()),
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
@@ -1556,7 +1564,24 @@ async fn client_send(
     reports.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sampled_at = std::time::Instant::now();
     let mut last_path = None;
+    let mut received = desktop.stream_received.subscribe();
+    let mut acknowledged = None;
     loop {
+        // The newest stream picture received is said once, as it changes.
+        let newest = *received.borrow_and_update();
+        if let Some(picture) = newest.filter(|picture| acknowledged != Some(*picture)) {
+            acknowledged = Some(picture);
+            let mut bytes = vec![COMMAND];
+            bytes.extend_from_slice(&desktop.control_state.borrow().1.to_be_bytes());
+            bytes.extend_from_slice(
+                &ControlMessage::Received {
+                    stamp: desktop.stamp,
+                    picture,
+                }
+                .encode(),
+            );
+            write(send, &bytes).await?;
+        }
         // Lease requests precede input batches. Admission takes a free lease;
         // subsequent acquire/yield operations are explicit and bounded.
         let controls: Vec<_> = lock(&desktop.control_commands).drain(..).collect();
@@ -1658,7 +1683,7 @@ async fn client_send(
             write(send, &bytes).await?;
         }
         tokio::select! {
-            _ = &mut notified => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
+            _ = &mut notified => {}, _ = received.changed() => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
             // The report itself goes at the top of the loop, when it is due.
             _ = reports.tick() => {},
             // An unanswered keyframe request is asked again when its patience runs out,
@@ -1790,6 +1815,9 @@ async fn client_receive(
                         .belongs_to(desktop.info.codec, desktop.info.stills)
                     {
                         return Err(Error::Malformed);
+                    }
+                    if body.frame.role != crate::FrameRole::Still {
+                        desktop.stream_received.send_replace(Some(body.sequence));
                     }
                     desktop.receive_video(shared, body);
                 }
@@ -2717,6 +2745,9 @@ fn process_host_message(
             }
         }
         ControlMessage::Keyframe { stamp } if stamp == desktop.stamp => desktop.keyframe.request(),
+        ControlMessage::Received { stamp, picture } if stamp == desktop.stamp => {
+            lock(&desktop.stream_flight).acknowledged(picture, std::time::Instant::now());
+        }
         ControlMessage::VideoReport { stamp, report } if stamp == desktop.stamp => {
             lock(&desktop.viewer_loss).observe(&report, std::time::Instant::now());
         }
@@ -2903,6 +2934,8 @@ async fn host_send(
     // still repeats the one before, and a picture dropped here takes none.
     let mut picture = 0u32;
     let mut gate = SendGate::default();
+    // Whether the last picture went on the stream rather than as datagrams.
+    let mut streaming = false;
     let mut congestion = crate::video::Congestion::default();
     let mut path = None;
     // The least backlog the gate saw since the last feedback.
@@ -2977,6 +3010,7 @@ async fn host_send(
                 max
             };
             if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
+                streaming = false;
                 desktop
                     .datagram
                     .store(max - PREFIX, std::sync::atomic::Ordering::Relaxed);
@@ -3051,9 +3085,20 @@ async fn host_send(
                 desktop.counters.still_sent(frame.payload.len());
                 pictured = true;
             } else {
+                streaming = true;
+                // The stream holds whatever is written to it: while the
+                // viewer has not acknowledged the pictures already written,
+                // this one is dropped whole and a keyframe follows once it
+                // has.
+                if !lock(&desktop.stream_flight).may_send(std::time::Instant::now()) {
+                    desktop.counters.send_dropped();
+                    gate.dropped(frame.keyframe, body.len());
+                    continue;
+                }
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
+                lock(&desktop.stream_flight).sent(picture, std::time::Instant::now());
                 picture = picture.wrapping_add(1);
                 gate.sent(frame.keyframe, bytes.len());
                 pictured = true;
@@ -3065,7 +3110,13 @@ async fn host_send(
         if pictured && control_rx.borrow().0 == DesktopControlState::Controlling {
             super::power::note_control_used(shared);
         }
-        if gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop)) {
+        // A keyframe is asked for once the stream's unacknowledged pictures
+        // let it go, or the datagram backlog has room for it.
+        let stream_blocked =
+            streaming && !lock(&desktop.stream_flight).may_send(std::time::Instant::now());
+        if !stream_blocked
+            && gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop))
+        {
             desktop.keyframe.request();
         }
         // While a keyframe is owed, look at the backlog again each frame
