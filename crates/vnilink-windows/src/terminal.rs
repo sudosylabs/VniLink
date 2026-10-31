@@ -38,12 +38,18 @@ use windows::{
         Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         System::{
             Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON},
+            JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            },
             Pipes::CreatePipe,
             Threading::{
                 CreateEventW, CreateProcessW, GetCurrentThreadId, GetExitCodeProcess,
-                InitializeProcThreadAttributeList, OpenThread, SetEvent, TerminateProcess,
-                UpdateProcThreadAttribute, WaitForMultipleObjects, WaitForSingleObject,
-                EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+                InitializeProcThreadAttributeList, OpenThread, ResumeThread, SetEvent,
+                TerminateProcess, UpdateProcThreadAttribute, WaitForMultipleObjects,
+                WaitForSingleObject, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT,
+                LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES, STARTUPINFOEXW,
                 THREAD_SYNCHRONIZE, THREAD_TERMINATE,
             },
@@ -186,6 +192,35 @@ impl Drop for Finished {
     }
 }
 
+/// A job whose processes all end when its last handle closes, so a shell's
+/// children do not outlive the terminal that started them.
+struct KillOnClose(OwnedHandle);
+impl KillOnClose {
+    fn new() -> Result<Self, Error> {
+        let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(native_error)?;
+        // A successful CreateJobObjectW returns a handle this process owns.
+        let job = unsafe { OwnedHandle::from_raw_handle(job.0) };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: `limits` is a live JOBOBJECT_EXTENDED_LIMIT_INFORMATION and the
+        // size passed is its own.
+        unsafe {
+            SetInformationJobObject(
+                handle(&job),
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                std::mem::size_of_val(&limits) as u32,
+            )
+        }
+        .map_err(native_error)?;
+        Ok(Self(job))
+    }
+    fn adopt(&self, process: &OwnedHandle) -> Result<(), Error> {
+        // SAFETY: both handles are open and owned by this process.
+        unsafe { AssignProcessToJobObject(handle(&self.0), handle(process)) }.map_err(native_error)
+    }
+}
+
 struct Attributes {
     _memory: Vec<u128>,
     list: LPPROC_THREAD_ATTRIBUTE_LIST,
@@ -261,6 +296,7 @@ impl IoWorker {
 struct Session {
     console: Option<HPCON>,
     process: Option<OwnedHandle>,
+    jobs: Option<KillOnClose>,
     reader: Option<JoinHandle<()>>,
     gatherer: Option<JoinHandle<()>>,
     writer: Option<IoWorker>,
@@ -285,6 +321,9 @@ impl Session {
                 }
             }
         }
+        // Ending the job ends the shell's children too, which a console close
+        // would otherwise wait on.
+        self.jobs.take();
         if let Some(writer) = self.writer.take() {
             writer.stop();
         }
@@ -404,6 +443,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         let mut session = Session {
             console: None,
             process: None,
+            jobs: None,
             reader: Some(reader),
             gatherer: None,
             writer: None,
@@ -453,7 +493,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                 None,
                 None,
                 false,
-                EXTENDED_STARTUPINFO_PRESENT,
+                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
                 None,
                 PCWSTR(directory.as_ptr()),
                 &info.StartupInfo,
@@ -461,8 +501,18 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             )
             .map_err(native_error)?;
         }
+        // CreateProcessW returned owned process and thread handles.
         session.process = Some(unsafe { OwnedHandle::from_raw_handle(process.hProcess.0) });
-        drop(unsafe { OwnedHandle::from_raw_handle(process.hThread.0) });
+        let main_thread = unsafe { OwnedHandle::from_raw_handle(process.hThread.0) };
+        // The shell runs only once it is in the job, so no child escapes it.
+        let jobs = KillOnClose::new()?;
+        jobs.adopt(session.process.as_ref().unwrap())?;
+        session.jobs = Some(jobs);
+        // SAFETY: the thread handle is open and the shell was created suspended.
+        if unsafe { ResumeThread(handle(&main_thread)) } == u32::MAX {
+            return Err(native_error(windows::core::Error::from_win32()));
+        }
+        drop(main_thread);
         startup.check()?;
         let (commands, incoming) = std::sync::mpsc::sync_channel(TERMINAL_QUEUE);
         let (ready, acknowledgement) = std::sync::mpsc::sync_channel(1);
@@ -682,6 +732,66 @@ mod tests {
         assert_eq!(
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
+        );
+    }
+    /// The processes whose parent is `parent`.
+    fn children_of(parent: u32) -> Vec<u32> {
+        use windows::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        };
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.unwrap();
+        // The snapshot handle is owned by this test.
+        let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot.0) };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut found = Vec::new();
+        let mut more = unsafe { Process32FirstW(handle(&snapshot), &mut entry) }.is_ok();
+        while more {
+            if entry.th32ParentProcessID == parent {
+                found.push(entry.th32ProcessID);
+            }
+            more = unsafe { Process32NextW(handle(&snapshot), &mut entry) }.is_ok();
+        }
+        found
+    }
+    /// Children of a shell end with its terminal. One in a console of its own is
+    /// not the pseudoconsole's to end, so before the job it outlived the terminal.
+    #[test]
+    fn closing_a_terminal_ends_the_children_of_its_shell() {
+        let mut backend = cmd()
+            .open(SIZE, BackendStartup::new(Duration::from_secs(5)))
+            .unwrap();
+        backend
+            .commands
+            .send(TerminalCommand::Input(
+                "start \"\" /min ping -n 100 127.0.0.1\r\necho VNI_CHILD_STAR^TED\r\n"
+                    .as_bytes()
+                    .to_vec(),
+            ))
+            .unwrap();
+        output_until(&mut backend, "VNI_CHILD_STARTED", Duration::from_secs(5));
+        let child = children_of(backend.process_id)
+            .into_iter()
+            .next()
+            .expect("the shell started a child");
+        let child = unsafe {
+            windows::Win32::System::Threading::OpenProcess(
+                windows::Win32::System::Threading::PROCESS_SYNCHRONIZE,
+                false,
+                child,
+            )
+        }
+        .unwrap();
+        // The handle is owned by this test.
+        let child = unsafe { OwnedHandle::from_raw_handle(child.0) };
+        drop(backend);
+        assert_eq!(
+            unsafe { WaitForSingleObject(handle(&child), 5000) },
+            WAIT_OBJECT_0,
+            "the shell's child outlived its terminal"
         );
     }
     /// A shell flooding output nobody reads holds the full queue; closing
