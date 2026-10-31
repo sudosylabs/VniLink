@@ -85,6 +85,7 @@ fn adapter_orders_text_events_and_refuses_input_after_revocation() {
     let connection = Arc::new(Connection {
         tx,
         closed: AtomicBool::new(false),
+        moves: Mutex::new(PendingMove::default()),
     });
     let mut input = WaylandInput {
         connection: connection.clone(),
@@ -492,11 +493,13 @@ fn real_portal_notify_transport_preserves_all_events() {
             // These run before any other portal open: each worker's runtime
             // ends with it, and the second must still reach the portal.
             for revoked in [false, true] {
+                let seen = recorded.clone();
                 tokio::task::spawn_blocking(move || {
                     let (tx, rx) = mpsc::sync_channel(64);
                     let connection = Arc::new(Connection {
                         tx,
                         closed: AtomicBool::new(false),
+                        moves: Mutex::new(PendingMove::default()),
                     });
                     let worker = connection.clone();
                     let (ready_tx, ready_rx) = mpsc::channel();
@@ -521,8 +524,26 @@ fn real_portal_notify_transport_preserves_all_events() {
                         logical,
                         origin: (0, 0),
                     };
+                    // Movement is not waited for and arrives before the key
+                    // that follows it, at the last position given.
+                    let before = seen.lock().unwrap().len();
+                    for x in [100, 200, 300] {
+                        input.apply(InputEvent::pointer(x, 50, 1, 1)).unwrap();
+                    }
                     input.apply(InputEvent::key_down(usage::A)).unwrap();
                     input.apply(InputEvent::key_up(usage::A)).unwrap();
+                    {
+                        let seen = seen.lock().unwrap();
+                        let delivered = &seen[before..];
+                        let key = delivered
+                            .iter()
+                            .position(|event| *event == Notify::Key(30, true))
+                            .unwrap();
+                        assert_eq!(delivered[key - 1], Notify::Pointer(150.0, 25.0));
+                        assert!(delivered[..key]
+                            .iter()
+                            .all(|event| matches!(event, Notify::Pointer(..))));
+                    }
                     if revoked {
                         input.send(vec![Notify::Key(999, true)]).unwrap();
                     } else {
@@ -673,4 +694,27 @@ fn control_characters_use_a_function_keysym_or_cannot_be_typed() {
         Some(0xa0),
         "the no-break space is graphic"
     );
+}
+
+#[test]
+fn a_burst_of_movement_reaches_the_portal_as_its_last_position_and_summed_steps() {
+    let mut pending = PendingMove::default();
+    assert!(pending.take().is_empty());
+    for event in [
+        Notify::Pointer(1.0, 2.0),
+        Notify::Motion(3.0, -1.0),
+        Notify::Pointer(10.0, 20.0),
+        Notify::Motion(-1.0, 4.0),
+    ] {
+        assert!(pending.add(&event));
+    }
+    assert!(
+        !pending.add(&Notify::Button(272, true)),
+        "a click is not movement"
+    );
+    assert_eq!(
+        pending.take(),
+        vec![Notify::Pointer(10.0, 20.0), Notify::Motion(2.0, 3.0)]
+    );
+    assert!(pending.take().is_empty(), "taken once");
 }
