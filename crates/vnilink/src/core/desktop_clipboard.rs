@@ -368,12 +368,21 @@ async fn exchange(
             }
             frame = incoming.recv() => match frame.ok_or(Error::NoSession)?? {
                 Frame::Text(text) => {
-                    let result = receive(&shared, &desktop, hosted, &text);
+                    let bytes = text.len();
+                    // The adapter may block in the operating system for up to
+                    // its own timeout; that wait belongs on a blocking thread,
+                    // not on a runtime worker other work shares.
+                    let result = {
+                        let (shared, desktop) = (shared.clone(), desktop.clone());
+                        tokio::task::spawn_blocking(move || receive(&shared, &desktop, hosted, &text))
+                            .await
+                            .unwrap_or(Err(Error::NoSession))
+                    };
                     tracing::debug!(
                         target: crate::trace::CLIPBOARD,
                         service = desktop.info.service.id,
                         hosted,
-                        bytes = text.len(),
+                        bytes,
                         refused = result.as_ref().err().map(Error::name),
                         reason = result.as_ref().err().and_then(Error::reason),
                         "clipboard received"
