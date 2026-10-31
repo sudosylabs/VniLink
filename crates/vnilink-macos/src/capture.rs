@@ -125,13 +125,24 @@ impl ScreenPlan {
     #[cfg(target_os = "macos")]
     pub fn configuration(&self) -> SCStreamConfiguration {
         let interval = CMTime::new(1, i32::from(self.frame_rate));
-        SCStreamConfiguration::new()
+        let mut configuration = SCStreamConfiguration::new()
             .with_queue_depth(5)
             .with_width(u32::from(self.width))
             .with_height(u32::from(self.height))
             .with_pixel_format(PixelFormat::BGRA)
             .with_shows_cursor(self.shows_cursor)
-            .with_minimum_frame_interval(&interval)
+            .with_minimum_frame_interval(&interval);
+        // sRGB, which the encoder's BT.709 signal describes: a wide-gamut
+        // display's pictures are converted by the system, not tagged P3 and
+        // shown wrongly by a viewer that reads BT.709.
+        vnilink::ignored!(
+            vnilink::trace::CAPTURE,
+            "a colour space name without a NUL cannot be refused",
+            configuration.set_color_space_name(
+                screencapturekit::stream::configuration::colors::color_space::SRGB
+            )
+        );
+        configuration
     }
 }
 
@@ -180,6 +191,11 @@ impl SCStreamOutputTrait for Handler {
         // sees an unchanged screen. Otherwise the comparison says how much
         // of it changed.
         let mut changed = None;
+        // ScreenCaptureKit says a still screen itself: an idle frame is not
+        // worth reading both pictures in full to learn the same.
+        if sample.frame_status() == Some(screencapturekit::cm::SCFrameStatus::Idle) {
+            return;
+        }
         if let Some(kept) = sample.pixel_buffer() {
             let mut previous = self
                 .previous
