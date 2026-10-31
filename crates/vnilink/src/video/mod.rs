@@ -43,9 +43,11 @@ pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
 pub(crate) use queue::{VideoQueue, INBOX_MAX_AGE, VIDEO_QUEUE};
 pub(crate) use recovery::KeyframeRequests;
+#[cfg(test)]
+pub(crate) use report::BASE_PROTECTION;
 pub(crate) use report::{
-    Congestion, ReportPacing, ReportTally, RttFloor, VideoReport, ViewerLoss, BASE_PROTECTION,
-    REPORT_EVERY, REPORT_LEN,
+    Congestion, ReportPacing, ReportTally, RttFloor, VideoReport, ViewerLoss, REPORT_EVERY,
+    REPORT_LEN,
 };
 pub(crate) use viewer::{Order, ViewerPictures};
 

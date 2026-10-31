@@ -940,7 +940,6 @@ mod tests {
     fn a_round_trip_that_climbs_under_a_stream_not_using_its_rate_is_no_queue() {
         let mut state = Adaptive::default();
         let ceiling = Limits::from(Quality::new(16_000, 60, 1920, 1080).unwrap());
-        let ceiling = Limits::from(Quality::new(16_000, 60, 1920, 1080).unwrap());
         let quality = Quality::new(16_000, 60, 1920, 1080).unwrap();
         let at = |tick: u64, rtt_ms: u64| Feedback {
             rtt_ms,

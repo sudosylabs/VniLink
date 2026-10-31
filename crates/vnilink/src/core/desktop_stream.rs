@@ -2170,33 +2170,114 @@ fn host_end(
     }
 }
 
+/// Commands the host reads ahead of the one it applies. A burst of pointer
+/// moves is applied as its newest.
+const HOST_COMMAND_BATCH: usize = 64;
+
+/// One message from the viewer's control stream, decoded once.
+struct HostCommand {
+    body: Vec<u8>,
+    /// The command a `COMMAND` message holds; `None` for the lease actions.
+    command: Option<Result<ControlMessage, Error>>,
+}
+
+impl HostCommand {
+    fn new(body: Vec<u8>) -> Self {
+        let command = (body.first() == Some(&COMMAND) && body.len() >= 9)
+            .then(|| ControlMessage::decode(&body[9..]));
+        Self { body, command }
+    }
+
+    /// Whether applying it calls into the platform: lease actions, input
+    /// and typed text.
+    fn native(&self) -> bool {
+        match self.body.first() {
+            Some(&RELEASE) | Some(&ACQUIRE_CONTROL) | Some(&YIELD_CONTROL) => true,
+            _ => matches!(
+                self.command,
+                Some(Ok(ControlMessage::Input { .. }
+                    | ControlMessage::Text { .. }
+                    | ControlMessage::Chord { .. }))
+            ),
+        }
+    }
+
+    /// The pointer position it moves to, with the lease epoch it was sent
+    /// under, if it is only that.
+    fn pointer_move(&self) -> Option<(u64, u64)> {
+        match &self.command {
+            Some(Ok(ControlMessage::Input {
+                stamp,
+                event: crate::InputEvent::Pointer { .. },
+            })) => Some((
+                u64::from_be_bytes(self.body.get(1..9)?.try_into().ok()?),
+                stamp.id,
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Drops each pointer position another follows in the same batch, under the
+/// same lease and for the same desktop: the host applies where the pointer
+/// is now, not where it passed. Keys, buttons and wheel turns stay, in order.
+fn coalesce_pointer_moves(batch: &mut Vec<HostCommand>) {
+    let moves: Vec<_> = batch.iter().map(HostCommand::pointer_move).collect();
+    let mut index = 0;
+    batch.retain(|_| {
+        let superseded = moves[index].is_some() && moves.get(index + 1) == Some(&moves[index]);
+        index += 1;
+        !superseded
+    });
+}
+
 async fn host_receive(
     shared: &Arc<Shared>,
     desktop: &Arc<DesktopRuntime>,
     recv: &mut RecvStream,
 ) -> Result<(), Error> {
-    loop {
-        let body = read(recv).await?;
-        let native = match body.first() {
-            Some(&RELEASE) | Some(&ACQUIRE_CONTROL) | Some(&YIELD_CONTROL) => true,
-            Some(&COMMAND) if body.len() >= 9 => matches!(
-                ControlMessage::decode(&body[9..]),
-                Ok(ControlMessage::Input { .. }
-                    | ControlMessage::Text { .. }
-                    | ControlMessage::Chord { .. })
-            ),
-            _ => false,
-        };
-        if native {
-            let shared = shared.clone();
-            let desktop = desktop.clone();
-            tokio::task::spawn_blocking(move || process_host_command(&shared, &desktop, &body))
-                .await
-                .map_err(|_| Error::NoSession)??;
-        } else {
-            process_host_command(shared, desktop, &body)?;
+    let (queued, mut arrived) = tokio::sync::mpsc::channel(HOST_COMMAND_BATCH);
+    let reader = async {
+        loop {
+            if queued.send(read(recv).await?).await.is_err() {
+                return Ok(());
+            }
         }
+    };
+    let applier = async {
+        while let Some(first) = arrived.recv().await {
+            let mut batch = vec![HostCommand::new(first)];
+            while batch.len() < HOST_COMMAND_BATCH {
+                let Ok(body) = arrived.try_recv() else { break };
+                batch.push(HostCommand::new(body));
+            }
+            coalesce_pointer_moves(&mut batch);
+            if batch.iter().any(HostCommand::native) {
+                // The platform is called from a blocking thread, once for
+                // the burst.
+                let shared = shared.clone();
+                let desktop = desktop.clone();
+                tokio::task::spawn_blocking(move || apply_host_batch(&shared, &desktop, batch))
+                    .await
+                    .map_err(|_| Error::NoSession)??;
+            } else {
+                apply_host_batch(shared, desktop, batch)?;
+            }
+        }
+        Ok(())
+    };
+    tokio::try_join!(reader, applier).map(|_| ())
+}
+
+fn apply_host_batch(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    batch: Vec<HostCommand>,
+) -> Result<(), Error> {
+    for HostCommand { body, command } in batch {
+        process_host_message(shared, desktop, &body, command)?;
     }
+    Ok(())
 }
 
 fn wait_input_cleanup(shared: &Shared) {
@@ -2356,7 +2437,7 @@ fn admit_host_input(
     }
     Ok(match input {
         HostInput::Event(event) => {
-            let selected = lock(&desktop.selected).clone();
+            let selected = lock(&desktop.selected);
             match super::topology::accept_pointer(shared, *event, &selected) {
                 Ok(()) => Ok(Some(*event)),
                 Err(error) => Err(pointer_refusal(&error)),
@@ -2436,10 +2517,22 @@ fn apply_host_input(
 /// Validate under Core state, take the adapter without waiting, then release
 /// Core state before native work. Late input is released under the same adapter
 /// guard when retirement or a lease transition overtakes the native call.
+#[cfg(test)]
 fn process_host_command(
     shared: &Shared,
     desktop: &DesktopRuntime,
     body: &[u8],
+) -> Result<(), Error> {
+    let HostCommand { command, .. } = HostCommand::new(body.to_vec());
+    process_host_message(shared, desktop, body, command)
+}
+
+/// [`process_host_command`] for a message whose command is already decoded.
+fn process_host_message(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    body: &[u8],
+    command: Option<Result<ControlMessage, Error>>,
 ) -> Result<(), Error> {
     let mut state = lock(&shared.state);
     runtime(
@@ -2480,7 +2573,7 @@ fn process_host_command(
         {
             drop(state);
             wait_input_cleanup(shared);
-            return process_host_command(shared, desktop, body);
+            return process_host_message(shared, desktop, body, command);
         }
         if !input_allowed {
             tracing::info!(
@@ -2548,7 +2641,7 @@ fn process_host_command(
     if body[0] != COMMAND {
         return Err(Error::Malformed);
     }
-    let command = ControlMessage::decode(&body[9..])?;
+    let command = command.ok_or(Error::Malformed)??;
     runtime(
         &state,
         desktop.info.service.id,
@@ -3087,6 +3180,79 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn command(epoch: u64, event: crate::InputEvent) -> HostCommand {
+        let mut bytes = vec![COMMAND];
+        bytes.extend_from_slice(&epoch.to_be_bytes());
+        bytes.extend_from_slice(
+            &ControlMessage::Input {
+                stamp: SessionStamp {
+                    id: 7,
+                    generation: 3,
+                },
+                event,
+            }
+            .encode(),
+        );
+        HostCommand::new(bytes)
+    }
+
+    fn kinds(batch: &[HostCommand]) -> Vec<(u64, &'static str)> {
+        batch
+            .iter()
+            .map(|item| match &item.command {
+                Some(Ok(ControlMessage::Input { event, .. })) => (
+                    u64::from_be_bytes(item.body[1..9].try_into().unwrap()),
+                    event.kind(),
+                ),
+                other => panic!("not an input: {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A burst of pointer positions is applied as the newest one; the keys,
+    /// buttons and wheel between them keep their place.
+    #[test]
+    fn a_burst_of_pointer_moves_is_applied_as_the_newest() {
+        use crate::InputEvent;
+        let at = |x| InputEvent::pointer(x, 0, 1, 1);
+        let mut batch = vec![
+            command(1, at(1)),
+            command(1, at(2)),
+            command(1, InputEvent::button_down(crate::PointerButton::Left)),
+            command(1, at(3)),
+            command(1, at(4)),
+            command(1, at(5)),
+            command(1, InputEvent::wheel(0, 1)),
+            command(1, at(6)),
+            command(2, at(7)),
+        ];
+        assert!(batch.iter().all(HostCommand::native));
+        coalesce_pointer_moves(&mut batch);
+        assert_eq!(
+            kinds(&batch),
+            vec![
+                (1, "pointer"),
+                (1, "button down"),
+                (1, "pointer"),
+                (1, "wheel"),
+                (1, "pointer"),
+                (2, "pointer"),
+            ],
+            "the last move of each run stays; a move under another lease is its own"
+        );
+        let moved: Vec<_> = batch
+            .iter()
+            .filter_map(|item| match &item.command {
+                Some(Ok(ControlMessage::Input {
+                    event: InputEvent::Pointer { x, .. },
+                    ..
+                })) => Some(*x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moved, vec![2, 5, 6, 7]);
+    }
 
     #[test]
     fn a_frame_waits_behind_at_most_three_frames_of_video() {
