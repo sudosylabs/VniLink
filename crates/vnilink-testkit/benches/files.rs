@@ -10,7 +10,8 @@
 //! running as in the application. Both engines run on this computer, or,
 //! with `--peer`, the receiving one is the test agent on another computer.
 //! The `rtt` cases cross a relay that holds each byte, as a distant peer
-//! does; `compressible` moves text that a compressing transfer would shrink.
+//! does, and the `slow` cases also pass at most 5 MB/s; `compressible` and
+//! `slow text` move text that a compressing transfer shrinks.
 
 use std::time::{Duration, Instant};
 
@@ -47,17 +48,41 @@ enum Content {
     Text,
 }
 
+/// `len` bytes of words chosen at random from a small vocabulary, which
+/// compress about as well as logs and source do, not as repeated lines do.
+fn prose(len: usize, seed: u64) -> Vec<u8> {
+    const WORDS: &str = "the of and to in is that for it as with was on be by this have from \
+        or one had not but what all were when we there can an your which their said if do \
+        will each about how up out them then she many some so these would other into has \
+        more her two like him see time could no make than first been its who now people my \
+        made over did down only way find use may water long little very after words called \
+        just where most know get through back much before go good new write our me man too \
+        any day same right look think also around another came come work three word must \
+        because does part even place well such here take why help put different away again \
+        off went old number great tell men say small every found still between name should";
+    let words: Vec<&str> = WORDS.split_whitespace().collect();
+    let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+    let mut text = Vec::with_capacity(len + 16);
+    while text.len() < len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        text.extend_from_slice(words[(state >> 20) as usize % words.len()].as_bytes());
+        text.push(if state % 11 == 0 { b'\n' } else { b' ' });
+    }
+    text.truncate(len);
+    text
+}
+
 /// Writes `files` under `folder` with `content`.
 fn write(folder: &std::path::Path, files: &[(&str, usize)], content: Content) {
     match content {
         Content::Random => write_files(folder, files),
         Content::Text => {
-            let line = b"the quick brown fox jumps over the lazy dog, again and again\n";
-            for (name, size) in files {
+            for (index, (name, size)) in files.iter().enumerate() {
                 let path = folder.join(name);
                 std::fs::create_dir_all(path.parent().expect("a folder")).expect("a folder");
-                let text: Vec<u8> = line.iter().cycle().take(*size).copied().collect();
-                std::fs::write(path, text).expect("a file");
+                std::fs::write(path, prose(*size, index as u64 + 1)).expect("a file");
             }
         }
     }
@@ -70,6 +95,8 @@ struct Setup {
     content: Content,
     /// The round trip across a relay, when the case has one.
     rtt: Option<Duration>,
+    /// Bytes a second the relay passes each way, when the link is slow.
+    rate: Option<u64>,
     staging: Staging,
 }
 
@@ -77,6 +104,7 @@ impl Setup {
     const PLAIN: Self = Self {
         content: Content::Random,
         rtt: None,
+        rate: None,
         staging: Staging::Here,
     };
 }
@@ -87,12 +115,13 @@ fn upload(files: &[(&str, usize)], setup: Setup) -> Duration {
     let Setup {
         content,
         rtt,
+        rate,
         staging,
     } = setup;
     let relay = rtt.map(|_| LocalRelay::start());
     let delayed = rtt
         .zip(relay.as_ref())
-        .map(|(rtt, relay)| relay.delayed(rtt / 4));
+        .map(|(rtt, relay)| relay.limited(rtt / 4, rate));
     let pair = match &delayed {
         Some(delayed) => {
             let (host, controller) = FILES;
@@ -276,6 +305,20 @@ fn main() {
     };
     measure("small rtt40", many(200, 4 * 1024, "small"), distant);
     measure("large rtt40", many(1, 64 * mib, "large"), distant);
+    // A slow link, 5 MB/s (40 Mbit/s) each way, where the bytes sent decide.
+    let slow = Setup {
+        rate: Some(5_000_000),
+        ..distant
+    };
+    measure(
+        "slow text",
+        many(1, 32 * mib, "text"),
+        Setup {
+            content: Content::Text,
+            ..slow
+        },
+    );
+    measure("slow random", many(1, 16 * mib, "large"), slow);
     // The path the connection settled on, once the runs gave it time to.
     if let Some(remote) = remote.as_ref() {
         report.against(remote.bench_peer());
