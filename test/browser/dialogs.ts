@@ -20,7 +20,7 @@ function assert(value: boolean, message: string): asserts value {
 const restart: IDialogOptions = {
 	type: 'warning',
 	message: 'Restart or shut down Studio Mac?',
-	detail: 'Its user has 30 seconds to cancel. Anything not saved there may be lost.',
+	detail: 'Its user has 30 seconds to cancel, and it is cancelled if you disconnect before then. Anything not saved there may be lost.',
 	buttons: ['Restart', 'Shut Down', 'Cancel'],
 	cancelId: 2,
 };
