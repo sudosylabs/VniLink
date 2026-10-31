@@ -296,10 +296,15 @@ impl Core {
             // The writer named itself in the invitation: keep it for this
             // computer's device list, before the first session. An absent
             // name keeps whatever a previous pairing stored.
-            state.trust.set_os(&opened.endpoint_id, opened.os)?;
+            if let Err(error) = state.trust.set_os(&opened.endpoint_id, opened.os) {
+                state.replay = previous_replay;
+                state.trust = previous_trust;
+                return Err(error);
+            }
             if let Some(name) = opened.hostname.clone() {
                 if let Err(error) = state.trust.set_hostname(&opened.endpoint_id, name) {
                     state.replay = previous_replay;
+                    state.trust = previous_trust;
                     return Err(error);
                 }
             }

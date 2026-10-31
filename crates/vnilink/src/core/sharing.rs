@@ -121,11 +121,13 @@ impl Core {
                 super::transfer::close_peer_files(&self.shared, &peer);
                 super::jobs::interrupt_peer_jobs(&self.shared, &peer, false);
             }
-            self.shared.events.publish(CoreEvent::DeviceAuthorized {
-                endpoint_id: PublicKey::from_bytes(&peer)
-                    .map_err(|_| Error::Malformed)?
-                    .to_string(),
-            });
+            // A stored key that does not parse has no device to name; the
+            // steps below still run for the grant that changed.
+            if let Ok(key) = PublicKey::from_bytes(&peer) {
+                self.shared.events.publish(CoreEvent::DeviceAuthorized {
+                    endpoint_id: key.to_string(),
+                });
+            }
         }
         let privacy_result = if !policy.system_actions {
             super::system_stream::release_all_privacy(&self.shared)
