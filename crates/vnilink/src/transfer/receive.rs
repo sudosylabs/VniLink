@@ -18,7 +18,7 @@ use super::wire::{
     FileRequest, RESET_CHANGED, RESET_STALLED, STATUS_BUSY, STATUS_CHANGED, STATUS_SENDING,
     VALUE_LEN,
 };
-use super::{Partial, TransferCounters, CHUNK, STALL_WITHIN};
+use super::{Partial, TransferCounters, RECEIVE_BUFFER, STALL_WITHIN};
 
 /// How long the sender may take to answer a request. Short in tests,
 /// which hold a sender back.
@@ -162,13 +162,17 @@ async fn receive_stream(
     };
     tokio::pin!(stopped);
     let mut incoming = Incoming::after(partial);
+    // One buffer for the whole stream: a read gathers every packet that
+    // arrived since the last, so a write, a hash update and a progress
+    // report cover many packets, not one.
+    let mut buffer = vec![0u8; RECEIVE_BUFFER];
     loop {
-        let chunk = tokio::select! {
+        let read = tokio::select! {
             biased;
             _ = &mut stopped => return Ok(Received::Cancelled),
-            chunk = tokio::time::timeout(STALL_WITHIN, recv.read_chunk(CHUNK)) => chunk,
+            read = tokio::time::timeout(STALL_WITHIN, recv.read(&mut buffer)) => read,
         };
-        let Ok(chunk) = chunk else {
+        let Ok(read) = read else {
             crate::ignored!(
                 crate::trace::FILES,
                 "a stalled stream that cannot be stopped is closed with its link",
@@ -176,15 +180,15 @@ async fn receive_stream(
             );
             return Ok(Received::Stalled);
         };
-        let bytes = match chunk {
-            Ok(Some(bytes)) => bytes,
+        let len = match read {
+            Ok(Some(len)) => len,
             Ok(None) => break,
             Err(ReadError::Reset(code)) if code == VarInt::from_u32(RESET_CHANGED) => {
                 return Ok(Received::Changed);
             }
             Err(error) => return Err(Error::network(error)),
         };
-        if !incoming.feed(partial, &bytes, progress, counters)? {
+        if !incoming.feed(partial, &buffer[..len], progress, counters)? {
             return Ok(Received::Mismatch);
         }
     }
@@ -211,8 +215,9 @@ impl Incoming {
         }
     }
 
-    /// Takes the next bytes of the stream. False when a segment failed its
-    /// check; an error when the bytes cannot be part of the file.
+    /// Takes the next bytes of the stream and reports how far the partial
+    /// reached once for all of them. False when a segment failed its check;
+    /// an error when the bytes cannot be part of the file.
     fn feed(
         &mut self,
         partial: &mut Partial,
@@ -220,6 +225,7 @@ impl Incoming {
         progress: &std::sync::mpsc::Sender<u64>,
         counters: &TransferCounters,
     ) -> Result<bool, Error> {
+        let written = partial.written();
         while !bytes.is_empty() {
             if let Some(pending) = self.value.as_mut() {
                 let take = bytes.len().min(VALUE_LEN - pending.len());
@@ -244,14 +250,16 @@ impl Incoming {
             partial.append(&bytes[..take])?;
             counters.received(take);
             bytes = &bytes[take..];
+            if partial.segment_left() == 0 {
+                self.value = Some(Vec::with_capacity(VALUE_LEN));
+            }
+        }
+        if partial.written() > written {
             crate::ignored!(
                 crate::trace::FILES,
                 "progress nobody watches is not needed",
                 progress.send(partial.written())
             );
-            if partial.segment_left() == 0 {
-                self.value = Some(Vec::with_capacity(VALUE_LEN));
-            }
         }
         Ok(true)
     }

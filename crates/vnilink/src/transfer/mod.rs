@@ -54,8 +54,12 @@ pub(crate) use send::{read_request, refuse, send, Source};
 pub(crate) use window::{Window, INITIAL_WINDOW};
 pub(crate) use wire::{FileRequest, FILES_ALPN, STATUS_BUSY, STATUS_CHANGED, STATUS_DENIED};
 
-/// Bytes per read, per stream write and per stream read.
+/// Bytes per source read and per stream write.
 const CHUNK: usize = 256 * 1024;
+
+/// Bytes a receiver gathers per stream read, before it writes, hashes and
+/// reports them: a stream hands over about one packet at a time otherwise.
+const RECEIVE_BUFFER: usize = 1024 * 1024;
 
 /// How long a receiver waits for a byte before it gives the stream up as
 /// stalled. Short in tests, which provoke stalls.
