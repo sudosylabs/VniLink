@@ -7,9 +7,10 @@
 
 //! Encoded video for one monitor.
 //!
-//! The platform captures, encodes, and draws. This module carries H.264 bytes,
-//! drops predicted frames until the next keyframe, and does not look inside the
-//! payload. Those bytes are screen content: do not log them.
+//! The platform captures, encodes, and draws. This module carries encoded
+//! frames of the stream's codec, drops predicted frames until the next
+//! keyframe, and does not look inside the payload. Those bytes are screen
+//! content: do not log them.
 
 mod codec;
 pub use codec::{CodecSupport, VideoCodec, YuvMatrix};

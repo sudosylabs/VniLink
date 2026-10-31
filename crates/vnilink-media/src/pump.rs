@@ -162,7 +162,7 @@ pub trait VideoEncoder: Send {
     }
 }
 
-/// Platform H.264 decoder. The returned picture is what the UI paints.
+/// Platform video decoder. The returned picture is what the UI paints.
 pub trait VideoDecoder: Send {
     fn decode(&mut self, frame: &EncodedFrame) -> Result<RawFrame, Error>;
 }

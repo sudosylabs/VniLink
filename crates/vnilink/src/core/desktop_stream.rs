@@ -1191,7 +1191,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         return Err(Error::InvalidSetting("this is not a Desktop service"));
     }
     if !lock(&core.shared.video_caps).can_decode() {
-        return Err(Error::Unsupported("H.264 decoder"));
+        return Err(Error::Unsupported("video decoder"));
     }
     let (link, stamp, stop) = {
         let state = core.alive_state()?;

@@ -32,8 +32,9 @@ pub(crate) const FRAG_HEADER: usize = 10;
 /// evens out parity-protected shards can be cut off again.
 const LEN_PREFIX: usize = 4;
 
-/// Largest data shard count accepted. A 1 MiB frame over ~240-byte payloads
-/// needs about four thousand shards; anything larger is malformed.
+/// Largest data shard count accepted. A 1 MiB frame over ~1,150-byte
+/// payloads needs about nine hundred shards; the limit leaves room for a
+/// path whose datagrams are far smaller, and anything larger is malformed.
 const MAX_FRAGMENTS: u16 = 8192;
 
 /// Most parity a frame carries, as a share of its data shards.
