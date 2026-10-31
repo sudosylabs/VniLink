@@ -67,10 +67,11 @@
  *   application by its code hash, so each copy needs its own grant; `--app`
  *   names an application that already has one. It only hosts Electron: the
  *   code it runs is this checkout's `out/`. The host's engine prepares video
- *   only, so the viewer cannot control the host, and only the host prepares
- *   native video: a viewer engine that also did, on the same computer, slowed
- *   the host's capture reads, a cost of measuring both sides on one computer.
- *   Keep the display awake and uncovered.
+ *   only, so the viewer cannot control the host. The viewer's engine also
+ *   prepares native video, without which it refuses the screen; on the same
+ *   computer that slows the host's capture reads (about 19 ms at p50), a
+ *   cost of measuring both sides on one computer, included in results since
+ *   2026-11-01. Keep the display awake and uncovered.
  * - Windows: Desktop Duplication captures only the signed-in user's desktop
  *   and fails in a session that has none, such as a service or a remote
  *   shell, so run it from a terminal on that desktop. Windows asks no

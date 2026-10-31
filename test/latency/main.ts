@@ -18,7 +18,7 @@ import { execFile } from 'node:child_process';
 import { app, BrowserWindow, screen } from 'electron';
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isLinux, isMacintosh } from '../../src/base/common/platform.js';
+import { isLinux } from '../../src/base/common/platform.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
 import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
@@ -520,16 +520,15 @@ async function viewer(driver: WindowDriver): Promise<void> {
 }
 
 // The host prepares native video to capture and encode, and only it turns
-// screen sharing on. The viewer prepares it on Windows and Linux, where
-// nothing else gives its engine a decoder and it would refuse the screen. On macOS
-// the window's own decoders admit it, and a viewer engine with native video
-// on the same Mac as the host made the host's capture reads about 19 ms
-// slower (glass to glass 133 against 116 ms p50): a cost of measuring on
-// one computer, not of either side. Across two computers the viewer
-// prepares it everywhere, as the product's does.
+// screen sharing on. The viewer prepares it too: an engine without a native
+// decoder refuses to open a screen, whatever the window decodes. On one Mac
+// a viewer engine with native video made the host's capture reads about
+// 19 ms slower (glass to glass 133 against 116 ms p50): a cost of measuring
+// on one computer, not of either side, included in Mac results since
+// 2026-11-01.
 const application = new TestApplication({
 	showWindow: false,
-	nativeVideo: role === 'host' || !isMacintosh || across,
+	nativeVideo: true,
 	screenGrant: role === 'host' ? screenGrant : undefined,
 	timeoutMs: 30 * 60000,
 });
