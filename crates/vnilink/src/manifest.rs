@@ -275,8 +275,13 @@ fn scan_anchored(
             if manifest_rel.split('/').count() > MAX_MANIFEST_DEPTH {
                 return Err(Error::InvalidSetting(MANIFEST_LIMIT));
             }
-            let st = vnilink_rename::anchored::stat_at(dir_fd.as_dir(), &name)
-                .map_err(|_| Error::InvalidSetting("the source folder cannot be read"))?;
+            let st = match vnilink_rename::anchored::stat_at(dir_fd.as_dir(), &name) {
+                Ok(st) => st,
+                // Listed, then deleted before it could be read: it is no
+                // longer part of the folder.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(Error::InvalidSetting("the source folder cannot be read")),
+            };
             if st.is_symlink {
                 skipped_symlinks += 1;
                 continue;
