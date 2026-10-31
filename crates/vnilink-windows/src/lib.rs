@@ -39,6 +39,8 @@ mod codecs;
 mod cursor;
 mod decode;
 mod encode;
+#[cfg(windows)]
+mod foundation;
 mod host;
 #[cfg(any(windows, test))]
 mod idle;

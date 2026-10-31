@@ -48,14 +48,14 @@ use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncVideoForceKeyFrame,
     CODECAPI_AVEncVideoMinQP, CODECAPI_AVScenarioInfo, ICodecAPI, IMFMediaType, IMFSample,
     IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
-    MFNominalRange_16_235, MFStartup, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFVideoInterlace_Progressive, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
-    MFVideoTransferMatrix_BT601, MFVideoTransferMatrix_BT709, MFSTARTUP_NOSOCKET,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-    MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY,
-    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-    MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION,
-    MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES, MF_MT_YUV_MATRIX, MF_VERSION,
+    MFNominalRange_16_235, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    MFVideoPrimaries_BT709, MFVideoTransFunc_709, MFVideoTransferMatrix_BT601,
+    MFVideoTransferMatrix_BT709, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE,
+    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MAX_KEYFRAME_SPACING,
+    MF_MT_MPEG_SEQUENCE_HEADER, MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE,
+    MF_MT_VIDEO_PRIMARIES, MF_MT_YUV_MATRIX,
 };
 #[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::{
@@ -116,6 +116,10 @@ pub struct WindowsEncoder {
     /// encoder was opened to read.
     #[cfg(windows)]
     input: vnilink::EncoderInput,
+    /// Media Foundation's startup, released after the transform above. The
+    /// camera path leaves it to its own owner.
+    #[cfg(windows)]
+    foundation: Option<crate::foundation::MediaFoundation>,
 }
 
 /// Converting captured pictures on the GPU, for one encoder.
@@ -185,7 +189,7 @@ impl WindowsEncoder {
             "a thread with COM already set up keeps it",
             CoInitializeEx(None, COINIT_MULTITHREADED).ok()
         );
-        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
+        let foundation = crate::foundation::MediaFoundation::start()?;
         let mut failure = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
         for candidate in candidates() {
             match Self::create_transform(
@@ -198,7 +202,8 @@ impl WindowsEncoder {
                 None,
                 matrix,
             ) {
-                Ok(encoder) => {
+                Ok(mut encoder) => {
+                    encoder.foundation = Some(foundation);
                     tracing::info!(
                         target: vnilink::trace::ENCODE,
                         transform = candidate.name.as_str(),
@@ -242,7 +247,7 @@ impl WindowsEncoder {
                 "a thread with COM already set up keeps it",
                 CoInitializeEx(None, COINIT_MULTITHREADED).ok()
             );
-            MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
+            let foundation = crate::foundation::MediaFoundation::start()?;
             Self::create_transform(
                 candidate,
                 width,
@@ -253,6 +258,10 @@ impl WindowsEncoder {
                 None,
                 matrix,
             )
+            .map(|mut encoder| {
+                encoder.foundation = Some(foundation);
+                encoder
+            })
         }
     }
 
@@ -429,6 +438,7 @@ impl WindowsEncoder {
             } else {
                 vnilink::EncoderInput::GpuReadBack
             },
+            foundation: None,
         })
     }
 }
@@ -1027,7 +1037,7 @@ impl WindowsEncoder {
                 );
             }
         };
-        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)
+        let foundation = crate::foundation::MediaFoundation::start()
             .map_err(step("Media Foundation"))
             .ok()?;
         let manager = device_manager(device)
@@ -1072,6 +1082,7 @@ impl WindowsEncoder {
         }
         opened.map(|mut encoder| {
             encoder.textures = Some(device.clone());
+            encoder.foundation = Some(foundation);
             encoder
         })
     }
