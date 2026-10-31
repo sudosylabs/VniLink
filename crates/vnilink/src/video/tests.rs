@@ -501,6 +501,132 @@ fn base_parity_turns_isolated_loss_into_repairs_not_keyframes() {
     }
 }
 
+fn take(
+    pictures: &mut ViewerPictures,
+    inbox: &VideoInbox,
+    wanted: &KeyframeFlag,
+    sequence: u32,
+    keyframe: bool,
+) -> Order {
+    pictures.picture(
+        sequence,
+        frame(u64::from(sequence), keyframe),
+        inbox,
+        wanted,
+    )
+}
+
+/// The send loop looks at the keyframe flag only when it wakes. A keyframe
+/// that arrives with the gap before it, between two looks, is the repair:
+/// asking for another would send the largest frame twice.
+#[test]
+fn a_keyframe_that_arrives_with_its_gap_asks_nothing_more() {
+    let start = Instant::now();
+    let mut pictures = ViewerPictures::new();
+    let inbox = VideoInbox::new();
+    let wanted = KeyframeFlag::new();
+    assert_eq!(take(&mut pictures, &inbox, &wanted, 0, true), Order::Next);
+    assert_eq!(
+        take(&mut pictures, &inbox, &wanted, 2, false),
+        Order::Gap(1),
+        "picture 1 never arrived"
+    );
+    assert!(wanted.pending(), "the gap wants a keyframe");
+    assert_eq!(
+        take(&mut pictures, &inbox, &wanted, 3, true),
+        Order::Next,
+        "the keyframe answers it"
+    );
+    assert!(
+        !pictures.should_ask(&wanted, start, RTT, FRAME_PERIOD),
+        "the send loop finds nothing owed"
+    );
+    // A loss after the keyframe is a new one.
+    assert_eq!(
+        take(&mut pictures, &inbox, &wanted, 5, false),
+        Order::Gap(1)
+    );
+    assert!(pictures.should_ask(&wanted, start, RTT, FRAME_PERIOD));
+}
+
+#[test]
+fn a_keyframe_that_skips_pictures_is_its_own_repair() {
+    let start = Instant::now();
+    let mut pictures = ViewerPictures::new();
+    let inbox = VideoInbox::new();
+    let wanted = KeyframeFlag::new();
+    pictures.picture(0, frame(0, true), &inbox, &wanted);
+    assert_eq!(
+        pictures.picture(4, frame(4, true), &inbox, &wanted),
+        Order::Gap(3),
+        "the pictures before it were lost"
+    );
+    assert!(
+        !pictures.should_ask(&wanted, start, RTT, FRAME_PERIOD),
+        "the keyframe that follows them needs no other"
+    );
+}
+
+/// A screen that holds still after a lost picture shows no later picture to
+/// reveal the gap, so the viewer asks when the frame goes quiet.
+#[test]
+fn a_frame_that_goes_quiet_asks_for_a_keyframe_without_waiting_for_the_next_change() {
+    let start = Instant::now();
+    let mut viewer = ViewerPath::new();
+    for part in &datagrams(0, true) {
+        viewer.receive(part, start);
+    }
+    assert_eq!(viewer.drain(), vec![0]);
+    let mut lost = datagrams(1, false);
+    lost.pop();
+    for part in &lost {
+        viewer.receive(part, start);
+    }
+    assert_eq!(viewer.requests, 0, "nothing shows picture 1 missing yet");
+    let at = viewer
+        .pictures
+        .quiet_at(RTT, FRAME_PERIOD)
+        .expect("an incomplete frame is waiting");
+    assert!(
+        at < start + Duration::from_millis(250),
+        "well inside the reassembler's half second"
+    );
+    viewer.pictures.give_up_quiet(at, RTT, FRAME_PERIOD);
+    viewer.pass(at);
+    assert_eq!(viewer.requests, 1, "the quiet frame wants a keyframe");
+    assert_eq!(viewer.pictures.quiet_at(RTT, FRAME_PERIOD), None);
+    // The keyframe arrives; a frame quiet after it, older, asks no more.
+    for part in &datagrams(2, true) {
+        viewer.receive(part, at);
+    }
+    assert_eq!(viewer.drain(), vec![2], "the keyframe shows");
+}
+
+/// A frame given up that an arrived picture already follows is the gap's.
+#[test]
+fn a_quiet_frame_an_arrived_picture_follows_asks_nothing_itself() {
+    let start = Instant::now();
+    let mut viewer = ViewerPath::new();
+    for part in &datagrams(0, true) {
+        viewer.receive(part, start);
+    }
+    let mut lost = datagrams(1, false);
+    lost.pop();
+    for part in &lost {
+        viewer.receive(part, start);
+    }
+    // Picture 2 completes: picture 1 is a gap and has asked already.
+    for part in &datagrams(2, false) {
+        viewer.receive(part, start);
+    }
+    assert_eq!(viewer.requests, 1);
+    viewer
+        .pictures
+        .give_up_quiet(start + Duration::from_millis(60), RTT, FRAME_PERIOD);
+    viewer.pass(start + Duration::from_millis(60));
+    assert_eq!(viewer.requests, 1, "nothing owed twice");
+}
+
 #[test]
 fn an_incomplete_frame_is_evicted_after_eight_newer_partials() {
     let mut reassembler = Reassembler::new();

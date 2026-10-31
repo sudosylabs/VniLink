@@ -618,9 +618,6 @@ fn ensure_datagram_router(
     });
 }
 
-/// How often a viewer tells its host what it lost.
-const REPORT_EVERY: Duration = Duration::from_millis(250);
-
 /// How often the router checks its connection is still the live one; between
 /// checks a closed owner is noticed by its own retired flag.
 const ROUTER_LIVENESS: Duration = Duration::from_millis(100);
@@ -1554,7 +1551,8 @@ async fn client_send(
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut reports = tokio::time::interval(REPORT_EVERY);
+    let mut reports = tokio::time::interval(crate::video::REPORT_EVERY);
+    let mut pacing = crate::video::ReportPacing::default();
     reports.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sampled_at = std::time::Instant::now();
     let mut last_path = None;
@@ -1581,14 +1579,33 @@ async fn client_send(
         let frame_period = frame_period(desktop);
         let (ask, retry) = {
             let mut pictures = lock(&desktop.pictures);
-            let ask = pictures.should_ask(
-                &desktop.keyframe,
-                std::time::Instant::now(),
-                path_rtt,
-                frame_period,
-            );
-            (ask, pictures.retry_at(path_rtt, frame_period))
+            let now = std::time::Instant::now();
+            pictures.give_up_quiet(now, path_rtt, frame_period);
+            let ask = pictures.should_ask(&desktop.keyframe, now, path_rtt, frame_period);
+            let wake = [
+                pictures.retry_at(path_rtt, frame_period),
+                pictures.quiet_at(path_rtt, frame_period),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            (ask, wake)
         };
+        if pacing.due(desktop.report.urgent(), std::time::Instant::now()) {
+            let report = desktop.report.take();
+            if !report.is_empty() {
+                let mut bytes = vec![COMMAND];
+                bytes.extend_from_slice(&lease_epoch.to_be_bytes());
+                bytes.extend_from_slice(
+                    &ControlMessage::VideoReport {
+                        stamp: desktop.stamp,
+                        report,
+                    }
+                    .encode(),
+                );
+                write(send, &bytes).await?;
+            }
+        }
         if ask {
             desktop.counters.keyframe_requested();
             let mut bytes = vec![COMMAND];
@@ -1642,18 +1659,10 @@ async fn client_send(
         }
         tokio::select! {
             _ = &mut notified => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
-            _ = reports.tick() => {
-                let report = desktop.report.take();
-                if !report.is_empty() {
-                    let mut bytes = vec![COMMAND];
-                    bytes.extend_from_slice(&lease_epoch.to_be_bytes());
-                    bytes.extend_from_slice(
-                        &ControlMessage::VideoReport { stamp: desktop.stamp, report }.encode(),
-                    );
-                    write(send, &bytes).await?;
-                }
-            },
-            // An unanswered keyframe request is asked again when its patience runs out.
+            // The report itself goes at the top of the loop, when it is due.
+            _ = reports.tick() => {},
+            // An unanswered keyframe request is asked again when its patience runs out,
+            // and a frame gone quiet is given up when its silence does.
             _ = async {
                 match retry {
                     Some(at) => tokio::time::sleep_until(at.into()).await,

@@ -9,7 +9,7 @@
 //!
 //! The viewer's datagram router tallies frames and fragments as they arrive
 //! or go missing; every quarter second the viewer sends the tally and starts
-//! a new one. The host smooths the reports into loss rates it can act on:
+//! a new one, and sooner when a frame was lost for good. The host smooths the reports into loss rates it can act on:
 //! how much protection to send, and whether the link needs less.
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -94,6 +94,12 @@ impl ReportTally {
         add(&self.fragments_repaired, counts.repaired);
     }
 
+    /// Whether a frame was lost for good since the last take: no parity
+    /// rebuilt it, so the host should hear of it before the next interval.
+    pub(crate) fn urgent(&self) -> bool {
+        self.frames_lost.load(Ordering::Relaxed) > 0
+    }
+
     /// The tally since the last take, which starts a new one.
     pub(crate) fn take(&self) -> VideoReport {
         let take = |counter: &AtomicU32| counter.swap(0, Ordering::Relaxed);
@@ -104,6 +110,35 @@ impl ReportTally {
             fragments_missing: take(&self.fragments_missing),
             fragments_repaired: take(&self.fragments_repaired),
         }
+    }
+}
+
+/// How often the viewer reports a quiet interval.
+pub(crate) const REPORT_EVERY: Duration = Duration::from_millis(250);
+
+/// Soonest a report follows another when frames were lost: a loss burst is
+/// one report, not one per frame.
+const URGENT_GAP: Duration = Duration::from_millis(30);
+
+/// When the viewer sends its tally: every [`REPORT_EVERY`], and after
+/// [`URGENT_GAP`] once a frame was lost for good, so the host's parity
+/// follows a loss within a round trip rather than within a quarter second.
+#[derive(Debug, Default)]
+pub(crate) struct ReportPacing {
+    last: Option<Instant>,
+}
+
+impl ReportPacing {
+    /// Whether to send the tally at `now`, `urgent` when a frame was lost.
+    pub(crate) fn due(&mut self, urgent: bool, now: Instant) -> bool {
+        let wait = if urgent { URGENT_GAP } else { REPORT_EVERY };
+        let due = self
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) >= wait);
+        if due {
+            self.last = Some(now);
+        }
+        due
     }
 }
 
@@ -267,6 +302,46 @@ mod tests {
             "the low sample was forgotten, so 80 ms is the path"
         );
         assert!(congestion.congested(Duration::from_millis(400)));
+    }
+
+    #[test]
+    fn a_lost_frame_is_reported_before_the_interval_ends() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let mut pacing = ReportPacing::default();
+        let tally = ReportTally::default();
+        assert!(!tally.urgent(), "nothing lost");
+        tally.fragments(crate::video::FragmentCounts {
+            received: 9,
+            missing: 1,
+            repaired: 1,
+        });
+        assert!(
+            !tally.urgent(),
+            "a repaired fragment waits for the interval"
+        );
+        assert!(pacing.due(false, start), "the first report goes at once");
+        assert!(
+            !pacing.due(false, start + ms(100)),
+            "a quiet interval waits"
+        );
+        tally.frames_lost(1);
+        assert!(tally.urgent(), "a frame lost for good is urgent");
+        assert!(pacing.due(true, start + ms(120)), "it goes at once");
+        tally.take();
+        tally.frames_lost(1);
+        assert!(
+            !pacing.due(true, start + ms(140)),
+            "but not twice in a burst"
+        );
+        assert!(
+            pacing.due(true, start + ms(150)),
+            "within 30 ms of the last"
+        );
+        tally.take();
+        assert!(!tally.urgent(), "taking the tally clears it");
+        assert!(!pacing.due(false, start + ms(300)), "the interval restarts");
+        assert!(pacing.due(false, start + ms(400)));
     }
 
     #[test]

@@ -268,9 +268,15 @@ pub(crate) struct Reassembler {
     silence: Duration,
     /// Fragments seen since [`Self::take_fragments`] was last asked.
     fragments: FragmentCounts,
+    /// The newest frame sequence that completed.
+    newest_completed: Option<u32>,
 }
 
 impl Reassembler {
+    /// How long an incomplete frame may go without a fragment before it is
+    /// given up whatever else happens.
+    pub(crate) const SILENCE: Duration = FRAG_SILENCE;
+
     pub(crate) fn new() -> Self {
         Self {
             partial: BTreeMap::new(),
@@ -278,6 +284,7 @@ impl Reassembler {
             unfinished: Unfinished::default(),
             silence: FRAG_SILENCE,
             fragments: FragmentCounts::default(),
+            newest_completed: None,
         }
     }
 
@@ -380,6 +387,12 @@ impl Reassembler {
         }
         let partial = self.partial.remove(&seq).expect("present");
         self.completed.push_back(seq);
+        if self
+            .newest_completed
+            .is_none_or(|done| seq.wrapping_sub(done) <= u32::MAX / 2)
+        {
+            self.newest_completed = Some(seq);
+        }
         while self.completed.len() > COMPLETED_MEMORY {
             self.completed.pop_front();
         }
@@ -423,18 +436,40 @@ impl Reassembler {
     }
 
     fn expire(&mut self, now: Instant) {
+        self.expire_after(now, self.silence);
+    }
+
+    /// Gives up the incomplete frames that have had no fragment for
+    /// `silence`. Whether one was the newest frame seen: nothing after it
+    /// has arrived to show it missing, so only the viewer can ask for what
+    /// it needs.
+    pub(crate) fn expire_after(&mut self, now: Instant, silence: Duration) -> bool {
         let expired: Vec<u32> = self
             .partial
             .iter()
-            .filter(|(_, partial)| now.duration_since(partial.heard) >= self.silence)
+            .filter(|(_, partial)| now.saturating_duration_since(partial.heard) >= silence)
             .map(|(&seq, _)| seq)
             .collect();
+        let mut newest = false;
         for seq in expired {
             if let Some(expired) = self.partial.remove(&seq) {
                 self.fragments.missing += expired.missing();
             }
             self.unfinished.expired += 1;
+            newest |= self
+                .newest_completed
+                .is_none_or(|done| seq != done && seq.wrapping_sub(done) <= u32::MAX / 2);
         }
+        newest
+    }
+
+    /// When the incomplete frame that has been quiet longest will have been
+    /// quiet for `silence`.
+    pub(crate) fn quiet_at(&self, silence: Duration) -> Option<Instant> {
+        self.partial
+            .values()
+            .map(|partial| partial.heard + silence)
+            .min()
     }
 }
 
