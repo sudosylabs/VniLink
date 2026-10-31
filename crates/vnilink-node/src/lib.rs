@@ -2023,7 +2023,7 @@ impl EngineBridge {
                     .collect();
                 Reply::Events {
                     events,
-                    lagged: poller.lagged().to_string(),
+                    lagged: poller.take_lagged().to_string(),
                 }
             }
             Command::ReleaseEvents { subscription_id } => {

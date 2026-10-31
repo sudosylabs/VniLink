@@ -136,7 +136,7 @@ fn subscriptions_poll_empty_and_report_lag() {
     let core = open_core();
     let events = core.subscribe_events().unwrap();
     assert!(events.poll(16).is_empty());
-    assert_eq!(events.lagged(), 0);
+    assert_eq!(events.take_lagged(), 0);
     // Events allow several subscribers.
     let _ = core.subscribe_events().unwrap();
 }

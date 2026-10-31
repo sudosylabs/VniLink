@@ -42,11 +42,13 @@ impl EventPoller {
         events
     }
 
-    pub fn lagged(&self) -> u64 {
+    /// Events dropped since the previous call; see
+    /// [`vnilink::EventSubscription::take_lagged`].
+    pub fn take_lagged(&self) -> u64 {
         self.inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .lagged()
+            .take_lagged()
     }
 }
 

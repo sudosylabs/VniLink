@@ -143,9 +143,11 @@ impl EventSubscription {
         self.rx.recv_timeout(timeout).ok()
     }
 
-    /// Events dropped because this subscriber was behind the bounded queue.
-    pub fn lagged(&self) -> u64 {
-        self.lagged.load(Ordering::Relaxed)
+    /// Events dropped because this subscriber was behind the bounded queue
+    /// since the previous call. Reading resets the count, so a caller that
+    /// resynchronises on a non-zero value does so once per overflow.
+    pub fn take_lagged(&self) -> u64 {
+        self.lagged.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -214,12 +216,25 @@ mod tests {
         hub.publish(CoreEvent::HostingChanged { hosting: true });
         hub.publish(CoreEvent::HostingChanged { hosting: false });
         hub.publish(CoreEvent::HostingChanged { hosting: true });
-        assert_eq!(subscription.lagged(), 2);
+        assert_eq!(subscription.take_lagged(), 2);
         assert_eq!(
             subscription.try_recv(),
             Some(CoreEvent::HostingChanged { hosting: true })
         );
         assert!(subscription.try_recv().is_none());
+    }
+
+    #[test]
+    fn an_overflow_is_reported_once() {
+        let hub = EventHub::new(1);
+        let subscription = hub.subscribe().unwrap();
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        hub.publish(CoreEvent::HostingChanged { hosting: false });
+        assert_eq!(subscription.take_lagged(), 1);
+        assert_eq!(subscription.take_lagged(), 0, "reading resets the count");
+        assert!(subscription.try_recv().is_some());
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        assert_eq!(subscription.take_lagged(), 0, "a later event fits");
     }
 
     #[test]
@@ -231,7 +246,7 @@ mod tests {
             .is_none());
         hub.publish(CoreEvent::HostingChanged { hosting: true });
         hub.publish(CoreEvent::HostingChanged { hosting: false });
-        assert_eq!(subscription.lagged(), 0);
+        assert_eq!(subscription.take_lagged(), 0);
         assert_eq!(
             subscription.recv_timeout(Duration::ZERO),
             Some(CoreEvent::HostingChanged { hosting: true })
@@ -258,6 +273,6 @@ mod tests {
             replacement.try_recv(),
             Some(CoreEvent::HostingChanged { hosting: true })
         );
-        assert_eq!(replacement.lagged(), 0);
+        assert_eq!(replacement.take_lagged(), 0);
     }
 }
