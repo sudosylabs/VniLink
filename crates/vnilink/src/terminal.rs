@@ -277,7 +277,7 @@ mod native {
                         }
                         Ok(TerminalCommand::Redraw(value)) => {
                             let temporary = TerminalSize {
-                                rows: if value.rows == 1 { 2 } else { value.rows - 1 },
+                                rows: if value.rows <= 1 { 2 } else { value.rows - 1 },
                                 columns: value.columns,
                             };
                             if value.validate().is_err()
