@@ -48,7 +48,7 @@ use windows::Win32::Media::MediaFoundation::{
     CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncVideoForceKeyFrame,
     CODECAPI_AVEncVideoMinQP, CODECAPI_AVScenarioInfo, ICodecAPI, IMFMediaType, IMFSample,
     IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
-    MFNominalRange_16_235, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    MFNominalRange_16_235, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
     MFVideoPrimaries_BT709, MFVideoTransFunc_709, MFVideoTransferMatrix_BT601,
     MFVideoTransferMatrix_BT709, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
@@ -90,6 +90,9 @@ pub struct WindowsEncoder {
     vendor: Vendor,
     #[cfg(windows)]
     hardware: bool,
+    /// The codec the transform encodes.
+    #[cfg(windows)]
+    codec: vnilink::VideoCodec,
     width: u32,
     height: u32,
     /// The matrix pictures are converted to and the SPS declares.
@@ -173,6 +176,7 @@ impl WindowsEncoder {
                     height,
                     frame_rate,
                     bitrate_bps,
+                    vnilink::VideoCodec::H264,
                     high,
                     matrix,
                 )
@@ -196,6 +200,7 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        codec: vnilink::VideoCodec,
         high: bool,
         matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
@@ -214,6 +219,7 @@ impl WindowsEncoder {
                 frame_rate,
                 bitrate_bps,
                 false,
+                codec,
                 high,
                 None,
                 matrix,
@@ -271,6 +277,7 @@ impl WindowsEncoder {
                 frame_rate,
                 bitrate_bps,
                 false,
+                vnilink::VideoCodec::H264,
                 false,
                 None,
                 matrix,
@@ -321,6 +328,7 @@ impl WindowsEncoder {
             frame_rate,
             bitrate_bps,
             true,
+            vnilink::VideoCodec::H264,
             false,
             None,
             YuvMatrix::Bt709,
@@ -336,6 +344,7 @@ impl WindowsEncoder {
         frame_rate: u8,
         bitrate_bps: u32,
         camera: bool,
+        codec: vnilink::VideoCodec,
         high: bool,
         manager: Option<&IMFDXGIDeviceManager>,
         matrix: YuvMatrix,
@@ -394,13 +403,29 @@ impl WindowsEncoder {
                 )
             );
         }
-        let output = video_type(MFVideoFormat_H264, width, height, rate, matrix)?;
+        let output = video_type(
+            crate::transform::subtype(codec),
+            width,
+            height,
+            rate,
+            matrix,
+        )?;
         output.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps)?;
         // A desktop viewer asks for a keyframe when it needs one; the
         // periodic one is only a backstop, every ten seconds.
         let spacing = if camera { rate } else { rate * 10 };
         output.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, spacing)?;
-        if high && !camera {
+        if codec != vnilink::VideoCodec::H264 {
+            // A hardware encoder's own profile; no B pictures, for the same
+            // reason as below.
+            use windows::Win32::Media::MediaFoundation::CODECAPI_AVEncMPVDefaultBPictureCount;
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "an encoder without a B picture setting makes none by default",
+                set_codec_u32(&transform, &CODECAPI_AVEncMPVDefaultBPictureCount, 0)
+            );
+            transform.SetOutputType(0, &output, 0)?;
+        } else if high && !camera {
             // High profile, the negotiated stream. No B pictures: they delay
             // every picture by the reordering depth, and a remote screen is
             // judged by how soon a change shows.
@@ -455,6 +480,7 @@ impl WindowsEncoder {
             events,
             vendor: candidate.vendor,
             hardware: candidate.hardware(),
+            codec,
             width: u32::from(width),
             height: u32::from(height),
             matrix,
@@ -596,7 +622,13 @@ impl VideoEncoder for WindowsEncoder {
             } else if params.force_keyframe {
                 self.recovery_qp.observe_full(sample.bytes.len(), params);
             }
-            return h264_access_unit(&sample.bytes, &sample.header, self.matrix);
+            return match self.codec {
+                vnilink::VideoCodec::H265 => {
+                    crate::bitstream::hevc_access_unit(&sample.bytes, &sample.header)
+                }
+                vnilink::VideoCodec::Av1 => crate::bitstream::av1_access_unit(&sample.bytes),
+                _ => h264_access_unit(&sample.bytes, &sample.header, self.matrix),
+            };
         }
         #[cfg(not(windows))]
         {
@@ -1011,7 +1043,9 @@ impl WindowsEncoder {
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
         let codec = codec_id;
         vnilink_media::CodecEncoder::open(codec, matrix, w, h, fps, bps, |codec, w, h, fps, bps| {
-            h264_only(codec)?;
+            if codec != vnilink::VideoCodec::H264 {
+                return Self::open_hardware_codec(codec, w, h, fps, bps, matrix, Some(device));
+            }
             Self::open_on(
                 w,
                 h,
@@ -1022,6 +1056,73 @@ impl WindowsEncoder {
                 device,
             )
         })
+    }
+
+    /// A hardware encoder of HEVC or AV1 for pictures captured on `device`
+    /// (any adapter's when there is none):
+    /// the first of its adapter's, then the other adapters', that opens. Pictures
+    /// reach it as NV12, converted on the GPU where it can and read back. There
+    /// is no software transform of these, so a computer without one fails and
+    /// the shared software encoder serves.
+    #[cfg(windows)]
+    pub fn open_hardware_codec(
+        codec: vnilink::VideoCodec,
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        matrix: YuvMatrix,
+        device: Option<&crate::gpu::GpuDevice>,
+    ) -> Result<Self, Error> {
+        if width % 2 != 0 || height % 2 != 0 {
+            return Err(Error::InvalidFrame("NV12 width and height must be even"));
+        }
+        ignored_hr!(
+            vnilink::trace::ENCODE,
+            "a thread with COM already set up keeps it",
+            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok() }
+        );
+        let foundation = crate::foundation::MediaFoundation::start()
+            .map_err(|_| Error::Unsupported("Media Foundation"))?;
+        // SAFETY: COM and Media Foundation are started on this thread; the
+        // candidates are used on it and dropped before the guard.
+        let adapter = device.and_then(|device| unsafe { device.adapter().ok() });
+        for candidate in unsafe { crate::transform::hardware_encoders_of(codec, adapter) } {
+            match unsafe {
+                Self::create_transform(
+                    &candidate,
+                    width,
+                    height,
+                    frame_rate,
+                    bitrate_bps,
+                    false,
+                    codec,
+                    false,
+                    None,
+                    matrix,
+                )
+            } {
+                Ok(mut encoder) => {
+                    tracing::info!(
+                        target: vnilink::trace::ENCODE,
+                        transform = candidate.name.as_str(),
+                        codec = ?codec,
+                        "Media Foundation encoder opened"
+                    );
+                    encoder.textures = device.cloned();
+                    encoder.foundation = Some(foundation);
+                    return Ok(encoder);
+                }
+                Err(err) => tracing::debug!(
+                    target: vnilink::trace::ENCODE,
+                    transform = candidate.name.as_str(),
+                    codec = ?codec,
+                    hresult = format_args!("{:#010x}", err.code().0),
+                    "a Media Foundation encoder did not open; trying the next"
+                ),
+            }
+        }
+        Err(Error::Unsupported("Media Foundation for this codec"))
     }
 
     /// An encoder for pictures captured on `device`. The first that opens of:
@@ -1066,6 +1167,7 @@ impl WindowsEncoder {
                 height,
                 frame_rate,
                 bitrate_bps,
+                vnilink::VideoCodec::H264,
                 high,
                 matrix,
             )
@@ -1115,6 +1217,7 @@ impl WindowsEncoder {
                     frame_rate,
                     bitrate_bps,
                     false,
+                    vnilink::VideoCodec::H264,
                     high,
                     Some(&manager),
                     matrix,

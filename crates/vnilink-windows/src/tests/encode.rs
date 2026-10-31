@@ -167,6 +167,29 @@ fn the_high_stream_is_high_and_the_default_stays_baseline() {
     );
 }
 
+/// A hardware HEVC or AV1 encoder, where the machine has one, makes a stream
+/// the shared software decoder shows in the right colour; where it has none
+/// it declines, and the caps do not offer the codec.
+#[test]
+fn a_hardware_codec_that_opens_round_trips_and_one_that_does_not_is_not_offered() {
+    let offered = crate::codecs::probe_video_codecs().additional;
+    for codec in [vnilink::VideoCodec::H265, vnilink::VideoCodec::Av1] {
+        let opens = WindowsEncoder::open_hardware_codec(
+            codec,
+            vnilink_media::PROBE_SIDE,
+            vnilink_media::PROBE_SIDE,
+            30,
+            1_000_000,
+            vnilink::YuvMatrix::Bt709,
+            None,
+        )
+        .is_ok();
+        let listed = offered.iter().any(|support| support.codec == codec);
+        eprintln!("{codec:?}: opens {opens}, offered {listed}");
+        assert!(!listed || opens, "{codec:?} is offered without an encoder");
+    }
+}
+
 /// Every transform that opens, hardware or not, returns a picture for each
 /// picture it is given, a forced keyframe as a keyframe; a hardware one in
 /// Baseline. Microsoft's software transform writes Main on the desktop path
