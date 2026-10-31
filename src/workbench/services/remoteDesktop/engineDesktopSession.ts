@@ -27,7 +27,17 @@ interface TakenPicture {
 	readonly role: DesktopPictureRole;
 	readonly regions: readonly DesktopRegion[] | undefined;
 	readonly at: number;
+	/** The picture waited this long in the engine's queue; see {@link CATCH_UP_MS}. */
+	readonly queuedMs: number;
 }
+
+/**
+ * A picture that waited longer than this in the engine's queue is decoded
+ * for the pictures after it and drawn only if none waits behind it in the
+ * decoder: the viewer catches up by decoding faster than pictures come,
+ * rather than asking for a keyframe.
+ */
+const CATCH_UP_MS = 150;
 
 /** The most regions a picture says, as the engine carries them. */
 const MAX_REGIONS = 64;
@@ -300,7 +310,9 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		}
 		this.software = decoder.software;
 		const timestamp = Number(fields.timestampUs);
-		this.taken.set(timestamp, { display: fields.displayId, revision: fields.revision, role, regions, at: performance.now() });
+		this.taken.set(timestamp, {
+			display: fields.displayId, revision: fields.revision, role, regions, at: performance.now(), queuedMs: fields.queuedUs / 1000,
+		});
 		decoder.decode({ key, timestamp, data: packet.data });
 		await decoder.drained(decodeQueueLimit);
 	}
@@ -403,6 +415,11 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 		}
 		if (this.ended || !taken || !this.pictureEmitter.hasListeners()) {
 			frame.close();
+			return;
+		}
+		if (behind > 0 && taken.queuedMs > CATCH_UP_MS) {
+			frame.close();
+			this.skippedPictures++;
 			return;
 		}
 		this.pictureEmitter.fire({ frame, role: taken.role, regions: taken.regions, display: taken.display, revision: taken.revision, decodedAt });
