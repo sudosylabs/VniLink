@@ -422,11 +422,11 @@ async function viewer(driver: WindowDriver): Promise<void> {
 			}
 			await new Promise(resolve => setTimeout(resolve, 250));
 			return {
-				role: document.querySelector('.desktop-status-role')?.textContent ?? '',
+				role: document.querySelector('.desktop-stats-role')?.textContent ?? '',
 				// What the view says when it cannot show the screen.
 				problem: [...document.querySelectorAll('.desktop-overlay:not([hidden]) :is(.desktop-overlay-title, .desktop-overlay-body)')].map(element => element.textContent).join(' '),
-				// The stats line fills once pictures are drawn and stays empty otherwise.
-				stats: document.querySelector('.desktop-status-stats')?.textContent ?? '',
+				// The details' summary fills once pictures are drawn and stays empty otherwise.
+				stats: document.querySelector('.desktop-stats-summary')?.textContent ?? '',
 				events: window.latencyEvents.splice(0),
 			};
 		})()`);
@@ -443,14 +443,21 @@ async function viewer(driver: WindowDriver): Promise<void> {
 		}
 	}
 	if (holdMs > 0) {
-		// The status bar changes every second, and it is on the captured
-		// screen: hidden, the screen can hold still.
+		// The picture details change every second, and they are on the
+		// captured screen: hidden, the screen can hold still.
 		await driver.window.webContents.executeJavaScript(`(() => {
 			const style = document.createElement('style');
-			style.textContent = '.desktop-status { visibility: hidden !important; }';
+			style.textContent = '.desktop-stats { visibility: hidden !important; }';
 			document.head.append(style);
 		})()`);
 	}
+	// The stage times show only in the expanded details.
+	await driver.window.webContents.executeJavaScript(`(() => {
+		const toggle = document.querySelector('.desktop-stats-toggle');
+		if (toggle?.getAttribute('aria-expanded') === 'false') {
+			toggle.click();
+		}
+	})()`);
 	await driver.screenshot('viewer-streaming');
 	publish('viewer-streaming', {});
 	// The view's own stage times, once a second, as it shows them: the
@@ -493,9 +500,15 @@ async function viewer(driver: WindowDriver): Promise<void> {
 		if (cpuStart && existsSync(join(rendezvous, 'read-done.json')) && !existsSync(join(rendezvous, 'viewer-cpu.json'))) {
 			publish('viewer-cpu', cores(cpuStart[0], cpuSeconds(), (Date.now() - cpuStart[1]) / 1000));
 		}
+		// The details' stage times ("Decoding" / "1.2 · 3.4 ms") as the
+		// summary reads them, one per line, and the summary line.
 		const shown: unknown = await driver.window.webContents.executeJavaScript(`(() => {
-			const stats = document.querySelector('.desktop-status-stats');
-			return { text: stats?.title ?? '', status: stats?.textContent ?? '' };
+			const stages = [...document.querySelectorAll('.desktop-stats-latency dt:not(.desktop-stats-heading)')].flatMap(term => {
+				const times = /^([\\d.]+) · ([\\d.]+) ms$/.exec(term.nextElementSibling?.textContent ?? '');
+				return times ? [term.textContent + ': ' + times[1] + ' ms, ' + times[2] + ' ms at most for 95%'] : [];
+			});
+			const replaced = document.querySelector('.desktop-stats-note')?.textContent;
+			return { text: [...stages, ...(replaced ? [replaced] : [])].join('\\n'), status: document.querySelector('.desktop-stats-summary')?.textContent ?? '' };
 		})()`);
 		if (record(shown) && typeof shown.text === 'string' && shown.text.length > 0) {
 			// The stage times, and the status line: frame rate, codec, bitrate and round trip.

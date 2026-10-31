@@ -65,6 +65,18 @@ test('latency options are bounded', () => {
 	assert.throws(() => latencyOptions('/root', ['--unknown']));
 });
 
+test('the viewer status is read from the picture details summary', async () => {
+	const { summariseViewerStatus } = await import('../../build/lib/latency.ts');
+	const stages = [
+		{ at: 1, text: '', status: '60 fps · 4 ms · Direct' },
+		{ at: 2, text: '3 pictures replaced by newer ones before drawing', status: '58 fps · 6 ms · Relay' },
+	].map(line => JSON.stringify(line)).join('\n');
+	const status = summariseViewerStatus(stages);
+	assert.deepEqual(status.frameRate, { p50: 58, p95: 60, count: 2 });
+	assert.deepEqual(status.roundTrip, { p50: 4, p95: 6, count: 2 });
+	assert.deepEqual(status.replaced, { p50: 3, p95: 3, count: 1 });
+});
+
 test('a run is summarised from the screen and the viewer stages', async () => {
 	const { summariseLatency, renderLatencySummary } = await import('../../build/lib/latency.ts');
 	const samples = [10, 30, 20, null, 40].map(latencyMs => JSON.stringify({ shownMs: 1, codes: [], latencyMs })).join('\n');

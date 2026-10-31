@@ -296,8 +296,8 @@ export function summariseViewerStatus(stages: string): ViewerStatus {
 		const match = typeof entry[field] === 'string' ? pattern.exec(entry[field]) : null;
 		return match ? [Number(match[1])] : [];
 	}));
-	// "50 fps · H.264 · 380 kb/s · 76 ms"; "17 pictures replaced by newer ones before drawing"
-	return { frameRate: read('status', /(\d+) fps/), roundTrip: read('status', /(\d+) ms$/), replaced: read('text', /(\d+) pictures replaced/) };
+	// "50 fps · 76 ms · Direct"; "17 pictures replaced by newer ones before drawing"
+	return { frameRate: read('status', /(\d+) fps/), roundTrip: read('status', /(\d+) ms\b/), replaced: read('text', /(\d+) pictures replaced/) };
 }
 
 function stagePercentiles(values: readonly number[]): StagePercentiles | undefined {
