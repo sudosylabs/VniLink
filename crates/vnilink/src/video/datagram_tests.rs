@@ -270,6 +270,31 @@ fn fragments_are_counted_for_the_loss_report() {
     );
 }
 
+/// A clean link's frames carry one parity shard: the first random loss on
+/// it is repaired, whatever the frame's size up to fifty fragments, and a
+/// frame costs one more datagram.
+#[test]
+fn a_frame_on_a_clean_link_survives_one_lost_datagram() {
+    let base = crate::video::BASE_PROTECTION;
+    assert_eq!(crate::video::parity_count(1, base), 1);
+    assert_eq!(crate::video::parity_count(50, base), 1);
+    assert_eq!(crate::video::parity_count(51, base), 2);
+    for lost in 0..4 {
+        let frame = body(false, 5, &[9u8; 2500]);
+        let frags = fragment(&frame, 82, 1000, base);
+        assert_eq!(frags.len(), 4, "three data shards and one parity");
+        let mut reasm = Reassembler::new();
+        let mut done = None;
+        for (index, frag) in frags.iter().enumerate() {
+            if index != lost {
+                done = done.or(reasm.push(frag));
+            }
+        }
+        assert_eq!(done, Some(frame), "datagram {lost} lost");
+        assert!(!reasm.take_unfinished().any());
+    }
+}
+
 /// Any parity-count of a protected frame's shards may go missing and the
 /// frame still arrives exactly, its rebuilt data shards counted as repaired;
 /// one more missing and it never completes.
@@ -303,16 +328,17 @@ fn parity_rebuilds_a_frame_missing_that_many_shards() {
     }
 }
 
-/// A small protected frame carries two parity shards whatever its share, so
-/// it survives two lost datagrams; an unprotected one carries none.
+/// A small frame on a link that loses carries two parity shards whatever
+/// its share, so it survives two lost datagrams; an unprotected one carries
+/// none.
 #[test]
 fn a_small_protected_frame_survives_two_lost_datagrams() {
-    assert_eq!(crate::video::parity_count(1, 0.01), 2);
-    assert_eq!(crate::video::parity_count(40, 0.01), 2);
+    assert_eq!(crate::video::parity_count(1, 0.03), 2);
+    assert_eq!(crate::video::parity_count(40, 0.03), 2);
     assert_eq!(crate::video::parity_count(40, 0.25), 10);
     assert_eq!(crate::video::parity_count(1, 0.0), 0);
     let frame = body(false, 4, &[7u8; 300]);
-    let frags = fragment(&frame, 81, 1000, 0.01);
+    let frags = fragment(&frame, 81, 1000, 0.03);
     assert_eq!(frags.len(), 3, "one data shard and two parity shards");
     let mut reasm = Reassembler::new();
     assert_eq!(reasm.push(&frags[2]), Some(frame));

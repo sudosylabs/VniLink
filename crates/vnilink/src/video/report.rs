@@ -117,8 +117,15 @@ const REPORT_FRESH: Duration = Duration::from_secs(3);
 /// through most of the loss bursts a rate that size makes likely.
 const PARITY_PER_LOSS: f64 = 2.5;
 
-/// Fragment loss below this is a clean link: no parity but a keyframe's.
+/// Fragment loss below this is a clean link: parity at [`BASE_PROTECTION`].
 const CLEAN_LOSS: f64 = 0.001;
+
+/// Parity on every predicted frame of a link that is not queueing, before
+/// any loss is reported: one shard for a frame of up to
+/// `1 / BASE_PROTECTION` fragments. The first random loss on a clean link
+/// is then repaired instead of costing a keyframe, and a small frame, which
+/// is most of what a screen sends, pays one datagram for it.
+pub(crate) const BASE_PROTECTION: f64 = 0.02;
 
 /// Parity on a keyframe before any report: losing one starts a spiral.
 const KEYFRAME_PARITY: f64 = 0.1;
@@ -149,20 +156,23 @@ impl ViewerLoss {
     }
 
     /// Parity for a frame, as a share of its data shards, from what the
-    /// viewer reports losing. A keyframe gets double, at least
-    /// [`KEYFRAME_PARITY`]: a lost one costs the most to send again. On a
-    /// `congested` link loss is its queue overflowing, which more parity
-    /// would only add to: the keyframe's least is all it gets.
+    /// viewer reports losing, at least [`BASE_PROTECTION`]. A keyframe gets
+    /// double, at least [`KEYFRAME_PARITY`]: a lost one costs the most to
+    /// send again. On a `congested` link loss is its queue overflowing,
+    /// which more parity would only add to: a predicted frame gets none and
+    /// the keyframe its least.
     pub(crate) fn protection(&self, keyframe: bool, congested: bool, now: Instant) -> f64 {
         let fresh = !congested
             && self
                 .heard
                 .is_some_and(|at| now.saturating_duration_since(at) <= REPORT_FRESH);
         let loss = if fresh { self.fragment_loss } else { 0.0 };
-        let share = if loss < CLEAN_LOSS {
+        let share = if congested {
             0.0
+        } else if loss < CLEAN_LOSS {
+            BASE_PROTECTION
         } else {
-            loss * PARITY_PER_LOSS
+            (loss * PARITY_PER_LOSS).max(BASE_PROTECTION)
         };
         let share = if keyframe {
             (share * 2.0).max(KEYFRAME_PARITY)
@@ -304,8 +314,8 @@ mod tests {
     fn protection_follows_reported_loss() {
         let now = Instant::now();
         let mut loss = ViewerLoss::default();
-        // Before any report: only keyframes, a little.
-        assert_eq!(loss.protection(false, false, now), 0.0);
+        // Before any report: a little on a predicted frame, more on a keyframe.
+        assert_eq!(loss.protection(false, false, now), BASE_PROTECTION);
         assert!((loss.protection(true, false, now) - KEYFRAME_PARITY).abs() < 1e-9);
         loss.observe(
             &VideoReport {
@@ -324,7 +334,7 @@ mod tests {
             crate::video::MAX_PROTECTION
         );
         let later = now + REPORT_FRESH + Duration::from_secs(1);
-        assert_eq!(loss.protection(false, false, later), 0.0);
+        assert_eq!(loss.protection(false, false, later), BASE_PROTECTION);
     }
 
     #[test]

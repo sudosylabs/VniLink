@@ -63,19 +63,25 @@ const MAX_SHARD: usize = 64 * 1024;
 /// instead of reopening a frame the decoder already consumed.
 const COMPLETED_MEMORY: usize = 16;
 
-/// Fewest parity shards a protected frame carries: a small frame of one or
-/// two fragments then survives two lost datagrams, as a large one does at
-/// the same share. Sunshine keeps the same floor.
+/// Fewest parity shards a frame carries once its link is losing: a small
+/// frame of one or two fragments then survives two lost datagrams, as a
+/// large one does at the same share. Sunshine keeps the same floor. A frame
+/// at no more than [`super::report::BASE_PROTECTION`] carries one.
 const MIN_PARITY: usize = 2;
 
 /// Parity shards for `data` data shards at `protection`, a share of the
-/// data: none at zero, else [`MAX_PROTECTION`] at most but never fewer than
-/// [`MIN_PARITY`].
+/// data: none at zero, else [`MAX_PROTECTION`] at most. Above the base
+/// share never fewer than [`MIN_PARITY`], at it one.
 pub(crate) fn parity_count(data: usize, protection: f64) -> usize {
     if !(protection > 0.0) {
         return 0;
     }
-    (((data as f64) * protection.min(MAX_PROTECTION)).ceil() as usize).max(MIN_PARITY)
+    let floor = if protection > super::report::BASE_PROTECTION {
+        MIN_PARITY
+    } else {
+        1
+    };
+    (((data as f64) * protection.min(MAX_PROTECTION)).ceil() as usize).max(floor)
 }
 
 /// The datagrams [`fragment`] makes of a body of `body` bytes, and their

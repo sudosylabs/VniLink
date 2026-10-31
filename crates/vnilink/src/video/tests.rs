@@ -45,6 +45,9 @@ const KEYFRAME: usize = P_FRAME * 10;
 /// VideoToolbox keyframe interval (`crates/vnilink-macos/src/encode.rs`).
 const GOP: u64 = 120;
 
+/// The share a keyframe carries before any loss is reported.
+const KEYFRAME_PROTECTION: f64 = 0.1;
+
 /// The harness's impaired profiles keep a 20 ms round trip, so a request
 /// reaches the host and its keyframe comes back within one frame.
 const RTT: Duration = Duration::from_millis(20);
@@ -81,11 +84,15 @@ fn frame(index: u64, keyframe: bool) -> EncodedFrame {
 }
 
 fn datagrams(index: u64, keyframe: bool) -> Vec<Vec<u8>> {
+    datagrams_at(index, keyframe, 0.0)
+}
+
+fn datagrams_at(index: u64, keyframe: bool, protection: f64) -> Vec<Vec<u8>> {
     fragment(
         &encode_video_body(&frame(index, keyframe), index as u32),
         index as u32,
         DATAGRAM,
-        0.0,
+        protection,
     )
 }
 
@@ -154,6 +161,9 @@ impl ViewerPath {
 /// The encoder side: a periodic keyframe, plus one for every frame on which
 /// at least one request has arrived.
 struct Host {
+    /// Whether frames carry the parity a clean link gets from
+    /// `ViewerLoss::protection`, as the product host sends them.
+    protected: bool,
     due: Option<u64>,
     keyframes: u64,
     bytes: usize,
@@ -161,8 +171,9 @@ struct Host {
 }
 
 impl Host {
-    fn new() -> Self {
+    fn new(protected: bool) -> Self {
         Self {
+            protected,
             due: None,
             keyframes: 0,
             bytes: 0,
@@ -181,7 +192,14 @@ impl Host {
             self.due = None;
             self.keyframes += 1;
         }
-        let parts = datagrams(index, keyframe);
+        let protection = if !self.protected {
+            0.0
+        } else if keyframe {
+            KEYFRAME_PROTECTION
+        } else {
+            crate::video::BASE_PROTECTION
+        };
+        let parts = datagrams_at(index, keyframe, protection);
         let size: usize = parts.iter().map(Vec::len).sum();
         self.bytes += size;
         if keyframe {
@@ -194,11 +212,21 @@ impl Host {
 /// Streams `frames` frames; `deliver` decides which datagrams arrive.
 fn stream(
     frames: u64,
+    deliver: impl FnMut(u64, usize) -> bool,
+) -> (ViewerPath, Host, Vec<u64>, u64) {
+    stream_protected(frames, false, deliver)
+}
+
+/// [`stream`] from a host that protects its frames as the product does on
+/// a link with no reported loss.
+fn stream_protected(
+    frames: u64,
+    protected: bool,
     mut deliver: impl FnMut(u64, usize) -> bool,
 ) -> (ViewerPath, Host, Vec<u64>, u64) {
     let start = Instant::now();
     let mut viewer = ViewerPath::new();
-    let mut host = Host::new();
+    let mut host = Host::new(protected);
     let mut shown = Vec::new();
     let (mut frozen, mut longest_frozen) = (0, 0);
     for index in 0..frames {
@@ -380,8 +408,13 @@ struct LossRun {
 }
 
 fn run_loss(percent: f64, seed: u64) -> LossRun {
+    run_loss_protected(percent, seed, false)
+}
+
+fn run_loss_protected(percent: f64, seed: u64, protected: bool) -> LossRun {
     let mut loss = Loss::new(seed, percent);
-    let (viewer, host, shown, longest_frozen) = stream(30 * FPS, |_, _| !loss.drops());
+    let (viewer, host, shown, longest_frozen) =
+        stream_protected(30 * FPS, protected, |_, _| !loss.drops());
     LossRun {
         keyframes_sent: host.keyframes,
         keyframe_share: host.keyframe_bytes as f64 / host.bytes as f64,
@@ -442,6 +475,30 @@ fn loss_asks_for_one_keyframe_at_a_time() {
         *two,
         "the same seed reproduces the same run"
     );
+}
+
+/// What the host's first-loss parity buys on a link that has reported no
+/// loss: random loss at these rates mostly lands on one fragment of a frame,
+/// which one parity shard rebuilds, instead of costing a keyframe.
+#[test]
+fn base_parity_turns_isolated_loss_into_repairs_not_keyframes() {
+    for percent in [0.1, 0.5, 1.0] {
+        let bare = run_loss_protected(percent, 0x5EED, false);
+        let protected = run_loss_protected(percent, 0x5EED, true);
+        eprintln!("loss {percent}%: bare {bare:?}, protected {protected:?}");
+        assert!(
+            protected.requests < bare.requests,
+            "loss {percent}%: parity cuts keyframe requests: {bare:?} vs {protected:?}"
+        );
+        assert!(
+            protected.shown >= bare.shown,
+            "loss {percent}%: and shows at least as many pictures: {bare:?} vs {protected:?}"
+        );
+        assert!(
+            protected.longest_frozen <= bare.longest_frozen,
+            "loss {percent}%: and freezes no longer: {bare:?} vs {protected:?}"
+        );
+    }
 }
 
 #[test]
