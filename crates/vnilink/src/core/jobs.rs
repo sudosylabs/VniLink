@@ -122,6 +122,7 @@ const SOURCE_CHANGED: &str = "the source changed since preparation";
 const VERIFY_FAILED: &str = "the destination could not be verified";
 const PUBLISH_FAILED: &str = "the file could not be published";
 const STAGE_FAILED: &str = "the file could not be staged";
+const FLUSH_FAILED: &str = "the files could not be flushed to disk";
 
 // Why a job stopped short of finishing, shown with the job until it
 // resumes.
@@ -2888,6 +2889,18 @@ impl Core {
             if size != entry.size {
                 return self.mark_failed(id, VERIFY_FAILED);
             }
+        }
+        // Every file was synced as it landed; the job is complete only once
+        // the volume they landed on is flushed as well.
+        if !landed.is_empty() {
+            let folder = lock(&self.shared.file_roots).resolve_dir(local_root, &local_rel);
+            let flushed = folder
+                .map_err(|_| ())
+                .and_then(|folder| crate::transfer::flush_volume(&folder).map_err(|_| ()));
+            if flushed.is_err() {
+                return self.mark_failed(id, FLUSH_FAILED);
+            }
+            tracing::info!(target: crate::trace::FILES, job = id, "received files flushed");
         }
         remove_staging(&self.shared, id);
         {

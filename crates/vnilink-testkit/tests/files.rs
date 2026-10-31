@@ -93,6 +93,7 @@ fn an_upload_lands_exactly() {
           files: file received outcome=received resumed_at=0 size=4096 took=4096
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=9437191 took=9437191
+          files: received files flushed job=1
           files: job state done_bytes=9442823 files_done=5 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.concurrent_story(&["files"]),

@@ -314,6 +314,7 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
         controller:
           files: job state from=preparing job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=4096 took=4096
+          files: received files flushed job=1
           files: job state done_bytes=4096 files_done=1 from=transferring job=1 sender=false to=complete
           files: job state done_bytes=0 files_done=0 from=preparing job=2 sender=false to=cancelled
         host:

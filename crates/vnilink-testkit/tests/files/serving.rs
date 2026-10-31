@@ -222,6 +222,7 @@ fn jobs_sharing_content_keep_serving_it_when_one_is_cancelled() -> TestResult {
         host:
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=cancelled
           files: file received outcome=received resumed_at=0 size=1024 took=1024
+          files: received files flushed job=2
           files: job state done_bytes=1024 files_done=1 from=transferring job=2 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -305,6 +306,7 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
           files: job state done_bytes=0 files_done=0 from=serving job=2 sender=true to=cancelled
         host:
           files: file received outcome=received resumed_at=0 size=65536 took=65536
+          files: received files flushed job=1
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
           files: job state done_bytes=0 files_done=0 from=transferring job=2 sender=false to=cancelled
     "#]],
@@ -407,9 +409,11 @@ fn senders_keep_no_copy_of_their_sources() -> TestResult {
           files: file served ended=sent from=0 sent=2097152 size=2097152
           files: job state done_bytes=2097152 files_done=1 from=serving job=1 sender=true to=complete
           files: file received outcome=received resumed_at=0 size=2097152 took=2097152
+          files: received files flushed job=2
           files: job state done_bytes=2097152 files_done=1 from=transferring job=2 sender=false to=complete
         host:
           files: file received outcome=received resumed_at=0 size=2097152 took=2097152
+          files: received files flushed job=1
           files: job state done_bytes=2097152 files_done=1 from=transferring job=1 sender=false to=complete
           files: job state from=preparing job=2 sender=true to=serving
           files: file served ended=sent from=0 sent=2097152 size=2097152
@@ -540,6 +544,7 @@ fn a_late_sender_is_retried_without_a_resume() -> TestResult {
           files: file served ended=sent from=0 sent=65536 size=65536
         host:
           files: file received outcome=received resumed_at=0 size=65536 took=65536
+          files: received files flushed job=1
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),

@@ -229,6 +229,7 @@ fn a_replace_choice_applies_only_on_the_drive_it_was_made_for() -> TestResult {
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=512 took=512
+          files: received files flushed job=1
           files: job state done_bytes=512 files_done=1 from=transferring job=1 sender=false to=complete
         host:
           files: job state from=preparing job=1 sender=true to=serving
@@ -482,6 +483,7 @@ fn a_sending_drive_replaced_mid_upload_interrupts_and_resumes_once_back() -> Tes
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=512 took=512
+          files: received files flushed job=1
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -556,6 +558,7 @@ fn a_source_opened_before_its_drive_changed_serves_its_own_bytes() -> TestResult
         host:
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
+          files: received files flushed job=1
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),

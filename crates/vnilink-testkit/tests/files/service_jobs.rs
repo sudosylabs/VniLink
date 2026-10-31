@@ -124,9 +124,11 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
           files: file served ended=sent from=0 sent=8192 size=8192
           files: job state done_bytes=8192 files_done=1 from=serving job=1 sender=true to=complete
           files: file received outcome=received resumed_at=0 size=16384 took=16384
+          files: received files flushed job=2
           files: job state done_bytes=16384 files_done=1 from=transferring job=2 sender=false to=complete
         host:
           files: file received outcome=received resumed_at=0 size=8192 took=8192
+          files: received files flushed job=1
           files: job state done_bytes=8192 files_done=1 from=transferring job=1 sender=false to=complete
           files: job state from=preparing job=2 sender=true to=serving
           files: file served ended=sent from=0 sent=16384 size=16384
@@ -223,9 +225,11 @@ fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult
           files: file served ended=sent from=0 sent=8192 size=8192
           files: job state done_bytes=8192 files_done=1 from=serving job=1 sender=true to=complete
           files: file received outcome=received resumed_at=0 size=16384 took=16384
+          files: received files flushed job=2
           files: job state done_bytes=16384 files_done=1 from=transferring job=2 sender=false to=complete
         host:
           files: file received outcome=received resumed_at=0 size=8192 took=8192
+          files: received files flushed job=1
           files: job state done_bytes=8192 files_done=1 from=transferring job=1 sender=false to=complete
           files: job state from=preparing job=2 sender=true to=serving
           files: file served ended=sent from=0 sent=16384 size=16384
@@ -639,6 +643,7 @@ fn closing_one_computers_files_service_keeps_another_computers_transfer() -> Tes
           files: job state from=transferring job=1 sender=false to=interrupted
         second:
           files: file received outcome=received resumed_at=0 size=65536 took=65536
+          files: received files flushed job=1
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -724,6 +729,7 @@ fn a_new_files_service_adopts_a_closed_ones_job_and_fences_the_old_one() -> Test
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=1048576 took=1048576
+          files: received files flushed job=1
           files: job state done_bytes=1048576 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -1011,6 +1017,7 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=65536 took=65536
+          files: received files flushed job=1
           files: job state done_bytes=65536 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),

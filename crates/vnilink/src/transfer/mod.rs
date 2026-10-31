@@ -35,6 +35,7 @@
 //! and `core/transfer`).
 
 mod counters;
+mod flush;
 mod hash;
 mod partial;
 mod receive;
@@ -43,6 +44,7 @@ mod window;
 mod wire;
 
 pub(crate) use counters::TransferCounters;
+pub(crate) use flush::flush_volume;
 #[cfg(test)]
 pub(crate) use hash::SegmentHasher;
 pub(crate) use hash::SEGMENT_LEN;

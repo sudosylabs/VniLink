@@ -179,9 +179,11 @@ impl Partial {
         // segment is published as soon as it checks, so it needs the sync
         // (a rename would otherwise expose bytes a power loss can still
         // lose) but no journal line: nothing resumes after it.
-        self.file.sync_data().map_err(failed)?;
         if self.written < self.size {
+            self.file.sync_data().map_err(failed)?;
             self.journal(true)?.write_all(&expected).map_err(failed)?;
+        } else {
+            super::flush::sync_file(&self.file).map_err(failed)?;
         }
         self.checked = self.written;
         self.hasher = next_segment(self.checked, self.size);
