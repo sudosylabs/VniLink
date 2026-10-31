@@ -39,6 +39,9 @@ pub enum TerminalCommand {
     Resize(TerminalSize),
     /// One queue admission for the reconnect redraw and final dimensions.
     Redraw(TerminalSize),
+    /// Sent after the stop flag is set, to wake a worker that waits for a
+    /// command; it ends the worker.
+    Stop,
 }
 
 /// Installed by the host, independently from a peer's Terminal permission.
@@ -170,7 +173,8 @@ mod native {
             );
         }
     }
-    /// How often an idle worker looks whether its terminal was closed.
+    /// How often an idle worker looks whether its shell exited: a background
+    /// job that keeps the terminal open gives the worker nothing to wait on.
     const STOP_CHECK: Duration = Duration::from_millis(100);
     /// How often a worker whose shell closed its terminal looks for its exit.
     const EXIT_CHECK: Duration = Duration::from_millis(10);
@@ -197,6 +201,8 @@ mod native {
 
     /// Hands commands to the worker one at a time, waking it as each
     /// arrives, so the worker sleeps on its terminal rather than a timer.
+    /// It waits for a command; [`TerminalCommand::Stop`] and the stop flag,
+    /// which is set first, end it.
     fn forward(
         commands: std::sync::mpsc::Receiver<TerminalCommand>,
         worker: std::sync::mpsc::SyncSender<TerminalCommand>,
@@ -204,7 +210,8 @@ mod native {
         stop: Arc<AtomicBool>,
     ) {
         while !stop.load(Ordering::Acquire) {
-            match commands.recv_timeout(STOP_CHECK) {
+            match commands.recv() {
+                Ok(TerminalCommand::Stop) => break,
                 Ok(command) => {
                     if worker.send(command).is_err() {
                         break;
@@ -216,8 +223,7 @@ mod native {
                         wake.write(&[1])
                     );
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvError) => break,
             }
         }
         drop(worker);
@@ -279,6 +285,8 @@ mod native {
                                 break 'serve;
                             }
                         }
+                        // The forwarder ends instead of handing it on.
+                        Ok(TerminalCommand::Stop) => break 'serve,
                         Ok(TerminalCommand::Redraw(value)) => {
                             let temporary = TerminalSize {
                                 rows: if value.rows <= 1 { 2 } else { value.rows - 1 },

@@ -17,6 +17,9 @@ pub(super) struct HostedTerminal {
     pub(super) info: Mutex<TerminalSessionInfo>,
     pub(super) commands: std::sync::mpsc::SyncSender<TerminalCommand>,
     pub(super) stop: Arc<AtomicBool>,
+    /// Wakes the task that serves the terminal: a stop, a detach, or a change
+    /// in what the peer may do.
+    wake: tokio::sync::Notify,
     /// Set when its viewer asked to close it, before `stop`, so its stream
     /// says the viewer closed it rather than the host.
     pub(super) closed_by_viewer: AtomicBool,
@@ -35,7 +38,7 @@ pub(super) struct Attachment {
 impl Drop for Attachment {
     fn drop(&mut self) {
         if self.explicit_close.load(Ordering::Acquire) {
-            self.terminal.stop.store(true, Ordering::Release);
+            self.terminal.request_stop();
         }
         self.terminal.detach();
     }
@@ -83,6 +86,28 @@ impl HostedTerminal {
         };
         log.offset.saturating_add(start as u64)
     }
+    /// Ends the terminal: the flag first, then the wakes of the task that
+    /// serves it and of the backend's thread that waits for a command.
+    pub(super) fn request_stop(&self) {
+        self.stop.store(true, Ordering::Release);
+        self.wake.notify_one();
+        // A full queue holds commands the backend works through, and it
+        // checks the flag before each.
+        crate::ignored!(
+            crate::trace::TERMINAL,
+            "a full queue is worked through, and the flag checked, before it waits",
+            self.commands.try_send(TerminalCommand::Stop)
+        );
+    }
+    /// What the peer may do changed: the task looks again.
+    pub(super) fn recheck(&self) {
+        self.wake.notify_one();
+    }
+    /// When a terminal nobody is attached to ends, if it is not attached.
+    fn detached_until(&self) -> Option<Instant> {
+        lock(&self.detached)
+            .map(|at| at + Duration::from_secs(u64::from(self.policy.detached_timeout_secs)))
+    }
     fn detached_expired(&self, now: Instant) -> bool {
         lock(&self.detached)
             .and_then(|at| now.checked_duration_since(at))
@@ -94,8 +119,9 @@ impl HostedTerminal {
         lock(&self.info).attached = false;
         *lock(&self.detached) = Some(Instant::now());
         if !lock(&self.info).persistent {
-            self.stop.store(true, Ordering::Release);
+            self.request_stop();
         }
+        self.wake.notify_one();
     }
     pub(super) fn attach(&self, size: TerminalSize) -> Result<(), Error> {
         let mut info = lock(&self.info);
@@ -149,6 +175,7 @@ pub(super) fn start(
             ended: None,
         }),
         detached: Mutex::new(None),
+        wake: tokio::sync::Notify::new(),
     });
     {
         let mut sessions = lock(&shared.terminal_sessions);
@@ -160,14 +187,25 @@ pub(super) fn start(
     let runtime = terminal.clone();
     // Called on this core's runtime, after backend startup completed off-thread.
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_millis(25));
         loop {
+            // Asleep until output arrives, the terminal is told to stop or
+            // its peer's permission changes, or a detached terminal's time
+            // is up.
+            let until = runtime.detached_until();
             let event = tokio::select! {
                 event = backend.output.recv(), if lock(&runtime.log).ended.is_none() => event,
-                _ = ticker.tick() => {
+                () = runtime.wake.notified() => {
                     let permitted = { let state = lock(&shared.state); !state.shut_down && state.trust.service_granted(&peer, crate::ServiceKind::Terminal) };
-                    let expired = runtime.detached_expired(Instant::now());
-                    if runtime.stop.load(Ordering::Acquire) || !permitted || expired { break; }
+                    if runtime.stop.load(Ordering::Acquire) || !permitted || runtime.detached_expired(Instant::now()) { break; }
+                    continue;
+                }
+                () = async {
+                    match until {
+                        Some(at) => tokio::time::sleep_until(at.into()).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if runtime.detached_expired(Instant::now()) { break; }
                     continue;
                 }
             };
@@ -227,6 +265,7 @@ mod attachment_tests {
                     }),
                     commands,
                     stop: Arc::new(AtomicBool::new(false)),
+                    wake: tokio::sync::Notify::new(),
                     changed: tokio::sync::watch::channel(0).0,
                     log: Mutex::new(Log {
                         bytes: VecDeque::new(),
@@ -359,6 +398,7 @@ mod policy_tests {
             },
             commands,
             stop: Arc::new(AtomicBool::new(false)),
+            wake: tokio::sync::Notify::new(),
             changed,
             log: Mutex::new(log),
             detached: Mutex::new(Some(at)),
@@ -402,6 +442,7 @@ mod replay_tests {
             },
             commands,
             stop: Arc::new(AtomicBool::new(false)),
+            wake: tokio::sync::Notify::new(),
             changed: tokio::sync::watch::channel(0).0,
             log: Mutex::new(Log {
                 bytes: bytes.iter().copied().collect(),

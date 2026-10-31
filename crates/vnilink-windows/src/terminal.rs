@@ -517,6 +517,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         let (commands, incoming) = std::sync::mpsc::sync_channel(TERMINAL_QUEUE);
         let (ready, acknowledgement) = std::sync::mpsc::sync_channel(1);
         let writer_quit = writer_stop.clone();
+        let core_stop = stop.clone();
         let done = Finished(finished.clone());
         let writer = std::thread::Builder::new()
             .name("vnilink-conpty-write".into())
@@ -546,8 +547,10 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                         return;
                     }
                 }
-                while !writer_quit.load(Ordering::Acquire) {
-                    match incoming.recv_timeout(STOP_CHECK) {
+                // Waits for a command; a stop is set first and sent as one.
+                while !writer_quit.load(Ordering::Acquire) && !core_stop.load(Ordering::Acquire) {
+                    match incoming.recv() {
+                        Ok(TerminalCommand::Stop) => break,
                         Ok(TerminalCommand::Input(bytes)) => {
                             if bytes.is_empty()
                                 || bytes.len() > TERMINAL_CHUNK
@@ -576,7 +579,6 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                                 break;
                             }
                         }
-                        Err(RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     }
                 }
