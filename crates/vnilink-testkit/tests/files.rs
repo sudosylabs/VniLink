@@ -9,6 +9,8 @@
 //! between their own folders on their shared disks, with both job drivers
 //! running as in the application.
 
+#[path = "files/compression.rs"]
+mod compression;
 #[path = "files/drives.rs"]
 mod drives;
 #[path = "files/owners.rs"]

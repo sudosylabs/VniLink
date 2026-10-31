@@ -25,6 +25,10 @@
 //! bytes. The last segment is checked but not journaled: the file publishes
 //! as soon as it checks.
 //!
+//! A segment's bytes travel compressed with zstd when its first megabyte
+//! shrinks enough to be worth it, and as they are otherwise (`codec`); the
+//! chaining value covers the file's bytes, so it is the same either way.
+//!
 //! Through a relay the receiver holds its connection's receive window to
 //! what the path carries, so a transfer yields to the desktop session
 //! instead of queueing seconds ahead of it (`window`).
@@ -34,6 +38,7 @@
 //! partials live and when files publish belong to the core (`core/jobs`
 //! and `core/transfer`).
 
+mod codec;
 mod counters;
 mod flush;
 mod hash;

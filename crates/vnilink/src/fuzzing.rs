@@ -67,15 +67,16 @@ pub fn file_request(bytes: &[u8]) {
 }
 
 /// What an honest sender sends for `file` in segments of `segment`, a
-/// power of two of at least 1 KiB.
-pub fn honest_stream(file: &[u8], segment: u64) -> Vec<u8> {
-    crate::transfer::stream_of(file, segment)
+/// power of two of at least 1 KiB, raw or, with `squeezed`, as compressed
+/// blocks.
+pub fn honest_stream(file: &[u8], segment: u64, squeezed: bool) -> Vec<u8> {
+    crate::transfer::stream_of(file, segment, squeezed)
 }
 
 /// Receives `stream` in chunks of `chunks` (then the rest at once) as the
 /// file `file` in segments of `segment`, a power of two of at least 1 KiB.
-/// Only the honest stream may land, and it lands as the file; it lands
-/// however it is chunked.
+/// A stream lands only as the file, and an honest one lands, however it is
+/// chunked. A changed stream may still land when it decodes to the same bytes.
 pub fn receive_stream(file: &[u8], segment: u64, stream: &[u8], chunks: &[usize]) {
     assert!(
         segment.is_power_of_two() && segment >= 1024,
@@ -103,10 +104,11 @@ pub fn receive_stream(file: &[u8], segment: u64, stream: &[u8], chunks: &[usize]
         segment,
         pieces,
     );
-    let honest = stream == honest_stream(file, segment).as_slice();
+    let honest = [false, true]
+        .iter()
+        .any(|&squeezed| stream == honest_stream(file, segment, squeezed).as_slice());
     match landed {
         Ok(true) => {
-            assert!(honest, "only the honest stream lands");
             if !file.is_empty() {
                 assert_eq!(std::fs::read(&data).unwrap(), file, "it lands as the file");
             }
