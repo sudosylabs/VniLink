@@ -2846,7 +2846,7 @@ async fn host_send(
             if let Some((_, stats)) = &selected {
                 lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
             }
-            congestion.rtt(rtt);
+            congestion.rtt(rtt, std::time::Instant::now());
             let number = if still {
                 picture.wrapping_sub(1)
             } else {

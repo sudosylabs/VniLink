@@ -181,27 +181,57 @@ impl ViewerLoss {
     }
 }
 
+/// How long a round trip stays the least seen on the path. A path whose
+/// base round trip rises (a new route, a relay) is no longer measured
+/// against the old, lower one.
+const FLOOR_MEMORY: Duration = Duration::from_secs(30);
+
 /// The host's view of its own link: whether it is queueing, its round trip
-/// grown well past the least seen on the path. The send gate dropping
+/// grown well past the least seen on the path lately. The send gate dropping
 /// frames is not this: on a lossy link it follows keyframe bursts the
 /// congestion window cannot carry, and loss there is still random.
+///
+/// The least is kept for two consecutive [`FLOOR_MEMORY`] windows, so it
+/// forgets a low sample between one and two windows after it was seen.
 #[derive(Debug, Default)]
 pub(crate) struct Congestion {
-    floor: Option<Duration>,
+    /// The least round trip of the window that began at `since`.
+    current: Option<Duration>,
+    /// The least round trip of the window before it.
+    previous: Option<Duration>,
+    since: Option<Instant>,
 }
 
 impl Congestion {
-    /// The path's round trip now.
-    pub(crate) fn rtt(&mut self, rtt: Duration) {
-        if !rtt.is_zero() {
-            self.floor = Some(self.floor.map_or(rtt, |floor| floor.min(rtt)));
+    /// The path's round trip at `now`.
+    pub(crate) fn rtt(&mut self, rtt: Duration, now: Instant) {
+        if rtt.is_zero() {
+            return;
+        }
+        match self.since {
+            Some(since) if now.duration_since(since) >= FLOOR_MEMORY => {
+                let idle = now.duration_since(since) >= FLOOR_MEMORY * 2;
+                self.previous = if idle { None } else { self.current };
+                self.current = None;
+                self.since = Some(now);
+            }
+            None => self.since = Some(now),
+            Some(_) => {}
+        }
+        self.current = Some(self.current.map_or(rtt, |least| least.min(rtt)));
+    }
+
+    fn floor(&self) -> Option<Duration> {
+        match (self.current, self.previous) {
+            (Some(current), Some(previous)) => Some(current.min(previous)),
+            (current, previous) => current.or(previous),
         }
     }
 
     /// Whether the link is queueing, given its round trip now: at least
-    /// twice and 30 ms over the least seen.
+    /// twice and 30 ms over the least seen lately.
     pub(crate) fn congested(&self, rtt: Duration) -> bool {
-        self.floor
+        self.floor()
             .is_some_and(|floor| rtt >= floor * 2 && rtt >= floor + Duration::from_millis(30))
     }
 }
@@ -209,6 +239,25 @@ impl Congestion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_whose_round_trip_rises_stops_reading_as_congested() {
+        let start = Instant::now();
+        let mut congestion = Congestion::default();
+        congestion.rtt(Duration::from_millis(10), start);
+        let raised = Duration::from_millis(80);
+        assert!(congestion.congested(raised), "queueing against 10 ms");
+        let mut now = start;
+        while now.duration_since(start) < FLOOR_MEMORY * 3 {
+            now += Duration::from_secs(1);
+            congestion.rtt(raised, now);
+        }
+        assert!(
+            !congestion.congested(raised),
+            "the low sample was forgotten, so 80 ms is the path"
+        );
+        assert!(congestion.congested(Duration::from_millis(400)));
+    }
 
     #[test]
     fn a_report_round_trips() {
@@ -298,15 +347,16 @@ mod tests {
     #[test]
     fn a_link_is_congested_while_its_round_trip_grows() {
         let ms = Duration::from_millis;
+        let now = Instant::now();
         let mut link = Congestion::default();
         assert!(!link.congested(ms(500)), "nothing to compare with");
-        link.rtt(ms(20));
-        link.rtt(ms(0));
+        link.rtt(ms(20), now);
+        link.rtt(ms(0), now);
         assert!(!link.congested(ms(35)));
         assert!(link.congested(ms(50)));
         // A long path's jitter is not queueing.
         let mut far = Congestion::default();
-        far.rtt(ms(80));
+        far.rtt(ms(80), now);
         assert!(!far.congested(ms(120)));
         assert!(far.congested(ms(160)));
     }
