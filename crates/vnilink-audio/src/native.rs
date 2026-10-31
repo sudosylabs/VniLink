@@ -174,6 +174,8 @@ struct Buffer {
     failed: AtomicBool,
     failure_reason: AtomicU64,
     underruns: AtomicU64,
+    /// Callbacks a capture dropped because the ring had no room for them.
+    overruns: AtomicU64,
     /// Samples an output waits for before it plays, at the start and after
     /// running dry, so resumed sound does not stutter.
     prime: AtomicUsize,
@@ -184,6 +186,7 @@ impl Buffer {
             failed: AtomicBool::new(false),
             failure_reason: AtomicU64::new(0),
             underruns: AtomicU64::new(0),
+            overruns: AtomicU64::new(0),
             prime: AtomicUsize::new(0),
         })
     }
@@ -211,9 +214,16 @@ where
                     return;
                 }
                 let needed = data.len() / native_channels * output.channels();
-                if !data.len().is_multiple_of(native_channels) || needed > producer.slots() {
+                if !data.len().is_multiple_of(native_channels) {
                     buffer.failure_reason.store(3, Ordering::Relaxed);
                     buffer.failed.store(true, Ordering::Release);
+                    return;
+                }
+                if needed > producer.slots() {
+                    // The consumer stalled for longer than the ring holds. A
+                    // scheduling hiccup loses these samples; it does not end
+                    // the capture.
+                    buffer.overruns.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
                 for frame in data.chunks_exact(native_channels) {
@@ -258,6 +268,11 @@ pub struct NativeCapture {
     format: Format,
 }
 impl NativeCapture {
+    /// Callbacks dropped because the consumer left the ring full.
+    pub fn overruns(&self) -> u64 {
+        self.buffer.overruns.load(Ordering::Relaxed)
+    }
+
     /// Caller must check local source approval and OS microphone authorization
     /// before calling. Loopback is WASAPI render capture on Windows only.
     pub fn open(
