@@ -196,7 +196,32 @@ impl SCStreamOutputTrait for Handler {
         if sample.frame_status() == Some(screencapturekit::cm::SCFrameStatus::Idle) {
             return;
         }
-        if let Some(kept) = sample.pixel_buffer() {
+        // Where it says the frame changed costs no pixel to read; only a
+        // frame without that, or on a scaled display, is compared in full.
+        let info = sample.frame_info();
+        let rects: Vec<[f64; 4]> = info
+            .as_ref()
+            .and_then(|info| info.dirty_rects.as_ref())
+            .map(|rects| {
+                rects
+                    .iter()
+                    .map(|r| [r.origin.x, r.origin.y, r.size.width, r.size.height])
+                    .collect()
+            })
+            .unwrap_or_default();
+        let reported = crate::pixels::reported_changes(
+            &rects,
+            info.as_ref().and_then(|info| info.scale_factor),
+            delivered,
+        );
+        if reported.is_some() {
+            changed = reported;
+            // The next compared frame has nothing in common with this one.
+            *self
+                .previous
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = None;
+        } else if let Some(kept) = sample.pixel_buffer() {
             let mut previous = self
                 .previous
                 .lock()
