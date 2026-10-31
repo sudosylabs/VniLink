@@ -63,13 +63,25 @@ impl HostedTerminal {
         let bytes = log.bytes.range(start..end).copied().collect();
         (first, bytes, log.ended.clone())
     }
+    /// Where a reattached viewer's replay begins: the first line start inside
+    /// the replay window, so the viewer never receives the tail of an escape
+    /// sequence or a split character. A window of one unbroken line replays
+    /// nothing; the viewer's redraw paints the screen.
     pub(super) fn replay_start(&self) -> u64 {
         let log = lock(&self.log);
-        log.offset.saturating_add(
+        let from = log
+            .bytes
+            .len()
+            .saturating_sub(self.policy.replay_bytes as usize);
+        let start = if from == 0 && log.offset == 0 {
+            0
+        } else {
             log.bytes
-                .len()
-                .saturating_sub(self.policy.replay_bytes as usize) as u64,
-        )
+                .range(from..)
+                .position(|byte| *byte == b'\n')
+                .map_or(log.bytes.len(), |newline| from + newline + 1)
+        };
+        log.offset.saturating_add(start as u64)
     }
     fn detached_expired(&self, now: Instant) -> bool {
         lock(&self.detached)
@@ -319,7 +331,9 @@ mod policy_tests {
         };
         log.push(vec![1; TERMINAL_CHUNK], 2 * TERMINAL_CHUNK);
         log.push(vec![2; TERMINAL_CHUNK], 2 * TERMINAL_CHUNK);
-        log.push(vec![3; TERMINAL_CHUNK], 2 * TERMINAL_CHUNK);
+        let mut last = vec![3; TERMINAL_CHUNK];
+        last[0] = b'\n';
+        log.push(last, 2 * TERMINAL_CHUNK);
         assert_eq!(log.offset, TERMINAL_CHUNK as u64);
         assert_eq!(log.bytes.len(), 2 * TERMINAL_CHUNK);
         let at = Instant::now();
@@ -349,14 +363,78 @@ mod policy_tests {
             log: Mutex::new(log),
             detached: Mutex::new(Some(at)),
         };
-        assert_eq!(terminal.replay_start(), (2 * TERMINAL_CHUNK) as u64);
+        // The window opens on the line start after the newline at its first byte.
+        assert_eq!(terminal.replay_start(), (2 * TERMINAL_CHUNK + 1) as u64);
         let (offset, bytes, ended) = terminal.read(terminal.replay_start());
-        assert_eq!(offset, (2 * TERMINAL_CHUNK) as u64);
-        assert_eq!(bytes, vec![3; TERMINAL_CHUNK]);
+        assert_eq!(offset, (2 * TERMINAL_CHUNK + 1) as u64);
+        assert_eq!(bytes, vec![3; TERMINAL_CHUNK - 1]);
         assert_eq!(ended, None);
         assert!(!terminal.detached_expired(at + Duration::from_secs(17) - Duration::from_nanos(1)));
         assert!(terminal.detached_expired(at + Duration::from_secs(17)));
         *lock(&terminal.detached) = None;
         assert!(!terminal.detached_expired(at + Duration::from_secs(100)));
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+
+    fn hosted(bytes: &[u8], replay: u32) -> HostedTerminal {
+        let (commands, _rx) = std::sync::mpsc::sync_channel(1);
+        HostedTerminal {
+            peer: [0; 32],
+            closed_by_viewer: AtomicBool::new(false),
+            info: Mutex::new(TerminalSessionInfo {
+                id: "test".into(),
+                process_id: 0,
+                shell: "test".into(),
+                size: TerminalSize {
+                    rows: 24,
+                    columns: 80,
+                },
+                persistent: true,
+                attached: false,
+            }),
+            policy: TerminalPolicy {
+                replay_bytes: replay,
+                ..Default::default()
+            },
+            commands,
+            stop: Arc::new(AtomicBool::new(false)),
+            changed: tokio::sync::watch::channel(0).0,
+            log: Mutex::new(Log {
+                bytes: bytes.iter().copied().collect(),
+                offset: 0,
+                ended: None,
+            }),
+            detached: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn a_replay_never_starts_inside_an_escape_sequence() {
+        let text = b"one\x1b[38;2;1;2;3mred\x1b[0m\ntwo\n";
+        // A window of 12 bytes opens inside the colour sequence.
+        let terminal = hosted(text, 12);
+        let start = terminal.replay_start() as usize;
+        assert_eq!(&text[start..], b"two\n", "the replay opens on a line start");
+    }
+
+    #[test]
+    fn a_window_without_a_line_start_replays_nothing() {
+        let text = b"x\n\x1b[38;2;1;2;3mabcdef";
+        let terminal = hosted(text, 8);
+        assert_eq!(
+            terminal.replay_start() as usize,
+            text.len(),
+            "an unbroken tail is left to the viewer's redraw"
+        );
+    }
+
+    #[test]
+    fn a_window_covering_all_history_replays_it_all() {
+        let terminal = hosted(b"\x1b[1mhi\n", 1024);
+        assert_eq!(terminal.replay_start(), 0, "nothing precedes the history");
     }
 }

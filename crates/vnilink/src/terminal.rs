@@ -249,6 +249,10 @@ mod native {
             let mut event = None;
             let mut exit = None;
             let mut eof = false;
+            // Set once the shell was known gone before a read found the
+            // terminal empty. A background job that kept the terminal open
+            // never lets the read end, so this stands in for it.
+            let mut emptied = false;
             let mut last_output: Option<std::time::Instant> = None;
             'serve: while !self.ended.load(Ordering::Acquire) {
                 let mut drained = [0u8; 64];
@@ -316,6 +320,7 @@ mod native {
                     let gathered = std::time::Instant::now() + GATHER;
                     let mut bytes = vec![0; TERMINAL_CHUNK];
                     let mut filled = 0;
+                    let exited = exit.is_some();
                     while filled < TERMINAL_CHUNK {
                         match self.reader.read(&mut bytes[filled..]) {
                             Ok(0) => {
@@ -325,6 +330,7 @@ mod native {
                             Ok(n) => filled += n,
                             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                emptied = exited && filled == 0;
                                 let left =
                                     gathered.saturating_duration_since(std::time::Instant::now());
                                 if filled == 0 || !busy || left.is_zero() || !self.readable(left) {
@@ -342,6 +348,7 @@ mod native {
                         }
                     }
                     if filled > 0 {
+                        emptied = false;
                         last_output = Some(std::time::Instant::now());
                         bytes.truncate(filled);
                         event = Some(TerminalEvent::Output(bytes));
@@ -363,7 +370,7 @@ mod native {
                         Err(_) => break,
                     }
                 }
-                if eof && event.is_none() {
+                if (eof || emptied) && event.is_none() {
                     if let Some(code) = exit {
                         event = Some(TerminalEvent::Exited(code));
                         break;
@@ -377,7 +384,11 @@ mod native {
                 self.wait(
                     !eof,
                     !pending.is_empty(),
-                    if eof { EXIT_CHECK } else { STOP_CHECK },
+                    if eof || exit.is_some() {
+                        EXIT_CHECK
+                    } else {
+                        STOP_CHECK
+                    },
                 );
             }
             if let Some(mut value) = event {
@@ -880,6 +891,45 @@ mod tests {
         assert!(
             chunks < LINES / 10,
             "busy terminal output was not gathered: {chunks} chunks"
+        );
+    }
+
+    /// A shell that leaves a background job holding its terminal open is still
+    /// gone: the job keeps the terminal from ending, so the exit is reported
+    /// once the shell's last output is read.
+    #[test]
+    fn a_shell_that_exits_with_a_background_job_reports_its_exit() {
+        let mut backend = native()
+            .open(SIZE, crate::BackendStartup::new(Duration::from_secs(5)))
+            .unwrap();
+        backend
+            .commands
+            .send(crate::terminal::TerminalCommand::Input(
+                b"sleep 60 & echo LAST; exit 3\n".to_vec(),
+            ))
+            .unwrap();
+        let (events, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Some(event) = backend.output.blocking_recv() {
+                let ended = !matches!(event, TerminalEvent::Output(_));
+                if events.send(event).is_err() || ended {
+                    break;
+                }
+            }
+            drop(backend);
+        });
+        let mut text = Vec::new();
+        let ended = loop {
+            match received.recv_timeout(Duration::from_secs(8)) {
+                Ok(TerminalEvent::Output(bytes)) => text.extend(bytes),
+                Ok(event) => break event,
+                Err(_) => panic!("the shell's exit was never reported"),
+            }
+        };
+        assert_eq!(ended, TerminalEvent::Exited(3));
+        assert!(
+            String::from_utf8_lossy(&text).contains("LAST"),
+            "output written before the exit is delivered first"
         );
     }
 }
