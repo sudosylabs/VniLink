@@ -1018,6 +1018,34 @@ fn an_adoption_that_fails_to_save_can_be_retried() -> TestResult {
     Ok(())
 }
 
+/// A file the size of the receiver's whole budget is admitted: it is reserved
+/// once, not several times over.
+#[test]
+fn a_file_the_size_of_the_receivers_budget_is_admitted() -> TestResult {
+    let _trace = traced();
+    let pair = Pair::for_files();
+    let (host, controller) = (&pair.host, &pair.controller);
+    let bytes = payload(64 * 1024, 315);
+    std::fs::create_dir_all(controller.folder().join("set"))?;
+    std::fs::write(controller.folder().join("set/send.bin"), &bytes)?;
+    host.core
+        .set_file_resource_policy(vnilink::job::FileResourcePolicy {
+            max_concurrent_receivers: 1,
+            max_reserved_bytes: bytes.len() as u64,
+            minimum_free_bytes: 0,
+        })?;
+    let files = pair.open_files();
+    let sent = files::upload(&pair, &files, "set", "arrived")?;
+    let receiver = job_on(&host.core, false)?;
+    let (sent, got) = drive_to_end(&controller.core, sent, &host.core, receiver, DEFAULT_WAIT);
+    assert_eq!(both(&sent, &got), (JobState::Complete, JobState::Complete));
+    assert_eq!(
+        std::fs::read(host.folder().join("arrived/set/send.bin"))?,
+        bytes
+    );
+    Ok(())
+}
+
 /// A receiver whose resource budget a file exceeds fails the job before
 /// fetching anything: no staging, nothing landed, the source kept, and the
 /// sender fails too.
@@ -1032,7 +1060,7 @@ fn a_file_past_the_receivers_budget_fails_before_any_fetch() -> TestResult {
     host.core
         .set_file_resource_policy(vnilink::job::FileResourcePolicy {
             max_concurrent_receivers: 1,
-            max_reserved_bytes: 3 * bytes.len() as u64 - 1,
+            max_reserved_bytes: bytes.len() as u64 - 1,
             minimum_free_bytes: 0,
         })?;
     let files = pair.open_files();
