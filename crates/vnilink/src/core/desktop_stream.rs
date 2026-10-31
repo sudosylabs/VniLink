@@ -1549,7 +1549,7 @@ async fn client_send(
     desktop: &DesktopRuntime,
     send: &mut SendStream,
 ) -> Result<(), Error> {
-    let mut interval = tokio::time::interval(crate::adaptation::FEEDBACK_EVERY);
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut reports = tokio::time::interval(crate::video::REPORT_EVERY);
     let mut pacing = crate::video::ReportPacing::default();
@@ -2907,7 +2907,7 @@ async fn host_send(
     let mut path = None;
     // The least backlog the gate saw since the last feedback.
     let mut least_backlog: Option<usize> = None;
-    let mut metrics = tokio::time::interval(crate::adaptation::FEEDBACK_EVERY);
+    let mut metrics = tokio::time::interval(Duration::from_secs(1));
     metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = desktop.cursor.subscribe();
     let mut previous = None;

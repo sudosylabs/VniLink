@@ -178,8 +178,7 @@ pub(crate) struct HostState {
     pub secure_desktop: bool,
 }
 
-/// One report's inputs. The viewer samples them faster than the conditions
-/// are judged: see [`SAMPLE_MS`].
+/// One report's inputs. The viewer samples them once a second.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Observation {
     pub elapsed_ms: u64,
@@ -223,15 +222,9 @@ struct Tracked {
     clear: u8,
 }
 
-/// The conditions are judged once per this much time however often they
-/// are observed, so their hysteresis counts seconds, not samples.
-const SAMPLE_MS: u64 = 1000;
-
 /// The live set with its hysteresis. One per viewer pipeline.
 #[derive(Debug, Default)]
 pub(crate) struct Conditions {
-    /// Time observed since the last judgement.
-    pending_ms: u64,
     tracked: [Tracked; Condition::ALL.len()],
     silent_ms: u64,
     last_frames: Option<u64>,
@@ -241,14 +234,6 @@ pub(crate) struct Conditions {
 impl Conditions {
     /// Takes one report at `now_ms` and returns the set held after it.
     pub fn observe(&mut self, now_ms: u64, observation: &Observation) -> ConditionSet {
-        self.pending_ms = self.pending_ms.saturating_add(observation.elapsed_ms);
-        if self.pending_ms < SAMPLE_MS {
-            return self.active();
-        }
-        let observation = &Observation {
-            elapsed_ms: std::mem::take(&mut self.pending_ms),
-            ..*observation
-        };
         let frames = observation.received_frames;
         self.silent_ms = match self.last_frames {
             Some(before) if frames == before => {
