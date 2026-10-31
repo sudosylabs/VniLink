@@ -231,52 +231,68 @@ impl ViewerLoss {
 /// against the old, lower one.
 const FLOOR_MEMORY: Duration = Duration::from_secs(30);
 
-/// The host's view of its own link: whether it is queueing, its round trip
-/// grown well past the least seen on the path lately. The send gate dropping
-/// frames is not this: on a lossy link it follows keyframe bursts the
-/// congestion window cannot carry, and loss there is still random.
-///
-/// The least is kept for two consecutive [`FLOOR_MEMORY`] windows, so it
-/// forgets a low sample between one and two windows after it was seen.
+/// The least round trip seen lately on a path, kept for two consecutive
+/// [`FLOOR_MEMORY`] windows, so it forgets a low sample between one and two
+/// windows after it was seen. Times are measured from any fixed start.
 #[derive(Debug, Default)]
-pub(crate) struct Congestion {
+pub(crate) struct RttFloor {
     /// The least round trip of the window that began at `since`.
     current: Option<Duration>,
     /// The least round trip of the window before it.
     previous: Option<Duration>,
-    since: Option<Instant>,
+    since: Option<Duration>,
 }
 
-impl Congestion {
-    /// The path's round trip at `now`.
-    pub(crate) fn rtt(&mut self, rtt: Duration, now: Instant) {
+impl RttFloor {
+    /// The path's round trip, `at` this long after the start.
+    pub(crate) fn observe(&mut self, rtt: Duration, at: Duration) {
         if rtt.is_zero() {
             return;
         }
         match self.since {
-            Some(since) if now.duration_since(since) >= FLOOR_MEMORY => {
-                let idle = now.duration_since(since) >= FLOOR_MEMORY * 2;
+            Some(since) if at.saturating_sub(since) >= FLOOR_MEMORY => {
+                let idle = at.saturating_sub(since) >= FLOOR_MEMORY * 2;
                 self.previous = if idle { None } else { self.current };
                 self.current = None;
-                self.since = Some(now);
+                self.since = Some(at);
             }
-            None => self.since = Some(now),
+            None => self.since = Some(at),
             Some(_) => {}
         }
         self.current = Some(self.current.map_or(rtt, |least| least.min(rtt)));
     }
 
-    fn floor(&self) -> Option<Duration> {
+    pub(crate) fn floor(&self) -> Option<Duration> {
         match (self.current, self.previous) {
             (Some(current), Some(previous)) => Some(current.min(previous)),
             (current, previous) => current.or(previous),
         }
     }
+}
+
+/// The host's view of its own link: whether it is queueing, its round trip
+/// grown well past the least seen on the path lately. The send gate dropping
+/// frames is not this: on a lossy link it follows keyframe bursts the
+/// congestion window cannot carry, and loss there is still random.
+#[derive(Debug, Default)]
+pub(crate) struct Congestion {
+    floor: RttFloor,
+    start: Option<Instant>,
+}
+
+impl Congestion {
+    /// The path's round trip at `now`.
+    pub(crate) fn rtt(&mut self, rtt: Duration, now: Instant) {
+        let start = *self.start.get_or_insert(now);
+        self.floor
+            .observe(rtt, now.saturating_duration_since(start));
+    }
 
     /// Whether the link is queueing, given its round trip now: at least
     /// twice and 30 ms over the least seen lately.
     pub(crate) fn congested(&self, rtt: Duration) -> bool {
-        self.floor()
+        self.floor
+            .floor()
             .is_some_and(|floor| rtt >= floor * 2 && rtt >= floor + Duration::from_millis(30))
     }
 }
@@ -284,6 +300,19 @@ impl Congestion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_floor_forgets_a_low_sample_after_two_windows() {
+        let ms = Duration::from_millis;
+        let mut floor = RttFloor::default();
+        assert_eq!(floor.floor(), None);
+        floor.observe(ms(10), Duration::ZERO);
+        floor.observe(ms(0), Duration::ZERO);
+        floor.observe(ms(80), FLOOR_MEMORY);
+        assert_eq!(floor.floor(), Some(ms(10)), "kept for the next window");
+        floor.observe(ms(80), FLOOR_MEMORY * 2);
+        assert_eq!(floor.floor(), Some(ms(80)), "forgotten after two windows");
+    }
 
     #[test]
     fn a_path_whose_round_trip_rises_stops_reading_as_congested() {
