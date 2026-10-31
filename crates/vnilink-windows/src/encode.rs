@@ -148,6 +148,19 @@ impl WindowsEncoder {
         bitrate_bps: u32,
         matrix: YuvMatrix,
     ) -> Result<Self, Error> {
+        Self::open_profile(width, height, frame_rate, bitrate_bps, false, matrix)
+    }
+
+    /// [`Self::open`] producing High profile when `high`, else the baseline
+    /// every viewer decodes.
+    pub fn open_profile(
+        width: u16,
+        height: u16,
+        frame_rate: u8,
+        bitrate_bps: u32,
+        high: bool,
+        matrix: YuvMatrix,
+    ) -> Result<Self, Error> {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
@@ -160,6 +173,7 @@ impl WindowsEncoder {
                     height,
                     frame_rate,
                     bitrate_bps,
+                    high,
                     matrix,
                 )
             }
@@ -167,7 +181,7 @@ impl WindowsEncoder {
         }
         #[cfg(not(windows))]
         {
-            let _ = (width, height, frame_rate, bitrate_bps, matrix);
+            let _ = (width, height, frame_rate, bitrate_bps, high, matrix);
             Err(Error::Unsupported("Media Foundation H.264"))
         }
     }
@@ -182,6 +196,7 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        high: bool,
         matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
         ignored_hr!(
@@ -199,6 +214,7 @@ impl WindowsEncoder {
                 frame_rate,
                 bitrate_bps,
                 false,
+                high,
                 None,
                 matrix,
             ) {
@@ -255,6 +271,7 @@ impl WindowsEncoder {
                 frame_rate,
                 bitrate_bps,
                 false,
+                false,
                 None,
                 matrix,
             )
@@ -304,6 +321,7 @@ impl WindowsEncoder {
             frame_rate,
             bitrate_bps,
             true,
+            false,
             None,
             YuvMatrix::Bt709,
         )
@@ -318,6 +336,7 @@ impl WindowsEncoder {
         frame_rate: u8,
         bitrate_bps: u32,
         camera: bool,
+        high: bool,
         manager: Option<&IMFDXGIDeviceManager>,
         matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
@@ -381,7 +400,21 @@ impl WindowsEncoder {
         // periodic one is only a backstop, every ten seconds.
         let spacing = if camera { rate } else { rate * 10 };
         output.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, spacing)?;
-        if camera || candidate.hardware() {
+        if high && !camera {
+            // High profile, the negotiated stream. No B pictures: they delay
+            // every picture by the reordering depth, and a remote screen is
+            // judged by how soon a change shows.
+            use windows::Win32::Media::MediaFoundation::{
+                eAVEncH264VProfile_High, CODECAPI_AVEncMPVDefaultBPictureCount, MF_MT_MPEG2_PROFILE,
+            };
+            ignored_hr!(
+                vnilink::trace::ENCODE,
+                "an encoder without a B picture setting makes none by default",
+                set_codec_u32(&transform, &CODECAPI_AVEncMPVDefaultBPictureCount, 0)
+            );
+            output.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
+            transform.SetOutputType(0, &output, 0)?;
+        } else if camera || candidate.hardware() {
             // Baseline excludes B pictures, and is the H.264 every viewer
             // decodes; hardware transforms default to a higher profile.
             // Prefer the explicit constrained profile; older transforms
@@ -955,12 +988,13 @@ impl WindowsEncoder {
         h: u16,
         fps: u8,
         bps: u32,
-        codec: u8,
+        codec_id: u8,
         matrix: YuvMatrix,
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
+        let codec = codec_id;
         vnilink_media::CodecEncoder::open(codec, matrix, w, h, fps, bps, |codec, w, h, fps, bps| {
             h264_only(codec)?;
-            Self::open(w, h, fps, bps, matrix)
+            Self::open_profile(w, h, fps, bps, codec_id == vnilink::CODEC_H264_HIGH, matrix)
         })
     }
 
@@ -971,13 +1005,22 @@ impl WindowsEncoder {
         h: u16,
         fps: u8,
         bps: u32,
-        codec: u8,
+        codec_id: u8,
         matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Result<vnilink_media::CodecEncoder<Self>, Error> {
+        let codec = codec_id;
         vnilink_media::CodecEncoder::open(codec, matrix, w, h, fps, bps, |codec, w, h, fps, bps| {
             h264_only(codec)?;
-            Self::open_on(w, h, fps, bps, matrix, device)
+            Self::open_on(
+                w,
+                h,
+                fps,
+                bps,
+                codec_id == vnilink::CODEC_H264_HIGH,
+                matrix,
+                device,
+            )
         })
     }
 
@@ -995,6 +1038,7 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        high: bool,
         matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Result<Self, Error> {
@@ -1002,13 +1046,29 @@ impl WindowsEncoder {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
         if let Some(encoder) = unsafe {
-            Self::open_reading_textures(width, height, frame_rate, bitrate_bps, matrix, device)
+            Self::open_reading_textures(
+                width,
+                height,
+                frame_rate,
+                bitrate_bps,
+                high,
+                matrix,
+                device,
+            )
         } {
             return Ok(encoder);
         }
         unsafe {
             let candidates = || h264_encoders_for(device.adapter().ok());
-            Self::open_first(candidates, width, height, frame_rate, bitrate_bps, matrix)
+            Self::open_first(
+                candidates,
+                width,
+                height,
+                frame_rate,
+                bitrate_bps,
+                high,
+                matrix,
+            )
         }
         .map_err(|_| Error::Unsupported("Media Foundation H.264"))
     }
@@ -1019,6 +1079,7 @@ impl WindowsEncoder {
         height: u16,
         frame_rate: u8,
         bitrate_bps: u32,
+        high: bool,
         matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Option<Self> {
@@ -1054,6 +1115,7 @@ impl WindowsEncoder {
                     frame_rate,
                     bitrate_bps,
                     false,
+                    high,
                     Some(&manager),
                     matrix,
                 )

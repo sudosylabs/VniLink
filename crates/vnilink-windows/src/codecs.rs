@@ -25,9 +25,14 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
     {
         let encoder = WindowsEncoder::open(64, 64, 30, 500_000, vnilink::YuvMatrix::Bt709).ok();
         let encode = encoder.is_some();
+        // High only where an encoder opens it: a transform that refuses the
+        // profile leaves the stream baseline.
+        let high =
+            WindowsEncoder::open_profile(64, 64, 30, 500_000, true, vnilink::YuvMatrix::Bt709)
+                .is_ok();
         vnilink::VideoCodecCaps {
             encode_baseline: encode,
-            encode_high: false,
+            encode_high: high,
             decode_baseline: encode,
             decode_high: encode,
             max_width: 4096,

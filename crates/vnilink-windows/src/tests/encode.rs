@@ -73,6 +73,7 @@ fn the_capture_adapter_decides_the_encoder() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &device,
                 )
@@ -122,6 +123,48 @@ fn sps_profile(annex_b: &[u8]) -> Option<u8> {
         .windows(5)
         .find(|bytes| bytes[..3] == [0, 0, 1] && bytes[3] & 0x1f == 7)
         .map(|bytes| bytes[4])
+}
+
+/// The negotiated High stream is High, still one picture out for each in, and
+/// the baseline stream stays baseline.
+#[test]
+fn the_high_stream_is_high_and_the_default_stays_baseline() {
+    let params = |force| EncodeParams {
+        force_keyframe: force,
+        recovery: false,
+        bitrate_bps: 4_000_000,
+        frame_rate: 30,
+    };
+    let Ok(mut high) =
+        WindowsEncoder::open_profile(1280, 720, 30, 4_000_000, true, vnilink::YuvMatrix::Bt709)
+    else {
+        eprintln!("no encoder opens High here");
+        return;
+    };
+    let key = high
+        .encode(&text_page(1280, 720, 0), &params(true))
+        .unwrap();
+    assert_eq!(sps_profile(key.bytes()), Some(100), "High is 100");
+    for index in 1..8 {
+        let sample = high
+            .encode(&text_page(1280, 720, index), &params(false))
+            .unwrap();
+        assert!(!sample.keyframe(), "picture {index} is a delta");
+        assert!(
+            !sample.bytes().is_empty(),
+            "no picture waits for a later one"
+        );
+    }
+    let mut base =
+        WindowsEncoder::open(1280, 720, 30, 4_000_000, vnilink::YuvMatrix::Bt709).unwrap();
+    let key = base
+        .encode(&text_page(1280, 720, 0), &params(true))
+        .unwrap();
+    assert_ne!(
+        sps_profile(key.bytes()),
+        Some(100),
+        "the default is not High"
+    );
 }
 
 /// Every transform that opens, hardware or not, returns a picture for each
@@ -630,6 +673,7 @@ fn capture_to_encode_cost() {
                 720,
                 30,
                 4_000_000,
+                false,
                 vnilink::YuvMatrix::Bt709,
                 &captured_on,
             )
@@ -640,6 +684,7 @@ fn capture_to_encode_cost() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &shared.device(),
                 )
@@ -652,6 +697,7 @@ fn capture_to_encode_cost() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     other,
                 )
@@ -737,6 +783,7 @@ fn reopen_cost() {
                 720,
                 30,
                 4_000_000,
+                false,
                 vnilink::YuvMatrix::Bt709,
                 &device,
             )
@@ -1185,6 +1232,7 @@ fn an_encoder_opened_on_the_capture_device_reads_its_textures() {
                     height,
                     30,
                     8_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &gpu,
                 )
