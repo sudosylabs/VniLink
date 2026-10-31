@@ -38,6 +38,12 @@ pub const MAX_KEY_TEXT: usize = 128;
 /// instead of filling this queue. Key and button transitions do not.
 pub(crate) const INPUT_QUEUE: usize = 64;
 
+/// Extra room held for key and button releases once [`INPUT_QUEUE`] is full.
+/// A release that is refused leaves its key or button down on the host until
+/// the lease ends, so a stalled link may not turn the user's letting go into
+/// an error.
+pub(crate) const RELEASE_RESERVE: usize = 16;
+
 /// Precise-scroll units in one wheel detent. This is the Windows wheel delta.
 pub const WHEEL_DETENT: i32 = 120;
 

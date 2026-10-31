@@ -17,7 +17,7 @@ use crate::error::Error;
 use crate::protocol::Quality;
 
 use super::events::{check_key_text, InputEvent, PointerButton};
-use super::INPUT_QUEUE;
+use super::{INPUT_QUEUE, RELEASE_RESERVE};
 
 /// Keys and buttons this session has pressed and not yet released.
 #[derive(Debug, Default)]
@@ -145,6 +145,16 @@ impl fmt::Debug for Outbound {
     }
 }
 
+/// A key or button letting go: the transition a full queue must still take.
+fn is_release(item: &Outbound) -> bool {
+    matches!(
+        item,
+        Outbound::Event(
+            InputEvent::Key { down: false, .. } | InputEvent::Button { down: false, .. }
+        )
+    )
+}
+
 /// Controller-side queue. Pointer samples replace the pending sample.
 pub(crate) struct InputOutbox {
     queue: Mutex<VecDeque<Outbound>>,
@@ -200,7 +210,12 @@ impl InputOutbox {
             .queue
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if queue.len() + items.len() > INPUT_QUEUE {
+        let room = if items.iter().all(is_release) {
+            INPUT_QUEUE + RELEASE_RESERVE
+        } else {
+            INPUT_QUEUE
+        };
+        if queue.len() + items.len() > room {
             return Err(Error::Busy);
         }
         queue.extend(items.iter().cloned());
@@ -276,7 +291,9 @@ impl InputOutbox {
             self.notify.notify_one();
             return Ok(());
         }
-        if queue.len() >= INPUT_QUEUE {
+        if queue.len() >= INPUT_QUEUE
+            && !(is_release(&item) && queue.len() < INPUT_QUEUE + RELEASE_RESERVE)
+        {
             // Relative motion is a sample. A wheel that cannot fold stays
             // ordered with keys, so a full queue reports Busy instead of
             // discarding the scroll or a key. A dropped motion moved
@@ -575,6 +592,27 @@ mod tests {
                 InputEvent::key_up(usage::LEFT_SHIFT),
             ]
         );
+    }
+
+    #[test]
+    fn a_full_queue_still_takes_a_release_but_not_another_press() {
+        let outbox = InputOutbox::new();
+        for usage_code in 0..INPUT_QUEUE as u16 {
+            outbox.push(InputEvent::key_down(usage_code)).unwrap();
+        }
+        outbox.push(InputEvent::key_up(0)).unwrap();
+        assert!(matches!(
+            outbox.push(InputEvent::key_down(usage::A)),
+            Err(Error::Busy)
+        ));
+        for usage_code in 1..RELEASE_RESERVE as u16 {
+            outbox.push(InputEvent::key_up(usage_code)).unwrap();
+        }
+        assert!(
+            matches!(outbox.push(InputEvent::key_up(usage::A)), Err(Error::Busy)),
+            "the reserve is bounded"
+        );
+        assert_eq!(outbox.drain().len(), INPUT_QUEUE + RELEASE_RESERVE);
     }
 
     #[test]
