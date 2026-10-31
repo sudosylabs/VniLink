@@ -706,6 +706,7 @@ impl VnilinkCore {
             };
             // Restarts in a row whose capture never started.
             let mut failed_starts = 0;
+            let mut backoff = crate::backoff::Backoff::default();
             while !worker_stop.load(Ordering::Acquire) {
                 let pending = worker_core.video_targets().unwrap_or_default();
                 if pending.is_empty() {
@@ -723,7 +724,7 @@ impl VnilinkCore {
                 ) {
                     *worker_error.lock().unwrap_or_else(|e| e.into_inner()) =
                         Some(error.to_string());
-                    std::thread::sleep(Duration::from_millis(200));
+                    backoff.wait(&worker_stop);
                     continue;
                 }
                 // One OS stream for the requested display. A viewer who selected
@@ -816,9 +817,15 @@ impl VnilinkCore {
                             );
                         }
                     }
-                    std::thread::sleep(Duration::from_millis(200));
+                    // A capture that started and then ended is a first failure;
+                    // one that never started lengthens the wait.
+                    if capture_started {
+                        backoff.reset();
+                    }
+                    backoff.wait(&worker_stop);
                 } else {
                     failed_starts = 0;
+                    backoff.reset();
                 }
             }
             // Shared teardown (session, encode caps) belongs to the last

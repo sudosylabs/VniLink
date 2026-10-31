@@ -26,6 +26,8 @@
 mod audio;
 mod audio_native;
 mod audio_output;
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
+mod backoff;
 mod desktop_audio;
 pub use desktop_audio::{DesktopAudio, DesktopAudioPhase, DesktopAudioStatus};
 #[cfg(test)]
