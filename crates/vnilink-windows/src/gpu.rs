@@ -30,8 +30,8 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D, ID3D11VideoContext1,
     ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
     ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_BIND_VIDEO_ENCODER, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    D3D11_BIND_VIDEO_ENCODER, D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
     D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
     D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_OPTIMAL_SPEED, D3D11_VPIV_DIMENSION_TEXTURE2D,
@@ -128,6 +128,56 @@ impl TexturePool {
             context: self.context.clone(),
             size: (self.size.0 as u16, self.size.1 as u16),
         })
+    }
+}
+
+impl TexturePool {
+    /// A copy of `base` in which `draw` has changed `area` (left, top, width,
+    /// height, inside the picture). Only that rectangle leaves the GPU, as
+    /// packed BGRA, and goes back; the rest of the picture stays where it is.
+    pub(crate) unsafe fn overlay(
+        &self,
+        base: &WindowsPicture,
+        (left, top, width, height): (u32, u32, u32, u32),
+        draw: impl FnOnce(Vec<u8>) -> Result<Vec<u8>, Error>,
+    ) -> Result<WindowsPicture, Error> {
+        let unreadable = |_| Error::CaptureRejected("the captured picture could not be read");
+        let picture = self.picture(base.texture()).map_err(unreadable)?;
+        let region = D3D11_BOX {
+            left,
+            top,
+            front: 0,
+            right: left + width,
+            bottom: top + height,
+            back: 1,
+        };
+        let staging = staging(&self.device, (width, height), DXGI_FORMAT_B8G8R8A8_UNORM)
+            .map_err(unreadable)?;
+        self.context.CopySubresourceRegion(
+            &staging,
+            0,
+            0,
+            0,
+            0,
+            picture.texture(),
+            0,
+            Some(&region),
+        );
+        let packed = read_staging(&self.context, &staging, width as usize * 4, height as usize)
+            .map_err(unreadable)?;
+        let drawn = draw(packed)?;
+        if drawn.len() != width as usize * height as usize * 4 {
+            return Err(Error::InvalidFrame("the drawn region changed size"));
+        }
+        self.context.UpdateSubresource(
+            picture.texture(),
+            0,
+            Some(&region),
+            drawn.as_ptr().cast(),
+            width * 4,
+            0,
+        );
+        Ok(picture)
     }
 }
 
@@ -483,6 +533,16 @@ unsafe fn read_rows_from(
     rows: usize,
 ) -> windows::core::Result<Vec<u8>> {
     context.CopyResource(staging, texture);
+    read_staging(context, staging, row, rows)
+}
+
+/// What a staging texture holds already, `rows` rows of `row` bytes, packed.
+unsafe fn read_staging(
+    context: &ID3D11DeviceContext,
+    staging: &ID3D11Texture2D,
+    row: usize,
+    rows: usize,
+) -> windows::core::Result<Vec<u8>> {
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     context.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
     let pitch = mapped.RowPitch as usize;

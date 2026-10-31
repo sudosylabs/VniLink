@@ -463,6 +463,14 @@ fn on_device(
     frame: &vnilink_media::RawFrame,
     driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE,
 ) -> vnilink_media::RawFrame {
+    on_device_in_pool(frame, driver).0
+}
+
+/// [`on_device`] with the pool the picture was copied in.
+fn on_device_in_pool(
+    frame: &vnilink_media::RawFrame,
+    driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE,
+) -> (vnilink_media::RawFrame, crate::gpu::TexturePool) {
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -521,8 +529,42 @@ fn on_device(
             .unwrap();
         let pool = crate::gpu::TexturePool::new(device, context, (width, height));
         let picture = pool.picture(&source.unwrap()).unwrap();
-        vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap()
+        let native =
+            vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap();
+        (native, pool)
     }
+}
+
+/// The pointer is drawn into a picture on the GPU: the picture stays native,
+/// reads back as the CPU composite does, and the original is untouched.
+#[test]
+fn a_pointer_over_a_gpu_picture_leaves_it_on_the_gpu() {
+    use crate::cursor::{Kind, Pointer, Shape};
+    let page = vnilink_media::measure::text_page(640, 360, 0);
+    let (frame, pool) = on_device_in_pool(
+        &page,
+        windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+    );
+    let shape = Shape::new(Kind::Color, 2, 2, 8, [200, 100, 50, 128].repeat(4)).unwrap();
+    for position in [(10, 20), (-1, -1), (639, 359), (700, 20)] {
+        let pointer = Pointer {
+            visible: true,
+            position,
+            shape: Some(Shape::new(Kind::Color, 2, 2, 8, [200, 100, 50, 128].repeat(4)).unwrap()),
+            image: None,
+        };
+        let drawn = pointer.composite_picture(frame.clone(), &pool).unwrap();
+        assert!(
+            drawn.native_picture().is_some(),
+            "{position:?} left the GPU"
+        );
+        assert_eq!(
+            drawn.pixels(),
+            shape.composite(&page, position).unwrap().pixels(),
+            "{position:?} differs from the CPU composite"
+        );
+    }
+    assert_eq!(frame.pixels(), page.pixels());
 }
 
 /// `frame` averaged over `block` x `block` squares.

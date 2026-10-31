@@ -161,7 +161,7 @@ impl WindowsCapture {
                 self.pointer
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .composite(frame)
+                    .composite_picture(frame, &self.pool)
             })
             .transpose()
     }
