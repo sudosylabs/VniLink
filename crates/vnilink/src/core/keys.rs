@@ -350,7 +350,7 @@ mod v12_replacement_drop_probe {
         }
     }
     #[test]
-    fn v12_adapter_replacement_must_drop_old_backend_outside_core_state() {
+    fn adapter_replacement_must_drop_old_backend_outside_core_state() {
         let core = Arc::new(crate::test_support::loopback_core());
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
@@ -383,7 +383,7 @@ mod v12_replacement_drop_probe {
         );
     }
     #[test]
-    fn v12_rejected_adapter_teardown_keeps_core_responsive() {
+    fn rejected_adapter_teardown_keeps_core_responsive() {
         let core = Arc::new(crate::test_support::loopback_core());
         core.set_desktop(Box::new(New)).unwrap();
         core.shared.input_cleanup.store(1, Ordering::Release);

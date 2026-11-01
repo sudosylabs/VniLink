@@ -3780,11 +3780,11 @@ mod v8_native_input_lock_probe {
         }
     }
     #[test]
-    fn v8_slow_desktop_input_must_not_hold_core_state() {
+    fn slow_desktop_input_must_not_hold_core_state() {
         parked_input(false);
     }
     #[test]
-    fn v8_slow_stream_input_revokes_and_releases_after_async_close() {
+    fn slow_stream_input_revokes_and_releases_after_async_close() {
         parked_input(true);
     }
     fn parked_input(stream: bool) {
@@ -3900,7 +3900,7 @@ mod v9_pointer_wait_probe {
     pub(super) static WAITING: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
     #[test]
-    fn v9_pointer_wait_must_recheck_topology_before_native_apply() {
+    fn pointer_wait_must_recheck_topology_before_native_apply() {
         for change in 0..3 {
             queued_pointer(change);
         }
@@ -4036,7 +4036,7 @@ mod v10_cleanup_churn_probe {
         }
     }
     #[test]
-    fn v10_empty_desktop_churn_must_bound_retired_cleanup() {
+    fn empty_desktop_churn_must_bound_retired_cleanup() {
         use crate::test_support::{loopback_core, pair_for_control, RecordingDesktop};
         use std::sync::atomic::Ordering;
         let host = loopback_core();
@@ -4094,7 +4094,7 @@ mod v10_cleanup_churn_probe {
         assert_eq!(peak, 0, "empty owners must not queue native cleanup");
     }
     #[test]
-    fn v10_nonempty_retired_owners_keep_admission_slots() {
+    fn nonempty_retired_owners_keep_admission_slots() {
         use crate::test_support::{loopback_core, pair_for_control};
         use std::sync::atomic::Ordering;
         let host = loopback_core();

@@ -924,7 +924,7 @@ mod viewer_tests {
         }
     }
     #[test]
-    fn review_v7_last_capture_retirement_preserves_files_parent() {
+    fn last_capture_retirement_preserves_files_parent() {
         let host = core();
         let controller = core();
         host.start_hosting().unwrap();
@@ -1015,7 +1015,7 @@ mod viewer_tests {
         );
     }
     #[test]
-    fn review_v8_sharing_disable_preserves_each_files_parent() {
+    fn sharing_disable_preserves_each_files_parent() {
         let host = core();
         let first = core();
         let second = core();
@@ -1092,7 +1092,7 @@ mod viewer_tests {
         );
     }
     #[test]
-    fn review_v9_source_failure_preserves_healthy_desktop_and_files_parents() {
+    fn source_failure_preserves_healthy_desktop_and_files_parents() {
         let host = core();
         let first = core();
         let second = core();
@@ -1286,7 +1286,7 @@ mod viewer_tests {
         std::fs::remove_dir_all(root_path).unwrap();
     }
     #[test]
-    fn review_v10_unselected_source_failure_matches_actual_routing() {
+    fn unselected_source_failure_matches_actual_routing() {
         let host = core();
         let first = core();
         let second = core();
@@ -2165,7 +2165,7 @@ mod host_cursor_tests {
 mod review_v8_cursor_mode_change {
     use super::*;
     #[test]
-    fn review_v8_cursor_uses_live_logical_extent_after_mode_change() {
+    fn cursor_uses_live_logical_extent_after_mode_change() {
         let live = vnilink::DisplayInfo {
             id: 1,
             origin_x: 0,

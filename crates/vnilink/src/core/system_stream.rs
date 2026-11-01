@@ -1659,7 +1659,7 @@ mod review_authority_tests {
         }
     }
     #[test]
-    fn review_queued_restart_rechecks_disabled_policy() {
+    fn queued_restart_rechecks_disabled_policy() {
         let host = crate::test_support::loopback_core();
         let controller = crate::test_support::loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
@@ -1797,7 +1797,7 @@ mod worker_start_gate_tests {
     }
 
     #[test]
-    fn rereview_queued_restart_must_stand_down_when_system_owner_closes() {
+    fn queued_restart_must_stand_down_when_system_owner_closes() {
         let host = loopback_core();
         let controller = loopback_core();
         pair_for_control(&host, &controller);
@@ -1854,7 +1854,7 @@ mod worker_start_gate_tests {
     }
 
     #[test]
-    fn rereview_queued_restart_must_stand_down_when_parent_stopping() {
+    fn queued_restart_must_stand_down_when_parent_stopping() {
         // Adapted from the v3 probe: the admission now carries the exact
         // System owner, so the fixture opens a real owner (otherwise the
         // owner check, not the parent check, would fire).
@@ -1977,7 +1977,7 @@ mod v7_privacy_admission_probe {
         }
     }
     #[test]
-    fn v7_stale_privacy_admission_after_revoke_must_not_apply() {
+    fn stale_privacy_admission_after_revoke_must_not_apply() {
         let host = crate::test_support::loopback_core();
         let controller = crate::test_support::loopback_core();
         let actions = Arc::new(Fake(AtomicBool::new(false), AtomicBool::new(false)));

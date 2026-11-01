@@ -475,7 +475,7 @@ fn signed_pair(dx: i32, dy: i32, event: impl Fn(i32, i32) -> InputEvent) -> Opti
 mod review_motion_tests {
     use super::*;
     #[test]
-    fn review_absolute_pointer_after_relative_motion_is_not_suppressed() {
+    fn absolute_pointer_after_relative_motion_is_not_suppressed() {
         let queue = InputOutbox::new();
         let pointer = InputEvent::pointer(100, 100, 1, 1);
         queue.push(pointer).unwrap();
