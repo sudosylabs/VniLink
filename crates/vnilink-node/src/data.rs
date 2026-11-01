@@ -1159,17 +1159,11 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
-        let video = if self.kind == ChannelKind::Video {
-            Some(
-                desktop
-                    .as_ref()
-                    .unwrap()
-                    .service
-                    .subscribe_video()
-                    .map_err(core_error)?,
-            )
-        } else {
-            None
+        let video = match (self.kind, desktop.as_ref()) {
+            (ChannelKind::Video, Some(desktop)) => {
+                Some(desktop.service.subscribe_video().map_err(core_error)?)
+            }
+            _ => None,
         };
         let kind = match self.kind {
             ChannelKind::Terminal => Some(vnilink_app::FfiServiceKind::Terminal),

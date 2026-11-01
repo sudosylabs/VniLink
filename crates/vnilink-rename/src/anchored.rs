@@ -653,12 +653,8 @@ pub fn rename_from_staged(
             if r == 0 {
                 Ok(())
             } else {
-                let e = io::Error::last_os_error();
-                if e.raw_os_error() == Some(libc::EXDEV) {
-                    Err(e)
-                } else {
-                    Err(e)
-                }
+                // EXDEV, a move across devices, is reported as it is.
+                Err(io::Error::last_os_error())
             }
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -690,12 +686,8 @@ pub fn rename_from_staged(
             if r == 0 {
                 Ok(())
             } else {
-                let e = io::Error::last_os_error();
-                if e.raw_os_error() == Some(libc::EXDEV) {
-                    Err(e)
-                } else {
-                    Err(e)
-                }
+                // EXDEV, a move across devices, is reported as it is.
+                Err(io::Error::last_os_error())
             }
         }
         #[cfg(target_os = "macos")]
@@ -712,13 +704,8 @@ pub fn rename_from_staged(
             if r == 0 {
                 Ok(())
             } else {
-                let e = io::Error::last_os_error();
-                // macOS `renameatx_np` reports EXDEV for cross-device moves.
-                if e.raw_os_error() == Some(libc::EXDEV) {
-                    Err(e)
-                } else {
-                    Err(e)
-                }
+                // EXDEV, a move across devices, is reported as it is.
+                Err(io::Error::last_os_error())
             }
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]

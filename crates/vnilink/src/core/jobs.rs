@@ -3849,8 +3849,11 @@ pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
 /// [`save_jobs`] for callers that carry on either way; the failure is
 /// recorded there.
 pub(super) fn persist_jobs(shared: &Shared) {
-    // `save_jobs` recorded any failure.
-    if save_jobs(shared).is_err() {}
+    crate::ignored!(
+        crate::trace::FILES,
+        "save_jobs recorded the failure",
+        save_jobs(shared)
+    );
 }
 
 /// Records that the peer was not told of a change to a shared job: its
