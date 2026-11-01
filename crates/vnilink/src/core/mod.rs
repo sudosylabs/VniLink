@@ -439,6 +439,27 @@ pub struct ControlRequest {
     pub endpoint_id: String,
 }
 
+/// The engine's shared state.
+///
+/// # Lock order
+///
+/// Locks are taken outermost first, and a thread holding a later one never
+/// waits for an earlier one:
+///
+/// 1. `sharing_serial` and `privacy_serial`, which serialize a persisted or
+///    native change together with its cleanup.
+/// 2. `job_owner_gate`, then `jobs` (diagnostics and `interrupt_orphaned`
+///    count jobs before they take `state`).
+/// 3. `state`.
+/// 4. The slot a native adapter sits in: `desktop`, and the factories and
+///    actions (`terminal_factory`, `system_actions`) that open one. The
+///    exception is `native_input_adapter`, which takes `desktop` first and
+///    only `try_lock`s `state`, releasing `desktop` before it waits.
+/// 5. Leaf locks (`file_resources`, `job_journal`, the registries such as
+///    `job_cancel`, `terminal_sessions`, `files_serving`): held for a lookup
+///    or an update, never across another lock, I/O or an `await`.
+///
+/// Native callbacks and network calls run with none of these held.
 struct Shared {
     /// Wakes one paired computer's link supervisor so it dials now.
     presence_wake: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Notify>>>,
