@@ -1025,6 +1025,8 @@ impl<'a> CaptureBuffer<'a> {
     fn cursor_bytes(&self) -> Option<&[u8]> {
         // SAFETY: the dequeued buffer and its metadata remain owned until Drop.
         let buffer = unsafe { self.raw.as_ref().buffer.as_ref()? };
+        // SAFETY: the buffer's SPA arrays and allocations stay readable while
+        // it is dequeued, which lasts until Drop.
         unsafe { cursor_metadata(buffer) }
     }
     /// The regions of the screen the compositor redrew for this buffer, when
@@ -1035,6 +1037,8 @@ impl<'a> CaptureBuffer<'a> {
         if buffer.n_metas == 0 || buffer.metas.is_null() {
             return None;
         }
+        // SAFETY: `metas` is non-null (checked above) and holds `n_metas`
+        // entries owned by the dequeued buffer until Drop.
         let metas = unsafe { std::slice::from_raw_parts(buffer.metas, buffer.n_metas as usize) };
         let meta = metas
             .iter()
@@ -1073,6 +1077,8 @@ impl<'a> CaptureBuffer<'a> {
         if buffer.n_datas == 0 || buffer.datas.is_null() {
             return &mut [];
         }
+        // SAFETY: `datas` points at `n_datas` SPA entries, checked non-null above;
+        // `&mut self` makes the borrow exclusive.
         unsafe { std::slice::from_raw_parts_mut(buffer.datas.cast(), buffer.n_datas as usize) }
     }
 }
@@ -1091,6 +1097,8 @@ unsafe fn cursor_metadata(buffer: &pw::spa::sys::spa_buffer) -> Option<&[u8]> {
     if buffer.n_metas == 0 || buffer.metas.is_null() {
         return None;
     }
+    // SAFETY: `metas` is non-null with `n_metas` entries, owned by the dequeued
+    // buffer.
     let metas = unsafe { std::slice::from_raw_parts(buffer.metas, buffer.n_metas as usize) };
     let meta = metas
         .iter()
@@ -1544,17 +1552,24 @@ mod cursor_buffer_tests {
         };
         // Each advertised valid size is within `bytes`; rejected sizes must
         // never create a slice or touch the pointer.
+        // SAFETY: `meta.data` is the live 64-byte `bytes` array and `meta.size` is
+        // within it.
         assert_eq!(unsafe { cursor_metadata(&buffer) }.unwrap().len(), 64);
         meta.size = 28;
+        // SAFETY: `meta.size` of 28 is within the 64-byte `bytes` array.
         assert_eq!(unsafe { cursor_metadata(&buffer) }.unwrap().len(), 28);
         for size in [0, 27, crate::cursor::META_SIZE as u32 + 1, u32::MAX] {
             meta.size = size;
+            // SAFETY: a rejected size returns before any slice is built, so `bytes` is
+            // never read out of bounds.
             assert!(unsafe { cursor_metadata(&buffer) }.is_none());
         }
         meta.size = 64;
         meta.data = std::ptr::null_mut();
+        // SAFETY: a null `meta.data` is rejected before any slice is built.
         assert!(unsafe { cursor_metadata(&buffer) }.is_none());
         buffer.metas = std::ptr::null_mut();
+        // SAFETY: a null `metas` is rejected before any slice is built.
         assert!(unsafe { cursor_metadata(&buffer) }.is_none());
     }
 }

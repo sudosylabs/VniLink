@@ -106,6 +106,7 @@ struct Api {
 // are behind a mutex. NVENC and CUDA allow calls from any thread; a call
 // that needs a context pushes it on its own thread first ([`Current`]).
 unsafe impl Send for Api {}
+// SAFETY: see the `Send` impl above.
 unsafe impl Sync for Api {}
 
 /// One GPU's retained primary CUDA context.
@@ -151,6 +152,8 @@ impl Api {
 
 fn api() -> Option<&'static Api> {
     static API: OnceLock<Option<Api>> = OnceLock::new();
+    // SAFETY: `load` only resolves the symbols it declares from the driver's
+    // libraries and runs once, inside `OnceLock`.
     API.get_or_init(|| unsafe { load() }).as_ref()
 }
 

@@ -38,6 +38,8 @@ pub struct WindowsSystemActions {
 
 impl WindowsSystemActions {
     fn enable_shutdown_privilege() -> Result<(), Error> {
+        // SAFETY: `token` is written by `OpenProcessToken` for this process and closed
+        // once below. `privileges` and `luid` outlive the calls that read them.
         unsafe {
             let mut token = HANDLE::default();
             OpenProcessToken(
@@ -69,6 +71,7 @@ impl WindowsSystemActions {
 
     fn exit(&self, flags: EXIT_WINDOWS_FLAGS) -> Result<(), Error> {
         Self::enable_shutdown_privilege()?;
+        // SAFETY: `ExitWindowsEx` takes only flag values and touches no memory of ours.
         unsafe {
             ExitWindowsEx(flags | EWX_FORCEIFHUNG, SHTDN_REASON_FLAG_PLANNED)
                 .map_err(|_| Error::Unsupported("Windows refused the request"))
@@ -88,6 +91,7 @@ impl HostSystemActions for WindowsSystemActions {
     }
 
     fn lock_workstation(&self) -> Result<(), Error> {
+        // SAFETY: `LockWorkStation` takes no arguments.
         unsafe {
             LockWorkStation().map_err(|_| Error::Unsupported("workstation lock was rejected"))
         }

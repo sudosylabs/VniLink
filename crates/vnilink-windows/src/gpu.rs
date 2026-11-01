@@ -57,8 +57,9 @@ pub(crate) struct Pooled {
     texture: ID3D11Texture2D,
 }
 
-// D3D11 objects of a multithread-protected device may be used from any thread.
+// SAFETY: a texture of a multithread-protected D3D11 device may be used from any thread.
 unsafe impl Send for Pooled {}
+// SAFETY: as for `Send`.
 unsafe impl Sync for Pooled {}
 
 /// BGRA textures the capture copies desktop pictures into. A texture is
@@ -70,7 +71,10 @@ pub(crate) struct TexturePool {
     textures: Mutex<Vec<Arc<Pooled>>>,
 }
 
+// SAFETY: the device is multithread-protected ([`protect`]), so its context may be used from
+// any thread, and the textures are behind a mutex.
 unsafe impl Send for TexturePool {}
+// SAFETY: as for `Send`.
 unsafe impl Sync for TexturePool {}
 
 impl TexturePool {
@@ -189,7 +193,10 @@ pub struct WindowsPicture {
     size: (u16, u16),
 }
 
+// SAFETY: the picture's textures belong to a multithread-protected device and its context is
+// serialised by it.
 unsafe impl Send for WindowsPicture {}
+// SAFETY: as for `Send`.
 unsafe impl Sync for WindowsPicture {}
 
 impl WindowsPicture {
@@ -213,6 +220,9 @@ impl NativePicture for WindowsPicture {
 
     fn read_back(&self) -> Result<Vec<u8>, Error> {
         let (width, height) = (u32::from(self.size.0), u32::from(self.size.1));
+        // SAFETY: `device`, `context` and the texture are the picture's own live objects on one
+        // multithread-protected device. The row size and count are the texture's BGRA width and
+        // height.
         let rows = unsafe {
             read_rows(
                 &self.device,
@@ -251,7 +261,8 @@ pub(crate) struct Nv12Converter {
     size: (u32, u32),
 }
 
-// Used through `&mut self` by one encoder; the device is multithread-protected.
+// SAFETY: the converter is used through `&mut self` by one encoder at a time, and its device is
+// multithread-protected.
 unsafe impl Send for Nv12Converter {}
 
 impl Nv12Converter {
@@ -409,7 +420,9 @@ const OUTPUTS: usize = 3;
 #[derive(Clone)]
 pub struct GpuDevice(ID3D11Device);
 
+// SAFETY: `ID3D11Device` is free-threaded.
 unsafe impl Send for GpuDevice {}
+// SAFETY: as for `Send`.
 unsafe impl Sync for GpuDevice {}
 
 impl GpuDevice {

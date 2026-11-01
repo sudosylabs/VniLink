@@ -132,6 +132,8 @@ struct Device {
 
 impl Drop for Device {
     fn drop(&mut self) {
+        // SAFETY: `ptr` came from a successful `gbm_create_device` and is destroyed
+        // only here. `_fd` drops after this, so the device never outlives its fd.
         unsafe { gbm_device_destroy(self.ptr) }
     }
 }
@@ -205,6 +207,8 @@ impl Importer {
             let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
                 continue;
             };
+            // SAFETY: `file` is an open render node, kept alive in the `Device` pushed
+            // below for as long as the GBM device exists.
             let ptr = unsafe { gbm_create_device(file.as_raw_fd()) };
             if ptr.is_null() {
                 continue;
@@ -232,6 +236,10 @@ fn render_nodes() -> Vec<PathBuf> {
 }
 
 fn query_modifiers(device: *mut c_void, found: &mut Vec<u64>) {
+    // SAFETY: `device` is a live GBM device owned by an `Importer`. The EGL display
+    // is checked before use and terminated once; the looked-up entry point is
+    // non-null and has the signature `EGL_EXT_image_dma_buf_import_modifiers`
+    // declares for `eglQueryDmaBufModifiersEXT`.
     unsafe {
         let display = eglGetPlatformDisplay(EGL_PLATFORM_GBM_MESA, device, ptr::null());
         if display.is_null() {
@@ -257,6 +265,10 @@ fn append_modifiers(
     format: u32,
     found: &mut Vec<u64>,
 ) {
+    // SAFETY: `query` is the entry point checked by the caller and `display` is
+    // initialized. `modifiers` and `external` each hold `count` elements at the
+    // second call, and the first call passes null with a maximum of zero, which
+    // the extension allows.
     unsafe {
         let mut count = 0;
         if query(
@@ -307,6 +319,9 @@ fn import_one(
     for plane in planes {
         sync_fd(plane.fd, false);
     }
+    // SAFETY: `device` is a live GBM device and `planes` are open DMA-BUF fds the
+    // caller keeps open. The import structs outlive the call, which reads them
+    // and takes its own reference to the buffers.
     let bo = unsafe {
         if explicit && modifier != DRM_FORMAT_MOD_INVALID {
             let mut data = ImportModifier {
@@ -363,6 +378,8 @@ fn import_one(
     }
     let mut stride = 0u32;
     let mut map_data = ptr::null_mut();
+    // SAFETY: `bo` is the non-null buffer object imported above, and `stride` and
+    // `map_data` are valid out-parameters for the call.
     let mapped = unsafe {
         gbm_bo_map(
             bo,
@@ -376,6 +393,9 @@ fn import_one(
         )
     };
     let copied = copy_mapped(mapped, stride, width, height);
+    // SAFETY: `map_data` is the handle `gbm_bo_map` returned for `bo`, unmapped
+    // once and only if the map succeeded. `bo` is destroyed once and not used
+    // afterwards.
     unsafe {
         if !mapped.is_null() {
             gbm_bo_unmap(bo, map_data);
@@ -405,6 +425,10 @@ fn copy_mapped(
     }
     let mut packed = vec![0u8; row.checked_mul(rows)?];
     for y in 0..rows {
+        // SAFETY: `mapped` is non-null and covers `stride * rows` bytes. `stride >= row`
+        // and the product is checked above, so each `row`-byte read at
+        // `y * stride` is in bounds. The mapping stays alive until the caller
+        // unmaps it after this function returns.
         let src = unsafe { std::slice::from_raw_parts(mapped.cast::<u8>().add(y * stride), row) };
         packed[y * row..(y + 1) * row].copy_from_slice(src);
     }
@@ -418,6 +442,8 @@ fn sync_fd(fd: c_int, end: bool) {
     let mut sync = DmaBufSync {
         flags: DMA_BUF_SYNC_READ | if end { DMA_BUF_SYNC_END } else { 0 },
     };
+    // SAFETY: `fd` is a non-negative open DMA-BUF fd and `sync` is the
+    // `dma_buf_sync` the ioctl reads.
     unsafe {
         ioctl(fd, DMA_BUF_IOCTL_SYNC, &mut sync);
     }

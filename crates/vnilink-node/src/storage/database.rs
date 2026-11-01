@@ -597,6 +597,7 @@ fn selected_vfs_name(conn: &Connection) -> Result<String, StoreFailure> {
     if name_ptr.is_null() {
         return Err(StoreFailure::Unavailable);
     }
+    // Safety: `name_ptr` was checked non-null and points to the NUL-terminated name SQLite owns for the VFS, which outlives this copy into a `String`.
     let text = unsafe { std::ffi::CStr::from_ptr(name_ptr) };
     text.to_str()
         .map(str::to_string)

@@ -679,6 +679,7 @@ fn open_unix(path: &Path, flags: i32, mode: i32) -> Result<File, StoreFailure> {
     if fd < 0 {
         return Err(StoreFailure::Unavailable);
     }
+    // Safety: `fd` is the non-negative descriptor `open` just returned and nothing else owns it, so the `File` takes sole ownership.
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
@@ -760,12 +761,14 @@ fn macos_acl_result(acl: macos_acl::Acl) -> Result<bool, StoreFailure> {
         }
         entry_id = macos_acl::ACL_NEXT_ENTRY;
         let mut tag: macos_acl::AclTag = 0;
+        // Safety: `entry` was written by the successful `acl_get_entry` and stays valid until `acl` is freed below; `tag` is a valid out-pointer.
         let tag_read = unsafe { macos_acl::acl_get_tag_type(entry, &mut tag) };
         if tag_read != 0 || tag == macos_acl::ACL_EXTENDED_ALLOW {
             allows = true;
             break;
         }
     }
+    // Safety: `acl` came from the successful ACL read above and is freed exactly once; `entry` is not used afterwards.
     unsafe { macos_acl::acl_free(acl) };
     Ok(allows)
 }
@@ -774,6 +777,7 @@ fn macos_acl_result(acl: macos_acl::Acl) -> Result<bool, StoreFailure> {
 fn macos_is_remote(path: &Path) -> Result<bool, StoreFailure> {
     let text = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|_| StoreFailure::Unavailable)?;
+    // Safety: `libc::statfs` is a plain C struct of integers and arrays, for which all-zero bytes are a valid value.
     let mut info: libc::statfs = unsafe { std::mem::zeroed() };
     // Safety: `info` is a zeroed `statfs` owned by this frame. `statfs` writes
     // one struct and does not retain the path.
@@ -785,6 +789,7 @@ fn macos_is_remote(path: &Path) -> Result<bool, StoreFailure> {
     if info.f_flags & MNT_LOCAL == 0 {
         return Ok(true);
     }
+    // Safety: `f_fstypename` is a NUL-terminated array that `statfs` filled in `info`, and the copy ends before `info` is dropped.
     let name = unsafe { std::ffi::CStr::from_ptr(info.f_fstypename.as_ptr()) };
     let name = name.to_string_lossy();
     Ok(matches!(

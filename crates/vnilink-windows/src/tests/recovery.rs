@@ -20,6 +20,7 @@ use crate::transform::{h264_encoders, H264Transform};
 
 /// Each transform with the encoder it opened, or a line on why it did not.
 fn each_transform(mut measure: impl FnMut(&H264Transform)) {
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { h264_encoders() } {
         println!(
             "== {} ({:?}, {})",

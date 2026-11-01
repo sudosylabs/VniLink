@@ -90,6 +90,7 @@ impl MacEncoder {
     /// without the requirement says what VideoToolbox answers, or software.
     pub fn hardware(&self) -> bool {
         #[cfg(target_os = "macos")]
+        // SAFETY: `session` is the live compression session this encoder owns; the property copy returns a retained value or an error, and the CFBoolean calls only receive a value whose type id was just checked to be CFBoolean.
         unsafe {
             self.required_hardware
                 || self
@@ -250,7 +251,7 @@ fn set(
 fn set_rate(session: &CompressionSession, bitrate: i32, frame_rate: u8) -> bool {
     use apple_cf::cf::{CFArray, CFNumber};
     use videotoolbox::ffi;
-    // SAFETY (all three reads): VideoToolbox's exported constant keys,
+    // SAFETY: all three reads are VideoToolbox's exported constant keys,
     // initialised by the framework before any session exists.
     let (average, limits, expected) = unsafe {
         (
@@ -557,7 +558,7 @@ fn paint(surface: &IOSurface, frame: &RawFrame) -> Result<(), Error> {
     if stride < row {
         return Err(Error::InvalidFrame("frame stride is shorter than one row"));
     }
-    // The encoder owns this surface. VideoToolbox reads it only after the
+    // SAFETY: the encoder owns this surface. VideoToolbox reads it only after the
     // guard unlocks, and this lock is the only mapping of the bytes.
     let destination = unsafe { guard.as_slice_mut() }
         .ok_or(Error::EncodeRejected("VideoToolbox rejected the frame"))?;

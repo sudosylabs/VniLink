@@ -17,6 +17,9 @@ fn a_linear_dma_buf_imports_as_opaque_red() {
         return;
     }
     let device = importer.devices[0].ptr;
+    // SAFETY: `device` is a live GBM device owned by `importer`. Every buffer
+    // object, mapping and fd is created, used within its size and released in
+    // this block, and the mapping is written only inside its `stride` bounds.
     unsafe {
         let bo = gbm_bo_create(
             device,

@@ -161,10 +161,12 @@ fn handle(value: &impl AsRawHandle) -> HANDLE {
 fn pipe() -> Result<(File, File), Error> {
     let mut read = HANDLE::default();
     let mut write = HANDLE::default();
+    // SAFETY: `read` and `write` are locals the call fills in; no security attributes are
+    // passed.
     unsafe {
         CreatePipe(&mut read, &mut write, None, 0).map_err(native_error)?;
     }
-    // Successful CreatePipe transfers one independently owned handle per end.
+    // SAFETY: successful CreatePipe transfers one independently owned handle per end.
     Ok(unsafe {
         (
             File::from_raw_handle(read.0),
@@ -180,14 +182,17 @@ fn millis(value: Duration) -> u32 {
 }
 /// A manual-reset event that wakes the supervisor once a worker ends.
 fn event() -> Result<Arc<OwnedHandle>, Error> {
+    // SAFETY: `CreateEventW` takes no pointers except null ones.
     let event = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }.map_err(native_error)?;
-    // A successful CreateEventW returns a handle this process owns.
+    // SAFETY: a successful CreateEventW returns a handle this process owns.
     Ok(Arc::new(unsafe { OwnedHandle::from_raw_handle(event.0) }))
 }
 /// Signals its event when the worker holding it returns or unwinds.
 struct Finished(Arc<OwnedHandle>);
 impl Drop for Finished {
     fn drop(&mut self) {
+        // SAFETY: `self.0` is the event `event()` created, which stays open as long as this
+        // `Arc` does.
         unsafe {
             ignored_hr!(
                 vnilink::trace::TERMINAL,
@@ -203,8 +208,9 @@ impl Drop for Finished {
 struct KillOnClose(OwnedHandle);
 impl KillOnClose {
     fn new() -> Result<Self, Error> {
+        // SAFETY: `CreateJobObjectW` takes no pointers except null ones.
         let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(native_error)?;
-        // A successful CreateJobObjectW returns a handle this process owns.
+        // SAFETY: a successful CreateJobObjectW returns a handle this process owns.
         let job = unsafe { OwnedHandle::from_raw_handle(job.0) };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -234,6 +240,8 @@ struct Attributes {
 impl Attributes {
     fn new(console: HPCON) -> Result<Self, Error> {
         let mut bytes = 0;
+        // SAFETY: a null list with a null size query is how the required size is asked for;
+        // `bytes` is a local out-parameter.
         unsafe {
             // Asks only for the size: it fails with ERROR_INSUFFICIENT_BUFFER by design.
             let _sized = InitializeProcThreadAttributeList(None, 1, None, &mut bytes);
@@ -243,6 +251,9 @@ impl Attributes {
         }
         let mut memory = vec![0u128; bytes.div_ceil(std::mem::size_of::<u128>())];
         let list = LPPROC_THREAD_ATTRIBUTE_LIST(memory.as_mut_ptr().cast());
+        // SAFETY: `list` points at `memory`, zeroed and 16-byte aligned, at least as large as
+        // the size the first call reported. `memory` moves into the result without
+        // reallocating, so the list stays valid.
         unsafe {
             InitializeProcThreadAttributeList(Some(list), 1, None, &mut bytes)
                 .map_err(native_error)?;
@@ -251,6 +262,8 @@ impl Attributes {
             _memory: memory,
             list,
         };
+        // SAFETY: `list` was initialized above for one attribute. The value is the
+        // pseudoconsole handle itself, passed by value with its own size.
         unsafe {
             UpdateProcThreadAttribute(
                 list,
@@ -268,6 +281,8 @@ impl Attributes {
 }
 impl Drop for Attributes {
     fn drop(&mut self) {
+        // SAFETY: `list` was initialized in `new`, deleted once here, and `_memory` holding it
+        // is dropped after this.
         unsafe {
             windows::Win32::System::Threading::DeleteProcThreadAttributeList(self.list);
         }
@@ -283,10 +298,13 @@ impl IoWorker {
         // observed its stop flag and exited; no thread is forcibly terminated.
         if let Some(thread) = &self.thread {
             loop {
+                // SAFETY: `thread` is an open handle of the writer thread with terminate
+                // rights, which `CancelSynchronousIo` needs.
                 unsafe {
                     // Nothing pending to cancel is its usual answer between retries.
                     let _cancelled = CancelSynchronousIo(handle(thread));
                 }
+                // SAFETY: `thread` is an open handle of the writer thread, owned by this value.
                 if unsafe { WaitForSingleObject(handle(thread), millis(CANCEL_RETRY)) }
                     != WAIT_TIMEOUT
                 {
@@ -328,6 +346,8 @@ impl Session {
             );
         }
         if let Some(process) = &self.process {
+            // SAFETY: `process` is an open handle of the shell this session owns, with
+            // terminate and synchronize access from `CreateProcessW`.
             unsafe {
                 if WaitForSingleObject(handle(process), 0) != WAIT_OBJECT_0
                     && TerminateProcess(handle(process), 1).is_err()
@@ -353,6 +373,8 @@ impl Session {
         // blocks until clients disconnect. It observes external cancellation
         // while waiting for bounded output admission.
         if let Some(console) = self.console.take() {
+            // SAFETY: `console` is the pseudoconsole `open` created and is closed once, after
+            // the writer that resizes it has been joined.
             unsafe {
                 ClosePseudoConsole(console);
             }
@@ -474,6 +496,8 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             drain: drain.clone(),
             writer_stop: writer_stop.clone(),
         };
+        // SAFETY: `input_read` and `output_write` are open pipe ends this function owns. The
+        // pseudoconsole keeps its own references, so closing them after the call is correct.
         let opened = unsafe {
             CreatePseudoConsole(coord(size), handle(&input_read), handle(&output_write), 0)
                 .map_err(native_error)
@@ -509,6 +533,10 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                 .chain(Some(0))
                 .collect();
         let mut process = PROCESS_INFORMATION::default();
+        // SAFETY: `program` and `directory` are NUL-terminated and `command` is a writable
+        // NUL-terminated buffer, all outliving the call. `info` is a `STARTUPINFOEXW` whose
+        // size is set and whose attribute list is live in `attributes`; `process` is a local
+        // out-parameter.
         unsafe {
             CreateProcessW(
                 PCWSTR(program.as_ptr()),
@@ -524,8 +552,9 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             )
             .map_err(native_error)?;
         }
-        // CreateProcessW returned owned process and thread handles.
+        // SAFETY: CreateProcessW returned owned process and thread handles.
         session.process = Some(unsafe { OwnedHandle::from_raw_handle(process.hProcess.0) });
+        // SAFETY: as above: `hThread` is an owned handle that `CreateProcessW` returned.
         let main_thread = unsafe { OwnedHandle::from_raw_handle(process.hThread.0) };
         // The shell runs only once it is in the job, so no child escapes it.
         let jobs = KillOnClose::new()?;
@@ -548,6 +577,8 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             .spawn(within(move || {
                 let _done = done;
                 // Closing cancels this thread's writes and waits for it to end.
+                // SAFETY: `OpenThread` returns a new handle for the current thread, owned from
+                // here on.
                 let thread = unsafe {
                     OpenThread(
                         THREAD_TERMINATE | THREAD_SYNCHRONIZE,
@@ -584,6 +615,8 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                             }
                         }
                         Ok(TerminalCommand::Resize(size)) => {
+                            // SAFETY: `console` stays open until the writer, which is the only
+                            // caller of this, has been joined by `Session::close`.
                             if size.validate().is_err()
                                 || unsafe { ResizePseudoConsole(console, coord(size)) }.is_err()
                             {
@@ -595,6 +628,8 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                                 rows: if size.rows == 1 { 2 } else { size.rows - 1 },
                                 columns: size.columns,
                             };
+                            // SAFETY: as above: both resizes happen on the writer thread while
+                            // the console is open.
                             if size.validate().is_err()
                                 || unsafe { ResizePseudoConsole(console, coord(temporary)) }
                                     .is_err()
@@ -623,9 +658,12 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             // The child's exit, or the writer or output ending, wakes this wait.
             let waits = [child, handle(&*finished)];
             while !session.stop.load(Ordering::Acquire) {
+                // SAFETY: `waits` holds the process handle owned by `session` and the event
+                // owned by `finished`; both outlive the wait.
                 match unsafe { WaitForMultipleObjects(&waits, false, millis(STOP_CHECK)) } {
                     WAIT_OBJECT_0 => {
                         let mut status = 0;
+                        // SAFETY: `child` is the open process handle and `status` is a local.
                         if unsafe { GetExitCodeProcess(child, &mut status) }.is_ok() {
                             code = Some(status);
                         }
@@ -703,6 +741,8 @@ mod tests {
         bytes
     }
     fn open_process(backend: &TerminalBackend) -> OwnedHandle {
+        // SAFETY: `process_id` names the shell this backend started, and the call only requests
+        // synchronize access.
         let process = unsafe {
             windows::Win32::System::Threading::OpenProcess(
                 windows::Win32::System::Threading::PROCESS_SYNCHRONIZE,
@@ -711,6 +751,7 @@ mod tests {
             )
         }
         .unwrap();
+        // SAFETY: `OpenProcess` returned a new handle that nothing else owns.
         unsafe { OwnedHandle::from_raw_handle(process.0) }
     }
     fn cmd() -> WindowsTerminalFactory {
@@ -755,6 +796,7 @@ mod tests {
         let process = open_process(&backend);
         output_until(&mut backend, "VNI_CONPTY_READY_α", Duration::from_secs(5));
         drop(backend);
+        // SAFETY: `process` is an open handle owned by this test.
         assert_eq!(
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
@@ -794,19 +836,22 @@ mod tests {
             CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
             TH32CS_SNAPPROCESS,
         };
+        // SAFETY: the snapshot flags and process id are plain values.
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.unwrap();
-        // The snapshot handle is owned by this test.
+        // SAFETY: the snapshot handle is owned by this test.
         let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot.0) };
         let mut entry = PROCESSENTRY32W {
             dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
             ..Default::default()
         };
         let mut found = Vec::new();
+        // SAFETY: `snapshot` is an open snapshot handle and `entry` has its size set.
         let mut more = unsafe { Process32FirstW(handle(&snapshot), &mut entry) }.is_ok();
         while more {
             if entry.th32ParentProcessID == parent {
                 found.push(entry.th32ProcessID);
             }
+            // SAFETY: as above: `snapshot` is still open and `entry` is the same struct.
             more = unsafe { Process32NextW(handle(&snapshot), &mut entry) }.is_ok();
         }
         found
@@ -831,6 +876,8 @@ mod tests {
             .into_iter()
             .next()
             .expect("the shell started a child");
+        // SAFETY: the id is that of a child found in the snapshot, and only synchronize access
+        // is requested.
         let child = unsafe {
             windows::Win32::System::Threading::OpenProcess(
                 windows::Win32::System::Threading::PROCESS_SYNCHRONIZE,
@@ -839,9 +886,10 @@ mod tests {
             )
         }
         .unwrap();
-        // The handle is owned by this test.
+        // SAFETY: the handle is owned by this test.
         let child = unsafe { OwnedHandle::from_raw_handle(child.0) };
         drop(backend);
+        // SAFETY: `child` is an open handle owned by this test.
         assert_eq!(
             unsafe { WaitForSingleObject(handle(&child), 5000) },
             WAIT_OBJECT_0,
@@ -866,12 +914,14 @@ mod tests {
         let process = open_process(&backend);
         output_until(&mut backend, "VNI_FLOOD_1", Duration::from_secs(5));
         // Nothing reads further: the queue fills behind the shell.
+        // SAFETY: `process` is an open handle owned by this test.
         assert_eq!(
             unsafe { WaitForSingleObject(handle(&process), 500) },
             WAIT_TIMEOUT
         );
         let closed = Instant::now();
         drop(backend);
+        // SAFETY: `process` is an open handle owned by this test.
         assert_eq!(
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0

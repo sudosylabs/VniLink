@@ -38,6 +38,7 @@ const IDLE: Duration = Duration::from_secs(5);
 
 /// Non-prompting check. Only a local native permission flow may request access.
 pub fn microphone_authorized() -> bool {
+    // SAFETY: reads the authorization status for a media-type constant; nothing is retained or mutated and no prompt is raised.
     unsafe {
         AVMediaTypeAudio.is_some_and(|kind| {
             AVCaptureDevice::authorizationStatusForMediaType(kind)
@@ -48,6 +49,7 @@ pub fn microphone_authorized() -> bool {
 const BITRATE: u32 = 4_000_000;
 
 fn discover() -> Result<Retained<NSArray<AVCaptureDevice>>, Error> {
+    // SAFETY: builds a discovery session from AVFoundation's own device-type constants and reads its device list, which is returned retained.
     unsafe {
         let media = AVMediaTypeVideo.ok_or(Error::Unsupported("AVFoundation video"))?;
         let types = NSArray::from_slice(&[
@@ -66,6 +68,7 @@ fn discover() -> Result<Retained<NSArray<AVCaptureDevice>>, Error> {
     }
 }
 pub fn camera_devices() -> Result<Vec<CameraDevice>, Error> {
+    // SAFETY: reads each discovered device's name and identifier into owned strings inside the autorelease pool, so no borrowed Objective-C string escapes it.
     autoreleasepool(|_| unsafe {
         let devices = discover()?;
         Ok(devices
@@ -161,6 +164,7 @@ define_class!(
             }
             // The borrowed sample remains alive for this callback. Copy pixels
             // while locked; nothing referencing the OS buffer crosses threads.
+            // SAFETY: `sample` is the live buffer AVFoundation handed this callback, and `copy_sample` copies its pixels before returning, so nothing borrowed outlives the callback.
             match unsafe {
                 copy_sample(
                     sample,
@@ -188,8 +192,10 @@ define_class!(
     }
 );
 unsafe fn copy_sample(sample: &CMSampleBuffer, time: u64) -> Result<RawFrame, Error> {
+    // SAFETY: the caller guarantees `sample` is a live sample buffer; its image buffer is only used inside this function.
     let buffer =
         unsafe { sample.image_buffer() }.ok_or(Error::Unsupported("camera pixel buffer"))?;
+    // SAFETY: `buffer` is a live pixel buffer, retained for this function, and the caller's guarantee about it carries over.
     unsafe { copy_pixel_buffer(&buffer, time) }
 }
 unsafe fn copy_pixel_buffer(buffer: &CVPixelBuffer, time: u64) -> Result<RawFrame, Error> {
@@ -202,12 +208,14 @@ unsafe fn copy_pixel_buffer(buffer: &CVPixelBuffer, time: u64) -> Result<RawFram
         return Err(Error::Malformed);
     }
     let flags = CVPixelBufferLockFlags::ReadOnly;
+    // SAFETY: `buffer` is a live pixel buffer borrowed for the call; a successful lock is undone by `Unlock` below.
     if unsafe { CVPixelBufferLockBaseAddress(buffer, flags) } != 0 {
         return Err(Error::Unsupported("camera buffer lock"));
     }
     struct Unlock<'a>(&'a CVPixelBuffer);
     impl Drop for Unlock<'_> {
         fn drop(&mut self) {
+            // SAFETY: pairs with the successful lock above, with the same flags, once.
             unsafe {
                 CVPixelBufferUnlockBaseAddress(self.0, CVPixelBufferLockFlags::ReadOnly);
             }
@@ -224,6 +232,7 @@ unsafe fn copy_pixel_buffer(buffer: &CVPixelBuffer, time: u64) -> Result<RawFram
     {
         return Err(Error::Malformed);
     }
+    // SAFETY: the buffer stays locked by `_unlock`, `ptr` is its non-null base address, and the data size was checked to cover `needed` bytes, which are copied before the lock is released.
     let pixels = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), needed) }.to_vec();
     RawFrame::with_stride(width, height, stride, time, pixels).map_err(|_| Error::Malformed)
 }
@@ -235,6 +244,7 @@ impl Drop for CaptureGuard {
     fn drop(&mut self) {
         // A session left mid-configuration by a refused setting may throw
         // again here; the engine outlives a camera that could not stop.
+        // SAFETY: the session and output are retained by `self`; stopping a session and detaching the sample delegate are valid from any thread, and an Objective-C exception is caught by `catch` rather than unwinding.
         if objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
             self.session.stopRunning();
             self.output.setSampleBufferDelegate_queue(None, None);
@@ -261,9 +271,11 @@ unsafe fn set_format(
     format: &AVCaptureDeviceFormat,
     duration: CMTime,
 ) -> bool {
+    // SAFETY: `device` is a live capture device; a successful configuration lock is released below.
     if unsafe { device.lockForConfiguration() }.is_err() {
         return false;
     }
+    // SAFETY: the configuration lock is held. The caller guarantees `format` belongs to `device` and `duration` lies within one of its ranges, since the device throws for anything else, and calls this inside `catch`.
     unsafe {
         device.setActiveFormat(format);
         device.setActiveVideoMinFrameDuration(duration);
@@ -281,6 +293,7 @@ fn capture(
     startup.check()?;
     // Never request consent implicitly from a remote peer. Native permission UI
     // must obtain consent before this factory is enabled.
+    // SAFETY: reads the authorization status for a media-type constant; nothing is retained or mutated and no prompt is raised.
     unsafe {
         if AVCaptureDevice::authorizationStatusForMediaType(
             AVMediaTypeVideo.ok_or(Error::Unsupported("AVFoundation video"))?,
@@ -289,12 +302,15 @@ fn capture(
             return Err(Error::Unsupported("macOS camera permission"));
         }
     }
+    // SAFETY: reads the device's identifier into an owned string.
     let device = discover()?
         .iter()
         .find(|d| unsafe { d.uniqueID().to_string() == config.device_id })
         .ok_or(Error::Unsupported("camera device"))?;
     let mut choices = Vec::new();
+    // SAFETY: `device` is a live capture device and its formats are returned retained.
     for format in unsafe { device.formats() }.iter() {
+        // SAFETY: the format description is live for the duration of the call, which only reads its dimensions.
         let dimensions =
             unsafe { CMVideoFormatDescriptionGetDimensions(&format.formatDescription()) };
         let Ok(width) = u16::try_from(dimensions.width) else {
@@ -312,7 +328,9 @@ fn capture(
         {
             continue;
         }
+        // SAFETY: `format` is a live format and its frame rate ranges are returned retained.
         for range in unsafe { format.videoSupportedFrameRateRanges() }.iter() {
+            // SAFETY: `range` is a live frame rate range; both calls only read.
             let Some(fps) = frame_rate_in(
                 unsafe { range.minFrameRate() },
                 unsafe { range.maxFrameRate() },
@@ -325,6 +343,7 @@ fn capture(
                 + u32::from(fps.abs_diff(config.fps)) * 8;
             // The device accepts only durations inside the range it reports,
             // and throws for any other: at a bound, use the bound itself.
+            // SAFETY: `range` is a live frame rate range; the calls only read it.
             let duration = unsafe {
                 if f64::from(fps) >= range.maxFrameRate() - 0.01 {
                     range.minFrameDuration()
@@ -359,15 +378,19 @@ fn capture(
         source: source.clone(),
         start: Instant::now(),
     });
+    // SAFETY: `allocated` is a freshly allocated `CameraOutput` with its ivars set, and `init` is sent once through its superclass, as objc2 requires.
     let delegate: Retained<CameraOutput> = unsafe { msg_send![super(allocated), init] };
     let queue = DispatchQueue::new("vnilink.camera.capture", None);
+    // SAFETY: takes no arguments and returns a fresh retained session.
     let session = unsafe { AVCaptureSession::new() };
+    // SAFETY: takes no arguments and returns a fresh retained output.
     let output = unsafe { AVCaptureVideoDataOutput::new() };
     let guard = CaptureGuard { session, output };
     // AVFoundation throws for a setting a device refuses; that must fail
     // this camera, not unwind through Rust and abort the engine.
     let configured =
         objc2::exception::catch(std::panic::AssertUnwindSafe(|| -> Result<bool, Error> {
+            // SAFETY: runs inside `catch`, so an AVFoundation exception fails this camera instead of unwinding. The session is configured only from this thread between begin and commit, and `device`, `format`, `delegate` and `queue` outlive it: `guard` is dropped before `delegate`.
             unsafe {
                 let input = AVCaptureDeviceInput::deviceInputWithDevice_error(&device)
                     .map_err(|_| Error::Unsupported("camera input"))?;
@@ -509,6 +532,7 @@ mod tests {
         let mut raw = std::ptr::null_mut();
         // Core Video allocates the synthetic buffer. No capture device exists.
         assert_eq!(
+            // SAFETY: `raw` is a valid out-pointer; Core Video allocates the synthetic buffer, so no capture device exists.
             unsafe {
                 CVPixelBufferCreate(
                     None,
@@ -521,12 +545,15 @@ mod tests {
             },
             0
         );
+        // SAFETY: the create call above succeeded, so `raw` holds a non-null buffer retained once, which this takes ownership of.
         let buffer = unsafe { CFRetained::from_raw(NonNull::new(raw).unwrap()) };
         assert_eq!(
+            // SAFETY: `buffer` is a live pixel buffer; the lock is undone below.
             unsafe { CVPixelBufferLockBaseAddress(&buffer, CVPixelBufferLockFlags::empty()) },
             0
         );
         let stride = CVPixelBufferGetBytesPerRow(&buffer);
+        // SAFETY: the buffer is locked and its base address spans `stride * 64` bytes, the 64 rows created above.
         let data = unsafe {
             std::slice::from_raw_parts_mut(
                 CVPixelBufferGetBaseAddress(&buffer).cast::<u8>(),
@@ -539,9 +566,11 @@ mod tests {
             }
         }
         assert_eq!(
+            // SAFETY: pairs with the lock above, with the same flags.
             unsafe { CVPixelBufferUnlockBaseAddress(&buffer, CVPixelBufferLockFlags::empty()) },
             0
         );
+        // SAFETY: `buffer` is a live, unlocked pixel buffer, which `copy_pixel_buffer` locks itself.
         let frame = unsafe { copy_pixel_buffer(&buffer, 123) }.unwrap();
         assert_eq!(
             (frame.width(), frame.height(), frame.timestamp_us()),

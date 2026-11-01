@@ -753,6 +753,7 @@ fn a_posix_acl_on_the_lease_is_rejected_when_the_filesystem_stores_it() {
         value.extend_from_slice(&perm.to_le_bytes());
         value.extend_from_slice(&u32::MAX.to_le_bytes());
     }
+    // SAFETY: `text` is a NUL-terminated path, the attribute name a C string literal, and `value` a live buffer of `value.len()` bytes that `setxattr` only reads.
     let planted = unsafe {
         libc::setxattr(
             text.as_ptr(),

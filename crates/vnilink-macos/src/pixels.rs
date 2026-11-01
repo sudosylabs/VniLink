@@ -109,7 +109,7 @@ pub(crate) fn picture_change(
     let (Ok(left), Ok(right)) = (left.lock_read_only(), right.lock_read_only()) else {
         return None;
     };
-    // The stream has finished both buffers; these guards only read them.
+    // SAFETY: the stream has finished both buffers and each guard holds a read-only lock for as long as its slice is used, so the mapped bytes stay allocated, initialised and unmodified. Nothing here mutates them.
     let (Some(left_bytes), Some(right_bytes)) =
         (unsafe { left.as_slice() }, unsafe { right.as_slice() })
     else {
@@ -171,7 +171,7 @@ fn packed_bgra(
     if stride < row {
         return Err(Error::InvalidFrame("frame stride is shorter than one row"));
     }
-    // The stream has finished this buffer and this guard is the only mapping.
+    // SAFETY: the stream has finished this buffer and the read-only lock `guard` holds keeps the mapped bytes allocated, initialised and unmodified until `source` is last used.
     let source = unsafe { guard.as_slice() }.ok_or(Error::CaptureRejected(
         "ScreenCaptureKit did not deliver a frame",
     ))?;

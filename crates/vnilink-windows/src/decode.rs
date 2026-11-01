@@ -73,9 +73,9 @@ pub struct WindowsDecoder {
     open: Option<OpenDecoder>,
 }
 
-// Same contract as the encoder: the transform moves between threads but is
-// only ever touched through `&mut self` on one thread at a time.
 #[cfg(windows)]
+// SAFETY: same contract as the encoder: the transform moves between threads but
+// is only ever touched through `&mut self` on one thread at a time.
 unsafe impl Send for WindowsDecoder {}
 
 impl WindowsDecoder {
@@ -173,6 +173,8 @@ fn open_transform(
     width: u16,
     height: u16,
 ) -> windows::core::Result<(IMFTransform, crate::foundation::MediaFoundation)> {
+    // SAFETY: COM and Media Foundation are started for this thread before the transform is
+    // created. `on` is a local `VARIANT` whose `VT_UI4` arm is the one written and then read.
     unsafe {
         ignored_hr!(
             vnilink::trace::DECODE,
@@ -228,6 +230,9 @@ fn decode_picture(
 #[cfg(windows)]
 fn feed(transform: &IMFTransform, annex_b: &[u8], timestamp_us: u64) -> Result<Vec<u8>, Error> {
     const REJECTED: &str = "Media Foundation rejected the frame";
+    // SAFETY: `buffer` is created with room for `annex_b.len()` bytes, so `Lock` yields at
+    // least that many writable bytes at `data`, copied once and unlocked before the buffer is
+    // used again. The remaining calls pass live COM objects created here.
     unsafe {
         let buffer = MFCreateMemoryBuffer(annex_b.len() as u32)
             .map_err(|_| Error::DecodeRejected(REJECTED))?;

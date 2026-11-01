@@ -50,9 +50,13 @@ pub(crate) fn supported() -> bool {
         platform: 0,
         service: [0; 128],
     };
+    // SAFETY: `v` is a `Version` with its size field set, laid out as `OSVERSIONINFOW`, which
+    // `RtlGetVersion` fills.
     unsafe { RtlGetVersion(&mut v) == 0 && (v.major > 10 || v.major == 10 && v.build >= 19041) }
 }
 unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    // SAFETY: the system calls this with the window's own message, so forwarding it unchanged
+    // to the default procedure is what that procedure expects.
     unsafe { DefWindowProcW(hwnd, message, w, l) }
 }
 struct Overlay(HWND);
@@ -63,6 +67,9 @@ impl Overlay {
                 "Windows capture exclusion requires build 19041",
             ));
         }
+        // SAFETY: runs on the privacy worker thread, which creates, pumps and destroys the
+        // window, so every window call is made from its owning thread. Strings are static,
+        // `class` outlives registration and `window_proc` has the signature `WNDPROC` requires.
         unsafe {
             // This dedicated GUI owner uses physical coordinates on mixed-DPI desktops.
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -111,6 +118,7 @@ impl Overlay {
         }
     }
     fn cover(&self) -> Result<(), Error> {
+        // SAFETY: `self.0` is the window `open` created and this thread still owns.
         unsafe {
             SetWindowPos(
                 self.0,
@@ -127,6 +135,8 @@ impl Overlay {
 }
 impl Drop for Overlay {
     fn drop(&mut self) {
+        // SAFETY: `self.0` is the window `open` created, destroyed once, on the thread that
+        // owns it: an `Overlay` is not `Send`.
         unsafe {
             ignored_hr!(
                 vnilink::trace::SYSTEM,
@@ -196,6 +206,8 @@ impl Privacy {
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                             Err(mpsc::RecvTimeoutError::Timeout) => {}
                         }
+                        // SAFETY: `message` is a local `MSG`; the loop only drains this
+                        // thread's own queue, which holds the overlay's messages.
                         unsafe {
                             let mut message = MSG::default();
                             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {

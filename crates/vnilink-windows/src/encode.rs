@@ -137,10 +137,10 @@ enum GpuConversion {
     Unavailable,
 }
 
-// The transform is a COM pointer used through `&mut self` only, from the
+#[cfg(windows)]
+// SAFETY: the transform is a COM pointer used through `&mut self` only, from the
 // thread that opened it after `CoInitializeEx(COINIT_MULTITHREADED)`. Moving
 // it between threads is safe; sharing it is refused by the borrow checker.
-#[cfg(windows)]
 unsafe impl Send for WindowsEncoder {}
 
 impl WindowsEncoder {
@@ -169,6 +169,8 @@ impl WindowsEncoder {
         }
         #[cfg(windows)]
         {
+            // SAFETY: `open_first` starts COM and Media Foundation on this thread before it
+            // lists any candidate, and keeps them for the life of the encoder it returns.
             return unsafe {
                 Self::open_first(
                     || h264_encoders(),
@@ -263,6 +265,8 @@ impl WindowsEncoder {
         bitrate_bps: u32,
         matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
+        // SAFETY: COM and Media Foundation are started here on this thread, and `foundation` is
+        // stored in the encoder so the transform is dropped before Media Foundation shuts down.
         unsafe {
             ignored_hr!(
                 vnilink::trace::ENCODE,
@@ -292,6 +296,8 @@ impl WindowsEncoder {
     /// Whether the transform takes the `ICodecAPI` setting `key`.
     #[cfg(all(windows, test))]
     pub(crate) fn supports(&self, key: &windows::core::GUID) -> bool {
+        // SAFETY: `api` is a live `ICodecAPI` of this encoder's transform and `key`
+        // outlives the call.
         self.transform
             .cast::<ICodecAPI>()
             .is_ok_and(|api| unsafe { api.IsSupported(key) }.is_ok())
@@ -300,6 +306,8 @@ impl WindowsEncoder {
     /// Sets the `ICodecAPI` value `key` on the transform, for measuring.
     #[cfg(all(windows, test))]
     pub(crate) fn set_codec(&self, key: &windows::core::GUID, value: u32) -> bool {
+        // SAFETY: `transform` is this encoder's live transform, used from the thread that owns
+        // it.
         unsafe { set_codec_u32(&self.transform, key, value) }.is_ok()
     }
 
@@ -595,8 +603,8 @@ impl VideoEncoder for WindowsEncoder {
         }
         #[cfg(windows)]
         {
-            // SAFETY (floor and clear): `transform` is this encoder's live
-            // transform, used from the thread that owns it.
+            // SAFETY: `transform` is this encoder's live transform, used from
+            // the thread that owns it; the same holds for the clear below.
             let floored = params.force_keyframe
                 && params.recovery
                 && self.vendor.takes_qp_floor()
@@ -610,6 +618,7 @@ impl VideoEncoder for WindowsEncoder {
                 .is_ok();
             let sample = self.encode_picture(frame, captured, params);
             if floored {
+                // SAFETY: as above.
                 ignored_hr!(
                     vnilink::trace::ENCODE,
                     "a quality floor that cannot be lifted is lifted with the next one",
@@ -660,6 +669,9 @@ impl WindowsEncoder {
         };
         if !fits {
             let (width, height) = picture.size();
+            // SAFETY: `picture` holds a live device and its immediate context. The device was
+            // made multithread-protected when capture opened it, and both outlive the
+            // converter's creation.
             let made = unsafe {
                 crate::gpu::Nv12Converter::new(
                     picture.device(),
@@ -681,6 +693,8 @@ impl WindowsEncoder {
     /// GPU that holds it; only the NV12 picture is read into memory. `None`
     /// once the GPU cannot: the caller converts on the CPU instead.
     fn convert(&mut self, picture: &crate::gpu::WindowsPicture) -> Option<(Vec<u8>, Vec<u8>)> {
+        // SAFETY: `converter_for` returns only a converter built for this picture's device and
+        // size, and this encoder is the only user of it.
         let converted = unsafe { self.converter_for(picture)?.convert(picture) };
         converted
             .map_err(|_| self.gpu = GpuConversion::Unavailable)
@@ -702,11 +716,16 @@ impl WindowsEncoder {
                 .is_some_and(|device| device.device().as_raw() == picture.device().as_raw())
         });
         if let Some(picture) = on_device {
+            // SAFETY: `converter_for` returns only a converter built for this picture's
+            // device and size, and this encoder is the only user of it.
             let converted = self
                 .converter_for(picture)
                 .map(|converter| unsafe { converter.convert_texture(picture) });
             match converted {
                 Some(Ok(texture)) => {
+                    // SAFETY: `texture` is this converter's output on the device the transform
+                    // reads textures on (`on_device` checked it), and the transform is this
+                    // encoder's own.
                     match unsafe { self.encode_texture(&texture, frame.timestamp_us(), params) } {
                         Ok(sample) => {
                             self.input = vnilink::EncoderInput::GpuTexture;
@@ -730,6 +749,8 @@ impl WindowsEncoder {
                 self.convert_on_cpu(frame)?
             }
         };
+        // SAFETY: the planes are NV12 for this encoder's size, and COM and Media Foundation are
+        // started on this thread for the encoder's life.
         unsafe { self.encode_nv12(&y_plane, &uv_plane, frame.timestamp_us(), params) }
     }
 
@@ -773,6 +794,9 @@ impl WindowsEncoder {
         timestamp_us: u64,
         params: &EncodeParams,
     ) -> Result<MfSample, Error> {
+        // SAFETY: `MFCreateMemoryBuffer` is given `y_plane.len() + uv_plane.len()` bytes, so
+        // the locked `data` holds both copies, the second starting at `y_plane.len()`. The
+        // buffer is unlocked before it is read.
         let prepared = (|| unsafe {
             let size = (y_plane.len() + uv_plane.len()) as u32;
             let buffer = MFCreateMemoryBuffer(size)?;
@@ -809,6 +833,8 @@ impl WindowsEncoder {
         timestamp_us: u64,
         params: &EncodeParams,
     ) -> Result<MfSample, Error> {
+        // SAFETY: `texture` is a live D3D11 texture; the surface buffer takes its own reference
+        // to it.
         let prepared = (|| unsafe {
             let buffer = MFCreateDXGISurfaceBuffer(
                 &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D::IID,
@@ -840,6 +866,8 @@ impl WindowsEncoder {
                 return Err(Error::EncodeRejected("the encoder did not take the frame"));
             }
         }
+        // SAFETY: `transform` and `sample` are live COM objects used on the thread that owns
+        // this encoder.
         let processed = (|| unsafe {
             if params.force_keyframe {
                 force_idr(&self.transform)?;
@@ -858,6 +886,9 @@ impl WindowsEncoder {
     unsafe fn drain(&self) -> Result<MfSample, Error> {
         let mut buffers = [MFT_OUTPUT_DATA_BUFFER::default()];
         if !self.provides_samples {
+            // SAFETY: the buffer and sample are created and owned here. `pSample` is taken back
+            // with `ManuallyDrop::take` on the error path, and after `ProcessOutput` otherwise,
+            // so the sample is released exactly once.
             let prepared = (|| unsafe {
                 let buffer = MFCreateMemoryBuffer(self.output_size)?;
                 let sample = MFCreateSample()?;
@@ -1077,6 +1108,7 @@ impl WindowsEncoder {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
+        // SAFETY: `CoInitializeEx` takes only a null reserved pointer and a flag.
         ignored_hr!(
             vnilink::trace::ENCODE,
             "a thread with COM already set up keeps it",
@@ -1087,7 +1119,11 @@ impl WindowsEncoder {
         // SAFETY: COM and Media Foundation are started on this thread; the
         // candidates are used on it and dropped before the guard.
         let adapter = device.and_then(|device| unsafe { device.adapter().ok() });
+        // SAFETY: COM and Media Foundation are started on this thread; the candidates are used
+        // on it and dropped before the guard.
         for candidate in unsafe { crate::transform::hardware_encoders_of(codec, adapter) } {
+            // SAFETY: as above: the candidate's transform is created on this thread and dropped
+            // before `foundation`.
             match unsafe {
                 Self::create_transform(
                     &candidate,
@@ -1146,6 +1182,8 @@ impl WindowsEncoder {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
+        // SAFETY: `open_reading_textures` starts COM itself; `device` is a live device whose
+        // context is multithread-protected.
         if let Some(encoder) = unsafe {
             Self::open_reading_textures(
                 width,
@@ -1159,6 +1197,8 @@ impl WindowsEncoder {
         } {
             return Ok(encoder);
         }
+        // SAFETY: `open_first` starts COM and Media Foundation on this thread before it lists
+        // any candidate, and keeps them for the life of the encoder it returns.
         unsafe {
             let candidates = || h264_encoders_for(device.adapter().ok());
             Self::open_first(

@@ -135,6 +135,8 @@ impl IMFAsyncCallback_Impl for Callback_Impl {
         // SAFETY: `result` is the one this generator's `BeginGetEvent`
         // completed with.
         let event = unsafe { self.generator.EndGetEvent(result.as_ref()) };
+        // SAFETY: `event` is the event `EndGetEvent` returned, so both getters read an
+        // object this callback owns.
         let kind = match &event {
             Ok(event) => match unsafe { (event.GetType(), event.GetStatus()) } {
                 (_, Ok(status)) if status.is_err() => Event::Ended,

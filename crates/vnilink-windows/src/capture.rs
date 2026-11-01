@@ -85,6 +85,7 @@ impl WindowsCapture {
     /// Opens the primary display's output, on the adapter it is attached to.
     pub fn open(startup: &vnilink::BackendStartup) -> Result<Self, Error> {
         check_startup(startup)?;
+        // SAFETY: COM is started inside `open_desktop`, which runs on this thread only.
         let desktop = unsafe { Self::open_desktop(startup) }?;
         check_startup(startup)?;
         if desktop.format != DXGI_FORMAT_B8G8R8A8_UNORM {
@@ -174,6 +175,8 @@ impl WindowsCapture {
         timeout_ms: u32,
         timestamp_us: u64,
     ) -> Result<bool, Error> {
+        // SAFETY: `acquire` runs on the capture thread, which owns the duplication, and
+        // releases the frame it acquires before returning.
         let acquired = unsafe { self.acquire(timeout_ms, timestamp_us) };
         let arrived = matches!(acquired, Ok(Some(_)));
         {

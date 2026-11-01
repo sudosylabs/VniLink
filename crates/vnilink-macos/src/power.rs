@@ -32,7 +32,7 @@ unsafe extern "C" {
 struct Text(*const c_void);
 impl Text {
     fn new(value: &std::ffi::CStr) -> Result<Self, Error> {
-        // Static UTF-8 strings only; CF returns a retained object.
+        // SAFETY: `value` is a NUL-terminated C string that outlives the call, the allocator is the default (null) and the encoding is UTF-8. CF returns a retained string (null on failure) that `Text` releases on drop.
         let ptr =
             unsafe { CFStringCreateWithCString(std::ptr::null(), value.as_ptr(), 0x0800_0100) };
         if ptr.is_null() {
@@ -43,6 +43,7 @@ impl Text {
 }
 impl Drop for Text {
     fn drop(&mut self) {
+        // SAFETY: `self.0` is the retained, non-null CFString `new` created and it is released exactly once, here.
         unsafe {
             CFRelease(self.0);
         }
@@ -52,6 +53,7 @@ struct Inhibitor(u32);
 impl PowerInhibitor for Inhibitor {}
 impl Drop for Inhibitor {
     fn drop(&mut self) {
+        // SAFETY: `self.0` is the assertion id IOPM returned and it is released exactly once, here.
         unsafe {
             IOPMAssertionRelease(self.0);
         }
@@ -73,6 +75,7 @@ impl HostPowerFactory for MacPowerFactory {
         let reason = Text::new(c"VniLink remote desktop session")?;
         startup.check()?;
         let mut id = 0;
+        // SAFETY: `kind.0` and `reason.0` are live CFStrings owned by their `Text` guards for the whole call, and `id` is a valid out-pointer to a local.
         if unsafe { IOPMAssertionCreateWithName(kind.0, 255, reason.0, &mut id) } != 0 {
             return Err(Error::Unsupported("macOS rejected the power assertion"));
         }

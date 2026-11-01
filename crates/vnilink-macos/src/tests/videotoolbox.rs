@@ -958,6 +958,7 @@ fn captured(frame: &vnilink_media::RawFrame) -> vnilink_media::RawFrame {
     {
         let mut guard = surface.lock_read_write().unwrap();
         let stride = guard.bytes_per_row();
+        // SAFETY: `surface` was created here and only this lock maps its bytes, so the slice is unaliased until `guard` drops.
         let bytes = unsafe { guard.as_slice_mut() }.unwrap();
         for y in 0..frame.height() {
             let row = frame.row(y);

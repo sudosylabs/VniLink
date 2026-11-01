@@ -129,6 +129,7 @@ fn run(
         );
         return;
     }
+    // SAFETY: `GetCurrentThreadId` takes no arguments and cannot fail.
     vnilink::ignored!(
         vnilink::trace::INPUT,
         "the caller stopped waiting for the hook thread",

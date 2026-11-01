@@ -101,6 +101,7 @@ fn every_picture_decodes_on_its_own_input() {
         bitrate_bps: 8_000_000,
         frame_rate: 30,
     };
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { crate::transform::h264_encoders() } {
         let name = &candidate.name;
         let Ok(mut encoder) = WindowsEncoder::open_candidate(
@@ -193,6 +194,7 @@ fn decode_wait() {
     use vnilink_media::measure::text_page;
     const PICTURES: u64 = 120;
     let (width, height) = (1920u16, 1080u16);
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { crate::transform::h264_encoders() } {
         let Ok(mut encoder) = WindowsEncoder::open_candidate(
             &candidate,
