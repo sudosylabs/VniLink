@@ -161,6 +161,9 @@ impl EventSubscription {
 pub(crate) struct EventHub {
     capacity: usize,
     subscribers: Arc<Mutex<Vec<Subscriber>>>,
+    /// Woken when a session or a service changes, for work that waits for
+    /// one instead of polling for it.
+    changes: Arc<tokio::sync::Notify>,
 }
 
 struct Subscriber {
@@ -174,7 +177,13 @@ impl EventHub {
         Self {
             capacity: capacity.max(1),
             subscribers: Arc::new(Mutex::new(Vec::new())),
+            changes: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    /// Wakes, once, after any session or service change.
+    pub(crate) fn changes(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.changes)
     }
 
     /// The subscriber list is a set of channels, valid whatever a panicking
@@ -207,6 +216,14 @@ impl EventHub {
     }
 
     pub(crate) fn publish(&self, event: CoreEvent) {
+        if matches!(
+            event,
+            CoreEvent::SessionChanged { .. }
+                | CoreEvent::ServiceChanged { .. }
+                | CoreEvent::HostedServiceChanged { .. }
+        ) {
+            self.changes.notify_one();
+        }
         let mut subscribers = self.subscribers();
         subscribers.retain(|subscriber| match subscriber.tx.try_send(event.clone()) {
             Ok(()) => true,

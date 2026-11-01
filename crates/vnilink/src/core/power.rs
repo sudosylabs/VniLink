@@ -62,6 +62,7 @@ impl Core {
             state.power_policy = previous;
             return Err(error);
         }
+        self.shared.events.changes().notify_one();
         Ok(())
     }
     pub fn set_power_factory(
@@ -73,6 +74,7 @@ impl Core {
         let mut target = lock(&self.shared.power_factory);
         target.revision = target.revision.checked_add(1).ok_or(Error::Busy)?;
         target.adapter = factory;
+        self.shared.events.changes().notify_one();
         Ok(())
     }
     pub fn power_status(&self) -> Result<Vec<PowerStatus>, Error> {
@@ -87,19 +89,39 @@ impl Core {
 /// computer when it ends; see [`LockAfterControl`].
 pub(super) fn note_control_used(shared: &Shared) {
     shared.control_used.store(true, Ordering::Release);
+    shared.events.changes().notify_one();
 }
+
+/// How long the actor sleeps when no desktop holds anything, if no change
+/// wakes it first. Every change that matters wakes it; this only bounds the
+/// cost of one that was missed.
+const QUIET_RECHECK: Duration = Duration::from_secs(2);
 
 pub(super) fn start(shared: Weak<Shared>) {
     tokio::spawn(async move {
         let mut slots = [Slot::new(0), Slot::new(0)];
         let mut ticker = tokio::time::interval(Duration::from_millis(25));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let Some(changes) = shared.upgrade().map(|core| core.events.changes()) else {
+            return;
+        };
+        let mut quiet = false;
         loop {
-            ticker.tick().await;
+            // Nothing running that a clock or a native call moves: wait for a
+            // change instead of looking 40 times a second.
+            if quiet {
+                tokio::select! {
+                    _ = changes.notified() => {}
+                    _ = tokio::time::sleep(QUIET_RECHECK) => {}
+                }
+                ticker.reset();
+            } else {
+                ticker.tick().await;
+            }
             let Some(core) = shared.upgrade() else {
                 break;
             };
-            let (consumers, revision, factory, lock_fire) = {
+            let (consumers, revision, factory, lock_fire, desktops, lock_pending) = {
                 let mut state = lock(&core.state);
                 if state.shut_down {
                     break;
@@ -117,6 +139,7 @@ pub(super) fn start(shared: Weak<Shared>) {
                     core.events.publish(CoreEvent::ServiceChanged { service });
                 }
                 let mut consumers = [Vec::new(), Vec::new()];
+                let mut desktops = false;
                 for (hosted, records) in [(false, &state.services), (true, &state.hosted_services)]
                 {
                     for record in records.values() {
@@ -127,6 +150,7 @@ pub(super) fn start(shared: Weak<Shared>) {
                         {
                             continue;
                         }
+                        desktops = true;
                         for kind in PowerKind::ALL {
                             if state.power_policy.wants(hosted, kind) {
                                 consumers[kind.index()].push(record.stop.subscribe());
@@ -157,6 +181,8 @@ pub(super) fn start(shared: Weak<Shared>) {
                     factory.revision,
                     factory.adapter.clone(),
                     lock_fire,
+                    desktops,
+                    state.lock_watch.pending(),
                 )
             };
             if lock_fire {
@@ -176,6 +202,7 @@ pub(super) fn start(shared: Weak<Shared>) {
                     events.publish(CoreEvent::HostLocked { locked });
                 });
             }
+            let mut held = false;
             for (kind, watchers) in PowerKind::ALL.into_iter().zip(consumers) {
                 let slot = &mut slots[kind.index()];
                 let count = watchers.len() as u32;
@@ -274,7 +301,9 @@ pub(super) fn start(shared: Weak<Shared>) {
                     owners: count,
                     phase,
                 };
+                held |= count != 0 || slot.pending.is_some() || slot.inhibitor.is_some();
             }
+            quiet = !(held || desktops || lock_pending || lock_fire);
         }
         // Dropping slots cancels delayed acquisition and releases native handles.
     });

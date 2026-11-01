@@ -109,6 +109,11 @@ pub(crate) enum LockDecision {
 }
 
 impl LockAfterControl {
+    /// Armed, or waiting out a grace: the machine needs ticks to move.
+    pub(crate) fn pending(&self) -> bool {
+        self.armed || self.grace_until.is_some()
+    }
+
     /// `controlling` is whether a hosted desktop holds control; `used` is whether control was used since
     /// the last tick, which arms even when control already ended within
     /// it; `parent_live` is any Active incoming session. Disabling the
