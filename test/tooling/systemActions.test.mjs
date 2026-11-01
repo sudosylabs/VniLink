@@ -34,7 +34,7 @@ const result = await build({
 			builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'stub' }));
 			builder.onResolve({ filter: /(engineMainService|extensions)\.js$/ }, args => ({ path: args.path, namespace: 'stub' }));
 			builder.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-				contents: 'export const app = { focus() {} }; export const BrowserWindow = class {}; export const nativeTheme = {}; export const screen = {}; export const IEngineMainService = () => {}; export const registerSingleton = () => {}; export const InstantiationType = {};',
+				contents: 'export const app = { focus() {} }; export const powerMonitor = { on() {} }; export const BrowserWindow = class {}; export const nativeTheme = {}; export const screen = {}; export const IEngineMainService = () => {}; export const registerSingleton = () => {}; export const InstantiationType = {};',
 				loader: 'js',
 			}));
 		},

@@ -20,6 +20,7 @@ Object.assign(app, {
 	quit() { state.attempts++; let prevented = false; this.emit('before-quit', { preventDefault() { prevented = true; } }); if (!prevented) { state.completed = true; this.emit('will-quit'); } },
 	exit(code) { state.exitCode = code; },
 });
+export const powerMonitor = new EventEmitter();
 export const protocol = { registerSchemesAsPrivileged() { }, handle() { } };
 export const session = { defaultSession: { setPermissionRequestHandler() { }, setPermissionCheckHandler() { } } };
 export const nativeTheme = {};
@@ -238,4 +239,38 @@ test('opening VniLink while a login-item start is still starting opens the windo
 	} finally {
 		Object.assign(state, { background: false, atLogin: false });
 	}
+});
+
+test('quitting waits for a hung participant only so long, and says which one it left behind', async context => {
+	const { LifecycleMainService, app, state } = await load('./src/platform/lifecycle/electron-main/lifecycleMainService.ts', 'LifecycleMainService');
+	context.mock.timers.enable({ apis: ['setTimeout'] });
+	const errors = [];
+	const lifecycle = new LifecycleMainService({ error: message => errors.push(message) });
+	lifecycle.onWillShutdown(event => {
+		event.join('engine', new Promise(() => { }));
+		event.join('configuration', Promise.resolve());
+	});
+	const quits = state.attempts;
+	app.emit('before-quit', { preventDefault() { } });
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(state.attempts, quits, 'Quit before the participants had their time');
+	context.mock.timers.tick(20_000);
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(state.attempts, quits + 1, 'A hung participant kept the process alive');
+	assert.match(errors.join('\n'), /without waiting longer for engine,/);
+	lifecycle.dispose();
+});
+
+test('Windows ending the session runs shutdown, which before-quit does not announce then', async () => {
+	const { LifecycleMainService, app } = await load('./src/platform/lifecycle/electron-main/lifecycleMainService.ts', 'LifecycleMainService');
+	const lifecycle = new LifecycleMainService({ error() { } });
+	let joined = 0;
+	lifecycle.onWillShutdown(() => {
+		joined++;
+	});
+	app.emit('session-end');
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(joined, 1);
+	assert.equal(lifecycle.quitting, true);
+	lifecycle.dispose();
 });

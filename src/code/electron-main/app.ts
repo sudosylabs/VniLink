@@ -154,6 +154,7 @@ export class VniLinkApplication extends Disposable {
 		try {
 			await app.whenReady();
 			this.checkRunning();
+			this.instantiationService.invokeFunction(accessor => accessor.get(ILifecycleMainService)).listenForSystemShutdown();
 			installApplicationMenu();
 			// The window's native context menus, which macOS uses.
 			registerContextMenuListener();
