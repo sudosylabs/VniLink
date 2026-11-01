@@ -54,7 +54,7 @@
 //! queue still holds.
 
 mod capture;
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 mod chord;
 mod plan;
 
