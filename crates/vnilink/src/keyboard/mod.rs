@@ -54,14 +54,11 @@
 //! queue still holds.
 
 mod capture;
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 mod chord;
-mod layout;
 mod plan;
 
 pub use capture::SystemKeys;
-
-pub(crate) use layout::layout_steps;
-pub use layout::{HostLayout, LayoutStep, ModifierLevel};
 
 /// How [`crate::RemoteDesktopService::submit_local_key`] turns one local key
 /// into host input.
@@ -130,5 +127,6 @@ impl<'a> LocalKey<'a> {
     }
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 pub(crate) use chord::{find_chord, keysym_of, ChordLevel, HostKeymap};
 pub(crate) use plan::{KeyPlan, Planned};

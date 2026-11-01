@@ -323,7 +323,7 @@ struct BitWriter {
 
 impl BitWriter {
     fn bit(&mut self, bit: u32) {
-        if self.used % 8 == 0 {
+        if self.used.is_multiple_of(8) {
             self.bytes.push(0);
         }
         if bit != 0 {

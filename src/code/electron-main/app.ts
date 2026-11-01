@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import { app, BrowserWindow, nativeTheme, net, protocol, session } from 'electron';
-import type { BrowserWindow as BrowserWindowType } from 'electron';
+import type { BrowserWindow as BrowserWindowType, WebContents } from 'electron';
 import { release } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -62,6 +62,7 @@ import { CONFIGURATION_CHANNEL_NAME } from '../../platform/configuration/common/
 import { WINDOW_CONFIGURATION_CHANNEL, type INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration.js';
 import { IWindowsMainService, WindowsMainService } from '../../platform/windows/electron-main/windowsMainService.js';
 import { registerDevelopmentWindow } from './development.js';
+import { contentSecurityPolicy, secureWebContents } from './webContentsSecurity.js';
 
 export interface ApplicationOptions {
 	readonly showWindow?: boolean;
@@ -222,6 +223,7 @@ export class VniLinkApplication extends Disposable {
 			event.join('configuration', configuration.flush());
 			event.join('state', state.close());
 		}));
+		this._register(Event.fromNodeEventEmitter<WebContents>(app, 'web-contents-created', (_event: unknown, contents: WebContents) => contents)(secureWebContents));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
 			this.dispose();
 		}));
@@ -308,7 +310,11 @@ export class VniLinkApplication extends Disposable {
 			if (request.method !== 'GET' || url.hostname !== 'app' || url.port || url.username || url.password || !workbenchFiles.has(url.pathname)) {
 				return new Response('Not found', { status: 404 });
 			}
-			return net.fetch(pathToFileURL(join(__dirname, 'renderer', url.pathname.slice(1))).href);
+			return net.fetch(pathToFileURL(join(__dirname, 'renderer', url.pathname.slice(1))).href).then(response => {
+				const headers = new Headers(response.headers);
+				headers.set('Content-Security-Policy', contentSecurityPolicy);
+				return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+			});
 		});
 		session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
 			callback(false);
@@ -372,38 +378,45 @@ export class VniLinkApplication extends Disposable {
 
 	private async startEngine(): Promise<void> {
 		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
-		const permissions = this.instantiationService.invokeFunction(accessor => accessor.get(IPermissionsMainService));
-		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
 		const temporary = this.options.temporaryEngine ?? false;
 		try {
+			engine.setRestartHandler(() => this.initializeEngine(temporary));
 			await engine.start(temporary, temporary && this.options.temporaryEngineCaptures === true, this.options.temporaryEngineScreenGrant);
-			// Transfers stage here; the engine creates it the first time one does.
-			await engine.execute({ type: 'setTransferDirectory', path: join(app.getPath('userData'), 'Transfers') }).catch((error: unknown) => {
-				this.logService.error('The transfer folder could not be set; Files transfers will fail.', error);
-			});
-			if (!temporary) {
-				await permissions.synchronize().catch(() => {
-					this.logService.error('Native input backend could not be initialized.');
-				});
-			} else if (this.options.temporaryEngineCaptures === true && isMacintosh) {
-				// Screen only: a measuring host is viewed, never controlled.
-				// Elsewhere the system asks no permission to capture, and the
-				// engine is told nothing, as `synchronizeNativePermissions` does.
-				await engine.execute({ type: 'reportNativePermissions', screen: permissions.isGranted('screen'), input: false, camera: false, microphone: false });
-			}
-			await configuration.restoreEngineDefaults(temporary);
-			await engine.refreshRestartRequired();
-			const runtime = await engine.execute({ type: 'nativeRuntime' });
-			if (runtime.type === 'nativeRuntime') {
-				for (const backend of runtime.backends) {
-					if (!backend.ready) {
-						this.logService.error(backend.error ?? 'Native backend unavailable.');
-					}
-				}
-			}
+			await this.initializeEngine(temporary);
 			mark('vnilink/engineReady');
 		} catch (error) {
 			this.logService.error('VniLink engine unavailable; secure installation could not be opened.', error);
+		}
+	}
+
+	/** Applies what main configures in a new engine; it runs after the first start and after each restart. */
+	private async initializeEngine(temporary: boolean): Promise<void> {
+		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
+		const permissions = this.instantiationService.invokeFunction(accessor => accessor.get(IPermissionsMainService));
+		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
+		// Transfers stage here; the engine creates it the first time one does.
+		await engine.execute({ type: 'setTransferDirectory', path: join(app.getPath('userData'), 'Transfers') }).catch((error: unknown) => {
+			this.logService.error('The transfer folder could not be set; Files transfers will fail.', error);
+		});
+		if (!temporary) {
+			await permissions.synchronize().catch(() => {
+				this.logService.error('Native input backend could not be initialized.');
+			});
+		} else if (this.options.temporaryEngineCaptures === true && isMacintosh) {
+			// Screen only: a measuring host is viewed, never controlled.
+			// Elsewhere the system asks no permission to capture, and the
+			// engine is told nothing, as `synchronizeNativePermissions` does.
+			await engine.execute({ type: 'reportNativePermissions', screen: permissions.isGranted('screen'), input: false, camera: false, microphone: false });
+		}
+		await configuration.restoreEngineDefaults(temporary);
+		await engine.refreshRestartRequired();
+		const runtime = await engine.execute({ type: 'nativeRuntime' });
+		if (runtime.type === 'nativeRuntime') {
+			for (const backend of runtime.backends) {
+				if (!backend.ready) {
+					this.logService.error(backend.error ?? 'Native backend unavailable.');
+				}
+			}
 		}
 	}
 

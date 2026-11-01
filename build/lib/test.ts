@@ -106,8 +106,8 @@ export function selectPeer(args: readonly string[], cwd = process.cwd()): PeerSe
 	if (file === undefined || check === undefined) {
 		throw new Error('--peer and --peer-check go together: the agent\'s .vnl file and the digits it printed beside it');
 	}
-	if (!/^\d{3}$/.test(check)) {
-		throw new Error('--peer-check takes the three digits the agent printed');
+	if (!/^\d{6}$/.test(check)) {
+		throw new Error('--peer-check takes the six digits the agent printed');
 	}
 	return { services, env: { VNILINK_PEER: file, VNILINK_PEER_CHECK: check } };
 }

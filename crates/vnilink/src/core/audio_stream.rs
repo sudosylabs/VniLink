@@ -21,24 +21,37 @@ pub struct RemoteAudioService {
     stop: tokio::sync::watch::Sender<bool>,
     inbox: Arc<AudioSource>,
 }
+
 impl RemoteAudioService {
     pub fn config(&self) -> AudioConfig {
         self.config.clone()
     }
+
     pub fn info(&self) -> &crate::ServiceInfo {
         self.lease.info()
     }
+
     pub fn is_cancelled(&self) -> bool {
         self.lease.is_cancelled()
     }
+
     pub fn try_recv(&self) -> Option<AudioPacket> {
         self.inbox.pop()
     }
+
+    /// Blocks until a packet has arrived, the service closes, or `limit`
+    /// passes, so a playback thread sleeps between packets instead of
+    /// polling for them.
+    pub fn wait(&self, limit: Duration) {
+        self.inbox.wait(limit);
+    }
+
     pub fn close(&self) {
         self.stop.send_replace(true);
         self.inbox.close();
     }
 }
+
 impl Drop for RemoteAudioService {
     fn drop(&mut self) {
         self.close();
@@ -70,6 +83,7 @@ impl Core {
         }
         Ok(())
     }
+
     pub fn remote_audio_devices(
         &self,
         connection: u64,
@@ -99,6 +113,7 @@ impl Core {
             tokio::select!{biased;_=stop.changed()=>Err(Error::NoSession),result=operation=>result.map_err(|_|Error::Timeout)?}
         })
     }
+
     pub fn open_audio_service(
         &self,
         id: u64,
@@ -272,6 +287,7 @@ fn validate_devices(devices: &[AudioDevice]) -> Result<(), Error> {
     }
     Ok(())
 }
+
 async fn response(send: &mut SendStream, code: u8) -> Result<(), Error> {
     write(send, vec![1, code, 0]).await
 }
@@ -325,6 +341,7 @@ pub(super) async fn list(
     }
     tokio::select! {biased;_=parent.changed()=>Err(Error::NoSession),result=tokio::time::timeout(TIMEOUT,run)=>result.map_err(|_|Error::Timeout)?}
 }
+
 async fn read_packet(recv: &mut RecvStream) -> Result<Vec<u8>, Error> {
     crate::sidestream::read_frame(
         recv,

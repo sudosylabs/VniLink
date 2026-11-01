@@ -18,7 +18,7 @@ import { execFile } from 'node:child_process';
 import { app, BrowserWindow, screen } from 'electron';
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isLinux, isMacintosh } from '../../src/base/common/platform.js';
+import { isLinux } from '../../src/base/common/platform.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
 import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
@@ -422,11 +422,11 @@ async function viewer(driver: WindowDriver): Promise<void> {
 			}
 			await new Promise(resolve => setTimeout(resolve, 250));
 			return {
-				role: document.querySelector('.desktop-status-role')?.textContent ?? '',
+				role: document.querySelector('.desktop-stats-role')?.textContent ?? '',
 				// What the view says when it cannot show the screen.
 				problem: [...document.querySelectorAll('.desktop-overlay:not([hidden]) :is(.desktop-overlay-title, .desktop-overlay-body)')].map(element => element.textContent).join(' '),
-				// The stats line fills once pictures are drawn and stays empty otherwise.
-				stats: document.querySelector('.desktop-status-stats')?.textContent ?? '',
+				// The details' summary fills once pictures are drawn and stays empty otherwise.
+				stats: document.querySelector('.desktop-stats-summary')?.textContent ?? '',
 				events: window.latencyEvents.splice(0),
 			};
 		})()`);
@@ -443,14 +443,21 @@ async function viewer(driver: WindowDriver): Promise<void> {
 		}
 	}
 	if (holdMs > 0) {
-		// The status bar changes every second, and it is on the captured
-		// screen: hidden, the screen can hold still.
+		// The picture details change every second, and they are on the
+		// captured screen: hidden, the screen can hold still.
 		await driver.window.webContents.executeJavaScript(`(() => {
 			const style = document.createElement('style');
-			style.textContent = '.desktop-status { visibility: hidden !important; }';
+			style.textContent = '.desktop-stats { visibility: hidden !important; }';
 			document.head.append(style);
 		})()`);
 	}
+	// The stage times show only in the expanded details.
+	await driver.window.webContents.executeJavaScript(`(() => {
+		const toggle = document.querySelector('.desktop-stats-toggle');
+		if (toggle?.getAttribute('aria-expanded') === 'false') {
+			toggle.click();
+		}
+	})()`);
 	await driver.screenshot('viewer-streaming');
 	publish('viewer-streaming', {});
 	// The view's own stage times, once a second, as it shows them: the
@@ -493,9 +500,15 @@ async function viewer(driver: WindowDriver): Promise<void> {
 		if (cpuStart && existsSync(join(rendezvous, 'read-done.json')) && !existsSync(join(rendezvous, 'viewer-cpu.json'))) {
 			publish('viewer-cpu', cores(cpuStart[0], cpuSeconds(), (Date.now() - cpuStart[1]) / 1000));
 		}
+		// The details' stage times ("Decoding" / "1.2 · 3.4 ms") as the
+		// summary reads them, one per line, and the summary line.
 		const shown: unknown = await driver.window.webContents.executeJavaScript(`(() => {
-			const stats = document.querySelector('.desktop-status-stats');
-			return { text: stats?.title ?? '', status: stats?.textContent ?? '' };
+			const stages = [...document.querySelectorAll('.desktop-stats-latency dt:not(.desktop-stats-heading)')].flatMap(term => {
+				const times = /^([\\d.]+) · ([\\d.]+) ms$/.exec(term.nextElementSibling?.textContent ?? '');
+				return times ? [term.textContent + ': ' + times[1] + ' ms, ' + times[2] + ' ms at most for 95%'] : [];
+			});
+			const replaced = document.querySelector('.desktop-stats-note')?.textContent;
+			return { text: [...stages, ...(replaced ? [replaced] : [])].join('\\n'), status: document.querySelector('.desktop-stats-summary')?.textContent ?? '' };
 		})()`);
 		if (record(shown) && typeof shown.text === 'string' && shown.text.length > 0) {
 			// The stage times, and the status line: frame rate, codec, bitrate and round trip.
@@ -507,16 +520,15 @@ async function viewer(driver: WindowDriver): Promise<void> {
 }
 
 // The host prepares native video to capture and encode, and only it turns
-// screen sharing on. The viewer prepares it on Windows and Linux, where
-// nothing else gives its engine a decoder and it would refuse the screen. On macOS
-// the window's own decoders admit it, and a viewer engine with native video
-// on the same Mac as the host made the host's capture reads about 19 ms
-// slower (glass to glass 133 against 116 ms p50): a cost of measuring on
-// one computer, not of either side. Across two computers the viewer
-// prepares it everywhere, as the product's does.
+// screen sharing on. The viewer prepares it too: an engine without a native
+// decoder refuses to open a screen, whatever the window decodes. On one Mac
+// a viewer engine with native video made the host's capture reads about
+// 19 ms slower (glass to glass 133 against 116 ms p50): a cost of measuring
+// on one computer, not of either side, included in Mac results since
+// 2026-11-01.
 const application = new TestApplication({
 	showWindow: false,
-	nativeVideo: role === 'host' || !isMacintosh || across,
+	nativeVideo: true,
 	screenGrant: role === 'host' ? screenGrant : undefined,
 	timeoutMs: 30 * 60000,
 });

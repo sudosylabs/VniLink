@@ -151,14 +151,6 @@ pub(crate) fn clamp_extent(value: i32) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
 }
 
-pub(crate) fn clamp_point(value: u16, extent: u16) -> i32 {
-    if extent == 0 {
-        i32::from(value)
-    } else {
-        i32::from(value.min(extent - 1))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,10 +296,6 @@ mod tests {
         assert_eq!(platform_code(letter_a), letter_a.windows);
         #[cfg(all(unix, not(target_os = "macos")))]
         assert_eq!(platform_code(letter_a), letter_a.linux);
-        assert_eq!(clamp_point(50, 0), 50);
-        assert_eq!(clamp_point(0, 100), 0);
-        assert_eq!(clamp_point(50, 100), 50);
-        assert_eq!(clamp_point(100, 100), 99);
         assert_eq!(clamp_extent(0), 0);
         assert_eq!(clamp_extent(100), 100);
         assert_eq!(clamp_extent(-1), u16::MAX);

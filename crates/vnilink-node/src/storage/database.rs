@@ -597,6 +597,7 @@ fn selected_vfs_name(conn: &Connection) -> Result<String, StoreFailure> {
     if name_ptr.is_null() {
         return Err(StoreFailure::Unavailable);
     }
+    // Safety: `name_ptr` was checked non-null and points to the NUL-terminated name SQLite owns for the VFS, which outlives this copy into a `String`.
     let text = unsafe { std::ffi::CStr::from_ptr(name_ptr) };
     text.to_str()
         .map(str::to_string)
@@ -698,6 +699,7 @@ fn wait_for_barrier(dir: &Path) {
         if started.elapsed() > Duration::from_secs(10) {
             break;
         }
+        // The barrier is a file another thread or process makes; it has no event source.
         std::thread::sleep(Duration::from_millis(5));
     }
 }

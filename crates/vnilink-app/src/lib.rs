@@ -26,6 +26,8 @@
 mod audio;
 mod audio_native;
 mod audio_output;
+#[cfg(any(windows, target_os = "linux", target_os = "macos", test))]
+mod backoff;
 mod desktop_audio;
 pub use desktop_audio::{DesktopAudio, DesktopAudioPhase, DesktopAudioStatus};
 #[cfg(test)]
@@ -135,7 +137,6 @@ pub struct VnilinkCore {
 impl VnilinkCore {
     /// Opens a process-local core. `custom_relays` replaces the public
     /// default; an empty list with `public_relay` false is rejected.
-
     pub fn create(public_relay: bool, custom_relays: Vec<String>) -> Result<Self, FfiError> {
         let relay = if public_relay {
             RelaySettings::public_n0()
@@ -203,7 +204,6 @@ impl VnilinkCore {
     }
 
     /// Opens the persistent installation through a [`CredentialStore`].
-
     pub fn open_persistent(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {
         let core = Core::open(
             std::sync::Arc::new(storage::NativeStore(store.into())),
@@ -466,10 +466,6 @@ impl VnilinkCore {
         self.inner.unpair(&endpoint_id).map_err(map_error)
     }
 
-    pub fn control_check(&self) -> String {
-        self.inner.control_check()
-    }
-
     pub fn control_request(&self) -> Result<Option<FfiControlRequest>, FfiError> {
         self.inner
             .control_request()
@@ -662,3 +658,6 @@ mod tests;
 
 #[cfg(test)]
 mod desktop_tests;
+
+#[cfg(test)]
+mod wait;

@@ -22,8 +22,8 @@ export type PairingStep =
 	| { readonly kind: 'approval'; readonly endpointId: string }
 	/** An invitation was opened; the creator's digits pair with it. */
 	| { readonly kind: 'opened'; readonly fileName: string }
-	/** Paired from an invitation; the creator approves with these digits. */
-	| { readonly kind: 'reverseCode'; readonly code: string; readonly endpointId: string }
+	/** Paired from an invitation; the creator approves with these digits, which exist once the creator is waiting. */
+	| { readonly kind: 'reverseCode'; readonly code: string | null; readonly endpointId: string }
 	/** Both computers trust each other. */
 	| { readonly kind: 'paired' }
 	/** The invitation expired or its request was rejected; start again. */

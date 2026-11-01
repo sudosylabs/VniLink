@@ -27,10 +27,11 @@ import { ActiveTabContext, EngineAvailableContext, RestartRequiredContext } from
 import { ViewActionsMenu } from '../../src/workbench/parts/titlebar/viewActionsToolbar.js';
 import { IDevicePairingPopover } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
 import { CommandService } from '../../src/workbench/services/commands/commandService.js';
-import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
+import { IDeviceService, type ControlCheck, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
 import { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
+import { macrotask } from './waits.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -78,7 +79,7 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		connect: () => Promise.resolve(), rename: () => Promise.resolve(), forget: () => Promise.resolve(),
 		exportPairingFile: () => Promise.reject(new Error('Not used')),
 		pair: () => Promise.reject(new Error('Not used')),
-		pairingCheck: () => Promise.resolve('123'), incomingPairing: () => Promise.resolve(null),
+		onDidReceiveControlCheck: Event.None as Event<ControlCheck>, incomingPairing: () => Promise.resolve(null),
 		approvePairing: () => Promise.resolve(), rejectPairing: () => Promise.resolve(),
 		refresh() {
 			devices = [{ id: 'peer', name: '<b>Remote computer</b>', os: 'linux', presence: 'connected', hostname: null, direct: 0, relays: 0 }];
@@ -153,7 +154,7 @@ export async function verifyHomeLifecycle(): Promise<void> {
 			button.click();
 		}
 		// The command service runs a command once its activation settles.
-		await new Promise(resolve => setTimeout(resolve, 0));
+		await macrotask();
 		assert(popovers.join() === 'create,import' && popoverAnchors.length === 2 && popoverAnchors.every((each, index) => each === pairingButtons[index]), `Pairing buttons did not open their popover at the button: ${JSON.stringify(popovers)}`);
 		connection.click();
 		menu.dispose();

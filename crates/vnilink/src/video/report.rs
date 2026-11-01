@@ -9,7 +9,7 @@
 //!
 //! The viewer's datagram router tallies frames and fragments as they arrive
 //! or go missing; every quarter second the viewer sends the tally and starts
-//! a new one. The host smooths the reports into loss rates it can act on:
+//! a new one, and sooner when a frame was lost for good. The host smooths the reports into loss rates it can act on:
 //! how much protection to send, and whether the link needs less.
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -94,6 +94,12 @@ impl ReportTally {
         add(&self.fragments_repaired, counts.repaired);
     }
 
+    /// Whether a frame was lost for good since the last take: no parity
+    /// rebuilt it, so the host should hear of it before the next interval.
+    pub(crate) fn urgent(&self) -> bool {
+        self.frames_lost.load(Ordering::Relaxed) > 0
+    }
+
     /// The tally since the last take, which starts a new one.
     pub(crate) fn take(&self) -> VideoReport {
         let take = |counter: &AtomicU32| counter.swap(0, Ordering::Relaxed);
@@ -107,6 +113,35 @@ impl ReportTally {
     }
 }
 
+/// How often the viewer reports a quiet interval.
+pub(crate) const REPORT_EVERY: Duration = Duration::from_millis(250);
+
+/// Soonest a report follows another when frames were lost: a loss burst is
+/// one report, not one per frame.
+const URGENT_GAP: Duration = Duration::from_millis(30);
+
+/// When the viewer sends its tally: every [`REPORT_EVERY`], and after
+/// [`URGENT_GAP`] once a frame was lost for good, so the host's parity
+/// follows a loss within a round trip rather than within a quarter second.
+#[derive(Debug, Default)]
+pub(crate) struct ReportPacing {
+    last: Option<Instant>,
+}
+
+impl ReportPacing {
+    /// Whether to send the tally at `now`, `urgent` when a frame was lost.
+    pub(crate) fn due(&mut self, urgent: bool, now: Instant) -> bool {
+        let wait = if urgent { URGENT_GAP } else { REPORT_EVERY };
+        let due = self
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) >= wait);
+        if due {
+            self.last = Some(now);
+        }
+        due
+    }
+}
+
 /// Weight of the newest report in the host's smoothed rates.
 const NEWEST: f64 = 0.3;
 
@@ -117,8 +152,15 @@ const REPORT_FRESH: Duration = Duration::from_secs(3);
 /// through most of the loss bursts a rate that size makes likely.
 const PARITY_PER_LOSS: f64 = 2.5;
 
-/// Fragment loss below this is a clean link: no parity but a keyframe's.
+/// Fragment loss below this is a clean link: parity at [`BASE_PROTECTION`].
 const CLEAN_LOSS: f64 = 0.001;
+
+/// Parity on every predicted frame of a link that is not queueing, before
+/// any loss is reported: one shard for a frame of up to
+/// `1 / BASE_PROTECTION` fragments. The first random loss on a clean link
+/// is then repaired instead of costing a keyframe, and a small frame, which
+/// is most of what a screen sends, pays one datagram for it.
+pub(crate) const BASE_PROTECTION: f64 = 0.02;
 
 /// Parity on a keyframe before any report: losing one starts a spiral.
 const KEYFRAME_PARITY: f64 = 0.1;
@@ -149,20 +191,23 @@ impl ViewerLoss {
     }
 
     /// Parity for a frame, as a share of its data shards, from what the
-    /// viewer reports losing. A keyframe gets double, at least
-    /// [`KEYFRAME_PARITY`]: a lost one costs the most to send again. On a
-    /// `congested` link loss is its queue overflowing, which more parity
-    /// would only add to: the keyframe's least is all it gets.
+    /// viewer reports losing, at least [`BASE_PROTECTION`]. A keyframe gets
+    /// double, at least [`KEYFRAME_PARITY`]: a lost one costs the most to
+    /// send again. On a `congested` link loss is its queue overflowing,
+    /// which more parity would only add to: a predicted frame gets none and
+    /// the keyframe its least.
     pub(crate) fn protection(&self, keyframe: bool, congested: bool, now: Instant) -> f64 {
         let fresh = !congested
             && self
                 .heard
                 .is_some_and(|at| now.saturating_duration_since(at) <= REPORT_FRESH);
         let loss = if fresh { self.fragment_loss } else { 0.0 };
-        let share = if loss < CLEAN_LOSS {
+        let share = if congested {
             0.0
+        } else if loss < CLEAN_LOSS {
+            BASE_PROTECTION
         } else {
-            loss * PARITY_PER_LOSS
+            (loss * PARITY_PER_LOSS).max(BASE_PROTECTION)
         };
         let share = if keyframe {
             (share * 2.0).max(KEYFRAME_PARITY)
@@ -181,27 +226,73 @@ impl ViewerLoss {
     }
 }
 
+/// How long a round trip stays the least seen on the path. A path whose
+/// base round trip rises (a new route, a relay) is no longer measured
+/// against the old, lower one.
+const FLOOR_MEMORY: Duration = Duration::from_secs(30);
+
+/// The least round trip seen lately on a path, kept for two consecutive
+/// [`FLOOR_MEMORY`] windows, so it forgets a low sample between one and two
+/// windows after it was seen. Times are measured from any fixed start.
+#[derive(Debug, Default)]
+pub(crate) struct RttFloor {
+    /// The least round trip of the window that began at `since`.
+    current: Option<Duration>,
+    /// The least round trip of the window before it.
+    previous: Option<Duration>,
+    since: Option<Duration>,
+}
+
+impl RttFloor {
+    /// The path's round trip, `at` this long after the start.
+    pub(crate) fn observe(&mut self, rtt: Duration, at: Duration) {
+        if rtt.is_zero() {
+            return;
+        }
+        match self.since {
+            Some(since) if at.saturating_sub(since) >= FLOOR_MEMORY => {
+                let idle = at.saturating_sub(since) >= FLOOR_MEMORY * 2;
+                self.previous = if idle { None } else { self.current };
+                self.current = None;
+                self.since = Some(at);
+            }
+            None => self.since = Some(at),
+            Some(_) => {}
+        }
+        self.current = Some(self.current.map_or(rtt, |least| least.min(rtt)));
+    }
+
+    pub(crate) fn floor(&self) -> Option<Duration> {
+        match (self.current, self.previous) {
+            (Some(current), Some(previous)) => Some(current.min(previous)),
+            (current, previous) => current.or(previous),
+        }
+    }
+}
+
 /// The host's view of its own link: whether it is queueing, its round trip
-/// grown well past the least seen on the path. The send gate dropping
+/// grown well past the least seen on the path lately. The send gate dropping
 /// frames is not this: on a lossy link it follows keyframe bursts the
 /// congestion window cannot carry, and loss there is still random.
 #[derive(Debug, Default)]
 pub(crate) struct Congestion {
-    floor: Option<Duration>,
+    floor: RttFloor,
+    start: Option<Instant>,
 }
 
 impl Congestion {
-    /// The path's round trip now.
-    pub(crate) fn rtt(&mut self, rtt: Duration) {
-        if !rtt.is_zero() {
-            self.floor = Some(self.floor.map_or(rtt, |floor| floor.min(rtt)));
-        }
+    /// The path's round trip at `now`.
+    pub(crate) fn rtt(&mut self, rtt: Duration, now: Instant) {
+        let start = *self.start.get_or_insert(now);
+        self.floor
+            .observe(rtt, now.saturating_duration_since(start));
     }
 
     /// Whether the link is queueing, given its round trip now: at least
-    /// twice and 30 ms over the least seen.
+    /// twice and 30 ms over the least seen lately.
     pub(crate) fn congested(&self, rtt: Duration) -> bool {
         self.floor
+            .floor()
             .is_some_and(|floor| rtt >= floor * 2 && rtt >= floor + Duration::from_millis(30))
     }
 }
@@ -209,6 +300,78 @@ impl Congestion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_floor_forgets_a_low_sample_after_two_windows() {
+        let ms = Duration::from_millis;
+        let mut floor = RttFloor::default();
+        assert_eq!(floor.floor(), None);
+        floor.observe(ms(10), Duration::ZERO);
+        floor.observe(ms(0), Duration::ZERO);
+        floor.observe(ms(80), FLOOR_MEMORY);
+        assert_eq!(floor.floor(), Some(ms(10)), "kept for the next window");
+        floor.observe(ms(80), FLOOR_MEMORY * 2);
+        assert_eq!(floor.floor(), Some(ms(80)), "forgotten after two windows");
+    }
+
+    #[test]
+    fn a_path_whose_round_trip_rises_stops_reading_as_congested() {
+        let start = Instant::now();
+        let mut congestion = Congestion::default();
+        congestion.rtt(Duration::from_millis(10), start);
+        let raised = Duration::from_millis(80);
+        assert!(congestion.congested(raised), "queueing against 10 ms");
+        let mut now = start;
+        while now.duration_since(start) < FLOOR_MEMORY * 3 {
+            now += Duration::from_secs(1);
+            congestion.rtt(raised, now);
+        }
+        assert!(
+            !congestion.congested(raised),
+            "the low sample was forgotten, so 80 ms is the path"
+        );
+        assert!(congestion.congested(Duration::from_millis(400)));
+    }
+
+    #[test]
+    fn a_lost_frame_is_reported_before_the_interval_ends() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let mut pacing = ReportPacing::default();
+        let tally = ReportTally::default();
+        assert!(!tally.urgent(), "nothing lost");
+        tally.fragments(crate::video::FragmentCounts {
+            received: 9,
+            missing: 1,
+            repaired: 1,
+        });
+        assert!(
+            !tally.urgent(),
+            "a repaired fragment waits for the interval"
+        );
+        assert!(pacing.due(false, start), "the first report goes at once");
+        assert!(
+            !pacing.due(false, start + ms(100)),
+            "a quiet interval waits"
+        );
+        tally.frames_lost(1);
+        assert!(tally.urgent(), "a frame lost for good is urgent");
+        assert!(pacing.due(true, start + ms(120)), "it goes at once");
+        tally.take();
+        tally.frames_lost(1);
+        assert!(
+            !pacing.due(true, start + ms(140)),
+            "but not twice in a burst"
+        );
+        assert!(
+            pacing.due(true, start + ms(150)),
+            "within 30 ms of the last"
+        );
+        tally.take();
+        assert!(!tally.urgent(), "taking the tally clears it");
+        assert!(!pacing.due(false, start + ms(300)), "the interval restarts");
+        assert!(pacing.due(false, start + ms(400)));
+    }
 
     #[test]
     fn a_report_round_trips() {
@@ -255,8 +418,8 @@ mod tests {
     fn protection_follows_reported_loss() {
         let now = Instant::now();
         let mut loss = ViewerLoss::default();
-        // Before any report: only keyframes, a little.
-        assert_eq!(loss.protection(false, false, now), 0.0);
+        // Before any report: a little on a predicted frame, more on a keyframe.
+        assert_eq!(loss.protection(false, false, now), BASE_PROTECTION);
         assert!((loss.protection(true, false, now) - KEYFRAME_PARITY).abs() < 1e-9);
         loss.observe(
             &VideoReport {
@@ -275,7 +438,7 @@ mod tests {
             crate::video::MAX_PROTECTION
         );
         let later = now + REPORT_FRESH + Duration::from_secs(1);
-        assert_eq!(loss.protection(false, false, later), 0.0);
+        assert_eq!(loss.protection(false, false, later), BASE_PROTECTION);
     }
 
     #[test]
@@ -298,15 +461,16 @@ mod tests {
     #[test]
     fn a_link_is_congested_while_its_round_trip_grows() {
         let ms = Duration::from_millis;
+        let now = Instant::now();
         let mut link = Congestion::default();
         assert!(!link.congested(ms(500)), "nothing to compare with");
-        link.rtt(ms(20));
-        link.rtt(ms(0));
+        link.rtt(ms(20), now);
+        link.rtt(ms(0), now);
         assert!(!link.congested(ms(35)));
         assert!(link.congested(ms(50)));
         // A long path's jitter is not queueing.
         let mut far = Congestion::default();
-        far.rtt(ms(80));
+        far.rtt(ms(80), now);
         assert!(!far.congested(ms(120)));
         assert!(far.congested(ms(160)));
     }

@@ -11,14 +11,10 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use blake3::hazmat::ChainingValue;
 
-use crate::error::Error;
+use crate::error::{DiskFault, Error};
 
 use super::hash::{segment_len, SegmentHasher, SEGMENT_LEN};
 
-/// Writing the partial failed for a reason other than space.
-pub(crate) const PARTIAL_FAILED: &str = "the file could not be staged";
-/// The destination's disk is full, or its quota is used up.
-pub(crate) const NO_SPACE: &str = "there is not enough space for this file";
 const VALUE_LEN: u64 = 32;
 /// Bytes read at a time when held bytes are hashed again.
 const HOLD_CHUNK: usize = 1024 * 1024;
@@ -33,7 +29,10 @@ const HOLD_CHUNK: usize = 1024 * 1024;
 /// that segment's check, which costs the segment once.
 pub(crate) struct Partial {
     file: std::fs::File,
-    journal: std::fs::File,
+    /// Where journal lines go.
+    journal_path: std::path::PathBuf,
+    /// The journal once opened: a file of one segment never makes one.
+    journal: Option<std::fs::File>,
     size: u64,
     /// Bytes per segment.
     segment: u64,
@@ -75,9 +74,14 @@ impl Partial {
                 .map_err(failed)
         };
         let file = open(path)?;
-        let journal = open(journal)?;
         let on_disk = file.metadata().map_err(failed)?.len();
-        let values = journal.metadata().map_err(failed)?.len() / VALUE_LEN;
+        // A journal exists only once a segment before the last was checked:
+        // a file of one segment never makes one.
+        let values = match std::fs::metadata(journal) {
+            Ok(meta) => meta.len() / VALUE_LEN,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(failed(error)),
+        };
         let mut checked = 0;
         let mut segments = 0;
         while segments < values && checked < size {
@@ -90,22 +94,23 @@ impl Partial {
         }
         let mut partial = Self {
             file,
-            journal,
+            journal_path: journal.to_owned(),
+            journal: None,
             size,
             segment,
             checked,
             written: checked,
             hasher: next_segment(checked, size),
         };
-        partial.truncate(segments)?;
+        partial.truncate(segments, values)?;
         let unchecked = on_disk.saturating_sub(checked);
-        partial.hold(unchecked.min(partial.segment_left()))?;
+        partial.hold(unchecked.min(partial.segment_left()), on_disk)?;
         Ok(partial)
     }
 
     /// Takes the first `bytes` past the checked segments back into the
     /// segment being written, reading them from disk for its hasher.
-    fn hold(&mut self, bytes: u64) -> Result<(), Error> {
+    fn hold(&mut self, bytes: u64, on_disk: u64) -> Result<(), Error> {
         if let Some(hasher) = self.hasher.as_mut() {
             let mut chunk = vec![0u8; HOLD_CHUNK.min(bytes as usize)];
             let mut left = bytes;
@@ -117,7 +122,11 @@ impl Partial {
             }
         }
         self.written = self.checked + bytes;
-        self.file.set_len(self.written).map_err(failed)
+        // Bytes past what is held are cut; a fresh file has none.
+        if on_disk > self.written {
+            self.file.set_len(self.written).map_err(failed)?;
+        }
+        Ok(())
     }
 
     /// Bytes in checked segments: where the next request starts.
@@ -162,12 +171,15 @@ impl Partial {
             self.drop_unchecked()?;
             return Ok(false);
         }
-        // The last segment is published as soon as it checks, so only the
-        // segments before it are worth a sync and a journal line: a small
-        // file costs neither, and an interruption repeats one segment.
+        // A checked segment is on disk before anything claims it. The last
+        // segment is published as soon as it checks, so it needs the sync
+        // (a rename would otherwise expose bytes a power loss can still
+        // lose) but no journal line: nothing resumes after it.
         if self.written < self.size {
             self.file.sync_data().map_err(failed)?;
-            self.journal.write_all(&expected).map_err(failed)?;
+            self.journal(true)?.write_all(&expected).map_err(failed)?;
+        } else {
+            super::flush::sync_file(&self.file).map_err(failed)?;
         }
         self.checked = self.written;
         self.hasher = next_segment(self.checked, self.size);
@@ -188,12 +200,48 @@ impl Partial {
     /// Cuts the journal to its first `segments` values and positions the
     /// partial after the checked segments; the bytes past them stay until
     /// [`Self::hold`] keeps or cuts them.
-    fn truncate(&mut self, segments: u64) -> Result<(), Error> {
-        self.file
-            .seek(SeekFrom::Start(self.checked))
-            .map_err(failed)?;
-        self.journal.set_len(segments * VALUE_LEN).map_err(failed)?;
-        self.journal.seek(SeekFrom::End(0)).map_err(failed)?;
+    fn truncate(&mut self, segments: u64, values: u64) -> Result<(), Error> {
+        if self.checked > 0 {
+            self.file
+                .seek(SeekFrom::Start(self.checked))
+                .map_err(failed)?;
+        }
+        // Values past the checked segments claim bytes the file lacks.
+        if values > segments {
+            self.cut_journal(segments * VALUE_LEN)?;
+        }
+        Ok(())
+    }
+}
+
+impl Partial {
+    /// Opens the journal, creating it with its folder when `create`, and
+    /// positions it at the end.
+    fn journal(&mut self, create: bool) -> Result<&mut std::fs::File, Error> {
+        if self.journal.is_none() {
+            if create {
+                if let Some(folder) = self.journal_path.parent() {
+                    std::fs::create_dir_all(folder).map_err(failed)?;
+                }
+            }
+            let mut journal = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(create)
+                .truncate(false)
+                .open(&self.journal_path)
+                .map_err(failed)?;
+            journal.seek(SeekFrom::End(0)).map_err(failed)?;
+            self.journal = Some(journal);
+        }
+        self.journal.as_mut().ok_or(Error::Malformed)
+    }
+
+    /// Cuts the journal to `len` bytes and positions it at the end.
+    fn cut_journal(&mut self, len: u64) -> Result<(), Error> {
+        let journal = self.journal(false)?;
+        journal.set_len(len).map_err(failed)?;
+        journal.seek(SeekFrom::End(0)).map_err(failed)?;
         Ok(())
     }
 }
@@ -204,10 +252,10 @@ fn next_segment(start: u64, size: u64) -> Option<SegmentHasher> {
 }
 
 fn failed(error: std::io::Error) -> Error {
-    Error::InvalidSetting(if no_space(&error) {
-        NO_SPACE
+    Error::Disk(if no_space(&error) {
+        DiskFault::NoSpace
     } else {
-        PARTIAL_FAILED
+        DiskFault::Failed
     })
 }
 
@@ -382,14 +430,23 @@ mod tests {
     }
 
     #[test]
+    fn a_file_of_one_segment_makes_no_journal() {
+        let scratch = Scratch::new("single");
+        let whole = vec![8u8; SEGMENT_LEN as usize - 5];
+        let mut partial = scratch.open(whole.len() as u64);
+        land_segment(&mut partial, &whole);
+        assert!(
+            !scratch.0.join("journal").exists(),
+            "nothing resumes after the only segment"
+        );
+    }
+
+    #[test]
     fn a_full_disk_is_named() {
         let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
-        assert!(matches!(failed(full), Error::InvalidSetting(NO_SPACE)));
+        assert!(matches!(failed(full), Error::Disk(DiskFault::NoSpace)));
         let other = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        assert!(matches!(
-            failed(other),
-            Error::InvalidSetting(PARTIAL_FAILED)
-        ));
+        assert!(matches!(failed(other), Error::Disk(DiskFault::Failed)));
     }
 
     #[test]

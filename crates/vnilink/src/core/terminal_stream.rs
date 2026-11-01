@@ -8,7 +8,7 @@
 //! Independently cancelled terminal pipe over an admitted neutral connection.
 // trace: records every ignored failure
 use super::service_stream::{read, write, HostedEnd, HostedEnding};
-use super::terminal_runtime::{self, HostedTerminal};
+use super::terminal_runtime::{self};
 use super::*;
 use crate::terminal::{
     TerminalCommand, TerminalEvent, TerminalOptions, TerminalSessionInfo, TerminalSize,
@@ -690,6 +690,16 @@ pub(super) async fn serve(
             }
         };
         let sending = async {
+            if offset > 0 {
+                // The replay starts after earlier output the viewer lacks: a
+                // full reset leaves no mode, colour or screen of that output
+                // behind to colour what follows.
+                write(
+                    &mut send,
+                    encode_event(TerminalEvent::Output(TERMINAL_RESET.to_vec())),
+                )
+                .await?;
+            }
             loop {
                 if runtime.stop.load(std::sync::atomic::Ordering::Acquire) {
                     ending.why(stopped());
@@ -772,6 +782,9 @@ pub(super) async fn serve(
     );
     result
 }
+
+/// Resets the viewer's emulator (RIS) before a replay that begins mid-history.
+const TERMINAL_RESET: &[u8] = b"\x1bc";
 
 impl Core {
     /// Discovers this paired peer's retained shells after reconnect. Session IDs

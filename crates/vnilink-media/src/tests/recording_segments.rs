@@ -9,6 +9,7 @@
 //! VideoToolbox output captured once on macOS (64x64 and 128x128 IDR frames
 //! plus a 64x64 P frame); the remuxer never parses slice content, so large
 //! filler NALs exercise byte accounting identically.
+use super::wait::{wait_active, wait_until};
 use crate::{
     scan_recording_prefix, RecordingError, RecordingFailure, RecordingLimits, RecordingRetention,
     SegmentWriter,
@@ -540,7 +541,7 @@ fn retention_expires_owned_segments_and_preserves_foreign_ones() {
 }
 
 #[test]
-fn review_retention_preserves_preexisting_numbered_file() {
+fn retention_preserves_preexisting_numbered_file() {
     let dir = scratch("review-existing");
     let foreign = dir.join("talk.000002.mkv");
     std::fs::write(&foreign, b"pre-existing user recording").unwrap();
@@ -567,7 +568,7 @@ fn review_retention_preserves_preexisting_numbered_file() {
 }
 
 #[test]
-fn review_v10_retention_preserves_replacement_of_an_owned_segment() {
+fn retention_preserves_replacement_of_an_owned_segment() {
     let dir = scratch("review-v10-replacement");
     let mut writer = SegmentWriter::create(
         &dir.join("talk.mkv"),
@@ -597,22 +598,21 @@ fn review_v10_retention_preserves_replacement_of_an_owned_segment() {
 }
 
 #[test]
-fn review_v11_finished_recorder_status_counts_finalized_segment() {
-    v11_recording_totals(1, false);
+fn finished_recorder_status_counts_finalized_segment() {
+    recording_totals(1, false);
 }
 #[test]
-fn review_v11_finished_recorder_status_counts_multiple_segments() {
-    v11_recording_totals(3, false);
+fn finished_recorder_status_counts_multiple_segments() {
+    recording_totals(3, false);
 }
 #[test]
-fn review_v11_wall_roll_refreshes_status_before_stop_without_more_frames() {
-    v11_recording_totals(1, true);
+fn wall_roll_refreshes_status_before_stop_without_more_frames() {
+    recording_totals(1, true);
 }
-fn v11_recording_totals(frame_count: u64, wall: bool) {
-    use std::time::{Duration, Instant};
+fn recording_totals(frame_count: u64, wall: bool) {
+    use std::time::Duration;
     use vnilink::{
-        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
-        VideoCodecCaps,
+        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, VideoCodecCaps,
     };
     let boot = || {
         Core::start(CoreConfig {
@@ -645,11 +645,7 @@ fn v11_recording_totals(frame_count: u64, wall: bool) {
     .unwrap();
     host.set_recording_sharing(true).unwrap();
     let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_active(&peer, parent.id);
     let parent = peer.controller_session(parent.id).unwrap();
     let owner = peer
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
@@ -664,28 +660,17 @@ fn v11_recording_totals(frame_count: u64, wall: bool) {
     }
     let recorder = crate::Recorder::start(&desktop, &dir.join("talk.mkv"), budget).unwrap();
     let target = host.video_targets().unwrap()[0];
-    let deadline = Instant::now() + Duration::from_secs(5);
     for index in 0..frame_count {
         host.publish_desktop_video(target.id, target.generation, idr64(index * 11_000_000))
             .unwrap();
-        while recorder.status().frames != index + 1 {
-            assert!(
-                Instant::now() < deadline,
-                "recorder missed frame: {:?}",
-                recorder.status()
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        wait_until("the recorder to take the published frame", || {
+            recorder.status().frames == index + 1
+        });
     }
     if wall {
-        while recorder.status().segments != 1 {
-            assert!(
-                Instant::now() < deadline,
-                "missing wall-roll status: {:?}",
-                recorder.status()
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        wait_until("the recorder to report the wall-clock roll", || {
+            recorder.status().segments == 1
+        });
         let state = recorder.status();
         assert_eq!(state.phase, crate::RecordingPhase::Recording);
         assert_eq!(
@@ -694,13 +679,12 @@ fn v11_recording_totals(frame_count: u64, wall: bool) {
         );
     }
     recorder.stop();
-    while !matches!(
-        recorder.status().phase,
-        crate::RecordingPhase::Finished | crate::RecordingPhase::Failed
-    ) {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_until("the recorder to finish", || {
+        matches!(
+            recorder.status().phase,
+            crate::RecordingPhase::Finished | crate::RecordingPhase::Failed
+        )
+    });
     let status = recorder.status();
     let files = finished(&dir);
     let actual_bytes = files
@@ -730,11 +714,10 @@ fn v11_recording_totals(frame_count: u64, wall: bool) {
 }
 
 #[test]
-fn review_v12_failed_recorder_preserves_finalized_segment_totals() {
-    use std::time::{Duration, Instant};
+fn failed_recorder_preserves_finalized_segment_totals() {
+    use std::time::Duration;
     use vnilink::{
-        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
-        VideoCodecCaps,
+        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, VideoCodecCaps,
     };
     let boot = || {
         Core::start(CoreConfig {
@@ -767,11 +750,7 @@ fn review_v12_failed_recorder_preserves_finalized_segment_totals() {
     .unwrap();
     host.set_recording_sharing(true).unwrap();
     let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_active(&peer, parent.id);
     let parent = peer.controller_session(parent.id).unwrap();
     let owner = peer
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
@@ -784,22 +763,15 @@ fn review_v12_failed_recorder_preserves_finalized_segment_totals() {
     let target = host.video_targets().unwrap()[0];
     host.publish_desktop_video(target.id, target.generation, idr64(0))
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while recorder.status().frames != 1 {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_until("the recorder to take the first frame", || {
+        recorder.status().frames == 1
+    });
     std::fs::write(dir.join("talk.000002.mkv.part"), b"foreign pending segment").unwrap();
     host.publish_desktop_video(target.id, target.generation, idr64(11_000_000))
         .unwrap();
-    while recorder.status().phase != crate::RecordingPhase::Failed {
-        assert!(
-            Instant::now() < deadline,
-            "expected storage collision failure: {:?}",
-            recorder.status()
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_until("the recorder to fail on the storage collision", || {
+        recorder.status().phase == crate::RecordingPhase::Failed
+    });
     let status = recorder.status();
     let files = finished(&dir);
     let bytes = files
@@ -827,7 +799,7 @@ fn review_v12_failed_recorder_preserves_finalized_segment_totals() {
 }
 
 #[test]
-fn review_v12_finalization_error_keeps_completed_output_snapshot() {
+fn finalization_error_keeps_completed_output_snapshot() {
     let dir = scratch("review-v12-failed-finalization");
     let mut writer = SegmentWriter::create(&dir.join("talk.mkv"), limits(), None).unwrap();
     writer.push(&idr64(0)).unwrap();
@@ -862,7 +834,7 @@ fn review_v12_finalization_error_keeps_completed_output_snapshot() {
 }
 
 #[test]
-fn review_v13_finalization_must_not_publish_a_replacement_partial() {
+fn finalization_must_not_publish_a_replacement_partial() {
     let dir = scratch("review-v13-partial-replacement");
     let mut reference = SegmentWriter::create(&dir.join("reference.mkv"), limits(), None).unwrap();
     reference.push(&idr64(0)).unwrap();
@@ -894,19 +866,19 @@ fn review_v13_finalization_must_not_publish_a_replacement_partial() {
 }
 
 #[test]
-fn review_v13_finalization_refuses_moved_partial() {
-    v13_partial_alias("moved");
+fn finalization_refuses_moved_partial() {
+    partial_alias("moved");
 }
 #[cfg(unix)]
 #[test]
-fn review_v13_finalization_refuses_symlink_partial() {
-    v13_partial_alias("symlink");
+fn finalization_refuses_symlink_partial() {
+    partial_alias("symlink");
 }
 #[test]
-fn review_v13_finalization_refuses_multiply_linked_partial() {
-    v13_partial_alias("hardlink");
+fn finalization_refuses_multiply_linked_partial() {
+    partial_alias("hardlink");
 }
-fn v13_partial_alias(kind: &str) {
+fn partial_alias(kind: &str) {
     let dir = scratch(&format!("review-v13-{kind}"));
     let mut writer = SegmentWriter::create(&dir.join("talk.mkv"), limits(), None).unwrap();
     writer.push(&idr64(0)).unwrap();
@@ -941,7 +913,7 @@ fn v13_partial_alias(kind: &str) {
 }
 
 #[test]
-fn v14_failed_prime_must_preserve_replacement_partial() {
+fn failed_prime_must_preserve_replacement_partial() {
     let dir = scratch("v14-prime-replacement");
     let mut writer = SegmentWriter::create(&dir.join("talk.mkv"), limits(), None).unwrap();
     let partial = dir.join("talk.000001.mkv.part");
@@ -971,7 +943,7 @@ fn v14_failed_prime_must_preserve_replacement_partial() {
 }
 
 #[test]
-fn review_v14_foreign_segments_must_not_shorten_this_recordings_retention() {
+fn foreign_segments_must_not_shorten_this_recordings_retention() {
     let dir = scratch("review-v14-foreign-budget");
     let foreign = dir.join("talk.000099.mkv");
     std::fs::write(&foreign, b"unrelated user recording").unwrap();
@@ -1001,14 +973,14 @@ fn review_v14_foreign_segments_must_not_shorten_this_recordings_retention() {
 }
 
 #[test]
-fn review_v14_foreign_bytes_must_not_consume_retention_budget() {
-    v14_retention_budget(false);
+fn foreign_bytes_must_not_consume_retention_budget() {
+    retention_budget(false);
 }
 #[test]
-fn review_v14_replaced_owned_entry_must_not_consume_retention_budget() {
-    v14_retention_budget(true);
+fn replaced_owned_entry_must_not_consume_retention_budget() {
+    retention_budget(true);
 }
-fn v14_retention_budget(replace: bool) {
+fn retention_budget(replace: bool) {
     let dir = scratch("review-v14-byte-budget");
     let mut writer = SegmentWriter::create(
         &dir.join("talk.mkv"),
@@ -1051,7 +1023,7 @@ fn v14_retention_budget(replace: bool) {
 }
 #[cfg(unix)]
 #[test]
-fn v14_failed_prime_preserves_aliases() {
+fn failed_prime_preserves_aliases() {
     for hardlink in [false, true] {
         let dir = scratch("v14-prime-alias");
         let mut writer = SegmentWriter::create(&dir.join("talk.mkv"), limits(), None).unwrap();

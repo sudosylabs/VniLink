@@ -64,7 +64,7 @@ fn sibling(database: &Path, suffix: &str) -> PathBuf {
 
 /// Linux data directory for the application, as a function of the inputs.
 /// Relative or empty `XDG_DATA_HOME` is ignored. This does not read the environment.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn linux_app_dir(
     home: Option<&Path>,
     xdg: Option<&std::ffi::OsStr>,
@@ -108,7 +108,7 @@ pub(crate) fn linux_fstype_is_remote(fstype: &str) -> bool {
 
 /// Classifies `path` after resolving symlinks in the existing prefix.
 /// The returned flag does not change the path used to create the store.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn linux_path_is_remote(mountinfo: &str, path: &Path) -> Result<bool, StoreFailure> {
     let resolved = resolve_mount_path(path)?;
     let Some(fstype) = linux_mount_fstype(mountinfo, &resolved) else {
@@ -117,13 +117,13 @@ pub(crate) fn linux_path_is_remote(mountinfo: &str, path: &Path) -> Result<bool,
     Ok(linux_fstype_is_remote(&fstype))
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 const MAX_SYMLINKS: usize = 40;
 
 /// Resolves the deepest existing prefix, then appends any missing suffix.
 /// A symlink loop past [`MAX_SYMLINKS`] fails. This does not create directories
 /// and is not a new store location.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn resolve_mount_path(path: &Path) -> Result<PathBuf, StoreFailure> {
     let mut hops = 0usize;
     let mut current = PathBuf::new();
@@ -173,7 +173,7 @@ pub(crate) fn resolve_mount_path(path: &Path) -> Result<PathBuf, StoreFailure> {
     Ok(current)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 #[derive(Clone)]
 enum OwnedComponent {
     Prefix(std::ffi::OsString),
@@ -183,7 +183,7 @@ enum OwnedComponent {
     Normal(std::ffi::OsString),
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn owned_components(path: &Path) -> Vec<OwnedComponent> {
     use std::path::Component;
     path.components()
@@ -197,7 +197,7 @@ fn owned_components(path: &Path) -> Vec<OwnedComponent> {
         .collect()
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn push_owned(path: &mut PathBuf, component: &OwnedComponent) {
     match component {
         OwnedComponent::Prefix(prefix) => path.push(prefix),
@@ -324,7 +324,7 @@ fn application_dir() -> Result<PathBuf, StoreFailure> {
         if location_is_remote(base)? {
             return Err(StoreFailure::Unavailable);
         }
-        return Ok(app);
+        Ok(app)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -569,15 +569,15 @@ pub(crate) fn location_is_remote(path: &Path) -> Result<bool, StoreFailure> {
     {
         let info =
             fs::read_to_string("/proc/self/mountinfo").map_err(|_| StoreFailure::Unavailable)?;
-        return linux_path_is_remote(&info, path);
+        linux_path_is_remote(&info, path)
     }
     #[cfg(target_os = "macos")]
     {
-        return macos_is_remote(path);
+        macos_is_remote(path)
     }
     #[cfg(windows)]
     {
-        return windows_support::is_remote(path);
+        windows_support::is_remote(path)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
@@ -679,6 +679,7 @@ fn open_unix(path: &Path, flags: i32, mode: i32) -> Result<File, StoreFailure> {
     if fd < 0 {
         return Err(StoreFailure::Unavailable);
     }
+    // Safety: `fd` is the non-negative descriptor `open` just returned and nothing else owns it, so the `File` takes sole ownership.
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
@@ -760,12 +761,14 @@ fn macos_acl_result(acl: macos_acl::Acl) -> Result<bool, StoreFailure> {
         }
         entry_id = macos_acl::ACL_NEXT_ENTRY;
         let mut tag: macos_acl::AclTag = 0;
+        // Safety: `entry` was written by the successful `acl_get_entry` and stays valid until `acl` is freed below; `tag` is a valid out-pointer.
         let tag_read = unsafe { macos_acl::acl_get_tag_type(entry, &mut tag) };
         if tag_read != 0 || tag == macos_acl::ACL_EXTENDED_ALLOW {
             allows = true;
             break;
         }
     }
+    // Safety: `acl` came from the successful ACL read above and is freed exactly once; `entry` is not used afterwards.
     unsafe { macos_acl::acl_free(acl) };
     Ok(allows)
 }
@@ -774,6 +777,7 @@ fn macos_acl_result(acl: macos_acl::Acl) -> Result<bool, StoreFailure> {
 fn macos_is_remote(path: &Path) -> Result<bool, StoreFailure> {
     let text = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|_| StoreFailure::Unavailable)?;
+    // Safety: `libc::statfs` is a plain C struct of integers and arrays, for which all-zero bytes are a valid value.
     let mut info: libc::statfs = unsafe { std::mem::zeroed() };
     // Safety: `info` is a zeroed `statfs` owned by this frame. `statfs` writes
     // one struct and does not retain the path.
@@ -785,6 +789,7 @@ fn macos_is_remote(path: &Path) -> Result<bool, StoreFailure> {
     if info.f_flags & MNT_LOCAL == 0 {
         return Ok(true);
     }
+    // Safety: `f_fstypename` is a NUL-terminated array that `statfs` filled in `info`, and the copy ends before `info` is dropped.
     let name = unsafe { std::ffi::CStr::from_ptr(info.f_fstypename.as_ptr()) };
     let name = name.to_string_lossy();
     Ok(matches!(
@@ -877,14 +882,14 @@ mod windows_support {
         use windows::Win32::Storage::FileSystem::CreateDirectoryW;
         let wide = wide_path(path)?;
         let descriptor = security_descriptor()?;
-        let mut attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
+        let attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor.0 .0,
             bInheritHandle: false.into(),
         };
         // Safety: `wide` and `attributes` live for the call. The descriptor is
         // freed when `descriptor` drops.
-        unsafe { CreateDirectoryW(windows::core::PCWSTR(wide.as_ptr()), Some(&mut attributes)) }
+        unsafe { CreateDirectoryW(windows::core::PCWSTR(wide.as_ptr()), Some(&attributes)) }
             .map_err(|_| StoreFailure::Unavailable)?;
         Ok(())
     }
@@ -922,7 +927,10 @@ mod windows_support {
             )
         }
         .map_err(|_| StoreFailure::Unavailable)?;
+        // Safety: `CreateFileW` succeeded, so `handle` is a valid handle that
+        // nothing else owns; `File` takes it over and closes it.
         let file = unsafe { File::from_raw_handle(handle.0) };
+        // Safety: the handle is the one `file` owns and stays open for the call.
         let flushed = unsafe {
             FlushFileBuffers(windows::Win32::Foundation::HANDLE(
                 file.as_raw_handle_copy(),
@@ -964,6 +972,8 @@ mod windows_support {
             return Err(StoreFailure::Unavailable);
         }
         let mut info = ACL_SIZE_INFORMATION::default();
+        // Safety: `dacl` is non-null and live, and `info` is an
+        // ACL_SIZE_INFORMATION of exactly the size passed.
         let info_ok = unsafe {
             GetAclInformation(
                 dacl,
@@ -980,6 +990,8 @@ mod windows_support {
         let mut broader = false;
         for index in 0..info.AceCount {
             let mut ace = std::ptr::null_mut();
+            // Safety: `dacl` is the non-null DACL read above, `index` is below
+            // its AceCount and `ace` is a local out value.
             let ace_ok = unsafe { GetAce(dacl, index, &mut ace) };
             if ace_ok.is_err() || ace.is_null() {
                 broader = true;
@@ -996,6 +1008,8 @@ mod windows_support {
                 broader = true;
                 break;
             }
+            // Safety: the type check above makes this an ACCESS_ALLOWED_ACE inside
+            // the DACL, which `descriptor` keeps alive.
             let allowed = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
             let sid = windows::Win32::Security::PSID(
                 (&allowed.SidStart as *const u32).cast_mut() as *mut _
@@ -1025,6 +1039,8 @@ mod windows_support {
 
     fn free_descriptor(descriptor: windows::Win32::Security::PSECURITY_DESCRIPTOR) {
         if !descriptor.0.is_null() {
+            // Safety: the non-null descriptor is a LocalAlloc block from the
+            // security APIs and every caller frees it once.
             unsafe {
                 windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
                     descriptor.0,
@@ -1059,12 +1075,17 @@ mod windows_support {
         // Safety: the process handle is a pseudo-handle and is not closed.
         // The token handle is closed at the end of this function.
         let mut token = windows::Win32::Foundation::HANDLE::default();
+        // Safety: the pseudo-handle is always valid and `token` is a local out value.
         unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
             .map_err(|_| StoreFailure::Unavailable)?;
         let mut length = 0u32;
         // Asks only for the size: it fails with ERROR_INSUFFICIENT_BUFFER by design.
+        // Safety: `token` is the open query token; no buffer is passed and
+        // `length` is a local out value.
         let _sized = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut length) };
         let mut buffer = vec![0u8; length as usize];
+        // Safety: `buffer` is writable for `length` bytes, the size the first
+        // call reported, and outlives the call.
         unsafe {
             GetTokenInformation(
                 token,
@@ -1078,15 +1099,20 @@ mod windows_support {
             vnilink::ignored!(
                 vnilink::trace::STORAGE,
                 "a token handle that cannot close ends with the process",
+                // Safety: `token` was opened above and this error path is its
+                // only close.
                 unsafe { windows::Win32::Foundation::CloseHandle(token) }
             );
             StoreFailure::Unavailable
         })?;
+        // Safety: the second call filled `buffer` with a TOKEN_USER whose SID
+        // lives in the same buffer, which stays alive until this function returns.
         let user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
         let text = sid_string(user.User.Sid);
         vnilink::ignored!(
             vnilink::trace::STORAGE,
             "a token handle that cannot close ends with the process",
+            // Safety: `token` was opened above and is closed once, here.
             unsafe { windows::Win32::Foundation::CloseHandle(token) }
         );
         text
@@ -1102,12 +1128,18 @@ mod windows_support {
             return Err(StoreFailure::Unavailable);
         }
         let mut len = 0usize;
+        // Safety: `raw` is non-null and nul-terminated on success, so reading
+        // up to the terminator stays inside the allocation.
         unsafe {
             while *raw.0.add(len) != 0 {
                 len += 1;
             }
         }
+        // Safety: the `len` units before the terminator are initialized and the
+        // allocation is not freed until after this copy.
         let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(raw.0, len) });
+        // Safety: `raw` was allocated by `ConvertSidToStringSidW` for LocalFree
+        // and nothing reads it afterwards.
         unsafe {
             windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
                 raw.0 as *mut _,
@@ -1124,7 +1156,7 @@ mod windows_support {
         };
         let wide = wide_path(path)?;
         let descriptor = security_descriptor()?;
-        let mut attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
+        let attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor.0 .0,
             bInheritHandle: false.into(),
@@ -1137,13 +1169,15 @@ mod windows_support {
                 windows::core::PCWSTR(wide.as_ptr()),
                 FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                Some(&mut attributes),
+                Some(&attributes),
                 disposition,
                 FILE_ATTRIBUTE_NORMAL,
                 None,
             )
         }
         .map_err(|_| StoreFailure::Unavailable)?;
+        // Safety: `CreateFileW` succeeded, so `handle` is a valid file handle
+        // that nothing else owns; `File` takes it over and closes it.
         Ok(unsafe { File::from_raw_handle(handle.0) })
     }
 

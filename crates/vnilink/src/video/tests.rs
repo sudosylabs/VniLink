@@ -45,6 +45,9 @@ const KEYFRAME: usize = P_FRAME * 10;
 /// VideoToolbox keyframe interval (`crates/vnilink-macos/src/encode.rs`).
 const GOP: u64 = 120;
 
+/// The share a keyframe carries before any loss is reported.
+const KEYFRAME_PROTECTION: f64 = 0.1;
+
 /// The harness's impaired profiles keep a 20 ms round trip, so a request
 /// reaches the host and its keyframe comes back within one frame.
 const RTT: Duration = Duration::from_millis(20);
@@ -81,11 +84,15 @@ fn frame(index: u64, keyframe: bool) -> EncodedFrame {
 }
 
 fn datagrams(index: u64, keyframe: bool) -> Vec<Vec<u8>> {
+    datagrams_at(index, keyframe, 0.0)
+}
+
+fn datagrams_at(index: u64, keyframe: bool, protection: f64) -> Vec<Vec<u8>> {
     fragment(
         &encode_video_body(&frame(index, keyframe), index as u32),
         index as u32,
         DATAGRAM,
-        0.0,
+        protection,
     )
 }
 
@@ -154,6 +161,9 @@ impl ViewerPath {
 /// The encoder side: a periodic keyframe, plus one for every frame on which
 /// at least one request has arrived.
 struct Host {
+    /// Whether frames carry the parity a clean link gets from
+    /// `ViewerLoss::protection`, as the product host sends them.
+    protected: bool,
     due: Option<u64>,
     keyframes: u64,
     bytes: usize,
@@ -161,8 +171,9 @@ struct Host {
 }
 
 impl Host {
-    fn new() -> Self {
+    fn new(protected: bool) -> Self {
         Self {
+            protected,
             due: None,
             keyframes: 0,
             bytes: 0,
@@ -181,7 +192,14 @@ impl Host {
             self.due = None;
             self.keyframes += 1;
         }
-        let parts = datagrams(index, keyframe);
+        let protection = if !self.protected {
+            0.0
+        } else if keyframe {
+            KEYFRAME_PROTECTION
+        } else {
+            crate::video::BASE_PROTECTION
+        };
+        let parts = datagrams_at(index, keyframe, protection);
         let size: usize = parts.iter().map(Vec::len).sum();
         self.bytes += size;
         if keyframe {
@@ -194,11 +212,21 @@ impl Host {
 /// Streams `frames` frames; `deliver` decides which datagrams arrive.
 fn stream(
     frames: u64,
+    deliver: impl FnMut(u64, usize) -> bool,
+) -> (ViewerPath, Host, Vec<u64>, u64) {
+    stream_protected(frames, false, deliver)
+}
+
+/// [`stream`] from a host that protects its frames as the product does on
+/// a link with no reported loss.
+fn stream_protected(
+    frames: u64,
+    protected: bool,
     mut deliver: impl FnMut(u64, usize) -> bool,
 ) -> (ViewerPath, Host, Vec<u64>, u64) {
     let start = Instant::now();
     let mut viewer = ViewerPath::new();
-    let mut host = Host::new();
+    let mut host = Host::new(protected);
     let mut shown = Vec::new();
     let (mut frozen, mut longest_frozen) = (0, 0);
     for index in 0..frames {
@@ -380,8 +408,13 @@ struct LossRun {
 }
 
 fn run_loss(percent: f64, seed: u64) -> LossRun {
+    run_loss_protected(percent, seed, false)
+}
+
+fn run_loss_protected(percent: f64, seed: u64, protected: bool) -> LossRun {
     let mut loss = Loss::new(seed, percent);
-    let (viewer, host, shown, longest_frozen) = stream(30 * FPS, |_, _| !loss.drops());
+    let (viewer, host, shown, longest_frozen) =
+        stream_protected(30 * FPS, protected, |_, _| !loss.drops());
     LossRun {
         keyframes_sent: host.keyframes,
         keyframe_share: host.keyframe_bytes as f64 / host.bytes as f64,
@@ -442,6 +475,156 @@ fn loss_asks_for_one_keyframe_at_a_time() {
         *two,
         "the same seed reproduces the same run"
     );
+}
+
+/// What the host's first-loss parity buys on a link that has reported no
+/// loss: random loss at these rates mostly lands on one fragment of a frame,
+/// which one parity shard rebuilds, instead of costing a keyframe.
+#[test]
+fn base_parity_turns_isolated_loss_into_repairs_not_keyframes() {
+    for percent in [0.1, 0.5, 1.0] {
+        let bare = run_loss_protected(percent, 0x5EED, false);
+        let protected = run_loss_protected(percent, 0x5EED, true);
+        eprintln!("loss {percent}%: bare {bare:?}, protected {protected:?}");
+        assert!(
+            protected.requests < bare.requests,
+            "loss {percent}%: parity cuts keyframe requests: {bare:?} vs {protected:?}"
+        );
+        assert!(
+            protected.shown >= bare.shown,
+            "loss {percent}%: and shows at least as many pictures: {bare:?} vs {protected:?}"
+        );
+        assert!(
+            protected.longest_frozen <= bare.longest_frozen,
+            "loss {percent}%: and freezes no longer: {bare:?} vs {protected:?}"
+        );
+    }
+}
+
+fn take(
+    pictures: &mut ViewerPictures,
+    inbox: &VideoInbox,
+    wanted: &KeyframeFlag,
+    sequence: u32,
+    keyframe: bool,
+) -> Order {
+    pictures.picture(
+        sequence,
+        frame(u64::from(sequence), keyframe),
+        inbox,
+        wanted,
+    )
+}
+
+/// The send loop looks at the keyframe flag only when it wakes. A keyframe
+/// that arrives with the gap before it, between two looks, is the repair:
+/// asking for another would send the largest frame twice.
+#[test]
+fn a_keyframe_that_arrives_with_its_gap_asks_nothing_more() {
+    let start = Instant::now();
+    let mut pictures = ViewerPictures::new();
+    let inbox = VideoInbox::new();
+    let wanted = KeyframeFlag::new();
+    assert_eq!(take(&mut pictures, &inbox, &wanted, 0, true), Order::Next);
+    assert_eq!(
+        take(&mut pictures, &inbox, &wanted, 2, false),
+        Order::Gap(1),
+        "picture 1 never arrived"
+    );
+    assert!(wanted.pending(), "the gap wants a keyframe");
+    assert_eq!(
+        take(&mut pictures, &inbox, &wanted, 3, true),
+        Order::Next,
+        "the keyframe answers it"
+    );
+    assert!(
+        !pictures.should_ask(&wanted, start, RTT, FRAME_PERIOD),
+        "the send loop finds nothing owed"
+    );
+    // A loss after the keyframe is a new one.
+    assert_eq!(
+        take(&mut pictures, &inbox, &wanted, 5, false),
+        Order::Gap(1)
+    );
+    assert!(pictures.should_ask(&wanted, start, RTT, FRAME_PERIOD));
+}
+
+#[test]
+fn a_keyframe_that_skips_pictures_is_its_own_repair() {
+    let start = Instant::now();
+    let mut pictures = ViewerPictures::new();
+    let inbox = VideoInbox::new();
+    let wanted = KeyframeFlag::new();
+    pictures.picture(0, frame(0, true), &inbox, &wanted);
+    assert_eq!(
+        pictures.picture(4, frame(4, true), &inbox, &wanted),
+        Order::Gap(3),
+        "the pictures before it were lost"
+    );
+    assert!(
+        !pictures.should_ask(&wanted, start, RTT, FRAME_PERIOD),
+        "the keyframe that follows them needs no other"
+    );
+}
+
+/// A screen that holds still after a lost picture shows no later picture to
+/// reveal the gap, so the viewer asks when the frame goes quiet.
+#[test]
+fn a_frame_that_goes_quiet_asks_for_a_keyframe_without_waiting_for_the_next_change() {
+    let start = Instant::now();
+    let mut viewer = ViewerPath::new();
+    for part in &datagrams(0, true) {
+        viewer.receive(part, start);
+    }
+    assert_eq!(viewer.drain(), vec![0]);
+    let mut lost = datagrams(1, false);
+    lost.pop();
+    for part in &lost {
+        viewer.receive(part, start);
+    }
+    assert_eq!(viewer.requests, 0, "nothing shows picture 1 missing yet");
+    let at = viewer
+        .pictures
+        .quiet_at(RTT, FRAME_PERIOD)
+        .expect("an incomplete frame is waiting");
+    assert!(
+        at < start + Duration::from_millis(250),
+        "well inside the reassembler's half second"
+    );
+    viewer.pictures.give_up_quiet(at, RTT, FRAME_PERIOD);
+    viewer.pass(at);
+    assert_eq!(viewer.requests, 1, "the quiet frame wants a keyframe");
+    assert_eq!(viewer.pictures.quiet_at(RTT, FRAME_PERIOD), None);
+    // The keyframe arrives; a frame quiet after it, older, asks no more.
+    for part in &datagrams(2, true) {
+        viewer.receive(part, at);
+    }
+    assert_eq!(viewer.drain(), vec![2], "the keyframe shows");
+}
+
+/// A frame given up that an arrived picture already follows is the gap's.
+#[test]
+fn a_quiet_frame_an_arrived_picture_follows_asks_nothing_itself() {
+    let start = Instant::now();
+    let mut viewer = ViewerPath::new();
+    for part in &datagrams(0, true) {
+        viewer.receive(part, start);
+    }
+    let mut lost = datagrams(1, false);
+    lost.pop();
+    for part in &lost {
+        viewer.receive(part, start);
+    }
+    // Picture 2 completes: picture 1 is a gap and has asked already.
+    for part in &datagrams(2, false) {
+        viewer.receive(part, start);
+    }
+    assert_eq!(viewer.requests, 1);
+    viewer
+        .pictures
+        .give_up_quiet(start + Duration::from_millis(60), RTT, FRAME_PERIOD);
+    viewer.pass(start + Duration::from_millis(60));
+    assert_eq!(viewer.requests, 1, "nothing owed twice");
 }
 
 #[test]

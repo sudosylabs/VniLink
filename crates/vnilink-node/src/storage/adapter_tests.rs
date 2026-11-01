@@ -146,10 +146,10 @@ fn production_database() -> PathBuf {
     {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let xdg = std::env::var_os("XDG_DATA_HOME");
-        return linux_app_dir(home.as_deref(), xdg.as_deref())
+        linux_app_dir(home.as_deref(), xdg.as_deref())
             .unwrap_or_else(|_| PathBuf::from("/missing-home"))
             .join("engine")
-            .join("installation.sqlite3");
+            .join("installation.sqlite3")
     }
     #[cfg(not(target_os = "linux"))]
     {

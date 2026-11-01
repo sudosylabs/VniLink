@@ -20,6 +20,7 @@ import { isNativeWindowConfiguration } from '../../src/platform/window/common/wi
 import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
 import { ScenarioSelection, browserScenarioNames } from '../automation/scenarios.js';
+import { contentSecurityPolicy } from '../../src/code/electron-main/webContentsSecurity.js';
 import { registerDevelopmentWindow } from '../../src/code/electron-main/development.js';
 import { NOTICE_URL } from '../../src/platform/systemActions/common/notice.js';
 import { windowPrompt } from '../../src/platform/systemActions/electron-main/noticeWindow.js';
@@ -105,6 +106,51 @@ class SmokeSuite {
 	}
 
 	/** The notice window counts down from its deadline, answers Cancel, and closes when its signal aborts. */
+	/** Stops the engine process the way a crash does and follows the window until the engine is back and answering. */
+	private async verifyEngineRestart(window: BrowserWindow): Promise<void> {
+		const engine = app.getAppMetrics().find(metric => metric.type === 'Utility' && metric.name === 'VniLink Engine');
+		assert(engine, 'The engine process is not running');
+		// The window listens before the process is stopped, so nothing it is told is missed.
+		await window.webContents.executeJavaScript(`(() => {
+			const service = window.driver.engine;
+			const story = [];
+			const changes = [
+				service.onDidChangeRestarting(restarting => story.push(restarting ? 'restarting' : 'steady')),
+				service.onDidChangeAvailability(available => story.push(available ? 'available' : 'unavailable')),
+			];
+			const back = new Promise((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error('The engine did not come back: ' + story.join(', '))), 30000);
+				changes.push(service.onDidChangeAvailability(available => { if (available) { clearTimeout(timer); resolve(); } }));
+			});
+			window.engineRestart = { story, changes, back };
+		})()`);
+		process.kill(engine.pid, 'SIGKILL');
+		const outcome: unknown = await window.webContents.executeJavaScript(`(async () => {
+			const service = window.driver.engine;
+			const { story, changes, back } = window.engineRestart;
+			await back;
+			const snapshot = await service.execute({ type: 'snapshot' });
+			const hostingEvent = new Promise((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error('No hosting event arrived from the restarted engine')), 10000);
+				changes.push(service.onDidReceiveEvents(batch => {
+					if (batch.events.some(event => event.type === 'hostingChanged' && event.hosting === false)) { clearTimeout(timer); resolve(); }
+				}));
+			});
+			const configuration = window.driver.mainProcess.getChannel('configuration');
+			await configuration.call('updateValue', { key: 'application.acceptConnections', value: false });
+			await hostingEvent;
+			await configuration.call('updateValue', { key: 'application.acceptConnections', value: true });
+			for (const change of changes) { change.dispose(); }
+			return { story, snapshot, restarting: service.restarting };
+		})()`);
+		assert(record(outcome));
+		assert(Array.isArray(outcome.story));
+		assert.deepEqual(outcome.story.slice(0, 2), ['restarting', 'unavailable'], 'Windows were not told the engine was coming back before they heard it was gone');
+		assert.deepEqual(outcome.story.slice(-2), ['steady', 'available']);
+		assert(isEngineReply(outcome.snapshot) && outcome.snapshot.type === 'snapshot' && outcome.snapshot.snapshot.hosting, 'The restarted engine does not host again');
+		assert.equal(outcome.restarting, false);
+	}
+
 	private async verifyNotice(): Promise<void> {
 		const theme = nativeTheme.themeSource;
 		const known = new Set(BrowserWindow.getAllWindows());
@@ -130,7 +176,8 @@ class SmokeSuite {
 		try {
 			for (const mode of ['light', 'dark'] as const) {
 				nativeTheme.themeSource = mode;
-				const answer = windowPrompt({ action: 'restart', name: 'Studio Mac', deadline: Date.now() + 30_000 }, new AbortController().signal);
+				const deadline = Date.now() + 30_000;
+				const answer = windowPrompt({ action: 'restart', name: 'Studio Mac', deadline }, new AbortController().signal);
 				const window = await opened();
 				assert.equal(window.webContents.getURL(), NOTICE_URL);
 				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('#notice-title')?.textContent`), 'Studio Mac wants to restart this computer');
@@ -149,7 +196,14 @@ class SmokeSuite {
 				}
 				appendFileSync(join(this.application.output, 'notice.log'), `${mode}: ${material} ${root} ${body}\n`);
 				const first = await detail(window);
-				assert.match(String(first), /^Restarting in (30|29) s\. Save your work, or cancel\.$/);
+				// The seconds left are those to the deadline when the notice was drawn,
+				// however long the window took to open on this machine.
+				const readAt = Date.now();
+				const shown = /^Restarting in (\d+) s\. Save your work, or cancel\.$/.exec(String(first));
+				assert(shown, `Unexpected countdown: ${String(first)}`);
+				const left = Number(shown[1]);
+				const remaining = deadline - readAt;
+				assert(left <= 30 && left >= Math.floor(remaining / 1000), `The countdown shows ${String(left)} s with ${String(remaining)} ms left`);
 				await new Promise(resolve => setTimeout(resolve, 1300));
 				assert.notEqual(await detail(window), first, 'The notice did not count down');
 				writeFileSync(join(this.application.output, `notice-${mode}.png`), (await window.webContents.capturePage()).toPNG());
@@ -264,7 +318,7 @@ class SmokeSuite {
 				document.querySelector('.device-pairing-popover .monaco-button.primary').click();
 				return code();
 			})()`);
-			assert.equal(code, '042');
+			assert.equal(code, '042517');
 			assert.equal(await download, 'VniLink.vnl');
 			await driver.screenshot('devices-pairing-popover');
 			await window.webContents.executeJavaScript(`(async () => {
@@ -272,15 +326,15 @@ class SmokeSuite {
 				const popover = document.querySelector('.device-pairing-popover');
 				const deadline = Date.now() + 3000;
 				const boxes = () => [...popover.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
-				while (boxes().length !== 3) {
+				while (boxes().length !== 6) {
 					if (Date.now() > deadline) { throw new Error('Incoming pairing field did not appear'); }
 					await new Promise(resolve => requestAnimationFrame(resolve));
 				}
 				if (popover.querySelector('.device-pairing-code:not([hidden])')) { throw new Error('Incoming confirmation disclosed the expected code'); }
-				[...'731'].forEach((digit, index) => {
+				[...'731904'].forEach((digit, index) => {
 					boxes()[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
 				});
-				boxes()[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+				boxes()[5].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 			})()`);
 			// Opening an invitation: choose it, type the creator's digits, then read ours back.
 			const frame = `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`;
@@ -301,8 +355,8 @@ class SmokeSuite {
 			await window.webContents.executeJavaScript(`(async () => {
 				await browserTests.browserScenarios.openFixtureInvitationFile();
 				const boxes = [...document.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
-				if (boxes.length !== 3) { throw new Error('The opened invitation did not ask for three digits'); }
-				[...'04'].forEach((digit, index) => {
+				if (boxes.length !== 6) { throw new Error('The opened invitation did not ask for six digits'); }
+				[...'04251'].forEach((digit, index) => {
 					boxes[index].focus();
 					boxes[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
 				});
@@ -310,8 +364,8 @@ class SmokeSuite {
 			await window.webContents.executeJavaScript(frame);
 			await driver.screenshot('devices-import-code');
 			await window.webContents.executeJavaScript(`(async () => {
-				const box = document.querySelectorAll('.device-pairing-field .code-input-digit')[2];
-				box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '2', bubbles: true, cancelable: true }));
+				const box = document.querySelectorAll('.device-pairing-field .code-input-digit')[5];
+				box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '7', bubbles: true, cancelable: true }));
 				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 				const deadline = Date.now() + 3000;
 				while (!document.querySelector('.device-pairing-popover .device-pairing-code:not([hidden])')) {
@@ -383,6 +437,9 @@ class SmokeSuite {
 		if (this.selection.includes('notice')) {
 			await this.verifyNotice();
 		}
+		if (this.selection.includes('engine-restart')) {
+			await this.verifyEngineRestart(window);
+		}
 		if (!this.selection.names.some((name: string) => ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload'].includes(name))) {
 			return;
 		}
@@ -434,7 +491,7 @@ class SmokeSuite {
 			engine.privateRejected !== true ||
 			engine.hostingRejected !== true
 		) {
-			throw new Error('Native control bridge failed');
+			throw new Error(`Native control bridge failed: ${JSON.stringify(engine, (key, value: unknown) => (key === 'token' ? '…' : value))}`);
 		}
 		let rejected = false;
 		try {
@@ -447,6 +504,15 @@ class SmokeSuite {
 		}
 		if ((await net.fetch('vnilink://app/main.cjs')).status !== 404) {
 			throw new Error('Unlisted asset accessible');
+		}
+		// The policy travels as a header, which `frame-ancestors` needs, on every document the protocol serves.
+		const policy = (await net.fetch('vnilink://app/index.html')).headers.get('content-security-policy');
+		if (policy !== contentSecurityPolicy || !policy.includes("frame-ancestors 'none'")) {
+			throw new Error(`The workbench is served without its content security policy: ${String(policy)}`);
+		}
+		// A page cannot open another window, whatever script runs in it.
+		if (await window.webContents.executeJavaScript(`window.open('about:blank') === null`) !== true) {
+			throw new Error('A page opened a window');
 		}
 		if (this.selection.includes('navigation')) {
 			await this.verifyHomeNavigation(window);

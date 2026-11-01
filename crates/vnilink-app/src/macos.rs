@@ -706,6 +706,7 @@ impl VnilinkCore {
             };
             // Restarts in a row whose capture never started.
             let mut failed_starts = 0;
+            let mut backoff = crate::backoff::Backoff::default();
             while !worker_stop.load(Ordering::Acquire) {
                 let pending = worker_core.video_targets().unwrap_or_default();
                 if pending.is_empty() {
@@ -723,7 +724,7 @@ impl VnilinkCore {
                 ) {
                     *worker_error.lock().unwrap_or_else(|e| e.into_inner()) =
                         Some(error.to_string());
-                    std::thread::sleep(Duration::from_millis(200));
+                    backoff.wait(&worker_stop);
                     continue;
                 }
                 // One OS stream for the requested display. A viewer who selected
@@ -816,9 +817,15 @@ impl VnilinkCore {
                             );
                         }
                     }
-                    std::thread::sleep(Duration::from_millis(200));
+                    // A capture that started and then ended is a first failure;
+                    // one that never started lengthens the wait.
+                    if capture_started {
+                        backoff.reset();
+                    }
+                    backoff.wait(&worker_stop);
                 } else {
                     failed_starts = 0;
+                    backoff.reset();
                 }
             }
             // Shared teardown (session, encode caps) belongs to the last
@@ -917,7 +924,7 @@ mod viewer_tests {
         }
     }
     #[test]
-    fn review_v7_last_capture_retirement_preserves_files_parent() {
+    fn last_capture_retirement_preserves_files_parent() {
         let host = core();
         let controller = core();
         host.start_hosting().unwrap();
@@ -930,13 +937,7 @@ mod viewer_tests {
         let parent = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        while controller.controller_session(parent.id).unwrap().phase
-            != crate::FfiSessionPhase::Active
-        {
-            assert!(std::time::Instant::now() < until);
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::session_active(&controller, parent.id);
         let parent = controller.controller_session(parent.id).unwrap();
         let files = controller
             .attach_controller_service(parent.id, parent.generation, crate::FfiServiceKind::Files)
@@ -1008,7 +1009,7 @@ mod viewer_tests {
         );
     }
     #[test]
-    fn review_v8_sharing_disable_preserves_each_files_parent() {
+    fn sharing_disable_preserves_each_files_parent() {
         let host = core();
         let first = core();
         let second = core();
@@ -1028,13 +1029,7 @@ mod viewer_tests {
                 .unwrap();
             host.set_desktop_sharing(true, true, false, true).unwrap();
             let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
-            let until = std::time::Instant::now() + Duration::from_secs(5);
-            while viewer.controller_session(parent.id).unwrap().phase
-                != crate::FfiSessionPhase::Active
-            {
-                assert!(std::time::Instant::now() < until);
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            crate::wait::session_active(viewer, parent.id);
             let parent = viewer.controller_session(parent.id).unwrap();
             let owner = viewer
                 .attach_controller_service(
@@ -1085,7 +1080,7 @@ mod viewer_tests {
         );
     }
     #[test]
-    fn review_v9_source_failure_preserves_healthy_desktop_and_files_parents() {
+    fn source_failure_preserves_healthy_desktop_and_files_parents() {
         let host = core();
         let first = core();
         let second = core();
@@ -1142,13 +1137,7 @@ mod viewer_tests {
                 .unwrap();
             host.set_desktop_sharing(true, true, false, true).unwrap();
             let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
-            let until = std::time::Instant::now() + Duration::from_secs(5);
-            while viewer.controller_session(parent.id).unwrap().phase
-                != crate::FfiSessionPhase::Active
-            {
-                assert!(std::time::Instant::now() < until);
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            crate::wait::session_active(viewer, parent.id);
             let parent = viewer.controller_session(parent.id).unwrap();
             let owner = viewer
                 .attach_controller_service(
@@ -1179,19 +1168,15 @@ mod viewer_tests {
             desktops.push(desktop);
         }
         assert_eq!(host.inner.hosted_sessions().unwrap().len(), 2);
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        while host
-            .inner
-            .video_targets()
-            .unwrap()
-            .iter()
-            .filter(|target| target.display_id != 0)
-            .count()
-            != 2
-        {
-            assert!(std::time::Instant::now() < until);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the host to hold 2 display source(s)", || {
+            host.inner
+                .video_targets()
+                .unwrap()
+                .iter()
+                .filter(|target| target.display_id != 0)
+                .count()
+                == 2
+        });
         let failures = host.inner.subscribe().unwrap();
         let failed = host
             .inner
@@ -1216,26 +1201,19 @@ mod viewer_tests {
                 .count(),
             1
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(vnilink::CoreEvent::HostedServiceChanged { service }) = failures.try_recv()
-            {
-                if service.id == failed.id
-                    && service.generation == failed.generation
-                    && service.phase
-                        == vnilink::ServicePhase::Failed(
-                            "Display 2: secondary source failed".into(),
-                        )
-                {
-                    break;
-                }
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "missing terminal source-failure event"
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        crate::wait::event(&failures, "the terminal source-failure event", |event| {
+            matches!(
+                event,
+                vnilink::CoreEvent::HostedServiceChanged { service }
+                    if service.id == failed.id
+                        && service.generation == failed.generation
+                        && service.phase
+                            == vnilink::ServicePhase::Failed(
+                                "Display 2: secondary source failed".into(),
+                            )
+            )
+            .then_some(())
+        });
         assert!(files.iter().all(|lease| !lease.is_cancelled()));
         assert_eq!(
             services
@@ -1279,7 +1257,7 @@ mod viewer_tests {
         std::fs::remove_dir_all(root_path).unwrap();
     }
     #[test]
-    fn review_v10_unselected_source_failure_matches_actual_routing() {
+    fn unselected_source_failure_matches_actual_routing() {
         let host = core();
         let first = core();
         let second = core();
@@ -1336,13 +1314,7 @@ mod viewer_tests {
                 .unwrap();
             host.set_desktop_sharing(true, true, false, true).unwrap();
             let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
-            let until = std::time::Instant::now() + Duration::from_secs(5);
-            while viewer.controller_session(parent.id).unwrap().phase
-                != crate::FfiSessionPhase::Active
-            {
-                assert!(std::time::Instant::now() < until);
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            crate::wait::session_active(viewer, parent.id);
             let parent = viewer.controller_session(parent.id).unwrap();
             let owner = viewer
                 .attach_controller_service(
@@ -1375,19 +1347,15 @@ mod viewer_tests {
             desktops.push(desktop);
         }
         assert_eq!(host.inner.hosted_sessions().unwrap().len(), 2);
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        while host
-            .inner
-            .video_targets()
-            .unwrap()
-            .iter()
-            .filter(|target| target.display_id != 0)
-            .count()
-            != 1
-        {
-            assert!(std::time::Instant::now() < until);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the host to hold 1 display source(s)", || {
+            host.inner
+                .video_targets()
+                .unwrap()
+                .iter()
+                .filter(|target| target.display_id != 0)
+                .count()
+                == 1
+        });
         let targets = host.inner.video_targets().unwrap();
         let unselected = targets
             .iter()
@@ -1457,13 +1425,7 @@ mod viewer_tests {
         let parent = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        while controller.controller_session(parent.id).unwrap().phase
-            != crate::FfiSessionPhase::Active
-        {
-            assert!(std::time::Instant::now() < until);
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::session_active(&controller, parent.id);
         assert!(
             host_target(&host.inner).is_none(),
             "idle neutral parent must not start capture"
@@ -1516,17 +1478,7 @@ mod viewer_tests {
             .into(),
         )
         .unwrap();
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        let frame = loop {
-            if let Some(frame) = viewer.poll() {
-                break frame;
-            }
-            assert!(
-                std::time::Instant::now() < until,
-                "service viewer did not decode"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        let frame = crate::wait::wait_for("the viewer to decode a frame", || viewer.poll());
         assert_eq!((frame.buffer().width, frame.buffer().height), (64, 64));
         viewer.stop();
         assert!(
@@ -1535,11 +1487,7 @@ mod viewer_tests {
         );
         let next_viewer = controller.mac_desktop_viewer(handle.clone()).unwrap();
         target.close(&host.inner); // capture/encode failure cleanup uses this path
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        while !handle.is_cancelled() {
-            assert!(std::time::Instant::now() < until);
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::wait_until("the handle to be cancelled", || handle.is_cancelled());
         assert!(next_viewer.poll().is_none());
         next_viewer.stop();
         assert!(host_target(&host.inner).is_none());
@@ -1579,13 +1527,7 @@ mod viewer_tests {
         let pending = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        while controller.controller_session(pending.id).unwrap().phase
-            != crate::FfiSessionPhase::Active
-        {
-            assert!(std::time::Instant::now() < until);
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::session_active(&controller, pending.id);
         let parent = controller.controller_session(pending.id).unwrap();
         let owner = controller
             .attach_controller_service(parent.id, parent.generation, crate::FfiServiceKind::Desktop)
@@ -1643,17 +1585,7 @@ mod viewer_tests {
             .into(),
         )
         .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let frame = loop {
-            if let Some(frame) = viewer.poll() {
-                break frame;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "decoded frame did not arrive"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        };
+        let frame = crate::wait::wait_for("the viewer to decode a frame", || viewer.poll());
         let buffer = frame.buffer();
         assert_eq!((buffer.width, buffer.height), (64, 64));
         let pixel = &frame.picture.pixels()[32 * buffer.stride as usize + 32 * 4..][..4];
@@ -1664,14 +1596,9 @@ mod viewer_tests {
         let replacement = controller.mac_desktop_viewer(handle.clone()).unwrap();
         replacement.stop();
         controller.disconnect_session(parent.id).unwrap();
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        while controller.mac_desktop_viewer(handle.clone()).is_ok() {
-            assert!(
-                std::time::Instant::now() < until,
-                "a Desktop on a closed connection takes no viewer"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::wait_until("a Desktop on a closed connection to take no viewer", || {
+            controller.mac_desktop_viewer(handle.clone()).is_err()
+        });
         controller.shutdown();
         host.shutdown();
     }
@@ -2158,7 +2085,7 @@ mod host_cursor_tests {
 mod review_v8_cursor_mode_change {
     use super::*;
     #[test]
-    fn review_v8_cursor_uses_live_logical_extent_after_mode_change() {
+    fn cursor_uses_live_logical_extent_after_mode_change() {
         let live = vnilink::DisplayInfo {
             id: 1,
             origin_x: 0,

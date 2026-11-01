@@ -289,6 +289,7 @@ pub(super) fn start_outgoing(
             stop: stop.clone(),
             link: None,
             remote_availability: None,
+            changed: tokio::sync::watch::channel(()).0,
         };
         let info = session_info(&session);
         state.outgoing.insert(id, session);
@@ -429,7 +430,24 @@ pub(super) async fn establish(
             },
         )
         .await?;
-        match read_frame_within(&mut recv, Some(super::HELLO_ANSWER_WAIT)).await? {
+        let mut answer = read_frame_within(&mut recv, Some(super::HELLO_ANSWER_WAIT)).await?;
+        if matches!(answer, ControlMessage::AwaitingApproval) {
+            // The host parked this Hello for its owner to type the digits
+            // this connection and the two ids produce. Show them while the
+            // answer is awaited.
+            if let Some(secret) = crate::pairing::control_secret(
+                &connection,
+                shared.secret.public().as_bytes(),
+                &device.endpoint_id,
+            ) {
+                shared.events.publish(CoreEvent::ControlCheck {
+                    endpoint_id: device.display_id.clone(),
+                    check: crate::pairing::control_digits(&secret),
+                });
+            }
+            answer = read_frame_within(&mut recv, Some(super::HELLO_ANSWER_WAIT)).await?;
+        }
+        match answer {
             ControlMessage::Accept {
                 stamp,
                 hostname: accept_hostname,
@@ -521,7 +539,7 @@ pub(super) async fn establish(
     // accepted here; the controller never accepts anything else.
     let aux_stop = stop_rx.clone();
     let aux_connection = connection.clone();
-    let aux_shared = Arc::clone(&shared);
+    let aux_shared = Arc::clone(shared);
     let aux_peer = device.endpoint_id;
     let aux = tokio::spawn(async move {
         super::fs::serve_aux_controller(aux_shared, aux_connection, aux_peer, aux_stop).await;
@@ -581,6 +599,7 @@ pub(super) async fn command_loop(
     });
     let _reader = ControllerTasks(vec![reader.abort_handle()]);
     let mut remote_close = false;
+    let mut announcements = crate::address::AnnouncementBudget::new(std::time::Instant::now());
     loop {
         if *stop_rx.borrow() {
             break;
@@ -594,15 +613,17 @@ pub(super) async fn command_loop(
             frame = frames_rx.recv() => {
                 match frame {
                     Some(Ok(ControlMessage::Addresses { relays, direct })) => {
-                        crate::ignored!(
-                            crate::trace::SESSION,
-                            "a peer's name and addresses are refreshed at the next connection",
-                            remember_peer_addresses(
-                                shared,
-                                &peer_key,
-                                Announcement { relays, direct },
-                            )
-                        );
+                        if announcements.admit(std::time::Instant::now()) {
+                            crate::ignored!(
+                                crate::trace::SESSION,
+                                "a peer's name and addresses are refreshed at the next connection",
+                                remember_peer_addresses(
+                                    shared,
+                                    &peer_key,
+                                    Announcement { relays, direct },
+                                )
+                            );
+                        }
                     }
                     Some(Ok(ControlMessage::Close)) => {
                         remote_close = true;
@@ -708,6 +729,11 @@ pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
         state.link_refused.insert(peer_key);
     } else {
         state.link_refused.remove(&peer_key);
+    }
+    if matches!(error, Error::Unauthorized) {
+        state.link_unauthorized.insert(peer_key);
+    } else {
+        state.link_unauthorized.remove(&peer_key);
     }
     drop(state);
     settle_outgoing(

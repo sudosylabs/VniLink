@@ -113,9 +113,9 @@ impl Core {
     pub fn wants_attested_picture(&self, at: std::time::Instant) -> bool {
         let _engine = self.engine();
         crate::snapshot::tap_is_fresh(at, std::time::Instant::now())
-            && !lock(&self.shared.snapshot_tap)
+            && lock(&self.shared.snapshot_tap)
                 .as_ref()
-                .is_some_and(|existing| existing.at.elapsed() < Duration::from_secs(1))
+                .is_none_or(|existing| existing.at.elapsed() >= Duration::from_secs(1))
     }
 
     /// Remember one freshly attested desktop frame for a later thumbnail.
@@ -484,7 +484,7 @@ async fn read_payload(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>, 
     crate::sidestream::read_frame(
         recv,
         |len| {
-            if len < 2 || len > FRAME_LIMIT {
+            if !(2..=FRAME_LIMIT).contains(&len) {
                 Err(Error::Malformed)
             } else {
                 Ok(())

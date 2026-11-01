@@ -27,6 +27,9 @@ impl PowerInhibitor for Inhibitor {}
 impl Drop for Inhibitor {
     fn drop(&mut self) {
         let handle = HANDLE(self.handle as *mut std::ffi::c_void);
+        // SAFETY: `handle` came from `PowerCreateRequest` and is owned by this value.
+        // The request is cleared only if it was set, and the handle is closed once,
+        // here.
         unsafe {
             if self.active {
                 ignored_hr!(
@@ -63,6 +66,8 @@ impl HostPowerFactory for WindowsPowerFactory {
                 SimpleReasonString: PWSTR(reason.as_mut_ptr()),
             },
         };
+        // SAFETY: `context` points at `reason`, which outlives the call; the request
+        // copies the string.
         let handle = unsafe { PowerCreateRequest(&context) }
             .map_err(|_| Error::Unsupported("Windows rejected the power request"))?;
         let mut owned = Inhibitor {
@@ -74,6 +79,7 @@ impl HostPowerFactory for WindowsPowerFactory {
             active: false,
         };
         startup.check()?;
+        // SAFETY: `handle` is the request just created and still open.
         unsafe { PowerSetRequest(handle, owned.kind) }
             .map_err(|_| Error::Unsupported("Windows rejected power inhibition"))?;
         owned.active = true;

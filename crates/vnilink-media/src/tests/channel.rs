@@ -129,6 +129,7 @@ fn a_waiter_wakes_on_a_push_and_not_before_a_deadline_without_one() {
     let pusher = {
         let channel = Arc::clone(&channel);
         std::thread::spawn(move || {
+            // A real timer: the push comes after the waiter has begun to wait.
             std::thread::sleep(Duration::from_millis(20));
             channel.push(slot(2, 2));
         })

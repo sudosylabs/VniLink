@@ -65,18 +65,22 @@ fn pairing_handles_and_errors() {
     let reader = open_core();
     let file = writer.export_pairing_file(900, true).unwrap();
     assert!(!file.bytes.is_empty());
-    assert_eq!(file.check.len(), 3);
+    assert_eq!(file.check.len(), 6);
     let preview = reader.open_pairing_file(file.bytes.clone()).unwrap();
     assert_eq!(preview.check, file.check);
     // Check a guaranteed mismatch; the preview token never crosses the FFI.
-    let wrong_check = if file.check == "000" { "001" } else { "000" };
+    let wrong_check = if file.check == "000000" {
+        "000001"
+    } else {
+        "000000"
+    };
     assert!(matches!(
         reader.confirm_pairing(preview.id, wrong_check.to_string()),
         Err(FfiError::PairingCheckMismatch)
     ));
     assert!(reader.open_pairing_file(vec![0, 1, 2]).is_err());
     assert!(matches!(
-        reader.confirm_pairing(999_999, "042".to_string()),
+        reader.confirm_pairing(999_999, "042042".to_string()),
         Err(FfiError::InvalidPairingFile)
     ));
     assert!(matches!(
@@ -84,9 +88,8 @@ fn pairing_handles_and_errors() {
         Err(FfiError::InvalidInvitation { .. })
     ));
     assert!(reader.control_request().unwrap().is_none());
-    assert_eq!(reader.control_check().len(), 3);
     assert!(matches!(
-        reader.confirm_control_request("042".to_string()),
+        reader.confirm_control_request("042042".to_string()),
         Err(FfiError::NoControlRequest)
     ));
     assert!(matches!(
@@ -136,7 +139,7 @@ fn subscriptions_poll_empty_and_report_lag() {
     let core = open_core();
     let events = core.subscribe_events().unwrap();
     assert!(events.poll(16).is_empty());
-    assert_eq!(events.lagged(), 0);
+    assert_eq!(events.take_lagged(), 0);
     // Events allow several subscribers.
     let _ = core.subscribe_events().unwrap();
 }
@@ -144,7 +147,6 @@ fn subscriptions_poll_empty_and_report_lag() {
 #[test]
 fn independent_controller_handles_cross_the_ffi() {
     use crate::FfiSessionPhase;
-    use std::time::{Duration, Instant};
     struct Capture;
     impl vnilink::HostCapture for Capture {
         fn monitor(&self) -> (u16, u16) {
@@ -186,20 +188,7 @@ fn independent_controller_handles_cross_the_ffi() {
     let pending_a = controller.begin_connect_services(a.endpoint_id()).unwrap();
     let pending_b = controller.begin_connect_services(b.endpoint_id()).unwrap();
     assert_ne!(pending_a.id, pending_b.id);
-    let wait = |id, phase| {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let session = controller.controller_session(id).unwrap();
-            if session.phase == phase {
-                break session;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "FFI session timed out: {session:?}"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    };
+    let wait = |id, phase| crate::wait::session_phase(&controller, id, phase);
     let sa = wait(pending_a.id, FfiSessionPhase::Active);
     let sb = wait(pending_b.id, FfiSessionPhase::Active);
     assert_eq!(controller.controller_sessions().unwrap().len(), 2);
@@ -221,20 +210,13 @@ fn independent_controller_handles_cross_the_ffi() {
     let (da, db) = (desktop(&sa), desktop(&sb));
     let (va, vb) = (da.subscribe_video().unwrap(), db.subscribe_video().unwrap());
     for (host, payload) in [(&a, 1u8), (&b, 2u8)] {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let hosted = loop {
-            if let Some(service) = host
-                .inner
+        let hosted = crate::wait::wait_for("the host's Desktop", || {
+            host.inner
                 .hosted_services()
                 .unwrap()
                 .into_iter()
                 .find(|service| service.kind == vnilink::ServiceKind::Desktop)
-            {
-                break service;
-            }
-            assert!(Instant::now() < deadline, "the host's Desktop");
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        });
         host.inner
             .publish_desktop_video(
                 hosted.id,

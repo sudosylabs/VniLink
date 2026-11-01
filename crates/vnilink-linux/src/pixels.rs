@@ -54,3 +54,56 @@ pub fn raw_frame_from_bgrx(
     }
     RawFrame::bgra(width, height, timestamp_us, packed)
 }
+
+/// A 32-bit pixel's bytes in memory, for formats the screen cast portal may
+/// offer besides BGRA and BGRx.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ByteOrder {
+    /// R, G, B, A.
+    Rgba,
+    /// R, G, B, unused.
+    Rgbx,
+    /// Unused, B, G, R.
+    Xbgr,
+}
+
+/// Rows of `order` pixels as tightly packed BGRA. The unused byte becomes
+/// opaque alpha; RGBA keeps its own.
+#[cfg(any(target_os = "linux", test))]
+pub fn raw_frame_from_order(
+    order: ByteOrder,
+    width: u16,
+    height: u16,
+    stride: usize,
+    timestamp_us: u64,
+    bytes: &[u8],
+) -> Result<RawFrame, Error> {
+    if width == 0 || height == 0 {
+        return Err(Error::InvalidFrame(
+            "frame width and height must be non-zero",
+        ));
+    }
+    let row = usize::from(width) * 4;
+    if stride < row {
+        return Err(Error::InvalidFrame("frame stride is shorter than one row"));
+    }
+    let needed = stride.saturating_mul(usize::from(height));
+    if bytes.len() < needed {
+        return Err(Error::InvalidFrame("frame is missing pixels"));
+    }
+    let mut packed = vec![0u8; row * usize::from(height)];
+    for y in 0..usize::from(height) {
+        let src = bytes[y * stride..y * stride + row].chunks_exact(4);
+        let dst = packed[y * row..(y + 1) * row].chunks_exact_mut(4);
+        for (src, dst) in src.zip(dst) {
+            let (b, g, r, a) = match order {
+                ByteOrder::Rgba => (src[2], src[1], src[0], src[3]),
+                ByteOrder::Rgbx => (src[2], src[1], src[0], 255),
+                ByteOrder::Xbgr => (src[1], src[2], src[3], 255),
+            };
+            dst.copy_from_slice(&[b, g, r, a]);
+        }
+    }
+    RawFrame::bgra(width, height, timestamp_us, packed)
+}

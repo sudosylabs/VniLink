@@ -41,7 +41,7 @@ use vnilink::{
     SessionRole, SharingPolicy,
 };
 use vnilink_testkit::events::drain;
-use vnilink_testkit::session::{wait_closed, wait_request};
+use vnilink_testkit::session::{wait_closed, wait_control_check, wait_request};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 const FILE_LIFETIME: Duration = Duration::from_secs(60);
@@ -57,6 +57,7 @@ fn pairing_counts(events: &EventSubscription) -> (usize, usize) {
             CoreEvent::DevicePaired { .. } => paired += 1,
             CoreEvent::DeviceAuthorized { .. } => authorized += 1,
             CoreEvent::ControlRequested { .. }
+            | CoreEvent::ControlCheck { .. }
             | CoreEvent::SessionChanged { .. }
             | CoreEvent::PeerRenamed { .. }
             | CoreEvent::AddressesUpdated { .. }
@@ -117,6 +118,7 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
 
     host.core.start_hosting()?;
     let host_events = host.core.subscribe()?;
+    let controller_events = controller.core.subscribe()?;
     let session = std::thread::scope(|scope| {
         let connecting = scope.spawn(|| controller.connect_services(&host));
         let request = wait_request(&host.core, Duration::from_secs(5));
@@ -125,14 +127,15 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
             controller.endpoint(),
             "the host asks about the controller"
         );
+        let shown = wait_control_check(&controller_events, Duration::from_secs(5));
         assert_eq!(
-            request.check,
-            controller.core.control_check(),
-            "the host asks by the controller's digits"
+            shown.len(),
+            6,
+            "the controller shows six digits from its connection"
         );
         let granted = host
             .core
-            .confirm_control_request(&request.check)
+            .confirm_control_request(&shown)
             .expect("the approval");
         assert!(
             !granted.grants.control && !granted.grants.clipboard && !granted.grants.transfer,

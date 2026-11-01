@@ -7,9 +7,10 @@
 
 //! Encoded video for one monitor.
 //!
-//! The platform captures, encodes, and draws. This module carries H.264 bytes,
-//! drops predicted frames until the next keyframe, and does not look inside the
-//! payload. Those bytes are screen content: do not log them.
+//! The platform captures, encodes, and draws. This module carries encoded
+//! frames of the stream's codec, drops predicted frames until the next
+//! keyframe, and does not look inside the payload. Those bytes are screen
+//! content: do not log them.
 
 mod codec;
 pub use codec::{CodecSupport, VideoCodec, YuvMatrix};
@@ -27,13 +28,17 @@ mod recovery;
 mod report;
 mod viewer;
 
-pub(crate) use counters::{VideoCounters, VideoCounts};
+pub(crate) use counters::VideoCounters;
+#[cfg(test)]
+pub(crate) use datagram::parity_count;
 pub(crate) use datagram::{
-    fragment, fragmented_size, parity_count, FragmentCounts, Losses, Reassembler, Unfinished,
-    FRAG_HEADER, MAX_PROTECTION,
+    fragment, fragmented_size, FragmentCounts, Losses, Reassembler, Unfinished, FRAG_HEADER,
+    MAX_PROTECTION,
 };
 pub(crate) use frame::micros_since;
-pub(crate) use frame::{decode_video_body, encode_video_body, VideoBody, VIDEO_HEADER};
+pub(crate) use frame::{
+    decode_video_body, encode_video_body, VideoBody, MAX_REGION_BYTES, VIDEO_HEADER,
+};
 pub use frame::{EncodedFrame, FrameRole, FrameTiming, Region, MAX_REGIONS};
 pub(crate) use in_flight::InFlight;
 pub(crate) use queue::{KeyframeFlag, QueueTelemetry, VideoInbox, VideoOutbox, VideoPush};
@@ -41,7 +46,12 @@ pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
 pub(crate) use queue::{VideoQueue, INBOX_MAX_AGE, VIDEO_QUEUE};
 pub(crate) use recovery::KeyframeRequests;
-pub(crate) use report::{Congestion, ReportTally, VideoReport, ViewerLoss, REPORT_LEN};
+#[cfg(test)]
+pub(crate) use report::BASE_PROTECTION;
+pub(crate) use report::{
+    Congestion, ReportPacing, ReportTally, RttFloor, VideoReport, ViewerLoss, REPORT_EVERY,
+    REPORT_LEN,
+};
 pub(crate) use viewer::{Order, ViewerPictures};
 
 /// Largest encoded payload, not counting the video header before it.

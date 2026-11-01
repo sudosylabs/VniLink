@@ -136,6 +136,7 @@ fn positional_volumes_change_files_by_fingerprint_and_never_delete_folders() -> 
         let at = std::fs::metadata(folder.join("f.txt"))?.modified()?;
         // FAT keeps creation times to 10 ms, but macOS's msdos reports them
         // to the even second: the new file is made past that tick.
+        // A real timer: the volume keeps creation times to the even second.
         std::thread::sleep(Duration::from_millis(2_100));
         std::fs::remove_file(folder.join("f.txt"))?;
         std::fs::write(folder.join("f.txt"), b"f.txt")?;

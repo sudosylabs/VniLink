@@ -360,54 +360,64 @@ async fn dispatch_aux_host(
 }
 
 /// Serves host-initiated job streams on the controller: only status
-/// queries arrive here, answered from this side's records.
+/// queries arrive here, answered from this side's records. Each stream is
+/// its own task with the host side's read deadline, so one that stalls
+/// delays no other.
 pub(super) async fn serve_aux_controller(
     shared: Arc<Shared>,
     connection: iroh::endpoint::Connection,
     peer: [u8; 32],
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
 ) {
+    let mut workers = tokio::task::JoinSet::new();
     loop {
         if *stop_rx.borrow() {
             break;
         }
-        let accepted = tokio::select! {
-            result = connection.accept_bi() => result,
+        tokio::select! {
+            biased;
             _ = stop_rx.changed() => break,
-        };
-        let Ok((mut send, mut recv)) = accepted else {
-            break;
-        };
-        let payload: Vec<u8> = match crate::sidestream::read_frame(
-            &mut recv,
-            |len| {
-                if len > crate::job::MAX_JOB_FRAME {
-                    Err(Error::Malformed)
-                } else {
-                    Ok(())
-                }
-            },
-            |bytes| Ok(bytes.to_vec()),
-        )
-        .await
-        {
-            Ok(payload) => payload,
-            Err(_) => continue,
-        };
-        let (tag, body) = match payload.split_first() {
-            Some((tag, body)) => (*tag, body),
-            None => continue,
-        };
-        if !super::jobs::neutral_job_control_allowed(&shared, &peer, tag, body) {
-            continue;
-        }
-        if super::jobs::handle_controller_job(&shared, &peer, &mut send, body, tag)
-            .await
-            .is_err()
-        {
-            continue;
+            _ = workers.join_next(), if !workers.is_empty() => {},
+            accepted = connection.accept_bi(), if workers.len() < 16 => {
+                let Ok((send, recv)) = accepted else { break; };
+                workers.spawn(controller_job_stream(shared.clone(), peer, send, recv));
+            }
         }
     }
+}
+
+async fn controller_job_stream(
+    shared: Arc<Shared>,
+    peer: [u8; 32],
+    mut send: iroh::endpoint::SendStream,
+    mut recv: iroh::endpoint::RecvStream,
+) {
+    let read = crate::sidestream::read_frame(
+        &mut recv,
+        |len| {
+            if len == 0 || len > crate::job::MAX_JOB_FRAME {
+                Err(Error::Malformed)
+            } else {
+                Ok(())
+            }
+        },
+        |bytes| Ok(bytes.to_vec()),
+    );
+    let Ok(Ok(payload)) = tokio::time::timeout(std::time::Duration::from_secs(5), read).await
+    else {
+        return;
+    };
+    let Some((&tag, body)) = payload.split_first() else {
+        return;
+    };
+    if !super::jobs::neutral_job_control_allowed(&shared, &peer, tag, body) {
+        return;
+    }
+    crate::ignored!(
+        crate::trace::FILES,
+        "a failed job query ends only itself",
+        super::jobs::handle_controller_job(&shared, &peer, &mut send, body, tag).await
+    );
 }
 
 /// Holds back each listing served to one controller, in milliseconds,
@@ -597,10 +607,12 @@ pub(super) async fn handle_fs_request(
                 peer,
                 generation,
                 id,
-                root,
-                &path,
-                offset,
-                limit,
+                ListPage {
+                    root,
+                    path: &path,
+                    offset,
+                    limit,
+                },
                 fs::ListHooks::none(),
             )
             .await
@@ -681,6 +693,14 @@ fn list_gate(
     }
 }
 
+/// The page of a directory a listing asks for.
+struct ListPage<'a> {
+    root: u64,
+    path: &'a str,
+    offset: u64,
+    limit: u16,
+}
+
 /// Serves one remote listing: admission under short locks, enumeration
 /// on a bounded worker, then an exact liveness/grant recheck before the
 /// page is encoded. A stale completion never publishes its page.
@@ -690,12 +710,15 @@ async fn serve_list_page(
     peer: &[u8; 32],
     generation: u64,
     id: u32,
-    root: u64,
-    path: &str,
-    offset: u64,
-    limit: u16,
+    page: ListPage<'_>,
     hooks: fs::ListHooks,
 ) -> (fs::Response, Option<Vec<u8>>) {
+    let ListPage {
+        root,
+        path,
+        offset,
+        limit,
+    } = page;
     // Fast gates first, without holding anything across an await.
     if let Some(status) = list_gate(&lock(&shared.state), session_id, peer, generation) {
         return (fs::Response::coded(id, status), None);
@@ -792,9 +815,11 @@ mod listing_tests {
         if STALE_PARKED.swap(true, Ordering::SeqCst) {
             return;
         }
-        while !STALE_RELEASED.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::test_support::wait_until(
+            "the parked listing to be released or cancelled",
+            Duration::from_secs(30),
+            || STALE_RELEASED.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire),
+        );
     }
 
     /// Forges a live incoming transfer session plus its paired grant, so
@@ -813,6 +838,7 @@ mod listing_tests {
             stop,
             link: None,
             remote_availability: None,
+            changed: tokio::sync::watch::channel(()).0,
         };
         let mut state = lock(&host.shared.state);
         state.trust.sharing.files = true;
@@ -879,10 +905,12 @@ mod listing_tests {
                         &STALE_PEER,
                         7,
                         9,
-                        files.root,
-                        &files.path(""),
-                        0,
-                        50,
+                        ListPage {
+                            root: files.root,
+                            path: &files.path(""),
+                            offset: 0,
+                            limit: 50,
+                        },
                         hooks,
                     )
                     .await;
@@ -890,14 +918,11 @@ mod listing_tests {
                 });
             });
             // Wait for the park: the worker reached the pre-access probe.
-            let deadline = std::time::Instant::now() + Duration::from_secs(8);
-            while !STALE_PARKED.load(Ordering::SeqCst) {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "list worker never parked"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            crate::test_support::wait_until(
+                "the list worker to park",
+                Duration::from_secs(8),
+                || STALE_PARKED.load(Ordering::SeqCst),
+            );
             // Sibling progress while parked: the async path is free and no
             // shared lock is held, so a full second listing completes.
             let (sibling, sibling_body) = sibling_rt.block_on(serve_list_page(
@@ -906,10 +931,12 @@ mod listing_tests {
                 &STALE_PEER,
                 7,
                 10,
-                files.root,
-                &files.path(""),
-                0,
-                50,
+                ListPage {
+                    root: files.root,
+                    path: &files.path(""),
+                    offset: 0,
+                    limit: 50,
+                },
                 fs::ListHooks::none(),
             ));
             assert!(sibling.is_ok(), "sibling list refused while parked");

@@ -9,3 +9,6 @@ description = "Owned portable HEVC codec bindings for VniLink"
 [build-dependencies]
 shiguredo_cmake = "=4.4.0"
 cc = "1"
+
+[lints]
+workspace = true

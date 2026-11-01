@@ -200,11 +200,13 @@ impl ExternalBufferDescriptor for Prime {
     type DescriptorAttribute = VADRMPRIMESurfaceDescriptor;
 
     fn va_surface_attribute(&mut self) -> VADRMPRIMESurfaceDescriptor {
-        let mut descriptor: VADRMPRIMESurfaceDescriptor = Default::default();
-        descriptor.width = self.width;
-        descriptor.height = self.height;
-        descriptor.fourcc = libva::VA_FOURCC_BGRX;
-        descriptor.num_objects = self.fds.len() as u32;
+        let mut descriptor = VADRMPRIMESurfaceDescriptor {
+            width: self.width,
+            height: self.height,
+            fourcc: libva::VA_FOURCC_BGRX,
+            num_objects: self.fds.len() as u32,
+            ..Default::default()
+        };
         for (index, fd) in self.fds.iter().enumerate() {
             descriptor.objects[index].fd = fd.as_raw_fd();
             descriptor.objects[index].size = self.sizes[index];

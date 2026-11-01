@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rand::RngExt;
 use tokio::sync::Notify;
 
 use super::connect::start_outgoing;
@@ -34,19 +35,34 @@ use crate::session::SessionPhase;
 use crate::DevicePresence;
 
 /// Waits between dials to an unreachable computer, the last one repeating.
-const BACKOFF: [Duration; 5] = [
+/// A computer that is off for a night is dialled every ten minutes, not
+/// every minute; it is dialled at once when it dials this one or the user
+/// asks for the link.
+const BACKOFF: [Duration; 8] = [
     Duration::from_secs(2),
     Duration::from_secs(5),
     Duration::from_secs(15),
     Duration::from_secs(30),
     Duration::from_secs(60),
+    Duration::from_secs(150),
+    Duration::from_secs(300),
+    Duration::from_secs(600),
 ];
 
-/// How often a link's session record is read for phase changes.
-const WATCH: Duration = Duration::from_millis(250);
+/// Share of each wait that is random, so computers that lost the same link
+/// together do not dial together.
+const JITTER: f64 = 0.2;
 
-/// How often the paired-device list is reconciled with running links.
-const RECONCILE: Duration = Duration::from_secs(1);
+/// The wait before the next dial after `failures` failures in a row.
+/// `spread` is a number in 0..1 that places the wait within its jitter.
+fn backoff(failures: usize, spread: f64) -> Duration {
+    let base = BACKOFF[failures.saturating_sub(1).min(BACKOFF.len() - 1)];
+    base.mul_f64(1.0 - JITTER + 2.0 * JITTER * spread.clamp(0.0, 1.0))
+}
+
+/// The longest the paired-device list goes without being reconciled with
+/// running links. A change to it, or to whether links run, is noticed at once.
+const RECONCILE: Duration = Duration::from_secs(60);
 
 impl Core {
     /// Keeps a neutral link to every paired computer so presence means
@@ -69,6 +85,8 @@ impl Core {
             let shared = Arc::clone(&self.shared);
             let handle = self.runtime.handle().clone();
             self.runtime.spawn(supervise(shared, handle));
+        } else {
+            self.shared.presence_reconcile.notify_one();
         }
         Ok(())
     }
@@ -106,7 +124,10 @@ async fn supervise(shared: Arc<Shared>, handle: tokio::runtime::Handle) {
                 handle.spawn(keep_link(Arc::clone(&shared), handle.clone(), peer))
             });
         }
-        tokio::time::sleep(RECONCILE).await;
+        tokio::select! {
+            _ = shared.presence_reconcile.notified() => {}
+            _ = tokio::time::sleep(RECONCILE) => {}
+        }
     }
     for (_, task) in links {
         task.abort();
@@ -118,6 +139,11 @@ async fn supervise(shared: Arc<Shared>, handle: tokio::runtime::Handle) {
 async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u8; 32]) {
     let wake = Arc::new(Notify::new());
     lock(&shared.presence_wake).insert(peer, Arc::clone(&wake));
+    let _ended = LinkEnded {
+        shared: Arc::clone(&shared),
+        peer,
+        wake: Arc::clone(&wake),
+    };
     let mut failures = 0usize;
     let mut reached = false;
     while running(&shared) {
@@ -160,7 +186,13 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
             );
             break;
         }
-        let refused = lock(&shared.state).link_refused.contains(&peer);
+        let (refused, unauthorized) = {
+            let state = lock(&shared.state);
+            (
+                state.link_refused.contains(&peer),
+                state.link_unauthorized.contains(&peer),
+            )
+        };
         set_presence(
             &shared,
             &display_id,
@@ -170,8 +202,21 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
                 DevicePresence::Disconnected
             },
         );
+        if unauthorized {
+            // The peer answered that this computer may not link to it. Asking
+            // again changes nothing until the peer or the user does.
+            tracing::debug!(
+                target: crate::trace::RELAY,
+                peer = crate::diagnostics::fingerprint(&peer),
+                "a paired computer refused the link: not dialling it until it dials or the user asks"
+            );
+            wake.notified().await;
+            lock(&shared.state).link_unauthorized.remove(&peer);
+            failures = 0;
+            continue;
+        }
         failures += 1;
-        let wait = BACKOFF[(failures - 1).min(BACKOFF.len() - 1)];
+        let wait = backoff(failures, rand::rng().random::<f64>());
         tracing::debug!(
             target: crate::trace::RELAY,
             peer = crate::diagnostics::fingerprint(&peer),
@@ -187,15 +232,30 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
             }
         }
     }
-    let mut state = lock(&shared.state);
-    if let Some(device) = state.trust.get(&peer).map(|d| d.display_id.clone()) {
-        state.presence.remove(&device);
-    }
-    state.link_refused.remove(&peer);
-    drop(state);
-    let mut wakes = lock(&shared.presence_wake);
-    if wakes.get(&peer).is_some_and(|w| Arc::ptr_eq(w, &wake)) {
-        wakes.remove(&peer);
+}
+
+/// What a computer's link leaves behind when its task ends, however it
+/// ends: the supervisor aborts the task of a computer that is unpaired.
+struct LinkEnded {
+    shared: Arc<Shared>,
+    peer: [u8; 32],
+    wake: Arc<Notify>,
+}
+
+impl Drop for LinkEnded {
+    fn drop(&mut self) {
+        let (shared, peer) = (&self.shared, self.peer);
+        let mut state = lock(&shared.state);
+        if let Some(device) = state.trust.get(&peer).map(|d| d.display_id.clone()) {
+            state.presence.remove(&device);
+        }
+        state.link_refused.remove(&peer);
+        state.link_unauthorized.remove(&peer);
+        drop(state);
+        let mut wakes = lock(&shared.presence_wake);
+        if wakes.get(&peer).is_some_and(|w| Arc::ptr_eq(w, &self.wake)) {
+            wakes.remove(&peer);
+        }
     }
 }
 
@@ -219,8 +279,16 @@ fn release_link(shared: &Shared, id: u64) {
     }
 }
 
-/// Follows one link's session until it ends. Returns whether it was ever up.
+/// Follows one link's session until it ends, waking when its phase moves.
+/// Returns whether it was ever up.
 async fn watch_link(shared: &Shared, id: u64, peer: &[u8; 32], display_id: &str) -> bool {
+    let Some(mut changed) = lock(&shared.state)
+        .outgoing
+        .get(&id)
+        .map(|session| session.changed.subscribe())
+    else {
+        return false;
+    };
     let mut reached = false;
     loop {
         let phase = lock(&shared.state)
@@ -254,7 +322,11 @@ async fn watch_link(shared: &Shared, id: u64, peer: &[u8; 32], display_id: &str)
                     );
                 }
                 reached = true;
-                lock(&shared.state).link_refused.remove(peer);
+                {
+                    let mut state = lock(&shared.state);
+                    state.link_refused.remove(peer);
+                    state.link_unauthorized.remove(peer);
+                }
                 set_presence(shared, display_id, DevicePresence::Connected);
             }
             Some(SessionPhase::Reconnecting) => {
@@ -265,7 +337,11 @@ async fn watch_link(shared: &Shared, id: u64, peer: &[u8; 32], display_id: &str)
         if !running(shared) {
             return reached;
         }
-        tokio::time::sleep(WATCH).await;
+        // The session is dropped from the record when its link is released,
+        // which ends the wait.
+        if changed.changed().await.is_err() {
+            return reached;
+        }
     }
 }
 
@@ -311,5 +387,20 @@ impl Core {
             .values()
             .find(|s| s.peer_key == key && s.phase == SessionPhase::Active)
             .and_then(|s| s.remote_availability.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waits_grow_to_ten_minutes_and_stay_within_their_jitter() {
+        assert_eq!(backoff(1, 0.5), BACKOFF[0]);
+        assert_eq!(backoff(50, 0.5), Duration::from_secs(600));
+        let (low, high) = (backoff(7, 0.0), backoff(7, 1.0));
+        assert_eq!(low, Duration::from_secs(240));
+        assert_eq!(high, Duration::from_secs(360));
+        assert!(backoff(3, 7.0) <= BACKOFF[2].mul_f64(1.0 + JITTER));
     }
 }

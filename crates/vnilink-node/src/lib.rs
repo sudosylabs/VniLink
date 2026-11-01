@@ -14,6 +14,8 @@
 mod native;
 mod storage;
 mod system;
+#[cfg(test)]
+mod wait;
 
 use native::{
     TransferCapability, TransferNativeBackend, TransferNativeDevice, TransferPowerPolicy,
@@ -25,11 +27,16 @@ pub use storage::reset_installation_cli;
 mod data;
 mod files;
 
-use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
+use napi::threadsafe_function::ThreadsafeFunctionCallMode;
+use napi::{
+    bindgen_prelude::{AsyncTask, Function},
+    Env, Error, Result, Status, Task,
+};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use vnilink_app::{EventPoller, FfiError, VnilinkCore};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
@@ -411,8 +418,11 @@ impl EventTransfer {
             vnilink_app::FfiEvent::DeviceUnpaired { endpoint_id } => {
                 serde_json::json!({ "type": "deviceUnpaired", "endpoint_id": endpoint_id })
             }
-            vnilink_app::FfiEvent::ControlRequested { endpoint_id, check } => {
-                serde_json::json!({ "type": "controlRequested", "endpoint_id": endpoint_id, "check": check })
+            vnilink_app::FfiEvent::ControlRequested { endpoint_id } => {
+                serde_json::json!({ "type": "controlRequested", "endpoint_id": endpoint_id })
+            }
+            vnilink_app::FfiEvent::ControlCheck { endpoint_id, check } => {
+                serde_json::json!({ "type": "controlCheck", "endpoint_id": endpoint_id, "check": check })
             }
             vnilink_app::FfiEvent::AddressesUpdated { endpoint_id } => {
                 serde_json::json!({ "type": "addressesUpdated", "endpoint_id": endpoint_id })
@@ -477,7 +487,6 @@ impl EventTransfer {
 #[derive(Serialize)]
 struct TransferControlRequest {
     endpoint_id: String,
-    check: String,
 }
 
 fn pointer_button(name: &str) -> Result<vnilink_app::FfiPointerButton> {
@@ -536,7 +545,7 @@ fn transfer_display(display: &vnilink_app::FfiDisplay) -> TransferDisplay {
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-enum Command {
+enum Call {
     BeginConnectServices {
         #[serde(rename = "endpointId")]
         endpoint_id: String,
@@ -930,7 +939,6 @@ enum Command {
     },
     SavedRelays,
     RelayRestartRequired,
-    ControlCheck,
     ControlRequest,
     ConfirmControlRequest {
         digits: String,
@@ -1032,9 +1040,6 @@ enum Reply {
     PeerAvailability {
         /// `null` until the paired computer's link has delivered a report.
         report: Option<Vec<serde_json::Value>>,
-    },
-    Check {
-        check: String,
     },
     ControlRequest {
         request: Option<TransferControlRequest>,
@@ -1145,12 +1150,15 @@ enum Reply {
 // cross the JSON bridge; callers poll and release them by id.
 struct State {
     core: Arc<VnilinkCore>,
-    closed: bool,
     native: native::NativeRuntimeState,
-    events: HashMap<u64, EventPoller>,
     /// The System service held on each connection this computer asked.
     systems: HashMap<(u64, u64), Arc<vnilink_app::SystemServiceHandle>>,
-    next_subscription: u64,
+}
+/// The event queues the window host reads. Apart from [`State`] so that a
+/// slow native command cannot hold a read of events.
+struct Subscriptions {
+    events: HashMap<u64, EventPoller>,
+    next: u64,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1164,6 +1172,8 @@ pub struct Engine {
     desktops: Arc<data::DesktopChannels>,
     cameras: Arc<data::CameraChannels>,
     state: Arc<Mutex<State>>,
+    subscriptions: Arc<Mutex<Subscriptions>>,
+    closed: Arc<AtomicBool>,
 }
 
 pub struct OpenedEngine {
@@ -1241,17 +1251,19 @@ impl Task for OpenTask {
             cameras: cameras.clone(),
             state: Arc::new(Mutex::new(State {
                 core,
-                closed: false,
                 native: native::NativeRuntimeState::new(
                     opened.backends,
                     desktops,
                     cameras,
                     opened.screen_grant,
                 ),
-                events: HashMap::new(),
                 systems: HashMap::new(),
-                next_subscription: 1,
             })),
+            subscriptions: Arc::new(Mutex::new(Subscriptions {
+                events: HashMap::new(),
+                next: 1,
+            })),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -1317,25 +1329,23 @@ pub fn open_temporary_engine(
 
 impl EngineBridge {
     /// Commands that describe displays and set desktop codec and quality defaults.
-    fn media(state: &mut State, command: &Command) -> Result<Reply> {
+    fn media(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::Topology => Reply::Displays {
-                displays: state
-                    .core
+            Call::Topology => Reply::Displays {
+                displays: core
                     .topology()
                     .map_err(core_error)?
                     .iter()
                     .map(transfer_display)
                     .collect(),
             },
-            Command::SessionTopology {
+            Call::SessionTopology {
                 session_id,
                 generation,
             } => {
                 let (id, gen) = session_target(session_id, generation)?;
                 Reply::Displays {
-                    displays: state
-                        .core
+                    displays: core
                         .session_topology(id, gen)
                         .map_err(core_error)?
                         .iter()
@@ -1343,16 +1353,15 @@ impl EngineBridge {
                         .collect(),
                 }
             }
-            Command::CaptureDisplays => Reply::DisplayIds {
-                displays: state
-                    .core
+            Call::CaptureDisplays => Reply::DisplayIds {
+                displays: core
                     .capture_displays()
                     .map_err(core_error)?
                     .into_iter()
                     .map(|display| display.to_string())
                     .collect(),
             },
-            Command::SetTopology { revision, displays } => {
+            Call::SetTopology { revision, displays } => {
                 let revision = parse_id(revision, "Invalid topology revision")?;
                 let displays = displays
                     .iter()
@@ -1369,13 +1378,10 @@ impl EngineBridge {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                state
-                    .core
-                    .set_topology(revision, displays)
-                    .map_err(core_error)?;
+                core.set_topology(revision, displays).map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetWindowDecoders { decoders } => {
+            Call::SetWindowDecoders { decoders } => {
                 use vnilink_app::FfiVideoCodec as C;
                 let decoders = decoders
                     .iter()
@@ -1400,13 +1406,10 @@ impl EngineBridge {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                state
-                    .core
-                    .set_window_decoders(decoders)
-                    .map_err(core_error)?;
+                core.set_window_decoders(decoders).map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetDesktopCodecDefault { codec } => {
+            Call::SetDesktopCodecDefault { codec } => {
                 use vnilink_app::FfiCodecPreference as C;
                 let preference = match codec.as_str() {
                     "auto" => C::Auto,
@@ -1421,13 +1424,11 @@ impl EngineBridge {
                         }))
                     }
                 };
-                state
-                    .core
-                    .set_desktop_codec_default(preference)
+                core.set_desktop_codec_default(preference)
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetDesktopQualityDefaults { quality } => {
+            Call::SetDesktopQualityDefaults { quality } => {
                 let quality = vnilink_app::new_quality(
                     quality.max_bitrate_kbps,
                     quality.max_frame_rate,
@@ -1435,9 +1436,7 @@ impl EngineBridge {
                     quality.max_height,
                 )
                 .map_err(core_error)?;
-                state
-                    .core
-                    .set_desktop_quality_defaults(quality)
+                core.set_desktop_quality_defaults(quality)
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1449,38 +1448,38 @@ impl EngineBridge {
 
 impl EngineBridge {
     /// Commands that host, advertise relays, and reset the installation.
-    fn hosting(core: &VnilinkCore, command: &Command) -> Result<Reply> {
+    fn hosting(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::StartHosting => {
+            Call::StartHosting => {
                 core.start_hosting().map_err(core_error)?;
                 Reply::Done
             }
-            Command::StopHosting => {
+            Call::StopHosting => {
                 core.stop_hosting().map_err(core_error)?;
                 Reply::Done
             }
-            Command::StopHostedSession => {
+            Call::StopHostedSession => {
                 core.stop_hosted_session().map_err(core_error)?;
                 Reply::Done
             }
-            Command::StopHostedPeer { session_id } => {
+            Call::StopHostedPeer { session_id } => {
                 let id = parse_id(session_id, "Invalid session ID")?;
                 core.stop_hosted_peer(id).map_err(core_error)?;
                 Reply::Done
             }
-            Command::ResetIdentity => {
+            Call::ResetIdentity => {
                 core.reset_identity().map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetRelayPublic => {
+            Call::SetRelayPublic => {
                 core.set_relay_public().map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetRelayCustom { urls } => {
+            Call::SetRelayCustom { urls } => {
                 core.set_relay_custom(urls.clone()).map_err(core_error)?;
                 Reply::Done
             }
-            Command::SaveCustomRelays { relays } => {
+            Call::SaveCustomRelays { relays } => {
                 let inputs = relays
                     .iter()
                     .map(|relay| vnilink_app::FfiRelayInput {
@@ -1492,10 +1491,10 @@ impl EngineBridge {
                 core.save_custom_relays(inputs).map_err(core_error)?;
                 Reply::Done
             }
-            Command::RelayRestartRequired => Reply::RestartRequired {
+            Call::RelayRestartRequired => Reply::RestartRequired {
                 required: core.relay_restart_required().map_err(core_error)?,
             },
-            Command::SavedRelays => Reply::Relays {
+            Call::SavedRelays => Reply::Relays {
                 relays: core
                     .saved_relays()
                     .map_err(core_error)?
@@ -1515,9 +1514,9 @@ impl EngineBridge {
 impl EngineBridge {
     /// The input defaults the controller's desktops open with, and this
     /// computer's own files.
-    fn input(core: &VnilinkCore, command: &Command) -> Result<Reply> {
+    fn input(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::SetInputDefaults {
+            Call::SetInputDefaults {
                 mode,
                 swap,
                 pointer,
@@ -1534,29 +1533,29 @@ impl EngineBridge {
                 .map_err(core_error)?;
                 Reply::Done
             }
-            Command::EnableFilesystemAccess => {
+            Call::EnableFilesystemAccess => {
                 core.enable_filesystem_access().map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetTransferDirectory { path } => {
+            Call::SetTransferDirectory { path } => {
                 core.set_transfer_directory(path.clone())
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::LocalPlaces => Reply::Places {
+            Call::LocalPlaces => Reply::Places {
                 places: files::transfer_places(core.places().map_err(core_error)?),
             },
-            Command::WatchLocal { root, path } => Reply::Watching {
+            Call::WatchLocal { root, path } => Reply::Watching {
                 watch: core
                     .watch_folder(parse_id(root, "Invalid root")?, path.clone())
                     .map_err(core_error)?
                     .to_string(),
             },
-            Command::UnwatchLocal { watch } => {
+            Call::UnwatchLocal { watch } => {
                 core.unwatch_folder(parse_id(watch, "Invalid watch")?);
                 Reply::Done
             }
-            Command::LocateLocal { path } => Reply::Location {
+            Call::LocateLocal { path } => Reply::Location {
                 location: core.locate(path.clone()).map_err(core_error)?.map(|found| {
                     TransferLocation {
                         root: found.root.to_string(),
@@ -1565,7 +1564,7 @@ impl EngineBridge {
                     }
                 }),
             },
-            Command::ListLocal { root, path, offset } => Reply::DirPage {
+            Call::ListLocal { root, path, offset } => Reply::DirPage {
                 page: files::transfer_page(
                     core.list_dir(
                         parse_id(root, "Invalid root")?,
@@ -1576,12 +1575,12 @@ impl EngineBridge {
                     .map_err(core_error)?,
                 ),
             },
-            Command::CreateLocalDir { root, path, name } => {
+            Call::CreateLocalDir { root, path, name } => {
                 core.create_dir(parse_id(root, "Invalid root")?, path.clone(), name.clone())
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::RenameLocal {
+            Call::RenameLocal {
                 root,
                 path,
                 name,
@@ -1598,7 +1597,7 @@ impl EngineBridge {
                 .map_err(core_error)?;
                 Reply::Done
             }
-            Command::DeleteLocal {
+            Call::DeleteLocal {
                 root,
                 path,
                 name,
@@ -1615,18 +1614,18 @@ impl EngineBridge {
                 .map_err(core_error)?;
                 Reply::Done
             }
-            Command::KeyboardMode => Reply::KeyboardMode {
+            Call::KeyboardMode => Reply::KeyboardMode {
                 mode: keyboard_mode_name(core.keyboard_mode().map_err(core_error)?).to_string(),
             },
-            Command::SetKeyboardMode { mode } => {
+            Call::SetKeyboardMode { mode } => {
                 core.set_keyboard_mode(keyboard_mode(mode)?)
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::SwapControlAndCommand => Reply::Swap {
+            Call::SwapControlAndCommand => Reply::Swap {
                 enabled: core.swap_control_and_command().map_err(core_error)?,
             },
-            Command::SetSwapControlAndCommand { enabled } => {
+            Call::SetSwapControlAndCommand { enabled } => {
                 core.set_swap_control_and_command(*enabled)
                     .map_err(core_error)?;
                 Reply::Done
@@ -1639,29 +1638,29 @@ impl EngineBridge {
 
 impl EngineBridge {
     /// Commands that dial, list, and tear down sessions.
-    fn sessions(core: &VnilinkCore, command: &Command) -> Result<Reply> {
+    fn sessions(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::BeginConnectServices { endpoint_id } => Reply::Session {
+            Call::BeginConnectServices { endpoint_id } => Reply::Session {
                 session: core
                     .begin_connect_services(endpoint_id.clone())
                     .map_err(core_error)?,
             },
-            Command::Disconnect => {
+            Call::Disconnect => {
                 core.disconnect().map_err(core_error)?;
                 Reply::Done
             }
-            Command::DisconnectSession { session_id } => {
+            Call::DisconnectSession { session_id } => {
                 let id = parse_id(session_id, "Invalid session ID")?;
                 core.disconnect_session(id).map_err(core_error)?;
                 Reply::Done
             }
-            Command::ControllerSessions => Reply::Sessions {
+            Call::ControllerSessions => Reply::Sessions {
                 sessions: core.controller_sessions().map_err(core_error)?,
             },
-            Command::HostedSessions => Reply::Sessions {
+            Call::HostedSessions => Reply::Sessions {
                 sessions: core.hosted_sessions().map_err(core_error)?,
             },
-            Command::HostedServices => Reply::Services {
+            Call::HostedServices => Reply::Services {
                 services: core
                     .hosted_services()
                     .map_err(core_error)?
@@ -1669,7 +1668,7 @@ impl EngineBridge {
                     .map(EventTransfer::service)
                     .collect(),
             },
-            Command::PeerAvailability { endpoint_id } => Reply::PeerAvailability {
+            Call::PeerAvailability { endpoint_id } => Reply::PeerAvailability {
                 report: core
                     .peer_availability(endpoint_id.clone())
                     .map_err(core_error)?
@@ -1682,17 +1681,17 @@ impl EngineBridge {
                             .collect()
                     }),
             },
-            Command::ControllerSession { session_id } => Reply::Session {
+            Call::ControllerSession { session_id } => Reply::Session {
                 session: core
                     .controller_session(parse_id(session_id, "Invalid session ID")?)
                     .map_err(core_error)?,
             },
-            Command::ForgetControllerSession { session_id } => {
+            Call::ForgetControllerSession { session_id } => {
                 core.forget_controller_session(parse_id(session_id, "Invalid session ID")?)
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::SessionPaths { session_id } => Reply::Paths {
+            Call::SessionPaths { session_id } => Reply::Paths {
                 paths: core
                     .session_paths(parse_id(session_id, "Invalid session ID")?)
                     .map_err(core_error)?
@@ -1706,7 +1705,7 @@ impl EngineBridge {
                     })
                     .collect(),
             },
-            Command::ControllerSessionPaths { session_id } => Reply::Paths {
+            Call::ControllerSessionPaths { session_id } => Reply::Paths {
                 paths: core
                     .controller_session_paths(parse_id(session_id, "Invalid session ID")?)
                     .map_err(core_error)?
@@ -1728,17 +1727,17 @@ impl EngineBridge {
 
 impl EngineBridge {
     /// Commands that pair devices and manage the device list.
-    fn pairing(core: &VnilinkCore, command: &Command) -> Result<Reply> {
+    fn pairing(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::CreateInvitation { ttl_seconds } => Reply::Invitation {
+            Call::CreateInvitation { ttl_seconds } => Reply::Invitation {
                 token: core
                     .create_invitation(u64::from(*ttl_seconds))
                     .map_err(core_error)?,
             },
-            Command::AcceptInvitation { token } => Reply::Device {
+            Call::AcceptInvitation { token } => Reply::Device {
                 device: core.accept_invitation(token.clone()).map_err(core_error)?,
             },
-            Command::ExportPairingFile {
+            Call::ExportPairingFile {
                 ttl_seconds,
                 allow_control,
             } => Reply::PairingFile {
@@ -1746,10 +1745,10 @@ impl EngineBridge {
                     .export_pairing_file(u64::from(*ttl_seconds), *allow_control)
                     .map_err(core_error)?,
             },
-            Command::OpenPairingFile { bytes } => Reply::PairingPreview {
+            Call::OpenPairingFile { bytes } => Reply::PairingPreview {
                 preview: core.open_pairing_file(bytes.clone()).map_err(core_error)?,
             },
-            Command::OpenPairingFileBase64 { data } => {
+            Call::OpenPairingFileBase64 { data } => {
                 use base64::Engine as _;
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(data)
@@ -1758,7 +1757,7 @@ impl EngineBridge {
                     preview: core.open_pairing_file(bytes).map_err(core_error)?,
                 }
             }
-            Command::ConfirmPairing { preview_id, digits } => {
+            Call::ConfirmPairing { preview_id, digits } => {
                 let id = preview_id
                     .parse::<u64>()
                     .map_err(|_| Error::new(Status::InvalidArg, "Invalid preview ID"))?;
@@ -1768,20 +1767,20 @@ impl EngineBridge {
                         .map_err(core_error)?,
                 }
             }
-            Command::Revoke { endpoint_id } => {
+            Call::Revoke { endpoint_id } => {
                 core.revoke(endpoint_id.clone()).map_err(core_error)?;
                 Reply::Done
             }
-            Command::Unpair { endpoint_id } => {
+            Call::Unpair { endpoint_id } => {
                 core.unpair(endpoint_id.clone()).map_err(core_error)?;
                 Reply::Done
             }
-            Command::SetPeerName { endpoint_id, name } => {
+            Call::SetPeerName { endpoint_id, name } => {
                 core.set_peer_pet_name(endpoint_id.clone(), Some(name.clone()))
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::PeerHostname { endpoint_id } => Reply::Hostname {
+            Call::PeerHostname { endpoint_id } => Reply::Hostname {
                 hostname: core
                     .peer_hostname(endpoint_id.clone())
                     .map_err(core_error)?,
@@ -1792,25 +1791,21 @@ impl EngineBridge {
     }
 
     /// Commands that answer incoming control requests.
-    fn access(core: &VnilinkCore, command: &Command) -> Result<Reply> {
+    fn access(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::ControlCheck => Reply::Check {
-                check: core.control_check(),
-            },
-            Command::ControlRequest => Reply::ControlRequest {
+            Call::ControlRequest => Reply::ControlRequest {
                 request: core.control_request().map_err(core_error)?.map(|request| {
                     TransferControlRequest {
                         endpoint_id: request.endpoint_id,
-                        check: request.check,
                     }
                 }),
             },
-            Command::ConfirmControlRequest { digits } => Reply::Device {
+            Call::ConfirmControlRequest { digits } => Reply::Device {
                 device: core
                     .confirm_control_request(digits.clone())
                     .map_err(core_error)?,
             },
-            Command::RejectControlRequest => {
+            Call::RejectControlRequest => {
                 core.reject_control_request().map_err(core_error)?;
                 Reply::Done
             }
@@ -1822,39 +1817,38 @@ impl EngineBridge {
 
 impl EngineBridge {
     /// Commands that report installation state without side effects.
-    fn identity(core: &VnilinkCore, command: &Command) -> Result<Reply> {
+    fn identity(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::Snapshot => Reply::Snapshot {
+            Call::Snapshot => Reply::Snapshot {
                 snapshot: core.snapshot().map_err(core_error)?,
             },
-            Command::DiagnosticSnapshot => Reply::DiagnosticSnapshot {
+            Call::DiagnosticSnapshot => Reply::DiagnosticSnapshot {
                 snapshot: core.diagnostic_snapshot_json().map_err(core_error)?,
             },
-            Command::DiagnosticRecorder => Reply::DiagnosticRecorder {
+            Call::DiagnosticRecorder => Reply::DiagnosticRecorder {
                 events: vnilink_log::export(),
             },
-            Command::LogFilter => log_filter_reply(vnilink_log::filter()),
-            Command::SetLogFilter { directives } => log_filter_reply(
+            Call::LogFilter => log_filter_reply(vnilink_log::filter()),
+            Call::SetLogFilter { directives } => log_filter_reply(
                 vnilink_log::set_filter(directives.as_deref())
                     .map_err(|error| Error::new(Status::InvalidArg, error.to_string()))?,
             ),
-            Command::EngineLogTail => Reply::EngineLogTail {
+            Call::EngineLogTail => Reply::EngineLogTail {
                 path: vnilink_log::log_file().map(|path| without_home(&path)),
                 text: vnilink_log::tail(MAX_LOG_TAIL)
                     .map_err(|_| Error::from_reason("The engine log could not be read"))?,
             },
-            Command::Endpoint => Reply::Endpoint {
+            Call::Endpoint => Reply::Endpoint {
                 endpoint_id: core.endpoint_id(),
             },
-            Command::Capabilities => Reply::Capabilities {
+            Call::Capabilities => Reply::Capabilities {
                 capabilities: core.capabilities(),
             },
-            Command::VideoCodecs => Reply::VideoCodecs {
-                codecs: TransferVideoCodecCaps::from(core.video_codecs().map_err(core_error)?),
+            Call::VideoCodecs => Reply::VideoCodecs {
+                codecs: core.video_codecs().map_err(core_error)?,
             },
-            Command::SetVideoCodecs { codecs } => {
-                core.set_video_codecs(codecs.clone().into())
-                    .map_err(core_error)?;
+            Call::SetVideoCodecs { codecs } => {
+                core.set_video_codecs(codecs.clone()).map_err(core_error)?;
                 Reply::Done
             }
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
@@ -1863,18 +1857,18 @@ impl EngineBridge {
     }
 
     /// Commands that grant service permissions and inspect terminal and file jobs.
-    fn services(state: &mut State, command: &Command) -> Result<Reply> {
+    fn services(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::SharingPolicy => Reply::SharingPolicy {
-                policy: state.core.sharing_policy().map_err(core_error)?,
+            Call::SharingPolicy => Reply::SharingPolicy {
+                policy: core.sharing_policy().map_err(core_error)?,
             },
-            Command::SetSharingPolicy { policy } => {
-                state.core.set_sharing_policy(*policy).map_err(core_error)?;
+            Call::SetSharingPolicy { policy } => {
+                core.set_sharing_policy(*policy).map_err(core_error)?;
                 Reply::Done
             }
-            Command::SystemPolicy => {
-                let policy = state.core.system_policy().map_err(core_error)?;
-                let support = state.core.system_support().map_err(core_error)?.support;
+            Call::SystemPolicy => {
+                let policy = core.system_policy().map_err(core_error)?;
+                let support = core.system_support().map_err(core_error)?.support;
                 Reply::SystemPolicy {
                     policy,
                     support: TransferSystemSupport {
@@ -1885,24 +1879,20 @@ impl EngineBridge {
                     },
                 }
             }
-            Command::SetSystemPolicy { policy } => {
-                state.core.set_system_policy(*policy).map_err(core_error)?;
+            Call::SetSystemPolicy { policy } => {
+                core.set_system_policy(*policy).map_err(core_error)?;
                 Reply::Done
             }
-            Command::TerminalPolicy => Reply::TerminalPolicy {
-                policy: TransferTerminalPolicy::from(
-                    state.core.terminal_policy().map_err(core_error)?,
-                ),
+            Call::TerminalPolicy => Reply::TerminalPolicy {
+                policy: TransferTerminalPolicy::from(core.terminal_policy().map_err(core_error)?),
             },
-            Command::SetTerminalPolicy { policy } => {
-                state
-                    .core
-                    .set_terminal_policy(policy.clone().into())
+            Call::SetTerminalPolicy { policy } => {
+                core.set_terminal_policy(policy.clone().into())
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::TerminalShells => {
-                let shells = state.core.terminal_shells().map_err(core_error)?;
+            Call::TerminalShells => {
+                let shells = core.terminal_shells().map_err(core_error)?;
                 Reply::TerminalShells {
                     shells: shells
                         .shells
@@ -1916,28 +1906,24 @@ impl EngineBridge {
                     current: shells.current,
                 }
             }
-            Command::SetTerminalShell { shell } => {
+            Call::SetTerminalShell { shell } => {
                 if shell
                     .as_ref()
                     .is_some_and(|id| id.is_empty() || id.len() > MAX_SHELL_ID)
                 {
                     return Err(Error::from_reason("Invalid shell"));
                 }
-                state
-                    .core
-                    .set_terminal_shell(shell.clone())
-                    .map_err(core_error)?;
+                core.set_terminal_shell(shell.clone()).map_err(core_error)?;
                 Reply::Done
             }
-            Command::RemoteTerminalSessions {
+            Call::RemoteTerminalSessions {
                 connection_id,
                 generation,
             } => {
                 let connection = parse_id(connection_id, "Invalid connection ID")?;
                 let generation = parse_id(generation, "Invalid generation")?;
                 Reply::TerminalSessions {
-                    sessions: state
-                        .core
+                    sessions: core
                         .remote_terminal_sessions(connection, generation)
                         .map_err(core_error)?
                         .into_iter()
@@ -1953,22 +1939,19 @@ impl EngineBridge {
                         .collect(),
                 }
             }
-            Command::CloseRemoteTerminalSession {
+            Call::CloseRemoteTerminalSession {
                 connection_id,
                 generation,
                 id,
             } => {
                 let connection = parse_id(connection_id, "Invalid connection ID")?;
                 let generation = parse_id(generation, "Invalid generation")?;
-                state
-                    .core
-                    .close_remote_terminal_session(connection, generation, id.clone())
+                core.close_remote_terminal_session(connection, generation, id.clone())
                     .map_err(core_error)?;
                 Reply::Done
             }
-            Command::HostedTerminalSessions => Reply::TerminalSessions {
-                sessions: state
-                    .core
+            Call::HostedTerminalSessions => Reply::TerminalSessions {
+                sessions: core
                     .hosted_terminal_sessions()
                     .map_err(core_error)?
                     .into_iter()
@@ -1983,10 +1966,8 @@ impl EngineBridge {
                     })
                     .collect(),
             },
-            Command::CloseTerminalSession { id } => {
-                state
-                    .core
-                    .close_terminal_session(id.clone())
+            Call::CloseTerminalSession { id } => {
+                core.close_terminal_session(id.clone())
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1996,23 +1977,27 @@ impl EngineBridge {
     }
 
     /// Commands that drain the core event queue into transfer records.
-    fn events(state: &mut State, command: &Command) -> Result<Reply> {
+    fn events(
+        core: &VnilinkCore,
+        subscriptions: &mut Subscriptions,
+        command: &Call,
+    ) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::SubscribeEvents => {
-                let poller = state.core.subscribe_events().map_err(core_error)?;
-                let subscription = state.next_subscription;
-                state.next_subscription = subscription.saturating_add(1);
-                state.events.insert(subscription, poller);
+            Call::SubscribeEvents => {
+                let poller = core.subscribe_events().map_err(core_error)?;
+                let subscription = subscriptions.next;
+                subscriptions.next = subscription.saturating_add(1);
+                subscriptions.events.insert(subscription, poller);
                 Reply::EventSubscription {
                     subscription_id: subscription.to_string(),
                 }
             }
-            Command::PollEvents {
+            Call::PollEvents {
                 subscription_id,
                 max_events,
             } => {
                 let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                let poller = state
+                let poller = subscriptions
                     .events
                     .get(&subscription)
                     .ok_or_else(|| Error::new(Status::InvalidArg, "Unknown event subscription"))?;
@@ -2023,12 +2008,12 @@ impl EngineBridge {
                     .collect();
                 Reply::Events {
                     events,
-                    lagged: poller.lagged().to_string(),
+                    lagged: poller.take_lagged().to_string(),
                 }
             }
-            Command::ReleaseEvents { subscription_id } => {
+            Call::ReleaseEvents { subscription_id } => {
                 let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                state.events.remove(&subscription);
+                subscriptions.events.remove(&subscription);
                 Reply::Done
             }
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
@@ -2041,185 +2026,253 @@ impl EngineBridge {
 /// entry point; each command family lives in its own method so new
 /// functionality extends the bridge by adding a method, never by editing a
 /// shared procedure.
+///
+/// Only the families that touch native or System state take the `State`
+/// lock; the rest run on the core alone, so a slow pairing or session command
+/// does not hold the others, and event reads have a lock of their own.
 struct EngineBridge {
+    core: Arc<VnilinkCore>,
     state: Arc<Mutex<State>>,
+    subscriptions: Arc<Mutex<Subscriptions>>,
+    closed: Arc<AtomicBool>,
+}
+
+/// Takes a lock even after a command panicked while holding it. The panic is
+/// contained in [`CommandTask::compute`] and reported to its caller; the
+/// guarded maps stay valid because each command changes them in one step, so
+/// refusing every later command would turn one failure into a dead engine.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl EngineBridge {
-    fn run(&self, command: &Command) -> Result<String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Error::from_reason("Engine unavailable"))?;
-        if state.closed {
+    fn run(&self, command: &Call) -> Result<String> {
+        if self.closed.load(Ordering::Acquire) {
             return Err(core_error(FfiError::ShutDown));
         }
-        let reply = Self::dispatch(&mut state, command)?;
+        let reply = self.dispatch(command)?;
         serde_json::to_string(&reply).map_err(|_| Error::from_reason("Cannot encode engine reply"))
     }
 
     /// Routes every command to its family. There is deliberately no fallback
-    /// arm: adding a variant to `Command` fails to compile here until it is
+    /// arm: adding a variant to `Call` fails to compile here until it is
     /// placed with its family.
-    fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
+    fn dispatch(&self, command: &Call) -> Result<Reply> {
         match command {
-            Command::Snapshot
-            | Command::DiagnosticSnapshot
-            | Command::DiagnosticRecorder
-            | Command::LogFilter
-            | Command::SetLogFilter { .. }
-            | Command::EngineLogTail
-            | Command::Endpoint
-            | Command::Capabilities
-            | Command::VideoCodecs
-            | Command::SetVideoCodecs { .. } => {
-                let core = &state.core;
-                Self::identity(core, command)
-            }
-            Command::CreateInvitation { .. }
-            | Command::AcceptInvitation { .. }
-            | Command::ExportPairingFile { .. }
-            | Command::OpenPairingFile { .. }
-            | Command::OpenPairingFileBase64 { .. }
-            | Command::ConfirmPairing { .. }
-            | Command::Revoke { .. }
-            | Command::Unpair { .. }
-            | Command::SetPeerName { .. }
-            | Command::PeerHostname { .. } => {
-                let core = &state.core;
-                Self::pairing(core, command)
-            }
-            Command::ControlCheck
-            | Command::ControlRequest
-            | Command::ConfirmControlRequest { .. }
-            | Command::RejectControlRequest => {
-                let core = &state.core;
-                Self::access(core, command)
-            }
-            Command::BeginConnectServices { .. }
-            | Command::Disconnect
-            | Command::DisconnectSession { .. }
-            | Command::ControllerSessions
-            | Command::HostedServices
-            | Command::PeerAvailability { .. }
-            | Command::HostedSessions
-            | Command::ControllerSession { .. }
-            | Command::ForgetControllerSession { .. }
-            | Command::SessionPaths { .. }
-            | Command::ControllerSessionPaths { .. } => {
-                let core = &state.core;
-                Self::sessions(core, command)
-            }
-            Command::SetInputDefaults { .. }
-            | Command::EnableFilesystemAccess
-            | Command::SetTransferDirectory { .. }
-            | Command::LocalPlaces
-            | Command::LocateLocal { .. }
-            | Command::WatchLocal { .. }
-            | Command::UnwatchLocal { .. }
-            | Command::ListLocal { .. }
-            | Command::CreateLocalDir { .. }
-            | Command::RenameLocal { .. }
-            | Command::DeleteLocal { .. }
-            | Command::KeyboardMode
-            | Command::SetKeyboardMode { .. }
-            | Command::SwapControlAndCommand
-            | Command::SetSwapControlAndCommand { .. } => {
-                let core = &state.core;
-                Self::input(core, command)
-            }
+            Call::Snapshot
+            | Call::DiagnosticSnapshot
+            | Call::DiagnosticRecorder
+            | Call::LogFilter
+            | Call::SetLogFilter { .. }
+            | Call::EngineLogTail
+            | Call::Endpoint
+            | Call::Capabilities
+            | Call::VideoCodecs
+            | Call::SetVideoCodecs { .. } => Self::identity(&self.core, command),
+            Call::CreateInvitation { .. }
+            | Call::AcceptInvitation { .. }
+            | Call::ExportPairingFile { .. }
+            | Call::OpenPairingFile { .. }
+            | Call::OpenPairingFileBase64 { .. }
+            | Call::ConfirmPairing { .. }
+            | Call::Revoke { .. }
+            | Call::Unpair { .. }
+            | Call::SetPeerName { .. }
+            | Call::PeerHostname { .. } => Self::pairing(&self.core, command),
+            Call::ControlRequest
+            | Call::ConfirmControlRequest { .. }
+            | Call::RejectControlRequest => Self::access(&self.core, command),
+            Call::BeginConnectServices { .. }
+            | Call::Disconnect
+            | Call::DisconnectSession { .. }
+            | Call::ControllerSessions
+            | Call::HostedServices
+            | Call::PeerAvailability { .. }
+            | Call::HostedSessions
+            | Call::ControllerSession { .. }
+            | Call::ForgetControllerSession { .. }
+            | Call::SessionPaths { .. }
+            | Call::ControllerSessionPaths { .. } => Self::sessions(&self.core, command),
+            Call::SetInputDefaults { .. }
+            | Call::EnableFilesystemAccess
+            | Call::SetTransferDirectory { .. }
+            | Call::LocalPlaces
+            | Call::LocateLocal { .. }
+            | Call::WatchLocal { .. }
+            | Call::UnwatchLocal { .. }
+            | Call::ListLocal { .. }
+            | Call::CreateLocalDir { .. }
+            | Call::RenameLocal { .. }
+            | Call::DeleteLocal { .. }
+            | Call::KeyboardMode
+            | Call::SetKeyboardMode { .. }
+            | Call::SwapControlAndCommand
+            | Call::SetSwapControlAndCommand { .. } => Self::input(&self.core, command),
             // Desktop input goes on its desktop's data channel (`data.rs`),
             // which decodes these shapes; no command carries it.
-            Command::SubmitKey { .. }
-            | Command::SubmitPointer { .. }
-            | Command::SubmitButton { .. }
-            | Command::SubmitWheel { .. }
-            | Command::SubmitMotion { .. }
-            | Command::SubmitPreciseWheel { .. }
-            | Command::SubmitText { .. }
-            | Command::SubmitLocalKey { .. }
-            | Command::ReleaseSessionInput { .. }
-            | Command::SelectDisplays { .. }
-            | Command::SwapSessionModifiers { .. }
-            | Command::CaptureSystemKeys { .. } => Err(Error::new(
+            Call::SubmitKey { .. }
+            | Call::SubmitPointer { .. }
+            | Call::SubmitButton { .. }
+            | Call::SubmitWheel { .. }
+            | Call::SubmitMotion { .. }
+            | Call::SubmitPreciseWheel { .. }
+            | Call::SubmitText { .. }
+            | Call::SubmitLocalKey { .. }
+            | Call::ReleaseSessionInput { .. }
+            | Call::SelectDisplays { .. }
+            | Call::SwapSessionModifiers { .. }
+            | Call::CaptureSystemKeys { .. } => Err(Error::new(
                 Status::InvalidArg,
                 "Desktop input goes on its data channel",
             )),
-            Command::SaveCustomRelays { .. }
-            | Command::StartHosting
-            | Command::StopHosting
-            | Command::StopHostedSession
-            | Command::StopHostedPeer { .. }
-            | Command::ResetIdentity
-            | Command::SetRelayPublic
-            | Command::SetRelayCustom { .. }
-            | Command::SavedRelays
-            | Command::RelayRestartRequired => {
-                let core = &state.core;
-                Self::hosting(core, command)
+            Call::SaveCustomRelays { .. }
+            | Call::StartHosting
+            | Call::StopHosting
+            | Call::StopHostedSession
+            | Call::StopHostedPeer { .. }
+            | Call::ResetIdentity
+            | Call::SetRelayPublic
+            | Call::SetRelayCustom { .. }
+            | Call::SavedRelays
+            | Call::RelayRestartRequired => Self::hosting(&self.core, command),
+            Call::StartNativeScreenSharing { .. }
+            | Call::StopNativeScreenSharing
+            | Call::NativeSharingStatus
+            | Call::StartRecording { .. }
+            | Call::RecordingStatus { .. }
+            | Call::StopRecording { .. }
+            | Call::ReleaseRecording { .. }
+            | Call::RemoteCameraDevices { .. }
+            | Call::RemoteAudioDevices { .. }
+            | Call::NativeCameraDevices
+            | Call::NativeAudioDevices
+            | Call::NativeAudioOutputs
+            | Call::SetNativeCameraSources { .. }
+            | Call::SetNativeAudioSources { .. }
+            | Call::PowerPolicy
+            | Call::SetPowerPolicy { .. }
+            | Call::PowerStatus
+            | Call::NativeRuntime
+            | Call::ReportNativePermissions { .. }
+            | Call::EnableNativeInput => native::dispatch(&mut lock(&self.state), command),
+            Call::Topology
+            | Call::SessionTopology { .. }
+            | Call::CaptureDisplays
+            | Call::SetTopology { .. }
+            | Call::SetDesktopCodecDefault { .. }
+            | Call::SetWindowDecoders { .. }
+            | Call::SetDesktopQualityDefaults { .. } => Self::media(&self.core, command),
+            Call::SubscribeEvents | Call::PollEvents { .. } | Call::ReleaseEvents { .. } => {
+                Self::events(&self.core, &mut lock(&self.subscriptions), command)
             }
-            Command::StartNativeScreenSharing { .. }
-            | Command::StopNativeScreenSharing
-            | Command::NativeSharingStatus
-            | Command::StartRecording { .. }
-            | Command::RecordingStatus { .. }
-            | Command::StopRecording { .. }
-            | Command::ReleaseRecording { .. }
-            | Command::RemoteCameraDevices { .. }
-            | Command::RemoteAudioDevices { .. }
-            | Command::NativeCameraDevices
-            | Command::NativeAudioDevices
-            | Command::NativeAudioOutputs
-            | Command::SetNativeCameraSources { .. }
-            | Command::SetNativeAudioSources { .. }
-            | Command::PowerPolicy
-            | Command::SetPowerPolicy { .. }
-            | Command::PowerStatus
-            | Command::NativeRuntime
-            | Command::ReportNativePermissions { .. }
-            | Command::EnableNativeInput => native::dispatch(state, command),
-            Command::Topology
-            | Command::SessionTopology { .. }
-            | Command::CaptureDisplays
-            | Command::SetTopology { .. }
-            | Command::SetDesktopCodecDefault { .. }
-            | Command::SetWindowDecoders { .. }
-            | Command::SetDesktopQualityDefaults { .. } => Self::media(state, command),
-            Command::SubscribeEvents
-            | Command::PollEvents { .. }
-            | Command::ReleaseEvents { .. } => Self::events(state, command),
-            Command::SharingPolicy
-            | Command::SetSharingPolicy { .. }
-            | Command::SystemPolicy
-            | Command::SetSystemPolicy { .. }
-            | Command::TerminalPolicy
-            | Command::SetTerminalPolicy { .. }
-            | Command::TerminalShells
-            | Command::SetTerminalShell { .. }
-            | Command::RemoteTerminalSessions { .. }
-            | Command::CloseRemoteTerminalSession { .. }
-            | Command::HostedTerminalSessions
-            | Command::CloseTerminalSession { .. } => Self::services(state, command),
-            Command::SystemAction { .. }
-            | Command::SystemOperation { .. }
-            | Command::CancelSystemAction { .. }
-            | Command::SetSystemPrivacy { .. }
-            | Command::SystemPrivacy { .. }
-            | Command::ScheduledSystemActions
-            | Command::CancelHostedSystemAction { .. }
-            | Command::RunHostedSystemActionNow { .. } => system::dispatch(state, command),
-            Command::Shutdown => {
-                state.closed = true;
-                native::shutdown(state)?;
+            Call::SharingPolicy
+            | Call::SetSharingPolicy { .. }
+            | Call::SystemPolicy
+            | Call::SetSystemPolicy { .. }
+            | Call::TerminalPolicy
+            | Call::SetTerminalPolicy { .. }
+            | Call::TerminalShells
+            | Call::SetTerminalShell { .. }
+            | Call::RemoteTerminalSessions { .. }
+            | Call::CloseRemoteTerminalSession { .. }
+            | Call::HostedTerminalSessions
+            | Call::CloseTerminalSession { .. } => Self::services(&self.core, command),
+            Call::SystemAction { .. }
+            | Call::SystemOperation { .. }
+            | Call::CancelSystemAction { .. }
+            | Call::SetSystemPrivacy { .. }
+            | Call::SystemPrivacy { .. }
+            | Call::ScheduledSystemActions
+            | Call::CancelHostedSystemAction { .. }
+            | Call::RunHostedSystemActionNow { .. } => {
+                system::dispatch(&mut lock(&self.state), command)
+            }
+            Call::Shutdown => {
+                self.closed.store(true, Ordering::Release);
+                native::shutdown(&mut lock(&self.state))?;
                 Ok(Reply::Done)
             }
         }
     }
 }
 
+/// How long the wake thread waits before it checks whether it was closed.
+const EVENT_WATCH_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Tells the window host that engine events are waiting, so it reads them
+/// instead of asking on a timer. It carries no events: the host reads them
+/// from its subscription, which keeps the lag and resync accounting in one
+/// place.
+#[napi]
+pub struct EventWatch {
+    closed: Arc<AtomicBool>,
+}
+#[napi]
+impl EventWatch {
+    /// Stops waking the host: no wake starts after this returns. The wake
+    /// thread ends within a second.
+    #[napi]
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+}
+impl Drop for EventWatch {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+#[napi]
+impl Engine {
+    /// Calls `callback` when engine events are waiting to be read. Calls
+    /// that wait to run merge, and the callback keeps no process alive. The
+    /// watch has a subscription of its own, opened before this returns, so
+    /// an event after this call always wakes the host, even one a read
+    /// finishes just before.
+    #[napi]
+    pub fn watch_events(&self, callback: Function<(), ()>) -> Result<EventWatch> {
+        let wake = callback
+            .build_threadsafe_function::<()>()
+            .callee_handled::<false>()
+            .weak::<true>()
+            .max_queue_size::<1>()
+            .build()?;
+        let subscription = self.core.subscribe_events().map_err(core_error)?;
+        let closed = Arc::new(AtomicBool::new(false));
+        let stop = closed.clone();
+        let engine_closed = self.closed.clone();
+        std::thread::Builder::new()
+            .name("event-watch".into())
+            .spawn(move || {
+                while !stop.load(Ordering::Acquire) && !engine_closed.load(Ordering::Acquire) {
+                    // Queued events are dropped before the wake, so one that
+                    // arrives later wakes the host again.
+                    if subscription.wait(EVENT_WATCH_CHECK) && !stop.load(Ordering::Acquire) {
+                        // Full means a wake is already waiting for this read.
+                        let _queued = wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                }
+            })
+            .map_err(|_| Error::from_reason("Cannot watch engine events"))?;
+        Ok(EventWatch { closed })
+    }
+}
+
+/// Runs one command so that a panic fails it alone. napi runs `compute` in an
+/// `extern "C"` callback, where an unwinding panic aborts the whole engine
+/// process, taking every session with it.
+fn contain(command: impl FnOnce() -> Result<String>) -> Result<String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(command)).unwrap_or_else(|_| {
+        tracing::error!(target: vnilink::trace::BRIDGE, "a command panicked");
+        Err(Error::from_reason(
+            "Internal: the engine command failed unexpectedly",
+        ))
+    })
+}
+
 pub struct CommandTask {
     bridge: EngineBridge,
-    command: Command,
+    command: Call,
     /// Its type, which the shape check admitted from the known ones.
     kind: String,
 }
@@ -2241,13 +2294,16 @@ impl Engine {
             return Err(Error::new(Status::InvalidArg, "Invalid engine command"));
         }
         let kind = raw["type"].as_str().unwrap_or_default().to_owned();
-        let decoded: Command = serde_json::from_value(raw).map_err(|_| {
+        let decoded: Call = serde_json::from_value(raw).map_err(|_| {
             tracing::info!(target: vnilink::trace::BRIDGE, command = kind.as_str(), "a command's fields were refused");
             Error::new(Status::InvalidArg, "Invalid engine command")
         })?;
         Ok(AsyncTask::new(CommandTask {
             bridge: EngineBridge {
+                core: self.core.clone(),
                 state: self.state.clone(),
+                subscriptions: self.subscriptions.clone(),
+                closed: self.closed.clone(),
             },
             command: decoded,
             kind,
@@ -2264,7 +2320,7 @@ impl Task for CommandTask {
             tracing::info_span!(target: "vnilink::bridge", "command", name = self.kind.as_str());
         let _command = span.enter();
         let started = std::time::Instant::now();
-        let reply = self.bridge.run(&self.command);
+        let reply = contain(|| self.bridge.run(&self.command));
         if let Err(error) = &reply {
             tracing::info!(
                 target: vnilink::trace::BRIDGE,
@@ -2412,7 +2468,6 @@ impl CommandShape {
             | "setRelayPublic"
             | "relayRestartRequired"
             | "savedRelays"
-            | "controlCheck"
             | "controlRequest"
             | "rejectControlRequest"
             | "controllerSessions"
@@ -2530,5 +2585,35 @@ mod ffi_store_error {
         );
         assert_eq!(ffi_error_name(&FfiError::StoreLocked), "StoreLocked");
         assert_eq!(ffi_error_name(&FfiError::CorruptRecord), "CorruptRecord");
+    }
+}
+
+#[cfg(test)]
+mod containment {
+    use super::{contain, lock};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_panicking_command_fails_alone_and_the_next_one_runs() {
+        let failed = contain(|| panic!("a bug in one command"));
+        assert_eq!(
+            failed.unwrap_err().reason,
+            "Internal: the engine command failed unexpectedly"
+        );
+        assert_eq!(contain(|| Ok("{}".into())).unwrap(), "{}");
+    }
+
+    #[test]
+    fn a_lock_poisoned_by_a_panic_is_taken_again() {
+        let shared = Arc::new(Mutex::new(1_u8));
+        let poisoner = shared.clone();
+        let panicked = std::thread::spawn(move || {
+            let _held = poisoner.lock().unwrap();
+            panic!("holding the lock");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(shared.is_poisoned());
+        assert_eq!(*lock(&shared), 1);
     }
 }

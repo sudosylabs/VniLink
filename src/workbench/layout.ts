@@ -114,6 +114,7 @@ export abstract class Layout extends Disposable implements ILayoutService {
 		this.notice.textContent = message ?? '';
 	}
 
+	protected static readonly engineRestartingNotice = nls.localize('workbench.engineRestarting', 'VniLink’s connection service stopped and is starting again.');
 	protected static readonly engineUnavailableNotice = nls.localize('workbench.engineUnavailable', 'VniLink could not start its connection service. Restart the app to try again.');
 	protected static readonly unexpectedErrorNotice = nls.localize('workbench.actionFailed', 'The action could not be completed. Try again.');
 }

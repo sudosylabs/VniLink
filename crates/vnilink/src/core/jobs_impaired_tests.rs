@@ -240,6 +240,24 @@ fn write_cases(root: &Path, matrix: &Matrix) -> Vec<&'static str> {
     vec!["small", "large", "mixed"]
 }
 
+/// Blocks until a job on `core` changes after `seen`, or `within` passes,
+/// on the signal the engine's own workers wait on.
+fn wait_for_job_revision(core: &Core, seen: u64, within: Duration) {
+    let deadline = Instant::now() + within;
+    let (gate, wake) = &core.shared.job_wake;
+    let mut guard = gate.lock().unwrap_or_else(|poison| poison.into_inner());
+    while core.job_revision() == seen {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return;
+        }
+        guard = wake
+            .wait_timeout(guard, left)
+            .map(|(guard, _)| guard)
+            .unwrap_or_else(|poison| poison.into_inner().0);
+    }
+}
+
 /// Drives until the receiver record ends or `deadline` passes, and returns
 /// the receiver's snapshot with the time it was taken, and what QUIC saw on
 /// each core's files connections once a second meanwhile. A job still running at
@@ -267,6 +285,7 @@ fn drive(
             std::thread::spawn(move || {
                 while !done.load(Ordering::Acquire) {
                     let idle = core.drive_jobs().map_or(true, |jobs| jobs.is_empty());
+                    // A real timer: the cadence of the tight driver under test.
                     std::thread::sleep(if idle {
                         pause.max(Duration::from_millis(1))
                     } else {
@@ -283,6 +302,7 @@ fn drive(
     let mut files_paths = Vec::new();
     let mut next_sample = started;
     let (snapshot, at) = loop {
+        let revision = host.job_revision();
         let snapshot = host.job_snapshot(job).expect("receiver record");
         let now = Instant::now();
         if snapshot.state.is_terminal() || now >= deadline {
@@ -297,7 +317,13 @@ fn drive(
             }));
             next_sample += Duration::from_secs(1);
         }
-        std::thread::sleep(Duration::from_millis(5));
+        // The receiver's own job-change signal, or the next sample, whichever
+        // comes first.
+        wait_for_job_revision(
+            host,
+            revision,
+            next_sample.min(deadline).saturating_duration_since(now),
+        );
     };
     if !snapshot.state.is_terminal() {
         for core in [host, controller] {
@@ -316,11 +342,9 @@ fn run_case(
     controller: &Arc<Core>,
     host: &Arc<Core>,
     files: &crate::ServiceInfo,
-    from: &FilesystemLocation,
-    to: &FilesystemLocation,
+    (from, to): (&FilesystemLocation, &FilesystemLocation),
     name: &str,
-    controller_root: &Path,
-    host_root: &Path,
+    (controller_root, host_root): (&Path, &Path),
 ) -> Value {
     let started = Instant::now();
     let (folder, names) = from.entry(name);
@@ -411,11 +435,12 @@ fn run_matrix(matrix: &Matrix) -> Value {
                 &controller,
                 &host,
                 &files,
-                &from,
-                &to,
+                (&from, &to),
                 name,
-                &controller_scratch.0.join("root"),
-                &host_scratch.0.join("root"),
+                (
+                    &controller_scratch.0.join("root"),
+                    &host_scratch.0.join("root"),
+                ),
             )
         })
         .collect();

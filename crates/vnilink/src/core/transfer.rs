@@ -145,6 +145,10 @@ impl Core {
     }
 }
 
+/// Files connections one paired computer may hold open to this one: a
+/// fetch shares one, and a redial replaces it once it is seen closed.
+const MAX_FILES_CONNECTIONS_PER_PEER: usize = 4;
+
 /// Serves one incoming files connection, one request per stream, until
 /// the peer closes it. Tracked by peer so revoke and unpair close it.
 pub(super) async fn serve_files_connection(shared: Arc<Shared>, connection: Connection) {
@@ -153,10 +157,17 @@ pub(super) async fn serve_files_connection(shared: Arc<Shared>, connection: Conn
         connection.close(0u8.into(), b"denied");
         return;
     }
-    lock(&shared.files_serving)
-        .entry(peer)
-        .or_default()
-        .push(connection.clone());
+    {
+        let mut serving = lock(&shared.files_serving);
+        let kept = serving.entry(peer).or_default();
+        kept.retain(|open| open.close_reason().is_none());
+        if kept.len() >= MAX_FILES_CONNECTIONS_PER_PEER {
+            drop(serving);
+            connection.close(0u8.into(), b"busy");
+            return;
+        }
+        kept.push(connection.clone());
+    }
     let mut streams = tokio::task::JoinSet::new();
     while let Ok((send, recv)) = connection.accept_bi().await {
         while streams.try_join_next().is_some() {}
@@ -195,6 +206,7 @@ async fn serve_stream(
         })
         .await
     };
+    let mut told = 0u64;
     match opened {
         Ok(Ok(source)) => {
             // Cancelling or revoking stops a file mid-way, not only the
@@ -208,14 +220,18 @@ async fn serve_stream(
                 counters,
                 || super::jobs::still_serving(&shared, &peer, request.job),
                 |position, finished| {
-                    super::jobs::sending_at(
-                        &shared,
-                        &peer,
-                        request.job,
-                        request.file,
-                        position,
-                        finished,
-                    )
+                    // The jobs lock is taken once a megabyte, not per chunk.
+                    if finished || position.saturating_sub(told) >= super::jobs::SENT_EVERY {
+                        told = position;
+                        super::jobs::sending_at(
+                            &shared,
+                            &peer,
+                            request.job,
+                            request.file,
+                            position,
+                            finished,
+                        );
+                    }
                 },
             )
             .await;

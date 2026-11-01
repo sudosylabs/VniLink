@@ -16,7 +16,7 @@ fn idle_portal_keeps_the_picture_and_propagates_capture_failure() {
         size: Mutex::new(Some((2, 2))),
         channel: FrameChannel::new(),
         format: Mutex::new(Some(VideoFormat::BGRx)),
-        modifier: Mutex::new(DRM_FORMAT_MOD_INVALID),
+        modifier: Mutex::new(crate::dmabuf::DRM_FORMAT_MOD_INVALID),
         modifier_explicit: AtomicBool::new(false),
         delivery: Mutex::new(Some(PortalDelivery {
             format: PortalFormat::Bgrx,

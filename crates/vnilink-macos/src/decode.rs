@@ -240,7 +240,7 @@ fn format_description(
     let pointers: Vec<*const u8> = parameter_sets.iter().map(|set| set.as_ptr()).collect();
     let sizes: Vec<usize> = parameter_sets.iter().map(|set| set.len()).collect();
     let mut description: apple_cf::raw::CMFormatDescriptionRef = std::ptr::null();
-    // The vectors stay alive for the call. The created description is +1 and
+    // SAFETY: `pointers` and `sizes` hold one entry per parameter set, and the sets they point at stay alive for the call. The created description is +1 and
     // `from_raw` adopts that retain.
     let status = unsafe {
         if codec == vnilink::VideoCodec::H265 {
@@ -269,6 +269,7 @@ fn format_description(
             "VideoToolbox rejected the parameter sets",
         ));
     }
+    // SAFETY: `description` is the +1 description the successful create call returned, adopted exactly once here; null yields `None`.
     unsafe { CMFormatDescription::from_raw(description.cast_mut().cast()) }.ok_or(
         Error::DecodeRejected("VideoToolbox rejected the parameter sets"),
     )
@@ -302,7 +303,7 @@ fn sample_buffer(
     ));
     let sample_size = avcc.len();
     let mut sample: apple_cf::raw::CMSampleBufferRef = std::ptr::null_mut();
-    // `CMSampleBufferCreateReady` copies the timing and retains the block and
+    // SAFETY: `block` and `format` are live; `timing`, `sample_size` and `sample` are valid locals. `CMSampleBufferCreateReady` copies the timing and retains the block and
     // format description. `from_raw` adopts the returned +1 sample.
     let status = unsafe {
         apple_cf::raw::CMSampleBufferCreateReady(
@@ -320,6 +321,7 @@ fn sample_buffer(
     if status != 0 {
         return Err(Error::DecodeRejected("VideoToolbox rejected the frame"));
     }
+    // SAFETY: `sample` is the +1 sample the successful create call returned, adopted exactly once here; null yields `None`.
     unsafe { CMSampleBuffer::from_raw(sample.cast()) }
         .ok_or(Error::DecodeRejected("VideoToolbox rejected the frame"))
 }
@@ -342,12 +344,13 @@ fn raw_time(time: CMTime) -> apple_cf::raw::CMTime {
 }
 
 fn bgra_attributes() -> Result<CFDictionary, Error> {
+    // SAFETY: reads a framework constant by value; it is set when CoreVideo loads, and a null is rejected below.
     let key_ptr =
         unsafe { std::ptr::addr_of!(apple_cf::raw::kCVPixelBufferPixelFormatTypeKey).read() };
     if key_ptr.is_null() {
         return Err(Error::Unsupported("VideoToolbox H.264"));
     }
-    // The key is a process-lifetime constant. The wrapper retains its own copy.
+    // SAFETY: the key is a process-lifetime constant. The wrapper retains its own copy.
     let key = unsafe { CFString::from_raw_borrowed(key_ptr.cast_mut().cast()) }
         .ok_or(Error::Unsupported("VideoToolbox H.264"))?;
     let value = CFNumber::from_u64(u64::from(BGRA));
@@ -375,7 +378,7 @@ fn raw_frame(buffer: &CVPixelBuffer, timestamp_us: u64) -> Result<RawFrame, Erro
     if stride < row {
         return Err(Error::InvalidFrame("frame stride is shorter than one row"));
     }
-    // The decoder has finished this buffer, this guard is the only mapping,
+    // SAFETY: the decoder has finished this buffer, this guard is the only mapping,
     // and the copy below only reads.
     let source = unsafe { guard.as_slice() }
         .ok_or(Error::DecodeRejected("the decoder did not return BGRA"))?;

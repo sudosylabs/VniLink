@@ -23,9 +23,9 @@ use super::database::{
 use super::key::{FileVault, KeyVault, KeyringVault, MemoryVault, KEY_ACCOUNT, KEY_SERVICE};
 #[cfg(unix)]
 use super::paths::linux_app_dir;
-use super::paths::{
-    self, linux_fstype_is_remote, linux_mount_fstype, linux_path_is_remote, resolve_mount_path,
-};
+use super::paths::{self, linux_fstype_is_remote, linux_mount_fstype};
+#[cfg(unix)]
+use super::paths::{linux_path_is_remote, resolve_mount_path};
 use super::{recover_installation, EncryptedInstallationStore, Failure};
 
 const OLD_SENTINEL: &[u8] = b"VNILINK-PLAINTEXT-SENTINEL-OLD-9f3c1a";
@@ -306,7 +306,7 @@ fn plaintext_bounds_reject_an_empty_or_oversized_record_before_sql() {
     let store = open(&fixture.engine, as_vault(&vault));
     let kept = b"kept-record".to_vec();
     store.save(kept.clone()).unwrap();
-    let before = fs::read(&fixture.database()).unwrap();
+    let before = fs::read(fixture.database()).unwrap();
     assert_eq!(
         store.save(Vec::new()).unwrap_err(),
         FfiError::StoreUnavailable
@@ -315,7 +315,7 @@ fn plaintext_bounds_reject_an_empty_or_oversized_record_before_sql() {
         store.save(vec![7; 1_048_577]).unwrap_err(),
         FfiError::StoreUnavailable
     );
-    assert_eq!(fs::read(&fixture.database()).unwrap(), before);
+    assert_eq!(fs::read(fixture.database()).unwrap(), before);
     assert_eq!(store.load().unwrap().as_deref(), Some(kept.as_slice()));
     let max = vec![9; 1_048_576];
     store.save(max.clone()).unwrap();
@@ -659,12 +659,12 @@ fn unsafe_permissions_links_and_acls_are_left_unchanged() {
     drop(store);
     assert_eq!(mode_bits(&fixture.database()), 0o600);
     assert_eq!(mode_bits(&fixture.engine.join("installation.lock")), 0o600);
-    fs::set_permissions(&fixture.database(), fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(fixture.database(), fs::Permissions::from_mode(0o644)).unwrap();
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_vault(&vault));
     assert_eq!(err.unwrap_err(), FfiError::StoreUnavailable);
     assert_eq!(mode_bits(&fixture.database()), 0o644);
 
-    fs::set_permissions(&fixture.database(), fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(fixture.database(), fs::Permissions::from_mode(0o600)).unwrap();
     let linked = fixture.engine.join("installation-link");
     fs::hard_link(fixture.database(), &linked).unwrap();
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_vault(&vault));
@@ -753,6 +753,7 @@ fn a_posix_acl_on_the_lease_is_rejected_when_the_filesystem_stores_it() {
         value.extend_from_slice(&perm.to_le_bytes());
         value.extend_from_slice(&u32::MAX.to_le_bytes());
     }
+    // SAFETY: `text` is a NUL-terminated path, the attribute name a C string literal, and `value` a live buffer of `value.len()` bytes that `setxattr` only reads.
     let planted = unsafe {
         libc::setxattr(
             text.as_ptr(),
@@ -799,12 +800,8 @@ fn the_rollback_journal_is_owner_readable_only_while_a_write_is_open() {
     store.arm_failure(Failure::Barrier(barrier.clone()));
     let journal = fixture.engine.join("installation.sqlite3-journal");
     let watch = std::thread::spawn(move || {
-        let started = Instant::now();
         let marker = barrier.join("after-write");
-        while !marker.exists() {
-            assert!(started.elapsed() < Duration::from_secs(8), "write barrier");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the write barrier", || marker.exists());
         let bits = mode_bits(&journal);
         fs::write(barrier.join("continue"), b"1").unwrap();
         bits
@@ -1081,11 +1078,7 @@ fn a_second_process_cannot_take_a_held_lease() {
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
     let mut child = child.spawn().unwrap();
-    let started = Instant::now();
-    while !signal.exists() {
-        assert!(started.elapsed() < Duration::from_secs(8), "lease signal");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the lease signal", || signal.exists());
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_file(&vault));
     assert_eq!(err.unwrap_err(), FfiError::StoreUnavailable);
     let lock = fixture.engine.join("installation.lock");
@@ -1123,6 +1116,7 @@ fn child_hold() {
     let store = open(&engine, as_file(&vault));
     fs::write(&signal, b"held").unwrap();
     let started = Instant::now();
+    // The child process has no channel back from its parent but this file.
     while !continue_at.exists() {
         if started.elapsed() > Duration::from_secs(10) {
             eprintln!("lease child timed out");

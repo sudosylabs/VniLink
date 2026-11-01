@@ -129,7 +129,7 @@ pub(super) fn evaluate_capability(
         peer.is_none_or(|peer| state.trust.service_granted(&peer, kind))
     };
     let view_ready = lock(&shared.video_caps).can_encode()
-        && monitor_size(&shared) != (0, 0)
+        && monitor_size(shared) != (0, 0)
         && lock(&shared.capture).is_some();
     let camera_turned_off = shared
         .camera_turned_off

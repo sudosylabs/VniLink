@@ -7,7 +7,7 @@
 
 use vnilink_media::{parse_annex_b, Error};
 
-use crate::bitstream::{h264_access_unit, picture_size};
+use crate::bitstream::{av1_has_sequence_header, h264_access_unit, hevc_access_unit, picture_size};
 
 #[test]
 fn a_length_prefixed_idr_gains_parameter_sets() {
@@ -224,4 +224,38 @@ fn camera_keyframes_require_actual_constrained_baseline_parameter_sets() {
     assert!(camera_access_unit(&unconstrained).is_err());
     assert!(camera_access_unit(&valid[..14]).is_err());
     assert!(camera_access_unit(&valid[8..]).is_err());
+}
+
+#[test]
+fn an_av1_unit_is_a_keyframe_when_it_has_a_sequence_header() {
+    // Temporal delimiter, sequence header (3 bytes), a frame OBU of 2 bytes.
+    let key = [0x12, 0x00, 0x0a, 0x03, 1, 2, 3, 0x32, 0x02, 9, 9];
+    assert_eq!(av1_has_sequence_header(&key), Ok(true));
+    let delta = [0x12, 0x00, 0x32, 0x02, 9, 9];
+    assert_eq!(av1_has_sequence_header(&delta), Ok(false));
+    assert!(
+        av1_has_sequence_header(&[0x0a, 0x09, 1]).is_err(),
+        "an OBU larger than the unit is malformed"
+    );
+    assert!(
+        av1_has_sequence_header(&[0x08]).is_err(),
+        "an OBU without a size is refused"
+    );
+}
+
+#[test]
+fn an_hevc_keyframe_without_parameter_sets_gains_the_encoders() {
+    // VPS 32, SPS 33, PPS 34 and an IDR_W_RADL (19) NAL, each with a 2-byte header.
+    let nal = |kind: u8| vec![0, 0, 0, 1, kind << 1, 1, 0xaa];
+    let header: Vec<u8> = [32, 33, 34].into_iter().flat_map(nal).collect();
+    let idr = nal(19);
+    let sample = hevc_access_unit(&idr, &header).unwrap();
+    assert!(sample.keyframe());
+    assert!(sample.bytes().starts_with(&header));
+    assert!(
+        hevc_access_unit(&idr, &[]).is_err(),
+        "no sets to add, no keyframe"
+    );
+    let delta = nal(1);
+    assert!(!hevc_access_unit(&delta, &[]).unwrap().keyframe());
 }

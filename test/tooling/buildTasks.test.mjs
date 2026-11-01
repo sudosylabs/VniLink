@@ -167,17 +167,17 @@ test('--times sets how often a suite is stressed, and what is left names the ser
 
 test('--peer and --peer-check name the agent a suite runs against, and nothing else is taken for a service', () => {
 	assert.deepEqual(selectPeer(['files', 'desktop']), { services: ['files', 'desktop'], env: {} });
-	assert.deepEqual(selectPeer(['files', '--peer', 'agent.vnl', '--peer-check', '042'], '/work'), {
+	assert.deepEqual(selectPeer(['files', '--peer', 'agent.vnl', '--peer-check', '042123'], '/work'), {
 		services: ['files'],
-		env: { VNILINK_PEER: resolve('/work', 'agent.vnl'), VNILINK_PEER_CHECK: '042' },
+		env: { VNILINK_PEER: resolve('/work', 'agent.vnl'), VNILINK_PEER_CHECK: '042123' },
 	});
-	assert.deepEqual(selectPeer(['--peer-check', '042', '--peer', '/elsewhere/agent.vnl', 'files'], '/work').env.VNILINK_PEER, resolve('/elsewhere/agent.vnl'), 'an absolute file stays where it is');
+	assert.deepEqual(selectPeer(['--peer-check', '042123', '--peer', '/elsewhere/agent.vnl', 'files'], '/work').env.VNILINK_PEER, resolve('/elsewhere/agent.vnl'), 'an absolute file stays where it is');
 	assert.throws(() => selectPeer(['files', '--peer', 'agent.vnl']), /--peer and --peer-check go together/);
-	assert.throws(() => selectPeer(['--peer-check', '042']), /--peer and --peer-check go together/);
+	assert.throws(() => selectPeer(['--peer-check', '042123']), /--peer and --peer-check go together/);
 	assert.throws(() => selectPeer(['files', '--peer']), /--peer needs a value/);
-	assert.throws(() => selectPeer(['--peer', '--peer-check', '042']), /--peer needs a value/);
-	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', '42']), /three digits/);
-	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', 'abc']), /three digits/);
+	assert.throws(() => selectPeer(['--peer', '--peer-check', '042123']), /--peer needs a value/);
+	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', '42']), /six digits/);
+	assert.throws(() => selectPeer(['--peer', 'agent.vnl', '--peer-check', 'abc']), /six digits/);
 });
 
 test('the agent starts only the measurement sides compiled into it, one at a time', async () => {

@@ -67,10 +67,11 @@
  *   application by its code hash, so each copy needs its own grant; `--app`
  *   names an application that already has one. It only hosts Electron: the
  *   code it runs is this checkout's `out/`. The host's engine prepares video
- *   only, so the viewer cannot control the host, and only the host prepares
- *   native video: a viewer engine that also did, on the same computer, slowed
- *   the host's capture reads, a cost of measuring both sides on one computer.
- *   Keep the display awake and uncovered.
+ *   only, so the viewer cannot control the host. The viewer's engine also
+ *   prepares native video, without which it refuses the screen; on the same
+ *   computer that slows the host's capture reads (about 19 ms at p50), a
+ *   cost of measuring both sides on one computer, included in results since
+ *   2026-11-01. Keep the display awake and uncovered.
  * - Windows: Desktop Duplication captures only the signed-in user's desktop
  *   and fails in a session that has none, such as a service or a remote
  *   shell, so run it from a terminal on that desktop. Windows asks no
@@ -119,7 +120,7 @@
  * The other computer runs the test agent, built from the same commit
  * (`node build/run.ts testkit:agent --allow screen`; the sides show and read
  * its real screen, so the agent refuses them without `--allow screen`). The
- * agent prints digits; the run prints three of its own; the person at the
+ * agent prints digits; the run shows six of its own; the person at the
  * agent types them on its terminal, and nothing is approved without that.
  * The agent starts its side from its own checkout (`testkit:launch`, the
  * launch a run on one computer uses), in folders of its own that it removes
@@ -172,7 +173,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { assertBundleFresh } from './bundles.ts';
 import { electronExecutable } from './electron.ts';
-import { assertNativeFresh, defaultNativeOptions } from './native.ts';
+import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
 import { isLinux, isMacintosh, isWindows, osName } from './platform.ts';
 import { type LaunchedProcess, ProcessRunner } from './processes.ts';
 import { agentPeer, openAgentSession, type AgentPeer, type AgentSession } from './remote.ts';
@@ -296,8 +297,8 @@ export function summariseViewerStatus(stages: string): ViewerStatus {
 		const match = typeof entry[field] === 'string' ? pattern.exec(entry[field]) : null;
 		return match ? [Number(match[1])] : [];
 	}));
-	// "50 fps · H.264 · 380 kb/s · 76 ms"; "17 pictures replaced by newer ones before drawing"
-	return { frameRate: read('status', /(\d+) fps/), roundTrip: read('status', /(\d+) ms$/), replaced: read('text', /(\d+) pictures replaced/) };
+	// "50 fps · 76 ms · Direct"; "17 pictures replaced by newer ones before drawing"
+	return { frameRate: read('status', /(\d+) fps/), roundTrip: read('status', /(\d+) ms\b/), replaced: read('text', /(\d+) pictures replaced/) };
 }
 
 function stagePercentiles(values: readonly number[]): StagePercentiles | undefined {
@@ -630,10 +631,29 @@ async function arrival(directory: string, name: string, timeoutMs: number, exite
 	}
 }
 
+/**
+ * The cargo command and environment that build the `glass_latency` example of
+ * `crate` for `target`, the target and tools the addon build uses, so the
+ * reader finds the same native libraries and lands where `reader` expects it.
+ */
+export function readerBuild(
+	crate: string,
+	target: string | undefined,
+	environment: NodeJS.ProcessEnv = process.env,
+	exists?: (path: string) => boolean,
+): { readonly args: string[]; readonly env: NodeJS.ProcessEnv } {
+	return {
+		args: ['build', '--release', '--locked', ...(target ? ['--target', target] : []), '-p', crate, '--example', 'glass_latency'],
+		env: nativeEnvironment({ profile: 'dev', target }, environment, exists),
+	};
+}
+
 /** How one platform runs the two sides and the reader. */
 interface LatencyPlatform {
 	/** The crate whose `glass_latency` example reads this platform's display. */
 	readonly readerCrate: string;
+	/** The cargo target the reader is built for, when it is not the host's default. */
+	readonly readerTarget?: string;
 	readonly reader: string;
 	/** How long someone at this computer may take to answer a consent dialog, for the host and for the reader. */
 	readonly consentMs: number;
@@ -681,6 +701,7 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 		const { target } = defaultNativeOptions();
 		return {
 			readerCrate: 'vnilink-windows',
+			readerTarget: target,
 			reader: join(root, 'target', ...(target ? [target] : []), 'release/examples/glass_latency.exe'),
 			consentMs: 0,
 			launch: direct(() => []),
@@ -959,7 +980,8 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		const platform = await latencyPlatform(root, options.app, processes, signal);
 		// The reader is built before the sides start, so its compile does not
 		// count against their timeouts.
-		await processes.run('cargo', ['build', '--release', '--locked', '-p', platform.readerCrate, '--example', 'glass_latency'], { cwd: root });
+		const build = readerBuild(platform.readerCrate, platform.readerTarget);
+		await processes.run('cargo', build.args, { cwd: root, env: build.env });
 		const rendezvous = join(work, 'rendezvous');
 		await mkdir(rendezvous);
 		// Where the desktop portal's grants are kept between runs, for the

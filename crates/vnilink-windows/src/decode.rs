@@ -37,10 +37,10 @@ use windows::core::Interface;
 #[cfg(windows)]
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MSH264DecoderMFT, CODECAPI_AVLowLatencyMode, ICodecAPI, IMFTransform,
-    MFCreateMemoryBuffer, MFCreateSample, MFStartup, MFVideoFormat_H264, MFVideoFormat_NV12,
-    MFSTARTUP_NOSOCKET, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-    MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT,
-    MF_E_TRANSFORM_STREAM_CHANGE, MF_LOW_LATENCY, MF_MT_SUBTYPE, MF_VERSION,
+    MFCreateMemoryBuffer, MFCreateSample, MFVideoFormat_H264, MFVideoFormat_NV12,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
+    MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MF_E_TRANSFORM_NEED_MORE_INPUT,
+    MF_E_TRANSFORM_STREAM_CHANGE, MF_LOW_LATENCY, MF_MT_SUBTYPE,
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
@@ -63,6 +63,9 @@ struct OpenDecoder {
     parameter_sets: Vec<Vec<u8>>,
     #[cfg(windows)]
     signal: VideoSignal,
+    /// Released after the transform above.
+    #[cfg(windows)]
+    _foundation: crate::foundation::MediaFoundation,
 }
 
 pub struct WindowsDecoder {
@@ -70,9 +73,9 @@ pub struct WindowsDecoder {
     open: Option<OpenDecoder>,
 }
 
-// Same contract as the encoder: the transform moves between threads but is
-// only ever touched through `&mut self` on one thread at a time.
 #[cfg(windows)]
+// SAFETY: same contract as the encoder: the transform moves between threads but
+// is only ever touched through `&mut self` on one thread at a time.
 unsafe impl Send for WindowsDecoder {}
 
 impl WindowsDecoder {
@@ -145,9 +148,10 @@ impl WindowsDecoder {
         let signal = h264_video_signal(sps)?.unwrap_or(UNDECLARED_SIGNAL);
         #[cfg(windows)]
         {
-            let transform = open_transform(width, height)
+            let (transform, foundation) = open_transform(width, height)
                 .map_err(|_| Error::Unsupported("Media Foundation H.264"))?;
             self.open = Some(OpenDecoder {
+                _foundation: foundation,
                 transform,
                 width,
                 height,
@@ -165,14 +169,19 @@ impl WindowsDecoder {
 }
 
 #[cfg(windows)]
-fn open_transform(width: u16, height: u16) -> windows::core::Result<IMFTransform> {
+fn open_transform(
+    width: u16,
+    height: u16,
+) -> windows::core::Result<(IMFTransform, crate::foundation::MediaFoundation)> {
+    // SAFETY: COM and Media Foundation are started for this thread before the transform is
+    // created. `on` is a local `VARIANT` whose `VT_UI4` arm is the one written and then read.
     unsafe {
         ignored_hr!(
             vnilink::trace::DECODE,
             "a thread with COM already set up keeps it",
             CoInitializeEx(None, COINIT_MULTITHREADED).ok()
         );
-        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)?;
+        let foundation = crate::foundation::MediaFoundation::start()?;
         let transform: IMFTransform =
             CoCreateInstance(&CLSID_MSH264DecoderMFT, None, CLSCTX_INPROC_SERVER)?;
         // Remote frames must be presented immediately: without low latency
@@ -200,7 +209,7 @@ fn open_transform(width: u16, height: u16) -> windows::core::Result<IMFTransform
         transform.SetOutputType(0, &output, 0)?;
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
         transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-        Ok(transform)
+        Ok((transform, foundation))
     }
 }
 
@@ -221,6 +230,9 @@ fn decode_picture(
 #[cfg(windows)]
 fn feed(transform: &IMFTransform, annex_b: &[u8], timestamp_us: u64) -> Result<Vec<u8>, Error> {
     const REJECTED: &str = "Media Foundation rejected the frame";
+    // SAFETY: `buffer` is created with room for `annex_b.len()` bytes, so `Lock` yields at
+    // least that many writable bytes at `data`, copied once and unlocked before the buffer is
+    // used again. The remaining calls pass live COM objects created here.
     unsafe {
         let buffer = MFCreateMemoryBuffer(annex_b.len() as u32)
             .map_err(|_| Error::DecodeRejected(REJECTED))?;

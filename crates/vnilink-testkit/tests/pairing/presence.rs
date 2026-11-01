@@ -218,6 +218,41 @@ fn the_host_reports_what_it_allows_and_follows_policy_changes() -> TestResult {
     Ok(())
 }
 
+/// A host that forgot the controller answers its link with a refusal; the
+/// controller then stops dialling it, rather than asking again every wait,
+/// until the host dials it or the user asks for the link.
+#[test]
+fn a_host_that_refuses_the_link_is_not_dialled_again() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    controller.set_presence_links(true)?;
+    wait_presence(controller, &pair.host, DevicePresence::Connected);
+    host.unpair(&pair.controller.endpoint())?;
+    wait_for("the link to close", FOLLOWING, || {
+        host.hosted_sessions().ok()?.is_empty().then_some(())
+    });
+    wait_for("the controller to be refused", FOLLOWING, || {
+        trace
+            .story(&["relay"])
+            .contains("refused the link")
+            .then_some(())
+    });
+    holds(
+        "a refusing computer not being dialled again",
+        Duration::from_secs(8),
+        || {
+            host.hosted_sessions()
+                .is_ok_and(|sessions| sessions.is_empty())
+        },
+    );
+    assert_eq!(
+        presence(controller, &pair.host.endpoint()),
+        DevicePresence::Disconnected
+    );
+    Ok(())
+}
+
 /// Forgetting a host ends its link, which is not dialled again, and its
 /// report is gone.
 #[test]
@@ -253,11 +288,21 @@ fn unpairing_ends_the_link_for_good() -> TestResult {
           relay: presence presence=Connecting
           relay: a link to a paired computer is up paths=1 relayed=false
           relay: presence presence=Connected
-          relay: a link to a computer no longer paired ended
         host:
           relay: endpoint bound listen=Loopback relay=false
     "#]],
-        || trace.story(&["relay"]),
+        // Whether the link task reaches its own "no longer paired" record or
+        // is aborted by the unpairing first is not part of the story.
+        || {
+            trace
+                .tell(&["relay"])
+                .only(&[
+                    "endpoint bound",
+                    "presence",
+                    "a link to a paired computer is up",
+                ])
+                .to_string()
+        },
     );
     Ok(())
 }

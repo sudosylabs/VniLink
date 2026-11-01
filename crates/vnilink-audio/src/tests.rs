@@ -229,6 +229,7 @@ fn explicit_native_device_loopback_transports_and_decodes_tone() {
             sequence += 1;
             let deadline = start + Duration::from_millis(sequence as u64 * 20);
             if let Some(wait) = deadline.checked_duration_since(Instant::now()) {
+                // A real timer: playback is fed at the 20 ms cadence of real audio.
                 thread::sleep(wait);
             } else {
                 sequence = (start.elapsed().as_millis() / 20) as usize + 1;
@@ -269,6 +270,7 @@ fn explicit_native_device_loopback_transports_and_decodes_tone() {
             power += samples.iter().map(|&v| (v as f64).powi(2)).sum::<f64>();
             count += 1;
         } else {
+            // A real timer: the device captures in real time over three seconds.
             thread::sleep(Duration::from_millis(2));
         }
     }

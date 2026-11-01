@@ -65,6 +65,7 @@ unsafe extern "C" {
 struct Uuid(Ref);
 impl Uuid {
     fn new(id: u32) -> Result<Self, Error> {
+        // SAFETY: takes only a display id; returns a retained CFUUID or null, which `Uuid` then releases on drop.
         let uuid = unsafe { CGDisplayCreateUUIDFromDisplayID(id) };
         if uuid.is_null() {
             Err(Error::Unsupported("display identity"))
@@ -75,6 +76,7 @@ impl Uuid {
 }
 impl Drop for Uuid {
     fn drop(&mut self) {
+        // SAFETY: `self.0` is the retained, non-null CFUUID `new` created and it is released exactly once, here.
         unsafe { CFRelease(self.0) }
     }
 }
@@ -87,6 +89,7 @@ struct Gamma {
 fn displays() -> Result<Vec<u32>, Error> {
     let mut ids = [0u32; 64];
     let mut count = 0;
+    // SAFETY: `ids` has room for the 64 entries passed as `max` and `count` is a valid out-pointer to a local.
     if unsafe { CGGetActiveDisplayList(64, ids.as_mut_ptr(), &mut count) } != 0
         || count == 0
         || count >= 64
@@ -96,6 +99,7 @@ fn displays() -> Result<Vec<u32>, Error> {
     Ok(ids[..count as usize].to_vec())
 }
 fn snapshot(id: u32) -> Result<Gamma, Error> {
+    // SAFETY: takes only a display id and returns a number.
     let cap = unsafe { CGDisplayGammaTableCapacity(id) };
     if cap == 0 || cap > 4096 {
         return Err(Error::Unsupported("display gamma table"));
@@ -104,6 +108,7 @@ fn snapshot(id: u32) -> Result<Gamma, Error> {
     let mut g = r.clone();
     let mut b = r.clone();
     let mut count = 0;
+    // SAFETY: `r`, `g` and `b` each hold `cap` floats, the capacity passed, and `count` is a valid out-pointer to a local.
     if unsafe {
         CGGetDisplayTransferByTable(
             id,
@@ -131,6 +136,7 @@ fn snapshot(id: u32) -> Result<Gamma, Error> {
 }
 fn blackout(id: u32, count: usize) -> Result<(), Error> {
     let zeros = vec![0f32; count];
+    // SAFETY: `zeros` holds `count` floats, the entry count passed, and the call only reads them.
     if unsafe {
         CGSetDisplayTransferByTable(
             id,
@@ -157,9 +163,11 @@ impl DisplayPrivacy {
         let mut fresh = Vec::new();
         for id in &ids {
             let uuid = Uuid::new(*id)?;
+            // SAFETY: both UUIDs are live, non-null CFUUIDs owned by `Gamma` and `Uuid`.
             if !self
                 .saved
                 .iter()
+                // SAFETY: both UUIDs are live, non-null CFUUIDs owned by `Gamma` and `Uuid`.
                 .any(|g| unsafe { CFEqual(g.uuid.0, uuid.0) })
             {
                 fresh.push(snapshot(*id)?);
@@ -171,6 +179,7 @@ impl DisplayPrivacy {
         self.saved.extend(fresh);
         for id in ids {
             let uuid = Uuid::new(id)?;
+            // SAFETY: both UUIDs are live, non-null CFUUIDs owned by `Gamma` and `Uuid`.
             let gamma = self
                 .saved
                 .iter()
@@ -188,11 +197,13 @@ impl DisplayPrivacy {
         let mut failed = false;
         self.saved.retain(|gamma| {
             let target = ids.iter().find(|id| {
+                // SAFETY: both UUIDs are live, non-null CFUUIDs owned by `Gamma` and `Uuid`.
                 Uuid::new(**id).is_ok_and(|uuid| unsafe { CFEqual(gamma.uuid.0, uuid.0) })
             });
             let Some(id) = target else {
                 return true;
             };
+            // SAFETY: `r`, `g` and `b` of a `Gamma` are truncated together to the one count the OS reported, so each holds `gamma.r.len()` floats, which the call only reads.
             let rejected = unsafe {
                 CGSetDisplayTransferByTable(
                     *id,
@@ -228,11 +239,15 @@ struct TapContext {
     escape: bool,
 }
 extern "C" fn filter(_proxy: Ref, kind: u32, event: Ref, data: *mut c_void) -> Ref {
+    // SAFETY: `data` is the `TapContext` boxed by `InputTap::open`; `InputTap::drop` invalidates the tap before the box is released, and the callback runs on the run loop of the thread that owns both.
     let context = unsafe { &mut *data.cast::<TapContext>() };
     // Timeout, OS disable, or the local recovery chord releases restrictions.
+    // SAFETY: the tap only delivers live events to its callback.
     if kind >= 0xffff_fffe
         || kind == 10
+            // SAFETY: the tap only delivers live events to its callback.
             && unsafe { CGEventGetIntegerValueField(event, 9) } == 53
+            // SAFETY: the tap only delivers live events to its callback.
             && unsafe { CGEventGetFlags(event) } & ((1 << 18) | (1 << 19))
                 == ((1 << 18) | (1 << 19))
     {
@@ -240,7 +255,9 @@ extern "C" fn filter(_proxy: Ref, kind: u32, event: Ref, data: *mut c_void) -> R
         return event;
     }
     // Enigo's marked events from this process remain usable by the remote viewer.
+    // SAFETY: the tap only delivers live events to its callback.
     if unsafe { CGEventGetIntegerValueField(event, 42) } == 100
+        // SAFETY: the tap only delivers live events to its callback.
         && unsafe { CGEventGetIntegerValueField(event, 41) } == std::process::id() as i64
     {
         event
@@ -260,6 +277,7 @@ impl InputTap {
         let mask = [1u32, 2, 3, 4, 5, 6, 7, 10, 11, 12, 22, 25, 26, 27]
             .into_iter()
             .fold(0u64, |mask, kind| mask | (1u64 << kind));
+        // SAFETY: `filter` and the boxed context stay valid until `InputTap::drop` invalidates the port; the box's heap address does not change when `InputTap` moves.
         let port = unsafe {
             CGEventTapCreate(
                 0,
@@ -273,15 +291,19 @@ impl InputTap {
         if port.is_null() {
             return Err(Error::Unsupported("local input blocking consent"));
         }
+        // SAFETY: `port` is the live, non-null tap created above.
         let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null(), port, 0) };
         if source.is_null() {
+            // SAFETY: `source` is null, so only the live `port` is invalidated and released, once.
             unsafe {
                 CFMachPortInvalidate(port);
                 CFRelease(port);
             }
             return Err(Error::Unsupported("input blocking run loop"));
         }
+        // SAFETY: takes no arguments and returns the calling thread's run loop.
         let runloop = unsafe { CFRunLoopGetCurrent() };
+        // SAFETY: `runloop` is this thread's, and `source` and `port` are live.
         unsafe {
             CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
             CGEventTapEnable(port, true);
@@ -296,6 +318,7 @@ impl InputTap {
 }
 impl Drop for InputTap {
     fn drop(&mut self) {
+        // SAFETY: `port` and `source` were created by `open` and are live; they are torn down on the run loop's thread and each is released once.
         unsafe {
             CGEventTapEnable(self.port, false);
             CFRunLoopRemoveSource(self.runloop, self.source, kCFRunLoopDefaultMode);
@@ -460,6 +483,7 @@ fn run(recv: mpsc::Receiver<Command>, observed: Arc<AtomicU8>) {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        // SAFETY: runs this thread's run loop in the default mode for a bounded time; nothing is borrowed across the call.
         unsafe {
             CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
         }

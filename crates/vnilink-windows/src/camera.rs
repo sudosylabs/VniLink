@@ -34,6 +34,8 @@ use windows::Win32::System::Com::{
 struct Foundation;
 impl Foundation {
     fn open() -> Result<Self, Error> {
+        // SAFETY: COM and Media Foundation are initialized and torn down in matching pairs on
+        // this thread, and a failed `MFStartup` is followed by its `CoUninitialize`.
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED)
                 .ok()
@@ -48,6 +50,8 @@ impl Foundation {
 }
 impl Drop for Foundation {
     fn drop(&mut self) {
+        // SAFETY: this balances the `CoInitializeEx` and `MFStartup` made by `open` on the same
+        // thread, once.
         unsafe {
             ignored_hr!(
                 vnilink::trace::CAMERA,
@@ -85,6 +89,9 @@ struct Activations {
 }
 impl Drop for Activations {
     fn drop(&mut self) {
+        // SAFETY: `pointer` and `count` are what `MFEnumDeviceSources` returned, checked as
+        // non-null with a bounded count in `devices`; each element is released once and the
+        // array is freed once with `CoTaskMemFree`.
         unsafe {
             if !self.pointer.is_null() {
                 for item in std::slice::from_raw_parts_mut(self.pointer, self.count as usize) {
@@ -143,6 +150,8 @@ pub fn camera_devices() -> Result<Vec<CameraDevice>, Error> {
         .name("vnilink-camera-enumerate".into())
         .spawn(|| {
             let _foundation = Foundation::open()?;
+            // SAFETY: the worker thread owns a COM apartment and Media Foundation startup
+            // (`_foundation`) for the whole call.
             unsafe { devices().map(|devices| devices.into_iter().map(|(info, _)| info).collect()) }
         })
         .map_err(|_| Error::Unsupported("camera enumeration worker"))?
@@ -219,6 +228,8 @@ impl IMFSourceReaderCallback_Impl for Callback_Impl {
         {
             Err(Error::Unsupported("camera device ended or changed format"))
         } else if let Some(sample) = sample.as_ref() {
+            // SAFETY: `sample` is the live sample the source reader passed to this callback, and
+            // `copy_sample` copies its pixels before the callback returns.
             unsafe {
                 copy_sample(
                     sample,
@@ -240,6 +251,7 @@ impl IMFSourceReaderCallback_Impl for Callback_Impl {
     }
     fn OnEvent(&self, _: u32, event: Ref<'_, IMFMediaEvent>) -> windows::core::Result<()> {
         if let Some(event) = event.as_ref() {
+            // SAFETY: `event` is the live event the source reader passed to this callback.
             if unsafe { event.GetStatus() }.map_or(true, |status| status.is_err()) {
                 self.source.fail();
             }
@@ -307,6 +319,8 @@ unsafe fn copy_sample(
 struct OwnedSource(IMFMediaSource, IMFActivate);
 impl Drop for OwnedSource {
     fn drop(&mut self) {
+        // SAFETY: `Shutdown` and `ShutdownObject` are the final calls on a source this value
+        // owns; both objects are still alive here.
         unsafe {
             ignored_hr!(
                 vnilink::trace::CAMERA,
@@ -327,6 +341,8 @@ struct Capture {
 }
 impl Drop for Capture {
     fn drop(&mut self) {
+        // SAFETY: `reader` is still alive and the call ends its pending reads; the source is
+        // released after it.
         unsafe {
             ignored_hr!(
                 vnilink::trace::CAMERA,
@@ -346,11 +362,14 @@ fn run(
 ) -> Result<(), Error> {
     let _foundation = Foundation::open()?;
     startup.check()?;
+    // SAFETY: `Foundation::open` started COM and Media Foundation on this thread and it
+    // outlives the activations.
     let (_, activation) = unsafe { devices()? }
         .into_iter()
         .find(|(device, _)| device.id == config.device_id)
         .ok_or(Error::Unsupported("approved camera is unavailable"))?;
     startup.check()?;
+    // SAFETY: `activation` is a live activation object from the enumeration above.
     let media_source: IMFMediaSource = unsafe { native(activation.ActivateObject())? };
     // Own activation immediately, including failures before reader creation.
     let partial = OwnedSource(media_source, activation);
@@ -364,6 +383,8 @@ fn run(
         origin: Instant::now(),
     }
     .into();
+    // SAFETY: `attrs`, `callback` and `partial.0` are live COM objects; the attributes take
+    // their own references.
     let reader = unsafe {
         let attrs = attributes(3)?;
         native(attrs.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1))?;
@@ -376,6 +397,8 @@ fn run(
         source: Some(partial),
     };
     startup.check()?;
+    // SAFETY: every call is made on this thread, which owns the apartment, on the reader and
+    // media types created here. `formats` and the locals outlive the calls that read them.
     unsafe {
         // Open one of the camera's own modes in its sensor's shape and ask
         // for that shape: other sizes come scaled and letterboxed.
@@ -470,6 +493,8 @@ fn run(
     startup.check()?;
     // This worker owns COM and MF for the encoder's entire lifetime. Avoid
     // acquiring an additional apartment/startup reference for each camera.
+    // SAFETY: this worker owns COM and Media Foundation for the encoder's whole lifetime
+    // (`_foundation` is dropped after it), which `open_camera` requires.
     let mut encoder = unsafe {
         WindowsEncoder::open_camera(config.width, config.height, config.fps as u8, 4_000_000)
     }
@@ -483,6 +508,8 @@ fn run(
         if !announced {
             startup.check()?;
         }
+        // SAFETY: `capture.reader` is alive and `ReadSample` is asynchronous: it hands the
+        // sample to the callback and takes no pointers from us.
         unsafe {
             native(capture.reader.ReadSample(
                 MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
@@ -567,6 +594,9 @@ mod tests {
             origin: Instant::now(),
         }
         .into();
+        // SAFETY: `buffer` is created with 16 bytes, so the locked pointer holds the 16 bytes
+        // copied before the unlock. The sample, buffer and callback are live COM objects on
+        // this thread's apartment.
         unsafe {
             let buffer = MFCreateMemoryBuffer(16).unwrap();
             let mut pointer = std::ptr::null_mut();

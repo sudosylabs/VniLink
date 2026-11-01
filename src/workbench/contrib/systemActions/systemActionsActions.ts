@@ -85,7 +85,7 @@ export class RestartOrShutDownAction extends Action2 {
 		const { button } = await dialogs.show({
 			type: 'warning',
 			message,
-			detail: nls.localize('system.confirmDetail', 'Its user has 30 seconds to cancel. Anything not saved there may be lost.'),
+			detail: nls.localize('system.confirmDetail', 'Its user has 30 seconds to cancel, and it is cancelled if you disconnect before then. Anything not saved there may be lost.'),
 			buttons: [...choices.map(choice => choice.label), nls.localize('system.cancelButton', 'Cancel')],
 			cancelId: choices.length,
 		});

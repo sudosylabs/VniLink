@@ -36,7 +36,25 @@ function timeoutFor(command: EngineCommand | { type: 'shutdown' }): number {
 	return 10000;
 }
 
-/** Owns the engine utility process, its request lanes and its lifetime. */
+/**
+ * The engine is restarted this many times in a row, after waits of one second
+ * doubling to sixteen, before it is given up for the rest of the run.
+ */
+const maxRestartAttempts = 5;
+
+const firstRestartDelay = 1000;
+
+const maxRestartDelay = 16000;
+
+/** A restarted engine that stays up this long has earned its attempts back. */
+const stableAfter = 60_000;
+
+/**
+ * Owns the engine utility process, its request lanes and its lifetime. An
+ * engine that exits on its own is started again with a bounded backoff; the
+ * restart handler re-applies what main configured on the first start, and
+ * availability returns after that.
+ */
 export class EngineMainService extends Disposable {
 	declare public readonly _serviceBrand: undefined;
 	private readonly availabilityChanged = this._register(new Emitter<boolean>());
@@ -46,7 +64,17 @@ export class EngineMainService extends Disposable {
 	private readonly events = this._register(new Relay<EngineEventBatch>());
 	/** Engine events, validated here; the host subscribes only while this has listeners. */
 	public readonly onDidReceiveEvents = this.events.event;
+	private readonly restartingChanged = this._register(new Emitter<boolean>());
+	/** Whether the engine stopped on its own and is waiting to be started again. */
+	public readonly onDidChangeRestarting = this.restartingChanged.event;
 	private restartRequired = false;
+	private restarting = false;
+	private restartAttempts = 0;
+	private restartTimer: ReturnType<typeof setTimeout> | undefined;
+	private stableTimer: ReturnType<typeof setTimeout> | undefined;
+	private restartHandler: (() => Promise<void>) | undefined;
+	private launchArguments: readonly string[] = [];
+	private ready = false;
 	private child: UtilityProcess | undefined;
 	private client: MessagePortClient | undefined;
 	private channel: IChannel | undefined;
@@ -68,7 +96,20 @@ export class EngineMainService extends Disposable {
 	}
 
 	public get available(): boolean {
-		return this.connected && !this.closing;
+		return this.ready && !this.closing;
+	}
+
+	public get isRestarting(): boolean {
+		return this.restarting;
+	}
+
+	/**
+	 * Registers what runs on every engine started after the first, before
+	 * commands from windows are admitted again: the engine begins empty, so
+	 * the defaults and settings main applied at launch are applied again.
+	 */
+	public setRestartHandler(handler: () => Promise<void>): void {
+		this.restartHandler = handler;
 	}
 
 	/**
@@ -81,8 +122,14 @@ export class EngineMainService extends Disposable {
 			throw new Error('Engine already started');
 		}
 		this.started = true;
-		const args = temporary ? ['--temporary', ...(capture ? ['--capture', ...(screenGrant === undefined ? [] : ['--screen-grant', screenGrant])] : [])] : [];
-		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), args, { serviceName: 'VniLink Engine', stdio: 'pipe' });
+		this.launchArguments = temporary ? ['--temporary', ...(capture ? ['--capture', ...(screenGrant === undefined ? [] : ['--screen-grant', screenGrant])] : [])] : [];
+		await this.launch();
+		this.markAvailable();
+	}
+
+	/** Forks the engine and resolves once it accepts commands; it stays supervised from then on. */
+	private async launch(): Promise<void> {
+		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), [...this.launchArguments], { serviceName: 'VniLink Engine', stdio: 'pipe' });
 		child.stdout?.resume();
 		child.stderr?.on('data', (chunk: Buffer) => {
 			for (const line of chunk.toString('utf8').split('\n')) {
@@ -92,6 +139,7 @@ export class EngineMainService extends Disposable {
 			}
 		});
 		this.child = child;
+		let supervised = false;
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				this.fail(new Error('Engine startup timed out'));
@@ -109,7 +157,7 @@ export class EngineMainService extends Disposable {
 					if (message.ready === true && !this.connected) {
 						this.connect(child);
 						this.connected = true;
-						this.availabilityChanged.fire(true);
+						supervised = true;
 						resolve();
 					} else {
 						const reason = typeof message.error === 'string' ? `: ${message.error}` : '';
@@ -121,11 +169,73 @@ export class EngineMainService extends Disposable {
 			});
 			child.once('exit', code => {
 				clearTimeout(timeout);
+				if (this.child !== child) {
+					// Stopped by `fail`, which already reported why.
+					return;
+				}
 				const error = new Error(`Engine exited (${String(code)})`);
+				if (supervised) {
+					// Before availability drops, so windows never see an engine that is neither up nor coming back.
+					this.scheduleRestart();
+				}
 				this.fail(error);
 				reject(error);
 			});
 		});
+	}
+
+	private markAvailable(): void {
+		if (this.closing || !this.connected) {
+			return;
+		}
+		this.ready = true;
+		this.setRestarting(false);
+		this.availabilityChanged.fire(true);
+		clearTimeout(this.stableTimer);
+		this.stableTimer = setTimeout(() => {
+			this.restartAttempts = 0;
+		}, stableAfter);
+	}
+
+	private setRestarting(value: boolean): void {
+		if (value !== this.restarting) {
+			this.restarting = value;
+			this.restartingChanged.fire(value);
+		}
+	}
+
+	/** Starts the engine again after a wait that doubles with each failure, until the attempts are spent. */
+	private scheduleRestart(): void {
+		if (this.closing || this.restartTimer) {
+			return;
+		}
+		if (this.restartAttempts >= maxRestartAttempts) {
+			this.logService.error(`[engine] stopped ${String(maxRestartAttempts)} times in a row; it will not be started again until VniLink restarts.`);
+			this.setRestarting(false);
+			return;
+		}
+		const delay = Math.min(firstRestartDelay * 2 ** this.restartAttempts, maxRestartDelay);
+		this.restartAttempts++;
+		this.setRestarting(true);
+		this.restartTimer = setTimeout(() => {
+			this.restartTimer = undefined;
+			void this.restart();
+		}, delay);
+	}
+
+	private async restart(): Promise<void> {
+		if (this.closing) {
+			return;
+		}
+		try {
+			await this.launch();
+			await this.restartHandler?.();
+			this.markAvailable();
+		} catch (error) {
+			this.logService.error('[engine] could not be started again.', error);
+			this.fail(error instanceof Error ? error : new Error('Engine restart failed'));
+			this.scheduleRestart();
+		}
 	}
 
 	public execute(command: EngineCommand): Promise<EngineReply> {
@@ -196,9 +306,12 @@ export class EngineMainService extends Disposable {
 				reject(error);
 			};
 			const timeout = setTimeout(() => {
-				// A slow call fails alone; the engine stays up for the rest.
+				// A slow call fails alone; the engine stays up for the rest. Cancelling
+				// stops the wait, not the work: the command may still finish, so the
+				// message says so and callers re-read before they repeat a change.
+				this.logService.warn(`[engine] ${command.type} did not answer in time; its outcome is unknown.`);
 				cancellation.cancel();
-				fail(new Error('Engine operation timed out'));
+				fail(new Error('Engine operation timed out and may still finish'));
 			}, timeoutFor(command));
 			this.waiting.add(fail);
 			channel.call<unknown>('execute', [command], cancellation.token).then(reply => {
@@ -254,6 +367,9 @@ export class EngineMainService extends Disposable {
 			return;
 		}
 		this.closing = true;
+		clearTimeout(this.restartTimer);
+		this.restartTimer = undefined;
+		this.setRestarting(false);
 		try {
 			if (this.connected) {
 				await this.enqueue({ type: 'shutdown' }, this.slowQueue, queue => {
@@ -267,7 +383,9 @@ export class EngineMainService extends Disposable {
 
 	private fail(error: Error): void {
 		const wasAvailable = this.available;
+		this.ready = false;
 		this.connected = false;
+		clearTimeout(this.stableTimer);
 		for (const reject of [...this.waiting]) {
 			reject(error);
 		}

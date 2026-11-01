@@ -19,11 +19,14 @@ export class EngineService extends Disposable implements IEngineService {
 	private readonly channel: IChannel;
 	private readonly availabilityChanged = this._register(new Emitter<boolean>());
 	public readonly onDidChangeAvailability = this.availabilityChanged.event;
+	private readonly restartingChanged = this._register(new Emitter<boolean>());
+	public readonly onDidChangeRestarting = this.restartingChanged.event;
 	private readonly restartRequiredChanged = this._register(new Emitter<boolean>());
 	public readonly onDidChangeRestartRequired = this.restartRequiredChanged.event;
 	public readonly onDidReceiveEvents: Event<EngineEventBatch>;
 	private _available: boolean;
 	private _restartRequired = false;
+	private _restarting = false;
 
 	constructor(
 		available: boolean,
@@ -36,14 +39,31 @@ export class EngineService extends Disposable implements IEngineService {
 		this._register(this.channel.listen<boolean>('onDidChangeAvailability')(value => {
 			this.setAvailable(value);
 		}));
+		this._register(this.channel.listen<boolean>('onDidChangeRestarting')(value => {
+			this.setRestarting(value);
+		}));
 		this._register(this.channel.listen<boolean>('onDidChangeRestartRequired')(value => {
 			this.setRestartRequired(value);
 		}));
 		if (available) {
-			void this.channel.call<boolean>('getRestartRequired').then(value => {
-				this.setRestartRequired(value);
-			}, () => { /* An unavailable engine cannot report restart requirements. */ });
+			this.readRestartRequired();
+		} else {
+			// A window opened while the engine restarts.
+			void this.channel.call<boolean>('getRestarting').then(value => {
+				this.setRestarting(value);
+			}, () => { /* Without an answer the window shows the engine as given up. */ });
 		}
+	}
+
+	/** A restarted engine starts from the saved relays, so the requirement is read again. */
+	private readRestartRequired(): void {
+		void this.channel.call<boolean>('getRestartRequired').then(value => {
+			this.setRestartRequired(value);
+		}, () => { /* An unavailable engine cannot report restart requirements. */ });
+	}
+
+	public get restarting(): boolean {
+		return this._restarting;
 	}
 
 	public get available(): boolean {
@@ -70,6 +90,16 @@ export class EngineService extends Disposable implements IEngineService {
 		if (!this._store.isDisposed && value !== this._available) {
 			this._available = value;
 			this.availabilityChanged.fire(value);
+			if (value) {
+				this.readRestartRequired();
+			}
+		}
+	}
+
+	private setRestarting(value: boolean): void {
+		if (!this._store.isDisposed && value !== this._restarting) {
+			this._restarting = value;
+			this.restartingChanged.fire(value);
 		}
 	}
 

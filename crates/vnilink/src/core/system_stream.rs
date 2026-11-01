@@ -40,6 +40,9 @@ const TAG_PRIVACY: u8 = 4;
 /// Retained operations per host. Queries are generation-fenced, so old
 /// connections can never reach a replacement's records.
 const MAX_OPERATIONS: usize = 64;
+/// Restarts, shutdowns and locks one computer may have waiting or running at
+/// once; the next is refused until one ends.
+const MAX_IN_FLIGHT_PER_PEER: usize = 4;
 const MAX_DETAIL: usize = 256;
 const MAX_SESSION_LABEL: usize = 64;
 
@@ -630,14 +633,29 @@ fn admit_locked(state: &State, id: u64) -> Result<Admission, u8> {
     })
 }
 
+/// Forgets the oldest operations that ended once more than [`MAX_OPERATIONS`]
+/// are kept. One still counting down its notice or running is never among
+/// them: forgetting it would drop an action the host promised.
 fn prune(state: &mut State) {
-    while state.system_operations.len() > MAX_OPERATIONS {
-        if let Some(oldest) = state.system_operations.keys().min().copied() {
-            state.system_operations.remove(&oldest);
-        } else {
-            break;
-        }
+    let excess = state.system_operations.len().saturating_sub(MAX_OPERATIONS);
+    if excess == 0 {
+        return;
     }
+    let mut ended: Vec<u64> = state
+        .system_operations
+        .iter()
+        .filter(|(_, record)| !in_flight(&record.operation.state))
+        .map(|(id, _)| *id)
+        .collect();
+    ended.sort_unstable();
+    for id in ended.into_iter().take(excess) {
+        state.system_operations.remove(&id);
+    }
+}
+
+/// Whether an operation has yet to end.
+fn in_flight(state: &OperationState) -> bool {
+    matches!(state, OperationState::Scheduled | OperationState::Admitted)
 }
 
 /// Worker-start outcome: either the native call ran, or the start gate
@@ -679,6 +697,20 @@ async fn execute(
             .get(&admission.connection_id)
             .map(|session| session.peer_key)
             .ok_or(Error::NoSession)?;
+        let waiting = state
+            .system_operations
+            .values()
+            .filter(|record| record.peer == peer && in_flight(&record.operation.state))
+            .count();
+        if waiting >= MAX_IN_FLIGHT_PER_PEER {
+            let reply = refuse_locked(
+                &mut state,
+                &admission,
+                action,
+                "too many actions are waiting",
+            );
+            return Ok(reply);
+        }
         let id = state.next_operation_id;
         state.next_operation_id = id.saturating_add(1).max(1);
         // Its end is recorded as it ends; an action the computer never
@@ -1096,6 +1128,7 @@ fn current_privacy(state: &State) -> PrivacyState {
     }
 }
 
+#[cfg(test)]
 fn set_privacy(
     shared: &Shared,
     admission: &Admission,
@@ -1298,16 +1331,14 @@ fn set_privacy_inner(
     if previous.is_some() {
         state.privacy = None;
     }
-    if display_held || input_held {
-        if state.privacy.is_none() {
-            state.privacy = Some(PrivacyLease {
-                connection_id: admission.connection_id,
-                service_id,
-                display_private: display_held,
-                input_blocked: input_held,
-                actions: actions.clone(),
-            });
-        }
+    if (display_held || input_held) && state.privacy.is_none() {
+        state.privacy = Some(PrivacyLease {
+            connection_id: admission.connection_id,
+            service_id,
+            display_private: display_held,
+            input_blocked: input_held,
+            actions: actions.clone(),
+        });
     }
     Err(1)
 }
@@ -1627,7 +1658,7 @@ mod review_authority_tests {
         }
     }
     #[test]
-    fn review_queued_restart_rechecks_disabled_policy() {
+    fn queued_restart_rechecks_disabled_policy() {
         let host = crate::test_support::loopback_core();
         let controller = crate::test_support::loopback_core();
         let (admission, _system) = admitted_system_owner(&host, &controller);
@@ -1676,12 +1707,7 @@ fn admitted_system_owner(host: &Core, controller: &Core) -> (Admission, RemoteSy
     let parent = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-    while controller.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let parent = controller.controller_session(parent.id).unwrap();
+    let parent = crate::test_support::wait_active(controller, parent.id);
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::System)
         .unwrap();
@@ -1765,7 +1791,7 @@ mod worker_start_gate_tests {
     }
 
     #[test]
-    fn rereview_queued_restart_must_stand_down_when_system_owner_closes() {
+    fn queued_restart_must_stand_down_when_system_owner_closes() {
         let host = loopback_core();
         let controller = loopback_core();
         pair_for_control(&host, &controller);
@@ -1781,12 +1807,7 @@ mod worker_start_gate_tests {
         let parent = controller
             .begin_connect_services(&host.endpoint_id())
             .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(8);
-        while controller.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let parent = controller.controller_session(parent.id).unwrap();
+        let parent = crate::test_support::wait_active(&controller, parent.id);
         let owner = controller
             .attach_controller_service(parent.id, parent.generation, ServiceKind::System)
             .unwrap();
@@ -1822,7 +1843,7 @@ mod worker_start_gate_tests {
     }
 
     #[test]
-    fn rereview_queued_restart_must_stand_down_when_parent_stopping() {
+    fn queued_restart_must_stand_down_when_parent_stopping() {
         // Adapted from the v3 probe: the admission now carries the exact
         // System owner, so the fixture opens a real owner (otherwise the
         // owner check, not the parent check, would fire).
@@ -1945,7 +1966,7 @@ mod v7_privacy_admission_probe {
         }
     }
     #[test]
-    fn v7_stale_privacy_admission_after_revoke_must_not_apply() {
+    fn stale_privacy_admission_after_revoke_must_not_apply() {
         let host = crate::test_support::loopback_core();
         let controller = crate::test_support::loopback_core();
         let actions = Arc::new(Fake(AtomicBool::new(false), AtomicBool::new(false)));

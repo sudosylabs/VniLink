@@ -114,6 +114,7 @@ pub fn open_child_held(parent: BorrowedFd, name: &str) -> io::Result<OwnedFd> {
 /// `fuse.fusefat`) is read from `/proc/self/mountinfo` by the descriptor's
 /// mount id.
 pub fn volume_ids(dir: BorrowedFd) -> io::Result<crate::VolumeIds> {
+    // SAFETY: `libc::statfs` is a plain C struct of integers and arrays, for which all-zero bytes are a valid value.
     let mut st: libc::statfs = unsafe { std::mem::zeroed() };
     // SAFETY: `fstatfs` writes the struct it is given for a live fd.
     if unsafe { libc::fstatfs(dir.as_raw_fd(), &mut st) } != 0 {
@@ -312,22 +313,26 @@ fn list_names_inner(dir: BorrowedFd, limit: usize) -> io::Result<(Vec<OsString>,
     // close it ourselves.
     let dirp = unsafe { libc::fdopendir(dup) };
     if dirp.is_null() {
+        // SAFETY: `dup` is the fresh descriptor `fdopendir` failed to adopt, so this is its only owner and it is closed once.
         unsafe { libc::close(dup) };
         return Err(io::Error::last_os_error());
     }
     // Clear errno before the loop so a null `readdir` with preserved zero
     // means clean end-of-directory.
     #[cfg(target_os = "linux")]
+    // SAFETY: `__errno_location` returns the calling thread's errno slot, which is valid to write.
     unsafe {
         *libc::__errno_location() = 0
     };
     #[cfg(target_os = "macos")]
+    // SAFETY: `__error` returns the calling thread's errno slot, which is valid to write.
     unsafe {
         *libc::__error() = 0
     };
     // The dup shares the caller's offset: rewind so every scan starts at
     // the first entry even after an earlier scan exhausted the stream.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    // SAFETY: `dirp` is the open, non-null DIR* this function owns.
     unsafe {
         libc::rewinddir(dirp)
     };
@@ -338,8 +343,10 @@ fn list_names_inner(dir: BorrowedFd, limit: usize) -> io::Result<(Vec<OsString>,
         let ent = unsafe { libc::readdir(dirp) };
         if ent.is_null() {
             #[cfg(target_os = "linux")]
+            // SAFETY: `__errno_location` returns the calling thread's errno slot, which is valid to read.
             let e = unsafe { *libc::__errno_location() };
             #[cfg(target_os = "macos")]
+            // SAFETY: `__error` returns the calling thread's errno slot, which is valid to read.
             let e = unsafe { *libc::__error() };
             #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             let e = 0;
@@ -370,7 +377,13 @@ fn list_names_inner(dir: BorrowedFd, limit: usize) -> io::Result<(Vec<OsString>,
 }
 
 /// `fstat` device+inode for pinning a root to its directory object.
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn fstat_dev_ino(fd: BorrowedFd) -> io::Result<(u64, u64)> {
+    // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: `fstat` writes a borrowed stat struct.
     let r = unsafe { libc::fstat(fd.as_raw_fd(), &mut st) };
@@ -382,7 +395,13 @@ pub fn fstat_dev_ino(fd: BorrowedFd) -> io::Result<(u64, u64)> {
 
 /// [`fstat_dev_ino`] with the creation time where the platform reports one
 /// through `fstat` (macOS), which tells a recycled inode apart.
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn fstat_identity(fd: BorrowedFd) -> io::Result<Identity> {
+    // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: `fstat` writes the borrowed stat struct for a live fd.
     if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 {
@@ -431,12 +450,18 @@ impl EntryStat {
     }
 }
 
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
     let c = cstr_name(name)?;
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     if let Some(stat) = statx_at(parent, &c) {
         return stat;
     }
+    // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: `fstatat` takes a borrowed dir fd plus a borrowed name.
     let r = unsafe {
@@ -469,6 +494,7 @@ pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
 /// the caller falls back to `fstatat`.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn statx_at(parent: BorrowedFd, name: &CString) -> Option<io::Result<EntryStat>> {
+    // SAFETY: `statx` is plain integers and arrays, for which all-zero bytes are a valid value.
     let mut st: libc::statx = unsafe { std::mem::zeroed() };
     // SAFETY: `statx` takes a borrowed dir fd plus a borrowed name and
     // writes the struct it is given.
@@ -509,7 +535,7 @@ fn statx_at(parent: BorrowedFd, name: &CString) -> Option<io::Result<EntryStat>>
         } else {
             None
         },
-        attributes: u32::from(mode) & 0o7777,
+        attributes: mode & 0o7777,
     }))
 }
 
@@ -653,12 +679,8 @@ pub fn rename_from_staged(
             if r == 0 {
                 Ok(())
             } else {
-                let e = io::Error::last_os_error();
-                if e.raw_os_error() == Some(libc::EXDEV) {
-                    Err(e)
-                } else {
-                    Err(e)
-                }
+                // EXDEV, a move across devices, is reported as it is.
+                Err(io::Error::last_os_error())
             }
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -690,16 +712,13 @@ pub fn rename_from_staged(
             if r == 0 {
                 Ok(())
             } else {
-                let e = io::Error::last_os_error();
-                if e.raw_os_error() == Some(libc::EXDEV) {
-                    Err(e)
-                } else {
-                    Err(e)
-                }
+                // EXDEV, a move across devices, is reported as it is.
+                Err(io::Error::last_os_error())
             }
         }
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: same as above with RENAME_EXCL, which `renameatx_np` takes in place of RENAME_NOREPLACE.
             let r = unsafe {
                 libc::renameatx_np(
                     libc::AT_FDCWD,
@@ -712,13 +731,8 @@ pub fn rename_from_staged(
             if r == 0 {
                 Ok(())
             } else {
-                let e = io::Error::last_os_error();
-                // macOS `renameatx_np` reports EXDEV for cross-device moves.
-                if e.raw_os_error() == Some(libc::EXDEV) {
-                    Err(e)
-                } else {
-                    Err(e)
-                }
+                // EXDEV, a move across devices, is reported as it is.
+                Err(io::Error::last_os_error())
             }
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -739,13 +753,16 @@ pub fn rename_from_staged(
 pub fn same_filesystem(staged: &Path, dir: BorrowedFd) -> io::Result<bool> {
     use std::os::unix::io::AsRawFd;
     let staged_c = cstr(staged)?;
+    // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut src: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: `stat` takes a borrowed NUL-terminated path; `fstat` takes
     // our own open dir fd.
     if unsafe { libc::stat(staged_c.as_ptr(), &mut src) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut dst: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `fstat` writes the zeroed stat struct for the live descriptor `dir`.
     if unsafe { libc::fstat(dir.as_raw_fd(), &mut dst) } != 0 {
         return Err(io::Error::last_os_error());
     }
@@ -784,6 +801,7 @@ impl<'a> SiblingStage<'a> {
                 }
                 return Err(error);
             }
+            // SAFETY: `fd` is the fresh descriptor `openat` returned, checked non-negative, and the `File` becomes its only owner.
             let file = unsafe { std::fs::File::from_raw_fd(fd) };
             return Ok(Self {
                 dir,
@@ -845,6 +863,7 @@ impl<'a> SiblingStage<'a> {
         if sync_first {
             if let Err(error) = file.sync_all() {
                 drop(file);
+                // SAFETY: `dir_fd` is the stage's live directory descriptor and `temp` a NUL-terminated name; the call is best effort.
                 unsafe { libc::unlinkat(dir_fd, temp.as_ptr(), 0) };
                 return Err(error);
             }
@@ -913,6 +932,7 @@ impl<'a> SiblingStage<'a> {
         if result.is_err() {
             // Unlink the orphan here: `file` is already taken, so Drop
             // treats the stage as settled.
+            // SAFETY: `dir_fd` is the stage's live directory descriptor and `temp` a NUL-terminated name; the call is best effort.
             unsafe { libc::unlinkat(dir_fd, temp.as_ptr(), 0) };
         }
         result
@@ -933,6 +953,11 @@ impl Drop for SiblingStage<'_> {
 /// Opens a regular file under `parent` and verifies it is the same object
 /// previously stated (`stat_at`): device+inode equality proves the pathname
 /// was not swapped between stat and open. Refuses symlinks and non-files.
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn open_file_verified(
     parent: BorrowedFd,
     name: &str,
@@ -940,6 +965,7 @@ pub fn open_file_verified(
     expected_ino: u64,
 ) -> io::Result<OwnedFd> {
     let fd = open_file_at(parent, name)?;
+    // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     use std::os::unix::io::AsRawFd;
     // SAFETY: `fstat` on our own open fd.
@@ -991,7 +1017,9 @@ pub fn open_file_at(parent: BorrowedFd, name: &str) -> io::Result<OwnedFd> {
     }
     // SAFETY: fresh owned fd.
     let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `fstat` writes the zeroed stat struct for the live descriptor `owned`.
     let r = unsafe { libc::fstat(owned.as_raw_fd(), &mut st) };
     if r != 0 {
         return Err(io::Error::last_os_error());

@@ -10,7 +10,7 @@ import test from 'node:test';
 import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
-import { agentLatencyEnvironment, latencyOptions, renderHoldSummary, summariseHolds } from '../../build/lib/latency.ts';
+import { agentLatencyEnvironment, latencyOptions, readerBuild, renderHoldSummary, summariseHolds } from '../../build/lib/latency.ts';
 
 async function load(entry) {
 	const output = await build({ entryPoints: [entry], bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', external: ['electron'] });
@@ -48,7 +48,7 @@ test('latency options are bounded', () => {
 	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0, frameRate: undefined, bitrate: undefined, busy: false, peer: undefined });
 	assert.equal(latencyOptions('/root', ['--fps', '60', '--bitrate', '50000']).bitrate, 50000);
 	assert.throws(() => latencyOptions('/root', ['--busy']));
-	assert.equal(latencyOptions('/root', ['--busy', '--peer', 'agent.vnl', '--peer-check', '123']).busy, true);
+	assert.equal(latencyOptions('/root', ['--busy', '--peer', 'agent.vnl', '--peer-check', '123123']).busy, true);
 	assert.throws(() => latencyOptions('/root', ['--bitrate', '0']));
 	assert.throws(() => latencyOptions('/root', ['--bitrate', '50001']));
 	assert.throws(() => latencyOptions('/root', ['--bitrate', 'automatic']));
@@ -63,6 +63,18 @@ test('latency options are bounded', () => {
 	assert.throws(() => latencyOptions('/root', ['--seconds', '2.5']));
 	assert.throws(() => latencyOptions('/root', ['--settle', '-1']));
 	assert.throws(() => latencyOptions('/root', ['--unknown']));
+});
+
+test('the viewer status is read from the picture details summary', async () => {
+	const { summariseViewerStatus } = await import('../../build/lib/latency.ts');
+	const stages = [
+		{ at: 1, text: '', status: '60 fps · 4 ms · Direct' },
+		{ at: 2, text: '3 pictures replaced by newer ones before drawing', status: '58 fps · 6 ms · Relay' },
+	].map(line => JSON.stringify(line)).join('\n');
+	const status = summariseViewerStatus(stages);
+	assert.deepEqual(status.frameRate, { p50: 58, p95: 60, count: 2 });
+	assert.deepEqual(status.roundTrip, { p50: 4, p95: 6, count: 2 });
+	assert.deepEqual(status.replaced, { p50: 3, p95: 3, count: 1 });
 });
 
 test('a run is summarised from the screen and the viewer stages', async () => {
@@ -148,14 +160,14 @@ test('a two-computer run names the agent by its file and digits, and which compu
 	assert.equal(latencyOptions('/root', ['--fps', '30']).frameRate, 30);
 	assert.throws(() => latencyOptions('/root', ['--fps', '0']));
 	assert.throws(() => latencyOptions('/root', ['--fps', '29.97']));
-	const options = latencyOptions('/root', ['--peer', 'agent.vnl', '--peer-check', '042', '--hosts', 'peer']);
-	assert.deepEqual(options.peer, { file: resolve('agent.vnl'), check: '042', hosts: 'peer' });
-	assert.equal(latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123']).peer?.hosts, 'here');
+	const options = latencyOptions('/root', ['--peer', 'agent.vnl', '--peer-check', '042123', '--hosts', 'peer']);
+	assert.deepEqual(options.peer, { file: resolve('agent.vnl'), check: '042123', hosts: 'peer' });
+	assert.equal(latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123123']).peer?.hosts, 'here');
 	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl']), /go together/);
-	assert.throws(() => latencyOptions('/root', ['--peer-check', '123']), /go together/);
-	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '12']), /three digits/);
-	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123', '--hosts', 'both']));
-	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123', '--hold', '5']), /--hold/);
+	assert.throws(() => latencyOptions('/root', ['--peer-check', '123123']), /go together/);
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '12']), /six digits/);
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123123', '--hosts', 'both']));
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123123', '--hold', '5']), /--hold/);
 	assert.throws(() => latencyOptions('/root', ['--hosts', 'peer']), /needs --peer/);
 	// SSH is gone: its options are unknown.
 	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local']));
@@ -199,4 +211,13 @@ test('a two-computer run is summarised from each side\'s own samples', async () 
 	assert.match(text, /\| Round trip \(ms\) \| 4\.0 \| 6\.0 \| 2 \|/);
 	assert.match(text, /\| Decoding \| 2\.0 \| 3\.0 \| 2 \|/);
 	assert.match(text, /Conditions the viewer held: encoder\.slow/);
+});
+
+test('the reader is built for the addon\'s target with its tools, and for the host\'s default elsewhere', () => {
+	const windows = readerBuild('vnilink-windows', 'x86_64-pc-windows-gnu', { PATH: 'C:\\mingw\\bin' }, () => true);
+	assert.deepEqual(windows.args, ['build', '--release', '--locked', '--target', 'x86_64-pc-windows-gnu', '-p', 'vnilink-windows', '--example', 'glass_latency']);
+	assert.equal(windows.env.CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER, 'gcc', 'the MinGW tools the addon build uses');
+	const mac = readerBuild('vnilink-macos', undefined, { PATH: '/bin' });
+	assert.deepEqual(mac.args, ['build', '--release', '--locked', '-p', 'vnilink-macos', '--example', 'glass_latency']);
+	assert.deepEqual(mac.env, { PATH: '/bin' });
 });

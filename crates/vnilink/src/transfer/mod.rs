@@ -25,6 +25,10 @@
 //! bytes. The last segment is checked but not journaled: the file publishes
 //! as soon as it checks.
 //!
+//! A segment's bytes travel compressed with zstd when its first megabyte
+//! shrinks enough to be worth it, and as they are otherwise (`codec`); the
+//! chaining value covers the file's bytes, so it is the same either way.
+//!
 //! Through a relay the receiver holds its connection's receive window to
 //! what the path carries, so a transfer yields to the desktop session
 //! instead of queueing seconds ahead of it (`window`).
@@ -34,7 +38,9 @@
 //! partials live and when files publish belong to the core (`core/jobs`
 //! and `core/transfer`).
 
+mod codec;
 mod counters;
+mod flush;
 mod hash;
 mod partial;
 mod receive;
@@ -43,10 +49,11 @@ mod window;
 mod wire;
 
 pub(crate) use counters::TransferCounters;
+pub(crate) use flush::flush_volume;
 #[cfg(test)]
 pub(crate) use hash::SegmentHasher;
 pub(crate) use hash::SEGMENT_LEN;
-pub(crate) use partial::{Partial, NO_SPACE, PARTIAL_FAILED};
+pub(crate) use partial::Partial;
 pub(crate) use receive::{ask, receive, Answer, Received};
 #[cfg(feature = "fuzzing")]
 pub(crate) use receive::{land, stream_of};
@@ -54,8 +61,12 @@ pub(crate) use send::{read_request, refuse, send, Source};
 pub(crate) use window::{Window, INITIAL_WINDOW};
 pub(crate) use wire::{FileRequest, FILES_ALPN, STATUS_BUSY, STATUS_CHANGED, STATUS_DENIED};
 
-/// Bytes per read, per stream write and per stream read.
+/// Bytes per source read and per stream write.
 const CHUNK: usize = 256 * 1024;
+
+/// Bytes a receiver gathers per stream read, before it writes, hashes and
+/// reports them: a stream hands over about one packet at a time otherwise.
+const RECEIVE_BUFFER: usize = 1024 * 1024;
 
 /// How long a receiver waits for a byte before it gives the stream up as
 /// stalled. Short in tests, which provoke stalls.

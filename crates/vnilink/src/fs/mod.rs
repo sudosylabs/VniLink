@@ -73,8 +73,6 @@ pub(crate) use wire::{
     STATUS_ERROR, STATUS_EXISTS, STATUS_NO_TRASH, STATUS_STALE, STATUS_UNPROVEN,
 };
 
-#[cfg(test)]
-pub(crate) use entry::stat;
 pub use entry::{EntryKind, EntryToken, FsEntry, TokenKind};
 pub use list::{DirPage, MAX_LISTED, MAX_PAGE};
 pub use roots::MAX_ROOTS;

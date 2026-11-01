@@ -20,6 +20,7 @@ use crate::transform::h264_encoders;
 /// probe says which kind a peer will get.
 #[test]
 fn prefers_a_hardware_transform_that_opens() {
+    // SAFETY: the candidates are listed and used on this test thread only.
     let encoders: Vec<_> = unsafe { h264_encoders() }.collect();
     assert!(!encoders.last().unwrap().hardware());
     let hardware_opens = encoders
@@ -52,13 +53,15 @@ fn the_capture_adapter_decides_the_encoder() {
     use vnilink::EncoderInput;
     for (name, device, _) in adapter_devices() {
         let device = crate::gpu::GpuDevice::new(device);
+        // SAFETY: `device` is a live D3D11 device created by `adapter_devices`.
         let adapter = unsafe { device.adapter().unwrap() };
+        // SAFETY: the candidates are listed and used on this test thread only.
         let on_adapter: Vec<_> = unsafe { crate::transform::hardware_encoders_on(adapter) }
             .into_iter()
             .map(|candidate| candidate.name)
             .collect();
+        // SAFETY: the candidates are listed and used on this test thread only.
         let listed: Vec<_> = unsafe { crate::transform::h264_encoders_for(Some(adapter)) }
-            .into_iter()
             .map(|candidate| candidate.name)
             .collect();
         assert_eq!(
@@ -73,6 +76,7 @@ fn the_capture_adapter_decides_the_encoder() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &device,
                 )
@@ -124,12 +128,78 @@ fn sps_profile(annex_b: &[u8]) -> Option<u8> {
         .map(|bytes| bytes[4])
 }
 
+/// The negotiated High stream is High, still one picture out for each in, and
+/// the baseline stream stays baseline.
+#[test]
+fn the_high_stream_is_high_and_the_default_stays_baseline() {
+    let params = |force| EncodeParams {
+        force_keyframe: force,
+        recovery: false,
+        bitrate_bps: 4_000_000,
+        frame_rate: 30,
+    };
+    let Ok(mut high) =
+        WindowsEncoder::open_profile(1280, 720, 30, 4_000_000, true, vnilink::YuvMatrix::Bt709)
+    else {
+        eprintln!("no encoder opens High here");
+        return;
+    };
+    let key = high
+        .encode(&text_page(1280, 720, 0), &params(true))
+        .unwrap();
+    assert_eq!(sps_profile(key.bytes()), Some(100), "High is 100");
+    for index in 1..8 {
+        let sample = high
+            .encode(&text_page(1280, 720, index), &params(false))
+            .unwrap();
+        assert!(!sample.keyframe(), "picture {index} is a delta");
+        assert!(
+            !sample.bytes().is_empty(),
+            "no picture waits for a later one"
+        );
+    }
+    let mut base =
+        WindowsEncoder::open(1280, 720, 30, 4_000_000, vnilink::YuvMatrix::Bt709).unwrap();
+    let key = base
+        .encode(&text_page(1280, 720, 0), &params(true))
+        .unwrap();
+    assert_ne!(
+        sps_profile(key.bytes()),
+        Some(100),
+        "the default is not High"
+    );
+}
+
+/// A hardware HEVC or AV1 encoder, where the machine has one, makes a stream
+/// the shared software decoder shows in the right colour; where it has none
+/// it declines, and the caps do not offer the codec.
+#[test]
+fn a_hardware_codec_that_opens_round_trips_and_one_that_does_not_is_not_offered() {
+    let offered = crate::codecs::probe_video_codecs().additional;
+    for codec in [vnilink::VideoCodec::H265, vnilink::VideoCodec::Av1] {
+        let opens = WindowsEncoder::open_hardware_codec(
+            codec,
+            vnilink_media::PROBE_SIDE,
+            vnilink_media::PROBE_SIDE,
+            30,
+            1_000_000,
+            vnilink::YuvMatrix::Bt709,
+            None,
+        )
+        .is_ok();
+        let listed = offered.iter().any(|support| support.codec == codec);
+        eprintln!("{codec:?}: opens {opens}, offered {listed}");
+        assert!(!listed || opens, "{codec:?} is offered without an encoder");
+    }
+}
+
 /// Every transform that opens, hardware or not, returns a picture for each
 /// picture it is given, a forced keyframe as a keyframe; a hardware one in
 /// Baseline. Microsoft's software transform writes Main on the desktop path
 /// (measured 2026-10-22), which is left as it was.
 #[test]
 fn every_transform_encodes_each_picture() {
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { h264_encoders() } {
         let Ok(mut encoder) = WindowsEncoder::open_candidate(
             &candidate,
@@ -191,6 +261,7 @@ fn every_transform_keeps_the_stream_colour() {
         .into_iter()
         .flat_map(|matrix| [(640u16, 480u16), (1920, 1080)].map(move |size| (matrix, size)))
     {
+        // SAFETY: the candidates are listed and used on this test thread only.
         for candidate in unsafe { h264_encoders() } {
             for colour in colours {
                 let Ok(mut encoder) = WindowsEncoder::open_candidate(
@@ -273,6 +344,7 @@ fn chroma_quality() {
         "| Transform | Size | Target Mb/s | Sent kB/s | Last PSNR | Last chroma | Last edge |"
     );
     println!("|---|---|---|---|---|---|---|");
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { h264_encoders() } {
         for (width, height) in [(1280u16, 720u16), (1920, 1080)] {
             for megabits in [2u32, 8] {
@@ -346,6 +418,8 @@ fn chroma_quality() {
 #[ignore = "probe"]
 fn adapters_and_outputs() {
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+    // SAFETY: every call is on a COM object created in this block, and the strings are copied
+    // out of the descriptions before they are printed.
     unsafe {
         let factory: IDXGIFactory1 = CreateDXGIFactory1().unwrap();
         let mut index = 0;
@@ -378,6 +452,7 @@ fn adapters_and_outputs() {
             index += 1;
         }
     }
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { h264_encoders() } {
         println!("encoder: {} ({:?})", candidate.name, candidate.vendor);
     }
@@ -397,6 +472,14 @@ fn on_device(
     frame: &vnilink_media::RawFrame,
     driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE,
 ) -> vnilink_media::RawFrame {
+    on_device_in_pool(frame, driver).0
+}
+
+/// [`on_device`] with the pool the picture was copied in.
+fn on_device_in_pool(
+    frame: &vnilink_media::RawFrame,
+    driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE,
+) -> (vnilink_media::RawFrame, crate::gpu::TexturePool) {
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -404,6 +487,10 @@ fn on_device(
         D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     };
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+    // SAFETY: `device` and `context` are filled by `D3D11CreateDevice` and kept alive.
+    // `pSysMem` points at `frame`'s pixels, which hold `stride * height` bytes and are only
+    // read during `CreateTexture2D`. The source texture is live on the same device when the
+    // pool copies it.
     unsafe {
         // As the capture does: video support where the driver has it.
         let (mut device, mut context) = (None, None);
@@ -455,8 +542,42 @@ fn on_device(
             .unwrap();
         let pool = crate::gpu::TexturePool::new(device, context, (width, height));
         let picture = pool.picture(&source.unwrap()).unwrap();
-        vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap()
+        let native =
+            vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap();
+        (native, pool)
     }
+}
+
+/// The pointer is drawn into a picture on the GPU: the picture stays native,
+/// reads back as the CPU composite does, and the original is untouched.
+#[test]
+fn a_pointer_over_a_gpu_picture_leaves_it_on_the_gpu() {
+    use crate::cursor::{Kind, Pointer, Shape};
+    let page = vnilink_media::measure::text_page(640, 360, 0);
+    let (frame, pool) = on_device_in_pool(
+        &page,
+        windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+    );
+    let shape = Shape::new(Kind::Color, 2, 2, 8, [200, 100, 50, 128].repeat(4)).unwrap();
+    for position in [(10, 20), (-1, -1), (639, 359), (700, 20)] {
+        let pointer = Pointer {
+            visible: true,
+            position,
+            shape: Some(Shape::new(Kind::Color, 2, 2, 8, [200, 100, 50, 128].repeat(4)).unwrap()),
+            image: None,
+        };
+        let drawn = pointer.composite_picture(frame.clone(), &pool).unwrap();
+        assert!(
+            drawn.native_picture().is_some(),
+            "{position:?} left the GPU"
+        );
+        assert_eq!(
+            drawn.pixels(),
+            shape.composite(&page, position).unwrap().pixels(),
+            "{position:?} differs from the CPU composite"
+        );
+    }
+    assert_eq!(frame.pixels(), page.pixels());
 }
 
 /// `frame` averaged over `block` x `block` squares.
@@ -497,6 +618,7 @@ fn every_transform_encodes_a_picture_converted_on_the_gpu() {
         [0, 128, 255],
         [128, 128, 128],
     ];
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { h264_encoders() } {
         for (width, height) in [(1280u16, 720u16), (640, 360)] {
             let encode = |frame: &vnilink_media::RawFrame| {
@@ -569,6 +691,8 @@ fn capture_to_encode_cost() {
     use vnilink_media::{HostVideo, PumpOutput, Quality};
     use windows::Win32::Foundation::FILETIME;
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    // SAFETY: `GetProcessTimes` is given the current process pseudo-handle and four local
+    // `FILETIME`s.
     let cpu = || unsafe {
         let (mut created, mut exited, mut kernel, mut user) = (
             FILETIME::default(),
@@ -593,10 +717,13 @@ fn capture_to_encode_cost() {
     capture.set_embeds_cursor(false);
     let (width, height) = capture.size();
     let captured_on = capture.device();
+    // SAFETY: `captured_on` is the live device capture opened.
     let capture_adapter = unsafe { captured_on.adapter().unwrap() };
     println!("desktop {width}x{height}, encoder at 1280x720");
     // Path 2: the picture copied into a texture shared with another
     // adapter's device, converted and encoded there.
+    // SAFETY: `captured_on` is the live device capture opened and `capture_adapter` is its
+    // adapter.
     let shared = unsafe {
         SharedAcross::new(
             &captured_on,
@@ -612,6 +739,7 @@ fn capture_to_encode_cost() {
     // has to beat.
     let other = adapter_devices().into_iter().find_map(|(_, device, _)| {
         let device = crate::gpu::GpuDevice::new(device);
+        // SAFETY: `device` is a live D3D11 device created by `adapter_devices`.
         let adapter = unsafe { device.adapter().unwrap() };
         ((adapter.LowPart, adapter.HighPart) != (capture_adapter.LowPart, capture_adapter.HighPart))
             .then_some(device)
@@ -630,6 +758,7 @@ fn capture_to_encode_cost() {
                 720,
                 30,
                 4_000_000,
+                false,
                 vnilink::YuvMatrix::Bt709,
                 &captured_on,
             )
@@ -640,6 +769,7 @@ fn capture_to_encode_cost() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &shared.device(),
                 )
@@ -652,6 +782,7 @@ fn capture_to_encode_cost() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     other,
                 )
@@ -678,6 +809,8 @@ fn capture_to_encode_cost() {
                         frame.pixels().to_vec(),
                     )
                     .unwrap(),
+                    // SAFETY: `shared` was built from the capture's own device, and `frame` is a
+                    // captured picture from that capture.
                     "shared" => unsafe { shared.as_ref().unwrap().carry(&frame).unwrap() },
                     _ => frame,
                 };
@@ -702,12 +835,12 @@ fn capture_to_encode_cost() {
 }
 
 /// An encoder reopened as the pump reopens it, the new one opening while
-/// the old is alive, three times a way: reading the captured texture (path
-/// 1) and reading NV12 from memory (path 3). Prints the time to open, to
-/// drop the old one, and to encode the first pictures; the picture freezes
-/// that long. Listing every adapter's encoders before opening the first
-/// took 0.8 to 1 s on a hybrid Intel + NVIDIA laptop (2026-10-23), now the capture adapter's are tried
-/// before the next adapter is asked. Needs the interactive session:
+/// the old is alive, three times a way: reading the captured texture
+/// (path 1) and reading NV12 from memory (path 3). Prints the time to open,
+/// to drop the old one, and to encode the first pictures; the picture
+/// freezes that long. Listing every adapter's encoders before opening the
+/// first took 0.8 to 1 s on a hybrid Intel + NVIDIA laptop (2026-10-23);
+/// now the capture adapter's are tried before the next adapter is asked. Needs the interactive session:
 /// `cargo test -p vnilink-windows --release --lib reopen_cost -- --ignored --nocapture`.
 #[test]
 #[ignore = "measurement"]
@@ -717,6 +850,7 @@ fn reopen_cost() {
     let capture = crate::WindowsCapture::open(&startup).unwrap();
     capture.set_embeds_cursor(false);
     let device = capture.device();
+    // SAFETY: `device` is the live device capture opened.
     let adapter = unsafe { device.adapter().unwrap() };
     let frame = loop {
         if let Some(frame) = capture.poll_frame(0).unwrap() {
@@ -737,12 +871,14 @@ fn reopen_cost() {
                 720,
                 30,
                 4_000_000,
+                false,
                 vnilink::YuvMatrix::Bt709,
                 &device,
             )
             .unwrap();
         }
         // As `open_on` once no texture is read: candidates as they are listed.
+        // SAFETY: the candidates are listed and used on this test thread only.
         unsafe { crate::transform::h264_encoders_for(Some(adapter)) }
             .find_map(|candidate| {
                 WindowsEncoder::open_candidate(
@@ -973,6 +1109,7 @@ fn a_captured_picture_is_converted_on_the_cpu_when_the_gpu_cannot() {
     use vnilink_media::measure::{psnr, text_page};
     use vnilink_media::{HostVideo, PumpOutput, Quality};
     let page = text_page(1280, 720, 0);
+    // SAFETY: the candidates are listed and used on this test thread only.
     for candidate in unsafe { h264_encoders() } {
         let Ok(mut encoder) = WindowsEncoder::open_candidate(
             &candidate,
@@ -1083,6 +1220,8 @@ fn adapter_devices() -> Vec<(
     };
     use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
     let mut devices = Vec::new();
+    // SAFETY: every call is on a COM object created in this block; `device` and `context` are
+    // filled by `D3D11CreateDevice` and kept alive in `devices`.
     unsafe {
         let factory: IDXGIFactory1 = CreateDXGIFactory1().unwrap();
         let mut index = 0;
@@ -1130,6 +1269,9 @@ fn on_this_device(
         D3D11_USAGE_DEFAULT,
     };
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+    // SAFETY: `device` and `context` are live and belong together. `pSysMem` points at
+    // `frame`'s pixels, which hold `stride * height` bytes and are only read during
+    // `CreateTexture2D`.
     unsafe {
         let (width, height) = (u32::from(frame.width()), u32::from(frame.height()));
         let desc = D3D11_TEXTURE2D_DESC {
@@ -1185,6 +1327,7 @@ fn an_encoder_opened_on_the_capture_device_reads_its_textures() {
                     height,
                     30,
                     8_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &gpu,
                 )

@@ -382,8 +382,13 @@ impl RemoteHost {
     ) -> Result<Self, PeerError> {
         let preview = engine.core.open_pairing_file(file)?;
         engine.core.confirm_pairing(&preview, check)?;
-        announce(&engine.core.control_check());
+        let events = engine.core.subscribe()?;
         let pending = engine.core.begin_connect_services(&preview.endpoint_id)?;
+        if let Some(digits) =
+            crate::session::control_check_or_end(&engine.core, &events, pending.id, APPROVAL_WAIT)
+        {
+            announce(&digits);
+        }
         let session = active(engine, pending.id, APPROVAL_WAIT)?;
         let channel = engine.core.dial_agent(&preview.endpoint_id)?;
         let mut host = Self {
@@ -606,26 +611,31 @@ mod tests {
         let agent = Agent::open(Reach::Loopback)?;
         let file = agent.export(Duration::from_secs(60))?;
         let suite = Engine::start("controller");
-        let wrong = if file.check == "000" { "111" } else { "000" };
+        let wrong = crate::session::other_check(&file.check);
         assert!(
             matches!(
-                RemoteHost::pair(&suite, &file.bytes, wrong),
+                RemoteHost::pair(&suite, &file.bytes, &wrong),
                 Err(PeerError::Engine(vnilink::Error::PairingCheckMismatch))
             ),
             "other digits pair with nothing"
         );
-        let suite_check = suite.core.control_check();
+        let (digits_tx, digits_rx) = std::sync::mpsc::channel::<String>();
+        let digits_rx = std::sync::Mutex::new(digits_rx);
         std::thread::scope(|scope| -> TestResult {
             let serving = scope.spawn(|| {
-                // The agent's owner types what the suite printed; the
-                // agent's engine asks by the same digits.
-                let controller = agent.admit(Instant::now() + APPROVAL_WAIT, |request| {
-                    assert_eq!(request.check, suite_check, "both screens show the digits");
-                    Some(suite_check.clone())
+                // The agent's owner types what the suite printed once it
+                // connected; the agent's engine compares them with its own.
+                let controller = agent.admit(Instant::now() + APPROVAL_WAIT, |_| {
+                    digits_rx.lock().ok()?.recv_timeout(APPROVAL_WAIT).ok()
                 })?;
                 agent.serve(&controller, Duration::from_secs(10))
             });
-            let mut host = RemoteHost::pair(&suite, &file.bytes, &file.check)?;
+            let mut host =
+                RemoteHost::pair_announcing(&suite, &file.bytes, &file.check, |digits| {
+                    digits_tx
+                        .send(digits.to_owned())
+                        .expect("the agent's owner");
+                })?;
             assert_eq!(
                 host.endpoint(),
                 agent.engine().endpoint(),
@@ -669,15 +679,21 @@ mod tests {
         }
         let file = agent.export(Duration::from_secs(60))?;
         let suite = Engine::start("controller");
-        let suite_check = suite.core.control_check();
+        let (digits_tx, digits_rx) = std::sync::mpsc::channel::<String>();
+        let digits_rx = std::sync::Mutex::new(digits_rx);
         std::thread::scope(|scope| -> TestResult {
             let serving = scope.spawn(|| {
                 let controller = agent.admit(Instant::now() + APPROVAL_WAIT, |_| {
-                    Some(suite_check.clone())
+                    digits_rx.lock().ok()?.recv_timeout(APPROVAL_WAIT).ok()
                 })?;
                 agent.serve(&controller, Duration::from_secs(30))
             });
-            let mut host = RemoteHost::pair(&suite, &file.bytes, &file.check)?;
+            let mut host =
+                RemoteHost::pair_announcing(&suite, &file.bytes, &file.check, |digits| {
+                    digits_tx
+                        .send(digits.to_owned())
+                        .expect("the agent's owner");
+                })?;
             test(agent.engine(), &suite, &mut host)?;
             drop(host);
             serving.join().expect("the agent's thread")?;
@@ -1247,14 +1263,20 @@ mod tests {
         let suite = Engine::start("controller");
         let preview = suite.core.open_pairing_file(&file.bytes)?;
         suite.core.confirm_pairing(&preview, &file.check)?;
+        let (digits_tx, digits_rx) = std::sync::mpsc::channel::<String>();
+        let digits_rx = std::sync::Mutex::new(digits_rx);
+        let events = suite.core.subscribe()?;
         std::thread::scope(|scope| -> TestResult {
             let serving = scope.spawn(|| {
-                let controller = agent.admit(Instant::now() + APPROVAL_WAIT, |request| {
-                    Some(request.check.clone())
+                let controller = agent.admit(Instant::now() + APPROVAL_WAIT, |_| {
+                    digits_rx.lock().ok()?.recv_timeout(APPROVAL_WAIT).ok()
                 })?;
                 agent.serve(&controller, Duration::from_secs(10))
             });
             let pending = suite.core.begin_connect_services(&preview.endpoint_id)?;
+            digits_tx
+                .send(crate::session::wait_control_check(&events, APPROVAL_WAIT))
+                .expect("the agent's owner");
             active(&suite, pending.id, APPROVAL_WAIT)?;
             let channel = suite.core.dial_agent(&preview.endpoint_id)?;
             send(

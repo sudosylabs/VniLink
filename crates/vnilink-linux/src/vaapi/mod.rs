@@ -418,7 +418,7 @@ impl Encoder {
         bitrate_bps: u32,
         matrix: YuvMatrix,
     ) -> Result<Self, Error> {
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame("width and height must be even"));
         }
         try_open(node, codec, width, height, frame_rate, bitrate_bps, matrix)
@@ -440,10 +440,8 @@ impl Encoder {
             Input::Nv12 { y, uv } => upload_nv12(
                 &surface,
                 self.format,
-                self.visible_width,
-                self.visible_height,
-                self.coded_width,
-                self.coded_height,
+                (self.visible_width, self.visible_height),
+                (self.coded_width, self.coded_height),
                 &y,
                 &uv,
             )
@@ -744,7 +742,9 @@ pub(crate) fn choose_bitrate_control(supported: u32) -> Option<u32> {
     }
     // Leaving this attribute unset selects CQP on Intel: bitrate settings
     // then have no effect and every picture uses the fixed initial quantizer.
-    [libva::VA_RC_VBR, libva::VA_RC_CBR]
+    // CBR first: a remote screen is bound by the link, and a rate that may
+    // swing above the target (VBR) queues a keyframe's burst behind itself.
+    [libva::VA_RC_CBR, libva::VA_RC_VBR]
         .into_iter()
         .find(|mode| supported & mode != 0)
 }
@@ -821,15 +821,9 @@ pub(crate) fn is_render_node_name(name: &str) -> bool {
 }
 
 pub(crate) fn choose_entrypoint(entrypoints: &[VAEntrypoint::Type]) -> Option<VAEntrypoint::Type> {
-    if entrypoints
-        .iter()
-        .any(|entry| *entry == VAEntrypoint::VAEntrypointEncSliceLP)
-    {
+    if entrypoints.contains(&VAEntrypoint::VAEntrypointEncSliceLP) {
         Some(VAEntrypoint::VAEntrypointEncSliceLP)
-    } else if entrypoints
-        .iter()
-        .any(|entry| *entry == VAEntrypoint::VAEntrypointEncSlice)
-    {
+    } else if entrypoints.contains(&VAEntrypoint::VAEntrypointEncSlice) {
         Some(VAEntrypoint::VAEntrypointEncSlice)
     } else {
         None
@@ -839,10 +833,8 @@ pub(crate) fn choose_entrypoint(entrypoints: &[VAEntrypoint::Type]) -> Option<VA
 fn upload_nv12(
     surface: &Surface<()>,
     format: libva::VAImageFormat,
-    visible_width: u32,
-    visible_height: u32,
-    coded_width: u32,
-    coded_height: u32,
+    (visible_width, visible_height): (u32, u32),
+    (coded_width, coded_height): (u32, u32),
     y: &[u8],
     uv: &[u8],
 ) -> Result<(), Error> {
@@ -863,10 +855,8 @@ fn upload_nv12(
         descriptor.offsets[0] as usize,
         descriptor.pitches[0] as usize,
         y,
-        visible_width as usize,
-        visible_height as usize,
-        coded_width as usize,
-        coded_height as usize,
+        (visible_width as usize, visible_height as usize),
+        (coded_width as usize, coded_height as usize),
         16,
     )?;
     copy_plane(
@@ -874,10 +864,8 @@ fn upload_nv12(
         descriptor.offsets[1] as usize,
         descriptor.pitches[1] as usize,
         uv,
-        visible_width as usize,
-        visible_height as usize / 2,
-        coded_width as usize,
-        coded_height as usize / 2,
+        (visible_width as usize, visible_height as usize / 2),
+        (coded_width as usize, coded_height as usize / 2),
         128,
     )?;
     Ok(())
@@ -888,10 +876,8 @@ fn copy_plane(
     offset: usize,
     pitch: usize,
     src: &[u8],
-    visible_width: usize,
-    visible_height: usize,
-    coded_width: usize,
-    coded_height: usize,
+    (visible_width, visible_height): (usize, usize),
+    (coded_width, coded_height): (usize, usize),
     pad: u8,
 ) -> Result<(), Error> {
     if pitch < coded_width {

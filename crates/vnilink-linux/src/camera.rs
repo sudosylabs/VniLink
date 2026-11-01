@@ -82,6 +82,7 @@ fn identity_of(caps: &NodeCaps) -> String {
 /// missing files, unreadable links, rejected characters — yields `None`
 /// and the node falls back to the serial-less identity plus the
 /// continuity rule, never to a guess.
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn read_serial(class_dir: &std::path::Path, node: &str) -> Option<String> {
     let link = class_dir.join(node).join("device");
     let target = std::fs::read_link(&link).ok()?;
@@ -480,12 +481,7 @@ impl HostCameraFactory for LinuxCameraFactory {
                         source.close();
                     })
                     .map_err(|_| Error::Unsupported("camera worker"))?;
-                match startup.receive(&result) {
-                    Ok(inner) => inner,
-                    // The caller cancelled: not a capture loss, so consent
-                    // is untouched and the cancellation propagates as-is.
-                    Err(cancelled) => return Err(cancelled),
-                }
+                startup.receive(&result)?
             }
             #[cfg(not(target_os = "linux"))]
             {

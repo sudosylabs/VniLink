@@ -22,20 +22,11 @@ import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 import still from './fixtures/still.json' with { type: 'json' };
 import { DesktopViewFakes } from './remoteDesktopServices.js';
+import { until } from './waits.js';
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
 		throw new Error(message);
-	}
-}
-
-async function until(condition: () => boolean, message: string, timeout = 5000): Promise<void> {
-	const deadline = performance.now() + timeout;
-	while (!condition()) {
-		if (performance.now() > deadline) {
-			throw new Error(message);
-		}
-		await new Promise(resolve => setTimeout(resolve, 10));
 	}
 }
 

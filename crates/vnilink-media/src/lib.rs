@@ -22,7 +22,9 @@ pub use software::{
     probe_software_codecs, CodecEncoder, SoftwareDecoder, SoftwareDecoderSlot, SoftwareEncoder,
 };
 mod hevc;
+mod probe;
 pub use hevc::{hevc_annex_b, hevc_sample, hevc_units};
+pub use probe::{decodes, PROBE_SIDE};
 mod annexb;
 mod channel;
 mod controller;

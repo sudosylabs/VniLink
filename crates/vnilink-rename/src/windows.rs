@@ -488,6 +488,7 @@ pub fn delete_file_object(file: &std::fs::File) -> io::Result<()> {
 
 /// Mounted drive roots, without requesting additional filesystem privileges.
 pub fn drive_roots() -> io::Result<Vec<std::path::PathBuf>> {
+    // SAFETY: takes no arguments and only reads the drive bitmask.
     let drives = unsafe { GetLogicalDrives() };
     if drives == 0 {
         return Err(io::Error::last_os_error());

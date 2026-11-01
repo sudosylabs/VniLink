@@ -371,9 +371,11 @@ mod tests {
         if LIST_PARKED.swap(true, Seq::SeqCst) {
             return;
         }
-        while !cancelled.load(Seq::Acquire) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::test_support::wait_until(
+            "the parked listing to be cancelled",
+            Duration::from_secs(30),
+            || cancelled.load(Seq::Acquire),
+        );
     }
 
     fn list_finish_probe(cancelled: bool) {
@@ -459,14 +461,9 @@ mod tests {
         });
         // The worker must reach the parked probe; on the old inline path no
         // probe exists and this times out.
-        let deadline = std::time::Instant::now() + Duration::from_secs(8);
-        while !LIST_PARKED.load(Ordering::SeqCst) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "list worker never parked"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::test_support::wait_until("the list worker to park", Duration::from_secs(8), || {
+            LIST_PARKED.load(Ordering::SeqCst)
+        });
         // Sibling progress while parked: the async worker is free and no
         // shared lock is held, so a full second listing completes.
         let sibling = sibling_rx

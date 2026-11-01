@@ -30,13 +30,15 @@ function deferred() {
 /** Records what pairing asks of the device service; requests and replies are set per test. */
 function fakeDevices(overrides = {}) {
 	const changed = new Emitter();
+	const checked = new Emitter();
 	const calls = [];
 	const devices = {
 		changed,
+		checked,
 		calls,
 		incoming: null,
 		onDidChangeDevices: changed.event,
-		exportPairingFile: () => Promise.resolve({ bytes: [1, 2, 3], check: '042', expiresAt: Date.now() + 900_000 }),
+		exportPairingFile: () => Promise.resolve({ bytes: [1, 2, 3], check: '042517', expiresAt: Date.now() + 900_000 }),
 		incomingPairing: () => Promise.resolve(devices.incoming),
 		approvePairing: digits => {
 			calls.push(['approve', digits]);
@@ -52,7 +54,7 @@ function fakeDevices(overrides = {}) {
 			calls.push(['pair', Array.from(bytes), digits]);
 			return Promise.resolve('peer');
 		},
-		pairingCheck: () => Promise.resolve('731'),
+		onDidReceiveControlCheck: checked.event,
 		connect: id => {
 			calls.push(['connect', id]);
 			return Promise.resolve();
@@ -83,19 +85,19 @@ test('an invitation waits, turns into an approval and pairs on the right digits'
 	try {
 		await service.createInvitation();
 		assert.equal(service.state.step.kind, 'invitation');
-		assert.equal(service.state.step.file.check, '042');
+		assert.equal(service.state.step.file.check, '042517');
 		assert.equal(service.state.busy, false);
 		service.reset();
 		assert.equal(service.state.step.kind, 'invitation', 'Closing the popover cancelled a live invitation');
-		devices.incoming = { endpoint_id: 'peer', check: '731' };
+		devices.incoming = { endpoint_id: 'peer' };
 		const approval = await until(service, state => state.step.kind === 'approval');
 		assert.equal(approval.step.endpointId, 'peer');
 		await service.submitCode('73');
-		assert.equal(service.state.message, 'Enter the three digits shown on the other computer.');
+		assert.equal(service.state.message, 'Enter the six digits shown on the other computer.');
 		assert.deepEqual(devices.calls, []);
-		await service.submitCode('731');
+		await service.submitCode('731904');
 		assert.equal(service.state.step.kind, 'paired');
-		assert.deepEqual(devices.calls, [['approve', '731']]);
+		assert.deepEqual(devices.calls, [['approve', '731904']]);
 		service.reset();
 		assert.equal(service.state.step.kind, 'idle');
 	} finally {
@@ -108,7 +110,7 @@ test('a rejected request ends the invitation', async () => {
 	const service = new DevicePairingService(devices);
 	try {
 		await service.createInvitation();
-		devices.incoming = { endpoint_id: 'peer', check: '731' };
+		devices.incoming = { endpoint_id: 'peer' };
 		await until(service, state => state.step.kind === 'approval');
 		await service.reject();
 		assert.equal(service.state.step.kind, 'ended');
@@ -124,17 +126,17 @@ test('a lapsed request returns to the live invitation and a new one asks again',
 	const service = new DevicePairingService(devices);
 	try {
 		await service.createInvitation();
-		devices.incoming = { endpoint_id: 'peer', check: '731' };
+		devices.incoming = { endpoint_id: 'peer' };
 		await until(service, state => state.step.kind === 'approval');
 		devices.incoming = null;
 		const waiting = await until(service, state => state.step.kind === 'invitation');
-		assert.equal(waiting.step.file.check, '042', 'The invitation was replaced instead of kept');
+		assert.equal(waiting.step.file.check, '042517', 'The invitation was replaced instead of kept');
 		assert.equal(waiting.message, 'The other computer stopped waiting. It will ask again while this invitation lasts.');
-		devices.incoming = { endpoint_id: 'peer', check: '731' };
+		devices.incoming = { endpoint_id: 'peer' };
 		await until(service, state => state.step.kind === 'approval');
-		await service.submitCode('731');
+		await service.submitCode('731904');
 		assert.equal(service.state.step.kind, 'paired');
-		assert.deepEqual(devices.calls, [['approve', '731']]);
+		assert.deepEqual(devices.calls, [['approve', '731904']]);
 	} finally {
 		service.dispose();
 	}
@@ -142,7 +144,7 @@ test('a lapsed request returns to the live invitation and a new one asks again',
 
 test('an invitation expires on its own', async () => {
 	const service = new DevicePairingService(fakeDevices({
-		exportPairingFile: () => Promise.resolve({ bytes: [1], check: '042', expiresAt: Date.now() + 20 }),
+		exportPairingFile: () => Promise.resolve({ bytes: [1], check: '042517', expiresAt: Date.now() + 20 }),
 	}));
 	try {
 		await service.createInvitation();
@@ -164,9 +166,13 @@ test('opening an invitation checks the file, pairs and shows the reverse code un
 		assert.equal(service.state.message, 'Choose a valid .vnl invitation smaller than 64 KB.');
 		await service.openInvitation(new File([new Uint8Array([86, 78])], 'office.vnl'));
 		assert.deepEqual(service.state.step, { kind: 'opened', fileName: 'office.vnl' });
-		await service.submitCode('042');
-		assert.deepEqual(service.state.step, { kind: 'reverseCode', code: '731', endpointId: 'peer' });
-		assert.deepEqual(devices.calls, [['pair', [86, 78], '042'], ['connect', 'peer']]);
+		await service.submitCode('042517');
+		assert.deepEqual(service.state.step, { kind: 'reverseCode', code: null, endpointId: 'peer' });
+		assert.deepEqual(devices.calls, [['pair', [86, 78], '042517'], ['connect', 'peer']]);
+		devices.checked.fire({ endpointId: 'other', check: '000000' });
+		assert.equal(service.state.step.code, null, 'Digits of another computer were shown');
+		devices.checked.fire({ endpointId: 'peer', check: '918273' });
+		assert.deepEqual(service.state.step, { kind: 'reverseCode', code: '918273', endpointId: 'peer' });
 		devices.changed.fire([{ id: 'peer', presence: 'connecting' }]);
 		assert.equal(service.state.step.kind, 'reverseCode');
 		devices.changed.fire([{ id: 'peer', presence: 'connected' }]);
@@ -180,7 +186,7 @@ test('a failed pairing keeps the opened invitation for another try', async () =>
 	const service = new DevicePairingService(fakeDevices({ pair: () => Promise.reject(new Error('The code does not match.')) }));
 	try {
 		await service.openInvitation(new File([new Uint8Array([1])], 'office.vnl'));
-		await service.submitCode('999');
+		await service.submitCode('999999');
 		assert.equal(service.state.step.kind, 'opened');
 		assert.equal(service.state.message, 'The code does not match.');
 		assert.equal(service.state.busy, false);
@@ -206,7 +212,7 @@ test('commands are not started twice and late replies after disposal are dropped
 	assert.equal(exports, 1, 'A busy flow started a second invitation');
 	service.dispose();
 	const seen = events.length;
-	pending.resolve({ bytes: [1], check: '042', expiresAt: Date.now() + 900_000 });
+	pending.resolve({ bytes: [1], check: '042517', expiresAt: Date.now() + 900_000 });
 	await first;
 	assert.equal(events.length, seen, 'A disposed service announced a late invitation');
 });

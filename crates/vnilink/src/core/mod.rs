@@ -52,6 +52,7 @@ mod camera_stream;
 mod clipboard;
 mod connect;
 mod desktop_clipboard;
+mod desktop_input;
 mod desktop_service;
 mod desktop_stream;
 mod drops;
@@ -68,8 +69,6 @@ mod job_journal;
 mod jobs;
 #[cfg(all(any(unix, windows), any(test, feature = "test-probes")))]
 pub use jobs::PrestageHooks;
-#[cfg(test)]
-pub(crate) use jobs::PREPARE_SCAN_HOOKS;
 #[cfg(any(test, feature = "test-probes"))]
 pub use jobs::{MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
 mod input_cleanup;
@@ -247,6 +246,9 @@ struct LiveSession {
     link: Option<iroh::endpoint::Connection>,
     /// On a controller's link: the host's latest report of what it allows.
     remote_availability: Option<Vec<(crate::Capability, crate::RemoteStatus)>>,
+    /// Sent on every phase change, so a watcher of this session sleeps
+    /// until the phase moves. Dropped with the session.
+    changed: tokio::sync::watch::Sender<()>,
 }
 
 impl LiveSession {
@@ -269,6 +271,7 @@ impl LiveSession {
             "session phase"
         );
         self.phase = phase;
+        self.changed.send_replace(());
     }
 
     /// Active, on a link still open. A stream that ends on such a session
@@ -397,12 +400,54 @@ struct State {
     presence: HashMap<String, crate::DevicePresence>,
     /// Paired computers whose last link was refused because they stopped hosting.
     link_refused: std::collections::HashSet<[u8; 32]>,
+    /// Paired computers that answered the last link with `Unauthorized`.
+    link_unauthorized: std::collections::HashSet<[u8; 32]>,
 }
 
 struct PairingWindow {
     expires_at_ms: u64,
     allow_control: bool,
+    /// Control requests that reached the prompt in this window.
+    requests: u8,
+    /// Wrong digits typed in this window.
+    failures: u8,
 }
+
+impl PairingWindow {
+    fn new(expires_at_ms: u64, allow_control: bool) -> Self {
+        Self {
+            expires_at_ms,
+            allow_control,
+            requests: 0,
+            failures: 0,
+        }
+    }
+
+    fn expired(&self, now_ms: u64) -> bool {
+        now_ms >= self.expires_at_ms
+    }
+
+    /// Whether another control request may reach the prompt at `now_ms`.
+    fn admits_control(&self, now_ms: u64) -> bool {
+        self.allow_control && !self.expired(now_ms) && self.requests < MAX_CONTROL_REQUESTS
+    }
+
+    fn count_request(&mut self) {
+        self.requests = self.requests.saturating_add(1);
+    }
+
+    /// Counts a wrong digit; true when that was the last the window forgives.
+    fn spend_failure(&mut self) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        self.failures >= MAX_CONTROL_FAILURES
+    }
+}
+
+/// Control requests one pairing window shows its owner. A peer that keeps
+/// connecting cannot keep the prompt on screen.
+const MAX_CONTROL_REQUESTS: u8 = 5;
+/// Wrong digits one pairing window forgives. The next one closes the window.
+const MAX_CONTROL_FAILURES: u8 = 3;
 
 struct PendingControl {
     id: u64,
@@ -414,17 +459,42 @@ struct PendingControl {
     decision: tokio::sync::oneshot::Sender<bool>,
 }
 
-/// A controller is waiting on this host. `check` matches [`Core::control_check`]
-/// on that controller.
+/// A controller is waiting on this host. Its owner types the digits that
+/// controller shows ([`CoreEvent::ControlCheck`]); this computer compares
+/// them and never reveals the expected ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlRequest {
     pub endpoint_id: String,
-    pub check: String,
 }
 
+/// The engine's shared state.
+///
+/// # Lock order
+///
+/// Locks are taken outermost first, and a thread holding a later one never
+/// waits for an earlier one:
+///
+/// 1. `sharing_serial` and `privacy_serial`, which serialize a persisted or
+///    native change together with its cleanup.
+/// 2. `job_owner_gate`, then `jobs` (diagnostics and `interrupt_orphaned`
+///    count jobs before they take `state`).
+/// 3. `state`.
+/// 4. The slot a native adapter sits in: `desktop`, and the factories and
+///    actions (`terminal_factory`, `system_actions`) that open one. The
+///    exception is `native_input_adapter`, which takes `desktop` first and
+///    only `try_lock`s `state`, releasing `desktop` before it waits.
+/// 5. Leaf locks (`file_resources`, `job_journal`, the registries such as
+///    `job_cancel`, `terminal_sessions`, `files_serving`): held for a lookup
+///    or an update, never across another lock, I/O or an `await`.
+///
+/// Native callbacks and network calls run with none of these held.
 struct Shared {
     /// Wakes one paired computer's link supervisor so it dials now.
     presence_wake: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Notify>>>,
+    /// The presence supervisor looks again at which computers are paired:
+    /// after a trust change is saved, when presence links turn on or off and
+    /// at shutdown.
+    presence_reconcile: tokio::sync::Notify,
     /// Serializes persisted sharing changes and their native revocation cleanup.
     sharing_serial: Mutex<()>,
     power_factory: Mutex<power::Factory>,
@@ -452,12 +522,8 @@ struct Shared {
     /// Where channels to the test agent go while it listens (`agent`).
     #[cfg(feature = "test-probes")]
     agent: Mutex<Option<std::sync::mpsc::Sender<agent::AgentChannel>>>,
-    /// Non-zero test budget, in milliseconds, for a blocked endpoint
-    /// close. A real close keeps the production limit.
-    #[cfg(test)]
-    teardown_budget_ms: AtomicU64,
-    #[cfg(test)]
-    block_endpoint_close: AtomicBool,
+    /// How the endpoint closes; a test swaps in a close that does not finish.
+    endpoint_close: Mutex<Arc<dyn CloseEndpoint>>,
     events: EventHub,
     state: Mutex<State>,
     desktop: Arc<Mutex<Option<Box<dyn HostDesktop>>>>,
@@ -512,6 +578,9 @@ struct Shared {
     /// keyed `(connection id, generation)`. One router per key owns
     /// `read_datagram`, so sibling owners never split each other's fragments.
     desktop_routers: Mutex<HashSet<(u64, u64)>>,
+    /// Host-only. Connections with a live input-datagram reader, keyed the
+    /// same way ([`desktop_input`]).
+    input_routers: Mutex<HashSet<(u64, u64)>>,
     topology: Mutex<topology::TopologySnapshot>,
     topology_watch: tokio::sync::watch::Sender<u64>,
     /// Controller-only. Exchanges Control and Command before an event is queued.
@@ -538,6 +607,9 @@ struct Shared {
     /// Incoming files connections by peer, closed on revoke and unpair so
     /// a file being served stops mid-way.
     files_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
+    /// Incoming connections between their first packet and the first thing
+    /// they send, which anyone can open; a full set refuses new ones.
+    unadmitted: Arc<tokio::sync::Semaphore>,
     /// One files connection per peer, kept for the files that follow so a
     /// small file does not pay for a handshake; dropped on revoke/unpair.
     files_fetching: Mutex<HashMap<[u8; 32], transfer::Fetching>>,
@@ -589,7 +661,7 @@ struct Shared {
 /// Call methods from outside the runtime this core creates. The core never
 /// invokes a UI callback. Read [`Core::snapshot`] for the current picture and
 /// poll [`Core::subscribe`] on the UI thread. A full event queue drops events
-/// for that subscriber and increments [`EventSubscription::lagged`] instead of
+/// for that subscriber and counts it for [`crate::EventSubscription::take_lagged`] instead of
 /// blocking the connection loop.
 pub struct Core {
     runtime: tokio::runtime::Runtime,
@@ -640,7 +712,11 @@ impl Core {
     }
 
     fn alive_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Error> {
-        let state = lock(&self.shared.state);
+        let mut state = lock(&self.shared.state);
+        if LOCK_POISONED.load(Ordering::SeqCst) {
+            fence_unrecoverable(&self.shared, &mut state);
+            return Err(Error::ShutDown);
+        }
         if state.shut_down {
             Err(Error::ShutDown)
         } else {
@@ -682,12 +758,34 @@ fn device_addr(device: &Device) -> Result<EndpointAddr, Error> {
     Ok(addr)
 }
 
+/// The sockets a peer can try: the ones this endpoint is bound to, and the
+/// ones it has found for itself (its interfaces, and how the network sees it).
 fn direct_addresses(endpoint: &Endpoint) -> Vec<SocketAddr> {
-    endpoint
+    let mut direct: Vec<SocketAddr> = endpoint
         .bound_sockets()
         .into_iter()
+        .chain(endpoint.addr().ip_addrs().copied())
         .filter(|addr| !addr.ip().is_unspecified() && addr.port() != 0)
-        .collect()
+        .collect();
+    direct.sort_unstable();
+    direct.dedup();
+    direct
+}
+
+/// The relays a peer dials to reach this computer: the configured ones, or
+/// in public mode the home relay the endpoint is connected to. Empty until
+/// the endpoint has reached one; the peer then falls back to discovery.
+fn dialable_relays(relay: &RelaySettings, own: &iroh::EndpointAddr) -> Result<Vec<String>, Error> {
+    let configured = relay.relay_urls()?;
+    if !configured.is_empty() {
+        return Ok(configured);
+    }
+    Ok(own
+        .relay_urls()
+        .filter_map(|url| crate::relay::parse_relay_url(url.as_str()).ok())
+        .map(|url| url.to_string())
+        .take(crate::relay::MAX_CUSTOM_RELAYS)
+        .collect())
 }
 
 fn session_info(session: &LiveSession) -> SessionInfo {
@@ -779,6 +877,12 @@ struct Installed {
 }
 
 fn persist(shared: &Shared, state: &mut State) -> Result<(), Error> {
+    shared.presence_reconcile.notify_one();
+    // What a peer may do is saved when it changes: a terminal serving a peer
+    // looks again whether it still may.
+    for terminal in lock(&shared.terminal_sessions).values() {
+        terminal.recheck();
+    }
     let Some(store) = &shared.store else {
         return Ok(());
     };
@@ -787,11 +891,13 @@ fn persist(shared: &Shared, state: &mut State) -> Result<(), Error> {
         &state.record_relay,
         &state.trust,
         &state.replay,
-        &state.terminal_policy,
-        &state.file_retention_policy,
-        &state.power_policy,
-        &state.file_resource_policy,
-        &state.system_policy,
+        installation::Policies {
+            terminal: &state.terminal_policy,
+            file_retention: &state.file_retention_policy,
+            power: &state.power_policy,
+            file_resource: &state.file_resource_policy,
+            system: &state.system_policy,
+        },
     )?;
     save_installation(shared, state, store.as_ref(), &bytes)
 }
@@ -838,7 +944,7 @@ fn stop_owned_work(state: &mut State, shared: &Shared) {
         );
     }
     for terminal in lock(&shared.terminal_sessions).values() {
-        terminal.stop.store(true, Ordering::Release);
+        terminal.request_stop();
     }
     services::synchronize(state, &shared.events);
 }
@@ -892,27 +998,27 @@ fn claim_endpoint_close(shared: &Shared) -> bool {
     true
 }
 
-fn teardown_limit(shared: &Shared, shortened: bool) -> Duration {
-    #[cfg(test)]
-    if shortened {
-        let millis = shared.teardown_budget_ms.load(Ordering::Acquire);
-        if millis > 0 {
-            return Duration::from_millis(millis);
-        }
-    }
-    let _ = (shared, shortened);
-    Duration::from_secs(5)
+/// The future that closes an endpoint and how long shutdown waits for it.
+type EndpointClosing = (
+    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    Duration,
+);
+
+/// How the engine closes its endpoint. A test substitutes a close that
+/// never finishes to follow the timeout and retry.
+trait CloseEndpoint: Send + Sync {
+    fn close(&self, endpoint: Endpoint) -> EndpointClosing;
 }
 
-fn take_close_block(shared: &Shared) -> bool {
-    #[cfg(test)]
-    {
-        shared.block_endpoint_close.swap(false, Ordering::AcqRel)
-    }
-    #[cfg(not(test))]
-    {
-        let _ = shared;
-        false
+/// Closes the endpoint and waits for it, up to the teardown limit.
+struct CloseIroh;
+
+impl CloseEndpoint for CloseIroh {
+    fn close(&self, endpoint: Endpoint) -> EndpointClosing {
+        (
+            Box::pin(async move { endpoint.close().await }),
+            Duration::from_secs(5),
+        )
     }
 }
 
@@ -975,17 +1081,9 @@ fn close_links_for_shutdown(shared: &Shared) {
 
 async fn close_endpoint(shared: &Arc<Shared>) -> bool {
     close_links_for_shutdown(shared);
-    let blocked = take_close_block(shared);
-    let limit = teardown_limit(shared, blocked);
-    let endpoint = shared.endpoint.clone();
-    tokio::time::timeout(limit, async move {
-        if blocked {
-            std::future::pending::<()>().await;
-        }
-        endpoint.close().await;
-    })
-    .await
-    .is_ok()
+    let closer = lock(&shared.endpoint_close).clone();
+    let (closing, limit) = closer.close(shared.endpoint.clone());
+    tokio::time::timeout(limit, closing).await.is_ok()
 }
 
 fn mark_teardown_finished(shared: &Shared) {
@@ -1038,8 +1136,29 @@ fn wait_for_endpoint_close(shared: &Shared) {
     }
 }
 
+/// Set when a thread panicked holding one of the core's locks. What that
+/// lock guards may be half updated, so nothing is served from it again:
+/// [`Core::alive_state`] refuses and closes the engine, and the thread that
+/// finds the poison stops with it. Teardown, which must still reach the
+/// state to close it, locks after the first finder.
+static LOCK_POISONED: AtomicBool = AtomicBool::new(false);
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+    lock_fenced(mutex, &LOCK_POISONED)
+}
+
+fn lock_fenced<'a, T>(mutex: &'a Mutex<T>, fence: &AtomicBool) -> std::sync::MutexGuard<'a, T> {
+    mutex.lock().unwrap_or_else(|poison| {
+        let first = !fence.swap(true, Ordering::SeqCst);
+        if first && !std::thread::panicking() {
+            tracing::error!(
+                target: crate::trace::SESSION,
+                "a thread panicked while holding a lock: the engine is closing"
+            );
+            panic!("a lock of the engine is poisoned");
+        }
+        poison.into_inner()
+    })
 }
 
 /// The live session on one side. Lookup, active phase, and id match live here
@@ -1063,5 +1182,73 @@ impl Shared {
         lock(&self.hostname)
             .clone()
             .or_else(crate::hostname::local_hostname)
+    }
+}
+
+#[cfg(test)]
+mod dialable_tests {
+    use super::*;
+    use iroh::TransportAddr;
+
+    fn own(relay: &str) -> iroh::EndpointAddr {
+        iroh::EndpointAddr::from_parts(
+            SecretKey::generate().public(),
+            [TransportAddr::Relay(relay.parse().unwrap())],
+        )
+    }
+
+    #[test]
+    fn public_mode_announces_the_home_relay_and_custom_mode_its_own() {
+        let home = own("https://home.relay.example.com");
+        assert_eq!(
+            dialable_relays(&RelaySettings::public_n0(), &home).unwrap(),
+            vec![
+                crate::relay::parse_relay_url("https://home.relay.example.com")
+                    .unwrap()
+                    .to_string()
+            ]
+        );
+        let custom =
+            RelaySettings::custom(vec![
+                crate::CustomRelay::new("https://mine.example.com").unwrap()
+            ])
+            .unwrap();
+        assert_eq!(
+            dialable_relays(&custom, &home).unwrap(),
+            custom.relay_urls().unwrap()
+        );
+    }
+
+    #[test]
+    fn public_mode_before_a_relay_is_reached_announces_none() {
+        let nothing = iroh::EndpointAddr::new(SecretKey::generate().public());
+        assert!(dialable_relays(&RelaySettings::public_n0(), &nothing)
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+
+    /// The first thread to find a poisoned lock stops with it and fences;
+    /// teardown, which comes after, can still reach the data to close it.
+    #[test]
+    fn a_poisoned_lock_fences_once_and_teardown_can_still_lock() {
+        let mutex = Arc::new(Mutex::new(5));
+        let poisoned = Arc::clone(&mutex);
+        let _ = std::thread::spawn(move || {
+            let _held = poisoned.lock().unwrap();
+            panic!("a thread dies holding the lock");
+        })
+        .join();
+        let fence = AtomicBool::new(false);
+        let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            *lock_fenced(&mutex, &fence)
+        }));
+        assert!(found.is_err(), "the finder stops instead of continuing");
+        assert!(fence.load(Ordering::SeqCst));
+        assert_eq!(*lock_fenced(&mutex, &fence), 5, "teardown still reads it");
     }
 }

@@ -60,10 +60,40 @@ impl vnilink_media::NativePicture for MacPicture {
     }
 }
 
+/// Where ScreenCaptureKit says a frame changed, as `[x, y, width, height]`
+/// rects, without reading a pixel. Whether they are points or pixels of the
+/// picture is only certain on a display that has no scale (`scale_factor`
+/// 1.0); on any other they are not trusted and the pixels say. `None` when
+/// there are no rects.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn reported_changes(
+    rects: &[[f64; 4]],
+    scale_factor: Option<f64>,
+    (width, height): (u16, u16),
+) -> Option<vnilink_media::Changes> {
+    if rects.is_empty() || scale_factor != Some(1.0) {
+        return None;
+    }
+    Some(vnilink_media::Changes::of(
+        rects.iter().map(|[x, y, w, h]| {
+            // Outwards to whole pixels: a fraction of one has changed.
+            let (left, top) = (x.floor(), y.floor());
+            [
+                left as i64,
+                top as i64,
+                (x + w).ceil() as i64 - left as i64,
+                (y + h).ceil() as i64 - top as i64,
+            ]
+        }),
+        u32::from(width),
+        u32::from(height),
+    ))
+}
+
 /// Where the picture changed between two BGRA pixel buffers: nothing for
 /// the same picture. ScreenCaptureKit marks a frame complete at the
-/// full frame rate whether or not anything on the screen changed, and
-/// attaches no dirty rects, so only the pixels say. Both stay where they
+/// full frame rate whether or not anything on the screen changed; when it
+/// attaches no dirty rects ([`reported_changes`]) only the pixels say. Both stay where they
 /// are: on Apple silicon the buffers are in shared memory and are read in
 /// place. `None` when either cannot be read, or the sizes differ.
 #[cfg(target_os = "macos")]
@@ -80,7 +110,7 @@ pub(crate) fn picture_change(
     let (Ok(left), Ok(right)) = (left.lock_read_only(), right.lock_read_only()) else {
         return None;
     };
-    // The stream has finished both buffers; these guards only read them.
+    // SAFETY: the stream has finished both buffers and each guard holds a read-only lock for as long as its slice is used, so the mapped bytes stay allocated, initialised and unmodified. Nothing here mutates them.
     let (Some(left_bytes), Some(right_bytes)) =
         (unsafe { left.as_slice() }, unsafe { right.as_slice() })
     else {
@@ -142,7 +172,7 @@ fn packed_bgra(
     if stride < row {
         return Err(Error::InvalidFrame("frame stride is shorter than one row"));
     }
-    // The stream has finished this buffer and this guard is the only mapping.
+    // SAFETY: the stream has finished this buffer and the read-only lock `guard` holds keeps the mapped bytes allocated, initialised and unmodified until `source` is last used.
     let source = unsafe { guard.as_slice() }.ok_or(Error::CaptureRejected(
         "ScreenCaptureKit did not deliver a frame",
     ))?;

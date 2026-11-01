@@ -121,6 +121,7 @@ pub(crate) fn places(roots: &RootSet) -> Places {
 }
 
 /// At most this many drives are offered; more are still reachable by path.
+#[cfg(unix)]
 const MAX_VOLUMES: usize = 32;
 
 /// Drives mounted where macOS and Linux put them, read afresh each time so

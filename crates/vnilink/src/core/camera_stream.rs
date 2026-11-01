@@ -19,6 +19,8 @@ use crate::{
 use iroh::endpoint::{RecvStream, SendStream};
 use std::time::Instant;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// How often a camera stream reads whether the host allows recording.
+const RECORDING_POLL: Duration = Duration::from_millis(250);
 /// How long a viewer whose requests failed still reads for the host's
 /// last word, which a host ending the stream sends after it stops reading.
 const LAST_WORD: Duration = Duration::from_secs(1);
@@ -715,14 +717,20 @@ pub(super) async fn serve(
         let sending = async {
             let mut timer = tokio::time::interval(Duration::from_millis(25));
             let mut recording = None;
+            let mut recording_read = None::<Instant>;
             loop {
-                // Recording consent follows the host's sharing policy as it changes.
-                let allowed = lock(&shared.state).trust.sharing.recording;
-                if recording != Some(allowed) {
-                    write(&mut send, vec![RECORDING, u8::from(allowed)])
-                        .await
-                        .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
-                    recording = Some(allowed);
+                // Recording consent follows the host's sharing policy as it
+                // changes. It is read a few times a second, not on every
+                // picture: the state lock is the whole engine's.
+                if recording_read.is_none_or(|read| read.elapsed() >= RECORDING_POLL) {
+                    recording_read = Some(Instant::now());
+                    let allowed = lock(&shared.state).trust.sharing.recording;
+                    if recording != Some(allowed) {
+                        write(&mut send, vec![RECORDING, u8::from(allowed)])
+                            .await
+                            .inspect_err(|_| ending.why(HostedEnd::ViewerClosed))?;
+                        recording = Some(allowed);
+                    }
                 }
                 if backend.source.is_cancelled() {
                     tracing::info!(

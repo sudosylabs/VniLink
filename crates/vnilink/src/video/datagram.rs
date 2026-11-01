@@ -32,8 +32,9 @@ pub(crate) const FRAG_HEADER: usize = 10;
 /// evens out parity-protected shards can be cut off again.
 const LEN_PREFIX: usize = 4;
 
-/// Largest data shard count accepted. A 1 MiB frame over ~240-byte payloads
-/// needs about four thousand shards; anything larger is malformed.
+/// Largest data shard count accepted. A 1 MiB frame over ~1,150-byte
+/// payloads needs about nine hundred shards; the limit leaves room for a
+/// path whose datagrams are far smaller, and anything larger is malformed.
 const MAX_FRAGMENTS: u16 = 8192;
 
 /// Most parity a frame carries, as a share of its data shards.
@@ -63,19 +64,25 @@ const MAX_SHARD: usize = 64 * 1024;
 /// instead of reopening a frame the decoder already consumed.
 const COMPLETED_MEMORY: usize = 16;
 
-/// Fewest parity shards a protected frame carries: a small frame of one or
-/// two fragments then survives two lost datagrams, as a large one does at
-/// the same share. Sunshine keeps the same floor.
+/// Fewest parity shards a frame carries once its link is losing: a small
+/// frame of one or two fragments then survives two lost datagrams, as a
+/// large one does at the same share. Sunshine keeps the same floor. A frame
+/// at no more than [`super::report::BASE_PROTECTION`] carries one.
 const MIN_PARITY: usize = 2;
 
 /// Parity shards for `data` data shards at `protection`, a share of the
-/// data: none at zero, else [`MAX_PROTECTION`] at most but never fewer than
-/// [`MIN_PARITY`].
+/// data: none at zero, else [`MAX_PROTECTION`] at most. Above the base
+/// share never fewer than [`MIN_PARITY`], at it one.
 pub(crate) fn parity_count(data: usize, protection: f64) -> usize {
-    if !(protection > 0.0) {
+    if protection.is_nan() || protection <= 0.0 {
         return 0;
     }
-    (((data as f64) * protection.min(MAX_PROTECTION)).ceil() as usize).max(MIN_PARITY)
+    let floor = if protection > super::report::BASE_PROTECTION {
+        MIN_PARITY
+    } else {
+        1
+    };
+    (((data as f64) * protection.min(MAX_PROTECTION)).ceil() as usize).max(floor)
 }
 
 /// The datagrams [`fragment`] makes of a body of `body` bytes, and their
@@ -98,6 +105,9 @@ pub(crate) fn fragmented_size(body: usize, max_datagram: usize, protection: f64)
 /// Split `body` into datagram payloads of at most `max_datagram` bytes:
 /// its data shards, then [`parity_count`] parity shards at `protection`.
 /// `seq` identifies the frame; the caller increments it per frame.
+///
+/// A body that needs more than [`MAX_FRAGMENTS`] data shards makes none: the
+/// viewer would reassemble a truncated frame, so the caller drops it.
 pub(crate) fn fragment(
     body: &[u8],
     seq: u32,
@@ -106,14 +116,13 @@ pub(crate) fn fragment(
 ) -> Vec<Vec<u8>> {
     // Reed–Solomon shards are even in length.
     let per = max_datagram.saturating_sub(FRAG_HEADER).max(64) & !1;
+    if (LEN_PREFIX + body.len()).div_ceil(per) > usize::from(MAX_FRAGMENTS) {
+        return Vec::new();
+    }
     let mut framed = Vec::with_capacity(LEN_PREFIX + body.len());
     framed.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes());
     framed.extend_from_slice(body);
-    let mut shards: Vec<Vec<u8>> = framed
-        .chunks(per)
-        .take(usize::from(MAX_FRAGMENTS))
-        .map(<[u8]>::to_vec)
-        .collect();
+    let mut shards: Vec<Vec<u8>> = framed.chunks(per).map(<[u8]>::to_vec).collect();
     let data = shards.len();
     let mut parity = parity_count(data, protection);
     if parity > 0 {
@@ -262,9 +271,15 @@ pub(crate) struct Reassembler {
     silence: Duration,
     /// Fragments seen since [`Self::take_fragments`] was last asked.
     fragments: FragmentCounts,
+    /// The newest frame sequence that completed.
+    newest_completed: Option<u32>,
 }
 
 impl Reassembler {
+    /// How long an incomplete frame may go without a fragment before it is
+    /// given up whatever else happens.
+    pub(crate) const SILENCE: Duration = FRAG_SILENCE;
+
     pub(crate) fn new() -> Self {
         Self {
             partial: BTreeMap::new(),
@@ -272,6 +287,7 @@ impl Reassembler {
             unfinished: Unfinished::default(),
             silence: FRAG_SILENCE,
             fragments: FragmentCounts::default(),
+            newest_completed: None,
         }
     }
 
@@ -374,6 +390,12 @@ impl Reassembler {
         }
         let partial = self.partial.remove(&seq).expect("present");
         self.completed.push_back(seq);
+        if self
+            .newest_completed
+            .is_none_or(|done| seq.wrapping_sub(done) <= u32::MAX / 2)
+        {
+            self.newest_completed = Some(seq);
+        }
         while self.completed.len() > COMPLETED_MEMORY {
             self.completed.pop_front();
         }
@@ -417,18 +439,40 @@ impl Reassembler {
     }
 
     fn expire(&mut self, now: Instant) {
+        self.expire_after(now, self.silence);
+    }
+
+    /// Gives up the incomplete frames that have had no fragment for
+    /// `silence`. Whether one was the newest frame seen: nothing after it
+    /// has arrived to show it missing, so only the viewer can ask for what
+    /// it needs.
+    pub(crate) fn expire_after(&mut self, now: Instant, silence: Duration) -> bool {
         let expired: Vec<u32> = self
             .partial
             .iter()
-            .filter(|(_, partial)| now.duration_since(partial.heard) >= self.silence)
+            .filter(|(_, partial)| now.saturating_duration_since(partial.heard) >= silence)
             .map(|(&seq, _)| seq)
             .collect();
+        let mut newest = false;
         for seq in expired {
             if let Some(expired) = self.partial.remove(&seq) {
                 self.fragments.missing += expired.missing();
             }
             self.unfinished.expired += 1;
+            newest |= self
+                .newest_completed
+                .is_none_or(|done| seq != done && seq.wrapping_sub(done) <= u32::MAX / 2);
         }
+        newest
+    }
+
+    /// When the incomplete frame that has been quiet longest will have been
+    /// quiet for `silence`.
+    pub(crate) fn quiet_at(&self, silence: Duration) -> Option<Instant> {
+        self.partial
+            .values()
+            .map(|partial| partial.heard + silence)
+            .min()
     }
 }
 

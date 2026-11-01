@@ -23,6 +23,7 @@ import { INativeRuntimeService } from '../../src/workbench/services/nativeRuntim
 import { IPermissionService } from '../../src/workbench/services/permissions/permissionService.js';
 import { IRemoteDesktopService } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITerminalHostService } from '../../src/workbench/services/terminal/terminalHostService.js';
+import { FakeTimers, macrotask } from './waits.js';
 
 export function assert(value: unknown, message: string): asserts value {
 	if (!value) {
@@ -30,16 +31,12 @@ export function assert(value: unknown, message: string): asserts value {
 	}
 }
 
-export async function settle(milliseconds = 0): Promise<void> {
-	await new Promise<void>(resolve => {
-		setTimeout(resolve, milliseconds);
-	});
+export function settle(): Promise<void> {
+	return macrotask();
 }
 
-/** Waits past the delay a typed value waits before it is applied. */
-export function settleEdit(): Promise<void> {
-	return settle(650);
-}
+/** How long the settings page waits after a typed value before it applies it, with room to spare. */
+const editDelay = 650;
 
 export function edit(input: HTMLInputElement | HTMLSelectElement, value: string, event: 'input' | 'change' = input instanceof HTMLSelectElement ? 'change' : 'input'): void {
 	input.value = value;
@@ -187,6 +184,8 @@ export const desktopCodecs: VideoCodecCaps = {
 
 /** Builds Home's settings pages over fake services, as the workbench would. */
 export class SettingsFixture extends Disposable {
+	/** The page's timers, which the test moves: a typed value applies when `settleEdit` advances past its delay. */
+	private readonly timers = this._register(new FakeTimers());
 	public readonly configuration = this._register(new FakeConfigurationService());
 	public readonly permissions = new FakePermissionService();
 	public chosenFolder: string | null = '/Recordings';
@@ -228,6 +227,11 @@ export class SettingsFixture extends Disposable {
 		this.instantiationService = this._register(new InstantiationService(services, true));
 		this.host.className = 'home-content';
 		document.body.append(this.host);
+	}
+
+	/** Moves time past the delay a typed value waits before it is applied. */
+	public settleEdit(): Promise<void> {
+		return this.timers.advance(editDelay);
 	}
 
 	/** Creates the registered settings page `id` and shows it. */

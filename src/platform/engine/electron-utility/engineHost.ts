@@ -17,8 +17,15 @@ import type { EngineEventBatch } from '../common/engineService.js';
 import { DataChannelHost } from './dataChannelHost.js';
 import type { NativeDataChannel } from './dataChannelHost.js';
 
+/** Stops the engine waking the host for events. */
+interface NativeEventWatch {
+	close(): void;
+}
+
 interface NativeEngine {
 	execute(command: string): Promise<string>;
+	/** Calls `wake` when events are waiting; calls that wait to run merge. */
+	watchEvents(wake: () => void): NativeEventWatch;
 	openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>;
 }
 
@@ -34,8 +41,11 @@ function screenGrantArgument(argv: readonly string[]): string | undefined {
 	return index >= 0 ? argv[index + 1] : undefined;
 }
 
-/** Engine events are read this often while the main process listens. */
-const eventPollInterval = 500;
+/** After a failed read, events are read again after this long, so the resync it owes is still delivered when no event follows. */
+const eventRetryDelay = 500;
+
+/** A read this full may have left events behind, so it is followed by another. */
+const maxEventsPerRead = 256;
 
 /** Each window may own at most this many native data channels. */
 const maxChannelsPerOwner = 8;
@@ -60,7 +70,10 @@ export class EngineHost implements IClientConnectionFilter {
 	});
 	public readonly onDidReceiveEvents = this.eventsEmitter.event;
 	private subscription: string | undefined;
-	private eventTimer: ReturnType<typeof setTimeout> | undefined;
+	private watch: NativeEventWatch | undefined;
+	private retryTimer: ReturnType<typeof setTimeout> | undefined;
+	private reading = false;
+	private readAgain = false;
 	private eventsWanted = false;
 	private resyncPending = true;
 
@@ -185,58 +198,95 @@ export class EngineHost implements IClientConnectionFilter {
 	private startEvents(): void {
 		this.eventsWanted = true;
 		this.resyncPending = true;
-		this.scheduleEvents(0);
+		const engine = this.engine;
+		if (engine) {
+			try {
+				// Watching begins before the first read, so an event after it always wakes the host.
+				this.watch = engine.watchEvents(() => {
+					this.requestRead();
+				});
+			} catch {
+				// Without a watch the retry timer below still reads, and reports the gap.
+			}
+		}
+		this.requestRead();
 	}
 
 	private stopEvents(): void {
 		this.eventsWanted = false;
-		clearTimeout(this.eventTimer);
-		this.eventTimer = undefined;
+		clearTimeout(this.retryTimer);
+		this.retryTimer = undefined;
+		this.watch?.close();
+		this.watch = undefined;
 		this.releaseSubscription();
 	}
 
-	private scheduleEvents(delay: number): void {
-		clearTimeout(this.eventTimer);
-		this.eventTimer = setTimeout(() => {
-			void this.readEvents();
-		}, delay);
-	}
-
-	/** Reads one batch of events, subscribing first when needed, and reports gaps as a resync. */
-	private async readEvents(): Promise<void> {
-		if (!this.readingEvents()) {
+	/** Reads events now, or once the read in flight ends. */
+	private requestRead(): void {
+		if (this.reading) {
+			this.readAgain = true;
 			return;
 		}
+		void this.readEvents();
+	}
+
+	/** Reads events until none are left, subscribing first when needed, and reports gaps as a resync. */
+	private async readEvents(): Promise<void> {
+		this.reading = true;
 		try {
-			if (!this.subscription) {
-				const reply = await this.execute({ type: 'subscribeEvents' });
-				if (!record(reply) || reply.type !== 'eventSubscription' || typeof reply.subscriptionId !== 'string') {
-					throw new Error('Invalid event subscription');
-				}
-				this.subscription = reply.subscriptionId;
+			do {
+				this.readAgain = false;
 				if (!this.readingEvents()) {
-					this.releaseSubscription();
 					return;
 				}
-			}
-			const reply = await this.execute({ type: 'pollEvents', subscriptionId: this.subscription, maxEvents: 256 });
-			if (!record(reply) || reply.type !== 'events' || !Array.isArray(reply.events)) {
-				throw new Error('Invalid event reply');
-			}
-			const resync = this.resyncPending || reply.lagged !== '0';
-			this.resyncPending = false;
-			if (resync || reply.events.length) {
-				this.eventsEmitter.fire({ events: reply.events as EngineEvent[], resync });
-			}
-		} catch {
-			// The next successful read reports that events may have been missed.
-			this.releaseSubscription();
-			this.resyncPending = true;
+				try {
+					if (await this.readBatch() === maxEventsPerRead) {
+						this.readAgain = true;
+					}
+				} catch {
+					// The next successful read reports that events may have been missed.
+					this.releaseSubscription();
+					this.resyncPending = true;
+					this.retryRead();
+				}
+			} while (this.readAgain);
 		} finally {
-			if (this.readingEvents()) {
-				this.scheduleEvents(eventPollInterval);
+			this.reading = false;
+		}
+	}
+
+	private retryRead(): void {
+		if (this.readingEvents()) {
+			clearTimeout(this.retryTimer);
+			this.retryTimer = setTimeout(() => {
+				this.requestRead();
+			}, eventRetryDelay);
+		}
+	}
+
+	/** Reads one batch and returns how many events it held. */
+	private async readBatch(): Promise<number> {
+		if (!this.subscription) {
+			const reply = await this.execute({ type: 'subscribeEvents' });
+			if (!record(reply) || reply.type !== 'eventSubscription' || typeof reply.subscriptionId !== 'string') {
+				throw new Error('Invalid event subscription');
+			}
+			this.subscription = reply.subscriptionId;
+			if (!this.readingEvents()) {
+				this.releaseSubscription();
+				return 0;
 			}
 		}
+		const reply = await this.execute({ type: 'pollEvents', subscriptionId: this.subscription, maxEvents: maxEventsPerRead });
+		if (!record(reply) || reply.type !== 'events' || !Array.isArray(reply.events)) {
+			throw new Error('Invalid event reply');
+		}
+		const resync = this.resyncPending || reply.lagged !== '0';
+		this.resyncPending = false;
+		if (resync || reply.events.length) {
+			this.eventsEmitter.fire({ events: reply.events as EngineEvent[], resync });
+		}
+		return reply.events.length;
 	}
 
 	/** Re-read after every await: listeners and shutdown change while a read is in flight. */

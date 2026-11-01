@@ -378,6 +378,9 @@ impl HostAudioFactory for NativeFactory {
 
 /// How often playback records how it keeps up.
 const PACE_REPORT: Duration = Duration::from_secs(5);
+/// The longest the playback worker waits for a packet before it looks at
+/// its stop flag again: one 20 ms block.
+const PLAYBACK_WAIT: Duration = Duration::from_millis(20);
 
 /// Records how far playback runs behind the sound it receives, so a
 /// delay can be read from the log instead of guessed by ear.
@@ -582,7 +585,10 @@ impl VnilinkCore {
                                 worker_stop.load(Ordering::Acquire) || player.is_cancelled()
                             })?;
                         } else {
-                            std::thread::sleep(Duration::from_millis(2));
+                            // The jitter buffer changes only when a packet
+                            // arrives; the bound keeps stop and the pace
+                            // report timely.
+                            player.wait_internal(PLAYBACK_WAIT);
                         }
                     }
                     Ok(())

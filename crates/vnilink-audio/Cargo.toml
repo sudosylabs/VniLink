@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Bounded Opus audio clock and playback engine for VniLink"
 publish = false
 
+[lints]
+workspace = true
+
 [features]
 default = []
 native = ["dep:cpal"]
@@ -15,7 +18,7 @@ native = ["dep:cpal"]
 opus = "=0.4.0"
 thiserror = "2"
 rubato = { version = "=0.16.2", default-features = false }
-rtrb = "=0.3.2"
+rtrb = "=0.3.5"
 cpal = { version = "=0.18.2", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

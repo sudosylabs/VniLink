@@ -42,11 +42,28 @@ impl EventPoller {
         events
     }
 
-    pub fn lagged(&self) -> u64 {
+    /// Waits up to `timeout` for an event and drops it with any queued behind
+    /// it, reporting whether there was one. For a subscription kept only to
+    /// learn that something happened; another subscription reads the events.
+    pub fn wait(&self, timeout: std::time::Duration) -> bool {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if inner.recv_timeout(timeout).is_none() {
+            return false;
+        }
+        while inner.try_recv().is_some() {}
+        true
+    }
+
+    /// Events dropped since the previous call; see
+    /// [`vnilink::EventSubscription::take_lagged`].
+    pub fn take_lagged(&self) -> u64 {
         self.inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .lagged()
+            .take_lagged()
     }
 }
 

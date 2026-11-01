@@ -50,6 +50,7 @@ fn main() {
             let Ok(guard) = buffer.lock_read_only() else {
                 return;
             };
+            // SAFETY: the stream has finished this buffer, and the read-only lock `guard` holds keeps its bytes allocated and unmodified while `bytes` is read.
             let Some(bytes) = (unsafe { guard.as_slice() }) else {
                 return;
             };

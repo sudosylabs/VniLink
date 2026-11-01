@@ -243,7 +243,7 @@ fn decode_picture(
                 slices.push(unit.bytes().to_vec());
             }
             // Data partitions carry no slice header of their own.
-            2 | 3 | 4 => {
+            2..=4 => {
                 return Err(Error::Unsupported(
                     "partitioned H.264 slices are not supported",
                 ));
@@ -258,12 +258,10 @@ fn decode_picture(
     if slices.is_empty() {
         return Err(Error::InvalidFrame("encoded frame has no picture"));
     }
-    if keyframe || has_idr {
-        if !parsed.has_sps() || !parsed.has_pps() || !has_idr {
-            return Err(Error::DecodeRejected(
-                "a keyframe needs SPS, PPS, and an IDR",
-            ));
-        }
+    if (keyframe || has_idr) && (!parsed.has_sps() || !parsed.has_pps() || !has_idr) {
+        return Err(Error::DecodeRejected(
+            "a keyframe needs SPS, PPS, and an IDR",
+        ));
     }
     // The last parameter set of each kind wins; our transport sends one of
     // each on a keyframe. Two passes, so a PPS never depends on SPS order
@@ -335,10 +333,7 @@ fn try_open(
     let display = Display::open_drm_display(path).ok()?;
     let profile = profile_for(sps).ok()?;
     let entrypoints = display.query_config_entrypoints(profile).ok()?;
-    if !entrypoints
-        .iter()
-        .any(|entry| *entry == VAEntrypoint::VAEntrypointVLD)
-    {
+    if !entrypoints.contains(&VAEntrypoint::VAEntrypointVLD) {
         return None;
     }
     let mut attrs = vec![VAConfigAttrib {
@@ -381,7 +376,7 @@ fn try_open(
 
 impl OpenDecoder {
     fn open(sps: Sps, pps: Pps, key: Vec<u8>, signal: VideoSignal) -> Result<Self, Error> {
-        if sps.visible.0 % 2 != 0 || sps.visible.1 % 2 != 0 {
+        if !sps.visible.0.is_multiple_of(2) || !sps.visible.1.is_multiple_of(2) {
             return Err(Error::Unsupported(
                 "odd H.264 picture sizes are not supported",
             ));
@@ -501,7 +496,7 @@ impl OpenDecoder {
 
     /// Picture order count for `pic_order_cnt_type` 0.
     fn picture_order(&self, slice: &Slice) -> Result<i32, Error> {
-        let max_lsb = 1i64 << (u32::from(self.sps.log2_max_poc_lsb_minus4) + 4);
+        let max_lsb = 1i64 << (self.sps.log2_max_poc_lsb_minus4 + 4);
         let lsb = i64::from(slice.poc_lsb);
         let prev_msb = i64::from(self.poc.prev_msb);
         let prev_lsb = i64::from(self.poc.prev_lsb);

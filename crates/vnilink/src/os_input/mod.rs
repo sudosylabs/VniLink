@@ -176,7 +176,7 @@ impl OsInput {
         }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            return self.type_layout_chord(text);
+            self.type_layout_chord(text)
         }
         #[cfg(not(all(unix, not(target_os = "macos"))))]
         {
@@ -227,7 +227,7 @@ mod codes;
 
 use codes::enigo_button;
 
-pub(crate) use codes::{clamp_extent, clamp_point, key_for_usage, platform_code};
+pub(crate) use codes::{clamp_extent, key_for_usage, platform_code};
 
 fn setup_error(error: NewConError) -> Error {
     match error {

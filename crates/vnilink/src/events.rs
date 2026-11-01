@@ -59,10 +59,16 @@ pub enum CoreEvent {
     },
     /// A controller opened this host's pairing file and is connecting.
     ///
-    /// `check` is the three digits on the controller's screen. Remember its identity
-    /// with [`crate::Core::confirm_control_request`] only when the person
-    /// types those digits.
+    /// The digits are on the controller's screen, not here. Remember its
+    /// identity with [`crate::Core::confirm_control_request`] only when the
+    /// person types those digits.
     ControlRequested {
+        endpoint_id: String,
+    },
+    /// This computer, as the controller, connected to `endpoint_id` and waits
+    /// for its owner to type `check` there. The digits come from this
+    /// connection and both computers' ids, so no other connection shows them.
+    ControlCheck {
         endpoint_id: String,
         check: String,
     },
@@ -143,9 +149,11 @@ impl EventSubscription {
         self.rx.recv_timeout(timeout).ok()
     }
 
-    /// Events dropped because this subscriber was behind the bounded queue.
-    pub fn lagged(&self) -> u64 {
-        self.lagged.load(Ordering::Relaxed)
+    /// Events dropped because this subscriber was behind the bounded queue
+    /// since the previous call. Reading resets the count, so a caller that
+    /// resynchronises on a non-zero value does so once per overflow.
+    pub fn take_lagged(&self) -> u64 {
+        self.lagged.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -153,6 +161,9 @@ impl EventSubscription {
 pub(crate) struct EventHub {
     capacity: usize,
     subscribers: Arc<Mutex<Vec<Subscriber>>>,
+    /// Woken when a session or a service changes, for work that waits for
+    /// one instead of polling for it.
+    changes: Arc<tokio::sync::Notify>,
 }
 
 struct Subscriber {
@@ -166,14 +177,28 @@ impl EventHub {
         Self {
             capacity: capacity.max(1),
             subscribers: Arc::new(Mutex::new(Vec::new())),
+            changes: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    /// Wakes, once, after any session or service change.
+    pub(crate) fn changes(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.changes)
+    }
+
+    /// The subscriber list is a set of channels, valid whatever a panicking
+    /// thread was doing to it, so a poisoned lock is still usable.
+    fn subscribers(&self) -> std::sync::MutexGuard<'_, Vec<Subscriber>> {
+        self.subscribers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     pub(crate) fn subscribe(&self) -> Result<EventSubscription, crate::error::Error> {
         let (tx, rx) = std::sync::mpsc::sync_channel(self.capacity);
         let lagged = Arc::new(AtomicU64::new(0));
         let alive = Arc::new(());
-        let mut subscribers = self.subscribers.lock().expect("event subscribers");
+        let mut subscribers = self.subscribers();
         subscribers.retain(|subscriber| subscriber.alive.upgrade().is_some());
         if subscribers.len() >= MAX_SUBSCRIBERS {
             return Err(crate::error::Error::Busy);
@@ -191,7 +216,15 @@ impl EventHub {
     }
 
     pub(crate) fn publish(&self, event: CoreEvent) {
-        let mut subscribers = self.subscribers.lock().expect("event subscribers");
+        if matches!(
+            event,
+            CoreEvent::SessionChanged { .. }
+                | CoreEvent::ServiceChanged { .. }
+                | CoreEvent::HostedServiceChanged { .. }
+        ) {
+            self.changes.notify_one();
+        }
+        let mut subscribers = self.subscribers();
         subscribers.retain(|subscriber| match subscriber.tx.try_send(event.clone()) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
@@ -208,18 +241,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_panic_in_a_subscriber_list_user_does_not_stop_events() {
+        let hub = EventHub::new(4);
+        let subscription = hub.subscribe().unwrap();
+        let poisoner = hub.subscribers.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = poisoner.lock().unwrap();
+            panic!("a thread dies holding the list");
+        })
+        .join();
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        assert!(hub.subscribe().is_ok());
+        drop(subscription);
+    }
+
+    #[test]
     fn a_slow_subscriber_does_not_block_the_publisher() {
         let hub = EventHub::new(1);
         let subscription = hub.subscribe().unwrap();
         hub.publish(CoreEvent::HostingChanged { hosting: true });
         hub.publish(CoreEvent::HostingChanged { hosting: false });
         hub.publish(CoreEvent::HostingChanged { hosting: true });
-        assert_eq!(subscription.lagged(), 2);
+        assert_eq!(subscription.take_lagged(), 2);
         assert_eq!(
             subscription.try_recv(),
             Some(CoreEvent::HostingChanged { hosting: true })
         );
         assert!(subscription.try_recv().is_none());
+    }
+
+    #[test]
+    fn an_overflow_is_reported_once() {
+        let hub = EventHub::new(1);
+        let subscription = hub.subscribe().unwrap();
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        hub.publish(CoreEvent::HostingChanged { hosting: false });
+        assert_eq!(subscription.take_lagged(), 1);
+        assert_eq!(subscription.take_lagged(), 0, "reading resets the count");
+        assert!(subscription.try_recv().is_some());
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        assert_eq!(subscription.take_lagged(), 0, "a later event fits");
     }
 
     #[test]
@@ -231,7 +292,7 @@ mod tests {
             .is_none());
         hub.publish(CoreEvent::HostingChanged { hosting: true });
         hub.publish(CoreEvent::HostingChanged { hosting: false });
-        assert_eq!(subscription.lagged(), 0);
+        assert_eq!(subscription.take_lagged(), 0);
         assert_eq!(
             subscription.recv_timeout(Duration::ZERO),
             Some(CoreEvent::HostingChanged { hosting: true })
@@ -258,6 +319,6 @@ mod tests {
             replacement.try_recv(),
             Some(CoreEvent::HostingChanged { hosting: true })
         );
-        assert_eq!(replacement.lagged(), 0);
+        assert_eq!(replacement.take_lagged(), 0);
     }
 }

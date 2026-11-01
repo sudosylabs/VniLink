@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Desktop Duplication and Media Foundation H.264 for VniLink"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink = { path = "../vnilink" }
@@ -29,6 +32,9 @@ windows = { version = "=0.61.3", features = [
     "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Performance",
     "Win32_System_IO",
     "Win32_System_Power",

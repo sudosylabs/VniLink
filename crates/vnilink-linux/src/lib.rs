@@ -40,7 +40,7 @@ pub use camera::LinuxCameraFactory;
 #[cfg(target_os = "linux")]
 mod codecs;
 mod encode;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 mod gpu;
 #[cfg(target_os = "linux")]
 mod gpu_picture;
@@ -50,12 +50,14 @@ mod host;
 #[cfg(target_os = "linux")]
 mod nvenc;
 mod owners;
+#[cfg(any(target_os = "linux", test))]
 mod parameter_set;
 #[cfg(target_os = "linux")]
 mod pipewire;
 mod pixels;
 mod pointer;
 mod portal;
+#[cfg(any(target_os = "linux", test))]
 mod syntax;
 #[cfg(target_os = "linux")]
 mod vaapi;
@@ -103,6 +105,7 @@ pub use wayland::{WaylandCapture, WaylandInput};
 #[path = "tests.rs"]
 mod tests;
 
+#[cfg(target_os = "linux")]
 mod cursor;
 
 #[cfg(target_os = "linux")]

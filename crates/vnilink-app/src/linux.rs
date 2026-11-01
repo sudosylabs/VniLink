@@ -376,6 +376,7 @@ fn serve(
     set(true, None);
     let releases = grant.is_some();
     let mut idle_since = std::time::Instant::now();
+    let mut backoff = crate::backoff::Backoff::default();
     while !stop.load(Ordering::Acquire) {
         if capture.as_ref().is_some_and(WaylandCapture::revoked) {
             // Ended on this computer: by its own controls, or the screen
@@ -421,7 +422,7 @@ fn serve(
                     // A locked screen cannot be shared; the next request
                     // tries again once it is unlocked.
                     set(true, Some(refusal(&error)));
-                    std::thread::sleep(Duration::from_secs(1));
+                    backoff.wait(stop);
                     continue;
                 }
             }
@@ -429,6 +430,7 @@ fn serve(
         let Some(open_capture) = capture.as_ref() else {
             continue;
         };
+        let served_from = std::time::Instant::now();
         let result = vnilink_media::serve_shared_capture(
             open_capture,
             core,
@@ -449,6 +451,11 @@ fn serve(
             },
         );
         idle_since = std::time::Instant::now();
+        // A run that served is not a failing source: only runs that end at
+        // once lengthen the wait.
+        if result.is_ok() || served_from.elapsed() >= Duration::from_secs(1) {
+            backoff.reset();
+        }
         match result {
             Ok(()) => set(true, None),
             Err(_) if !stop.load(Ordering::Acquire) && !open_capture.revoked() => {
@@ -456,7 +463,7 @@ fn serve(
                     true,
                     Some("Screen sharing stopped. Try connecting again.".into()),
                 );
-                std::thread::sleep(Duration::from_millis(200));
+                backoff.wait(stop);
             }
             Err(_) => {}
         }
@@ -527,6 +534,7 @@ mod tests {
     fn stopping_while_the_dialog_waits_ends_the_host_without_a_grant() {
         let host = core();
         let hosting = host.linux_host(None).unwrap();
+        // A real timer: the dialog is left open for a second before the stop.
         std::thread::sleep(Duration::from_secs(1));
         assert!(!hosting.is_started());
         let stopped = Instant::now();
@@ -553,6 +561,7 @@ mod tests {
         host.prepare_native_video().unwrap();
         viewer.prepare_native_video().unwrap();
         let hosting = host.linux_host(None).unwrap();
+        // Waits on a person answering the portal dialog, which no event reports.
         let until = Instant::now() + Duration::from_secs(120);
         while !hosting.is_started() {
             assert!(hosting.error().is_none(), "{:?}", hosting.error());
@@ -567,12 +576,7 @@ mod tests {
             .unwrap();
         host.set_desktop_sharing(true, false, false, false).unwrap();
         let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
-        let until = Instant::now() + Duration::from_secs(10);
-        while viewer.controller_session(parent.id).unwrap().phase != crate::FfiSessionPhase::Active
-        {
-            assert!(Instant::now() < until, "the viewer did not connect");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::session_active(&viewer, parent.id);
         let parent = viewer.controller_session(parent.id).unwrap();
         let owner = viewer
             .attach_controller_service(parent.id, parent.generation, crate::FfiServiceKind::Desktop)

@@ -426,6 +426,59 @@ fn either_computer_can_cancel_a_scheduled_restart() -> TestResult {
     Ok(())
 }
 
+/// The host keeps the last 64 operations to look up; a restart still counting
+/// down its notice is not one of those, however many locks follow it.
+#[test]
+fn a_scheduled_restart_is_not_forgotten_to_make_room_for_later_operations() -> TestResult {
+    let _trace = traced();
+    let fake = Arc::new(FakeSystem::full());
+    let pair = sharing(&fake)?;
+    allow_restart(&pair, Duration::from_secs(30))?;
+    let connection = pair.connect_services();
+    let system = pair.controller.open_system(&connection)?;
+    let restart = system.execute(SystemAction::Restart)?;
+    assert_eq!(restart.state, OperationState::Scheduled);
+    for _ in 0..80 {
+        system.execute(SystemAction::Lock)?;
+    }
+    assert_eq!(
+        system.operation(restart.id)?.state,
+        OperationState::Scheduled,
+        "the countdown is still there to cancel or run"
+    );
+    let cancelled = system.cancel(restart.id)?;
+    assert_eq!(cancelled.state, OperationState::Cancelled);
+    Ok(())
+}
+
+/// A computer cannot queue restarts without end: past a few waiting at once,
+/// the next is refused, and room returns as each ends.
+#[test]
+fn a_computer_cannot_queue_scheduled_actions_without_end() -> TestResult {
+    let _trace = traced();
+    let fake = Arc::new(FakeSystem::full());
+    let pair = sharing(&fake)?;
+    allow_restart(&pair, Duration::from_secs(30))?;
+    let connection = pair.connect_services();
+    let system = pair.controller.open_system(&connection)?;
+    let waiting = (0..4)
+        .map(|_| system.execute(SystemAction::Restart))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(waiting
+        .iter()
+        .all(|operation| operation.state == OperationState::Scheduled));
+    let refused = system.execute(SystemAction::Shutdown)?;
+    assert_eq!(refused.state, OperationState::Refused);
+    assert_eq!(refused.detail, "too many actions are waiting");
+    system.cancel(waiting[0].id)?;
+    assert_eq!(
+        system.execute(SystemAction::Shutdown)?.state,
+        OperationState::Scheduled,
+        "an action that ended makes room"
+    );
+    Ok(())
+}
+
 /// Another paired computer cannot cancel a restart it did not ask for;
 /// the person at the host can start it at once, and only once.
 #[test]

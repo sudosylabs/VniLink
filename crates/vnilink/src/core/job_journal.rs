@@ -133,10 +133,9 @@ pub(super) fn save_jobs(shared: &Shared) -> Result<(), Error> {
     // Whatever lands on disk below changed: watchers hear of it even when
     // the disk refuses it.
     super::jobs::jobs_changed(shared);
-    let dir = match lock(&shared.transfer_dir).clone() {
-        Some(dir) => Some(dir.join(JOURNAL_DIR)),
-        None => None,
-    };
+    let dir = lock(&shared.transfer_dir)
+        .clone()
+        .map(|dir| dir.join(JOURNAL_DIR));
     if let Some(dir) = &dir {
         std::fs::create_dir_all(dir).map_err(|_| Error::InvalidSetting(SAVE_FAILED))?;
     }

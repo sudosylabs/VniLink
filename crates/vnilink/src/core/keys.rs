@@ -195,6 +195,7 @@ pub(super) async fn host_command_loop(
     let mut reported = Vec::new();
     let mut availability_tick = tokio::time::interval(AVAILABILITY_INTERVAL);
     availability_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut announcements = crate::address::AnnouncementBudget::new(std::time::Instant::now());
     loop {
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             break true;
@@ -249,15 +250,17 @@ pub(super) async fn host_command_loop(
                 };
                 match message {
                     ControlMessage::Addresses { relays, direct } => {
-                        crate::ignored!(
-                            crate::trace::RELAY,
-                            "a peer's addresses are a hint; the next announcement retries",
-                            remember_peer_addresses(
-                                shared,
-                                peer.as_bytes(),
-                                Announcement { relays, direct },
-                            )
-                        );
+                        if announcements.admit(std::time::Instant::now()) {
+                            crate::ignored!(
+                                crate::trace::RELAY,
+                                "a peer's addresses are a hint; the next announcement retries",
+                                remember_peer_addresses(
+                                    shared,
+                                    peer.as_bytes(),
+                                    Announcement { relays, direct },
+                                )
+                            );
+                        }
                     }
                     ControlMessage::Close => break false,
                     _ => {
@@ -347,7 +350,7 @@ mod v12_replacement_drop_probe {
         }
     }
     #[test]
-    fn v12_adapter_replacement_must_drop_old_backend_outside_core_state() {
+    fn adapter_replacement_must_drop_old_backend_outside_core_state() {
         let core = Arc::new(crate::test_support::loopback_core());
         let (entered, ready) = std::sync::mpsc::sync_channel(1);
         let (proceed, wait) = std::sync::mpsc::channel();
@@ -380,7 +383,7 @@ mod v12_replacement_drop_probe {
         );
     }
     #[test]
-    fn v12_rejected_adapter_teardown_keeps_core_responsive() {
+    fn rejected_adapter_teardown_keeps_core_responsive() {
         let core = Arc::new(crate::test_support::loopback_core());
         core.set_desktop(Box::new(New)).unwrap();
         core.shared.input_cleanup.store(1, Ordering::Release);

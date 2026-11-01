@@ -112,6 +112,7 @@ fn an_upload_lands_exactly_and_keeps_its_source() -> TestResult {
           files: file received outcome=received resumed_at=0 size=4096 took=4096
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=9437184 took=9437184
+          files: received files flushed job=1
           files: job state done_bytes=9442816 files_done=4 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.concurrent_story(&["files"]),
@@ -163,6 +164,7 @@ fn a_download_lands_exactly_as_the_host_sender_mirrors_it() -> TestResult {
           files: file received outcome=received resumed_at=0 size=4096 took=4096
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=9437184 took=9437184
+          files: received files flushed job=1
           files: job state done_bytes=9442816 files_done=4 from=transferring job=1 sender=false to=complete
         host:
           files: job state from=preparing job=1 sender=true to=serving
@@ -268,6 +270,10 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
         "the renamed file holds the new contents"
     );
     trace.wait_for_records("job state", 2);
+    // A file's bytes land on a stream task of their own while the job asks
+    // about the next conflict, so where "file received" falls among the
+    // job's states is not part of the story: the states are told without
+    // the receipts, and the receipts on their own.
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
@@ -279,16 +285,34 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
         host:
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
-          files: file received outcome=received resumed_at=0 size=100 took=100
-          files: file received outcome=received resumed_at=0 size=100 took=100
-          files: file received outcome=received resumed_at=0 size=100 took=100
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
+          files: received files flushed job=1
           files: job state done_bytes=300 files_done=2 from=transferring job=1 sender=false to=complete
     "#]],
-        || trace.story(&["files"]),
+        || {
+            trace
+                .tell(&["files"])
+                .only(&["job state", "file served", "received files flushed"])
+                .to_string()
+        },
+    );
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        host:
+          files: file received outcome=received resumed_at=0 size=100 took=100
+          files: file received outcome=received resumed_at=0 size=100 took=100
+          files: file received outcome=received resumed_at=0 size=100 took=100
+    "#]],
+        || {
+            trace
+                .tell(&["files"])
+                .only(&["file received"])
+                .of("host")
+                .to_string()
+        },
     );
     Ok(())
 }
@@ -379,12 +403,9 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
-          files: file received outcome=received resumed_at=0 size=1024 took=1024
-          files: file received outcome=received resumed_at=0 size=1024 took=1024
-          files: file received outcome=received resumed_at=0 size=1024 took=1024
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
-          files: file received outcome=received resumed_at=1024 size=1024 took=0
+          files: received files flushed job=1
           files: job state done_bytes=3072 files_done=3 from=transferring job=1 sender=false to=complete
         host:
           files: job state from=preparing job=1 sender=true to=serving
@@ -395,6 +416,95 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
           files: job state from=interrupted job=1 sender=true to=serving
           files: file served ended=sent from=1024 sent=0 size=1024
           files: job state done_bytes=3072 files_done=3 from=serving job=1 sender=true to=complete
+    "#]],
+        // The third file's bytes land on a stream task of their own as the
+        // engine quits, so the receiver records it as received or as
+        // cancelled: only the file that resumed is told apart below.
+        || {
+            trace
+                .tell(&["files"])
+                .only(&["job state", "file served", "received files flushed"])
+                .to_string()
+        },
+    );
+    assert_eq!(
+        trace
+            .named_with("file received", &[("resumed_at", "1024"), ("took", "0")])
+            .len(),
+        1,
+        "the resumed receiver fetches nothing more of the file it had"
+    );
+    Ok(())
+}
+
+/// A receiver that stops after its last file landed and before the volume
+/// was flushed has not completed the job: it resumes, fetches nothing, flushes
+/// and only then completes.
+#[test]
+fn a_receiver_stopped_before_the_final_flush_completes_after_flushing_on_resume() -> TestResult {
+    let trace = traced();
+    let mut pair = Pair::for_files();
+    let source = pair.host.folder().join("set");
+    write_files(&source, &[("one.txt", 1024), ("two.txt", 1024)]);
+    let files = pair.open_files();
+    pair.controller.core.create_dir(
+        pair.controller.location().root,
+        &pair.controller.location().path(""),
+        "got",
+    )?;
+    let job = download(&pair, &files, "set", "got")?;
+
+    // Both files landed, each synced as it did; the job is not complete.
+    pair.controller.core.job_poll(job)?;
+    pair.controller.core.job_poll(job)?;
+    let mid = pair.controller.core.job_snapshot(job)?;
+    assert_eq!(mid.files_done, 2, "each poll lands one file: {mid:?}");
+    assert_eq!(
+        mid.state,
+        JobState::Transferring,
+        "the job completes only after the flush: {mid:?}"
+    );
+    pair.controller.restart();
+    drop(files);
+    assert_eq!(
+        pair.controller.core.job_list()?[0].state,
+        JobState::Interrupted,
+        "the job stopped before its flush is interrupted"
+    );
+    assert_eq!(
+        tree(&pair.controller.folder().join("got/set")),
+        tree(&source),
+        "the landed files stay"
+    );
+
+    let files = pair.open_files();
+    let controller = &pair.controller.core;
+    controller.files_service_adopt_job(files.service.id, files.service.generation, job)?;
+    controller.files_service_job_resume(files.service.id, files.service.generation, job)?;
+    let host_job = only_job(&pair.host.core)?;
+    let (sent, got) = drive_to_end(&pair.host.core, host_job, controller, job, TRANSFER);
+    assert_eq!(
+        (sent.state, got.state),
+        (JobState::Complete, JobState::Complete),
+        "the resumed job completes on both sides"
+    );
+    trace.wait_for_records("job state", 2);
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        controller:
+          files: file received outcome=received resumed_at=0 size=1024 took=1024
+          files: file received outcome=received resumed_at=0 size=1024 took=1024
+          files: job state from=transferring job=1 sender=false to=interrupted
+          files: job state from=interrupted job=1 sender=false to=transferring
+          files: received files flushed job=1
+          files: job state done_bytes=2048 files_done=2 from=transferring job=1 sender=false to=complete
+        host:
+          files: job state from=preparing job=1 sender=true to=serving
+          files: file served ended=sent from=0 sent=1024 size=1024
+          files: file served ended=sent from=0 sent=1024 size=1024
+          files: job state from=serving job=1 sender=true to=interrupted
+          files: job state from=interrupted job=1 sender=true to=serving
+          files: job state done_bytes=2048 files_done=2 from=serving job=1 sender=true to=complete
     "#]],
         || trace.story(&["files"]),
     );
@@ -639,6 +749,7 @@ fn a_refused_publication_keeps_the_original_and_resumes() -> TestResult {
           files: job state done_bytes=0 files_done=0 from=transferring job=1 sender=false to=failed
           files: job state from=failed job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=512 took=512
+          files: received files flushed job=1
           files: job state done_bytes=512 files_done=1 from=transferring job=1 sender=false to=complete
         host:
           files: job state from=preparing job=1 sender=true to=serving
@@ -827,6 +938,7 @@ fn driving_every_job_finishes_one_without_window_polls() -> TestResult {
           files: job state done_bytes=1024 files_done=1 from=serving job=1 sender=true to=complete
         host:
           files: file received outcome=received resumed_at=0 size=1024 took=1024
+          files: received files flushed job=1
           files: job state done_bytes=1024 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -902,6 +1014,7 @@ fn an_upload_conflict_reaches_its_sender_who_answers_it() -> TestResult {
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=100 took=100
+          files: received files flushed job=1
           files: job state done_bytes=100 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -976,6 +1089,7 @@ fn a_job_its_sender_cancelled_resumes_from_its_receiver() -> TestResult {
           files: job state from=cancelled job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=512 took=512
           files: file received outcome=received resumed_at=0 size=512 took=512
+          files: received files flushed job=1
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -1047,6 +1161,7 @@ fn a_restarted_sender_resumes_a_nested_source() -> TestResult {
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=512 size=512 took=0
+          files: received files flushed job=1
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -1109,6 +1224,7 @@ fn publication_across_filesystems_lands_the_file() -> TestResult {
           files: job state done_bytes=2048 files_done=1 from=serving job=1 sender=true to=complete
         host:
           files: file received outcome=received resumed_at=0 size=2048 took=2048
+          files: received files flushed job=1
           files: job state done_bytes=2048 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -1183,6 +1299,7 @@ fn a_receivers_keep_both_unblocks_a_sender_mirroring_the_conflict() -> TestResul
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=8 took=8
+          files: received files flushed job=1
           files: job state done_bytes=8 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -1260,6 +1377,7 @@ fn a_download_the_host_stops_sharing_resumes_once_shared_again() -> TestResult {
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=512 took=512
+          files: received files flushed job=1
           files: job state done_bytes=1024 files_done=2 from=transferring job=1 sender=false to=complete
         host:
           files: job state from=preparing job=1 sender=true to=serving

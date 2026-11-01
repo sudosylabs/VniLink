@@ -167,7 +167,7 @@ pub(super) async fn write_addresses(
     shared: &Shared,
     send: &mut iroh::endpoint::SendStream,
 ) -> Result<(), Error> {
-    let relays = shared.relay.relay_urls()?;
+    let relays = dialable_relays(&shared.relay, &shared.endpoint.addr())?;
     let direct = canonicalize_addrs(&direct_addresses(&shared.endpoint))?;
     let announcement = crate::address::canonical(&relays, &direct)?;
     write_frame(
@@ -424,7 +424,7 @@ mod address_refresh_tests {
             direct.push(extra);
         }
         let secret = SecretKey::from_bytes(&core.export_identity());
-        let (token, _) = invitation::issue(
+        let (token, ..) = invitation::issue(
             &secret,
             &opened.relays,
             &direct,
@@ -461,17 +461,8 @@ mod address_refresh_tests {
             .expect("paired device")
     }
 
-    fn wait_until(mut ready: impl FnMut() -> bool) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if ready() {
-                return;
-            }
-            if std::time::Instant::now() > deadline {
-                panic!("condition was not met");
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
+    fn wait_until(what: &str, ready: impl FnMut() -> bool) {
+        crate::test_support::wait_until(what, Duration::from_secs(5), ready);
     }
 
     #[test]
@@ -483,11 +474,11 @@ mod address_refresh_tests {
             .direct
             .contains(&stale()));
         crate::test_support::connect_link(&controller, &host);
-        wait_until(|| {
+        wait_until("the controller to save the host's addresses", || {
             let saved = device(&controller, &host.endpoint_id());
             !saved.direct.contains(&stale()) && saved.direct == host_direct
         });
-        wait_until(|| {
+        wait_until("the host to drop the stale address", || {
             !device(&host, &controller.endpoint_id())
                 .direct
                 .contains(&stale())
@@ -512,11 +503,12 @@ mod address_refresh_tests {
         pair(&host, &controller, Some(stale()));
         controller_store.fail_next_save(Error::StoreLocked);
         crate::test_support::connect_link(&controller, &host);
-        wait_until(|| {
+        wait_until("the host to drop the stale address", || {
             !device(&host, &controller.endpoint_id())
                 .direct
                 .contains(&stale())
         });
+        // A real timer: the window in which a wrongly applied save would show.
         std::thread::sleep(Duration::from_millis(300));
         assert!(device(&controller, &host.endpoint_id())
             .direct
@@ -535,11 +527,11 @@ mod address_refresh_tests {
         let controller = open_stored(&controller_store);
         let host_direct = pair(&host, &controller, Some(stale()));
         crate::test_support::connect_link(&controller, &host);
-        wait_until(|| {
+        wait_until("the controller to save the host's addresses", || {
             let saved = device(&controller, &host.endpoint_id());
             !saved.direct.contains(&stale()) && saved.direct == host_direct
         });
-        wait_until(|| {
+        wait_until("the host to drop the stale address", || {
             !device(&host, &controller.endpoint_id())
                 .direct
                 .contains(&stale())

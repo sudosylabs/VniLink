@@ -17,10 +17,10 @@ const { isEngineCommand, isEngineReply, isEngineEvent } = await import(`data:tex
 test('control commands reject privileged methods, malformed IDs and extra authority', () => {
 	assert.equal(isEngineCommand({ type: 'shutdown' }), false);
 	assert.equal(isEngineCommand({ type: 'snapshot', extra: true }), false);
-	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: '18446744073709551615', digits: '123' }), true);
-	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: '18446744073709551616', digits: '123' }), false);
-	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: 1, digits: '123' }), false);
-	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: '1', digits: '123456' }), false);
+	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: '18446744073709551615', digits: '123456' }), true);
+	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: '18446744073709551616', digits: '123456' }), false);
+	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: 1, digits: '123456' }), false);
+	assert.equal(isEngineCommand({ type: 'confirmPairing', previewId: '1', digits: '123' }), false);
 	assert.equal(isEngineCommand({ type: 'openPairingFile', bytes: [256] }), false);
 	assert.equal(isEngineCommand({ type: 'createInvitation', ttlSeconds: 60 }), true);
 	assert.equal(isEngineCommand({ type: 'createInvitation', ttlSeconds: NaN }), false);
@@ -86,7 +86,10 @@ test('bridge events keep core names and lossless ids', () => {
 	assert.equal(isEngineEvent({ type: 'folderChanged', watch: '4' }), true);
 	assert.equal(isEngineEvent({ type: 'folderChanged', watch: 4 }), false, 'ids are decimal strings');
 	assert.equal(isEngineEvent({ type: 'devicePaired', endpoint_id: 'peer' }), true);
-	assert.equal(isEngineEvent({ type: 'controlRequested', endpoint_id: 'peer', check: '123' }), true);
+	assert.equal(isEngineEvent({ type: 'controlRequested', endpoint_id: 'peer' }), true);
+	assert.equal(isEngineEvent({ type: 'controlRequested', endpoint_id: 'peer', check: '123456' }), false);
+	assert.equal(isEngineEvent({ type: 'controlCheck', endpoint_id: 'peer', check: '123456' }), true);
+	assert.equal(isEngineEvent({ type: 'controlCheck', endpoint_id: 'peer', check: '123' }), false);
 	assert.equal(isEngineEvent({ type: 'peerRenamed', endpoint_id: 'peer', hostname: null }), true);
 	assert.equal(isEngineEvent({ type: 'sessionChanged', id: '7', generation: '9', role: 'Host', phase: 'Active', peer_id: 'peer' }), true);
 	assert.equal(isEngineEvent({ type: 'sessionChanged', id: '7', generation: '9', role: 'Host', phase: { Failed: { message: 'lost' } }, peer_id: 'peer' }), true);
@@ -182,7 +185,7 @@ test('service commands validate kinds, policies, sessions and jobs exactly', () 
 });
 
 test('pairing handles cross the bridge as lossless decimal strings', () => {
-	const preview = { id: '18446744073709551615', endpoint_id: 'peer', check: '123', expires_at_ms: '18446744073709551615' };
+	const preview = { id: '18446744073709551615', endpoint_id: 'peer', check: '123456', expires_at_ms: '18446744073709551615' };
 	assert.equal(isEngineReply({ type: 'pairingPreview', preview }), true);
 	assert.equal(isEngineReply({ type: 'pairingPreview', preview: { ...preview, id: Number(preview.id) } }), false);
 	assert.equal(isEngineReply({ type: 'device', device: { endpoint_id: 'peer' } }), false);

@@ -169,7 +169,7 @@ const BITRATE_PROBE_MAX_MS: u64 = 24_000;
 /// learnt is kept for as long again.
 const PROBE_JUDGED_MS: u64 = 4000;
 
-/// Round trips kept to judge the next by: ten seconds of them.
+/// Round trips kept to judge the next by: the last ten samples.
 const RECENT_RTTS: usize = 10;
 
 /// How far the round trip may rise above its recent floor with the stream
@@ -281,7 +281,11 @@ pub(crate) struct Adaptive {
     /// How long the viewer has been missing frames without a break.
     lossy_ms: u64,
     cooldown_ms: u64,
-    rtt_floor: u64,
+    /// The least round trip seen lately; a path that is slower now is not
+    /// measured against what it was.
+    rtt_floor: crate::video::RttFloor,
+    /// Milliseconds stepped so far, the clock the floor forgets by.
+    clock_ms: u64,
     /// The last few round trips: a link whose round trip stays up under
     /// the stream's own load, as a shared radio's does, is judged against
     /// that, not against the round trip it showed idle.
@@ -316,7 +320,8 @@ impl Default for Adaptive {
             strained_ms: 0,
             lossy_ms: 0,
             cooldown_ms: 0,
-            rtt_floor: 0,
+            rtt_floor: crate::video::RttFloor::default(),
+            clock_ms: 0,
             recent_rtts: std::collections::VecDeque::new(),
             before_strain: None,
             since_restore: None,
@@ -332,6 +337,21 @@ impl Default for Adaptive {
     }
 }
 impl Adaptive {
+    /// A path begins afresh: its round trip is the floor.
+    fn restart_floor(&mut self, rtt_ms: u64) {
+        self.rtt_floor = crate::video::RttFloor::default();
+        self.rtt_floor.observe(
+            std::time::Duration::from_millis(rtt_ms.max(1)),
+            std::time::Duration::from_millis(self.clock_ms),
+        );
+    }
+
+    fn floor_ms(&self) -> u64 {
+        self.rtt_floor.floor().map_or(1, |floor| {
+            floor.as_millis().min(u128::from(u64::MAX)) as u64
+        })
+    }
+
     /// One sampling interval. `limits` are what the viewer chose, as the
     /// host agreed them, and what the session is on: recovery climbs back
     /// toward the frame rate and size and never past them, and the bitrate
@@ -378,7 +398,7 @@ impl Adaptive {
         let previous = self.previous.replace(next);
         self.signals = None;
         let Some(previous) = previous else {
-            self.rtt_floor = next.rtt_ms.max(1);
+            self.restart_floor(next.rtt_ms);
             return None;
         };
         // Counter reset, route change or a suspended sampler must warm up afresh.
@@ -396,7 +416,7 @@ impl Adaptive {
             self.since_restore = None;
             self.probe = None;
             self.probe_wait_ms = BITRATE_PROBE_MS;
-            self.rtt_floor = next.rtt_ms.max(1);
+            self.restart_floor(next.rtt_ms);
             self.recent_rtts.clear();
             self.status.reason = AdaptationReason::WarmingUp;
             return None;
@@ -454,7 +474,12 @@ impl Adaptive {
             0
         };
         let missed_per_mille = per_mille(viewer_lost.saturating_add(gate_dropped));
-        self.rtt_floor = self.rtt_floor.min(next.rtt_ms.max(1));
+        self.clock_ms = self.clock_ms.saturating_add(elapsed_ms);
+        self.rtt_floor.observe(
+            std::time::Duration::from_millis(next.rtt_ms.max(1)),
+            std::time::Duration::from_millis(self.clock_ms),
+        );
+        let rtt_floor = self.floor_ms();
         if self.recent_rtts.len() == RECENT_RTTS {
             self.recent_rtts.pop_front();
         }
@@ -535,10 +560,9 @@ impl Adaptive {
             .is_some_and(|host| host.oldest_ms >= 150 && host.queued >= 3);
         let host_pressure =
             host_queue_backed_up || next.host.is_some_and(|host| host.backlog_ms >= 150);
-        let inflated_rtt_ms = self
-            .rtt_floor
+        let inflated_rtt_ms = rtt_floor
             .saturating_mul(3)
-            .max(self.rtt_floor.saturating_add(80));
+            .max(rtt_floor.saturating_add(80));
         let inflated_rtt = next.rtt_ms >= inflated_rtt_ms;
         // The round trip answering a rate just tried: the link's queue
         // filling, before it loses anything.
@@ -555,7 +579,7 @@ impl Adaptive {
             host_queue_backed_up,
             host_queue_ms: self.status.host_queue_ms,
             rtt_ms: next.rtt_ms,
-            rtt_floor_ms: self.rtt_floor,
+            rtt_floor_ms: rtt_floor,
             inflated_rtt_ms,
             congestion_events: match (next.host, previous.host) {
                 (Some(now), Some(before)) => now
@@ -845,6 +869,26 @@ mod tests {
     fn initial() -> Quality {
         Quality::new(8000, 60, 1920, 1080).unwrap()
     }
+    #[test]
+    fn a_path_whose_round_trip_rose_for_good_stops_reading_as_inflated() {
+        let mut state = Adaptive::default();
+        let quality = initial();
+        let at = |second: u64, rtt_ms: u64| Feedback {
+            rtt_ms,
+            ..frame_sample(second)
+        };
+        // Twenty milliseconds at first, then a route that takes 200.
+        state.step(quality, WIDE, 1000, at(0, 20));
+        for second in 1..=60 {
+            state.step(quality, WIDE, 1000, at(second, 200));
+        }
+        let signals = state.signals.expect("stepping");
+        assert!(
+            signals.inflated_rtt_ms > signals.rtt_ms,
+            "after a minute at 200 ms the floor is 200 ms, not the 20 ms of the old route: {signals:?}"
+        );
+    }
+
     #[test]
     fn stable_high_latency_path_recovers_without_a_relay_penalty() {
         let mut state = Adaptive::default();

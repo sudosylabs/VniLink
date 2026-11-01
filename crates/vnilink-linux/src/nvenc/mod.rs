@@ -37,6 +37,7 @@
     unnecessary_transmutes,
     unused_imports,
     clippy::all,
+    clippy::undocumented_unsafe_blocks,
     unsafe_op_in_unsafe_fn
 )]
 mod bindings;
@@ -106,6 +107,7 @@ struct Api {
 // are behind a mutex. NVENC and CUDA allow calls from any thread; a call
 // that needs a context pushes it on its own thread first ([`Current`]).
 unsafe impl Send for Api {}
+// SAFETY: see the `Send` impl above.
 unsafe impl Sync for Api {}
 
 /// One GPU's retained primary CUDA context.
@@ -151,6 +153,8 @@ impl Api {
 
 fn api() -> Option<&'static Api> {
     static API: OnceLock<Option<Api>> = OnceLock::new();
+    // SAFETY: `load` only resolves the symbols it declares from the driver's
+    // libraries and runs once, inside `OnceLock`.
     API.get_or_init(|| unsafe { load() }).as_ref()
 }
 
@@ -398,8 +402,8 @@ impl Encoder {
             apiVersion: API_VERSION,
             ..Default::default()
         };
-        // SAFETY: `params` and `session` outlive the call.
         check(
+            // SAFETY: `params` and `session` outlive the call.
             unsafe { call!(api, nvEncOpenEncodeSessionEx)(&mut params, &mut session) },
             "NVENC could not open a session",
         )
@@ -441,8 +445,8 @@ impl Encoder {
             },
             ..Default::default()
         });
-        // SAFETY: the session is open and `preset` outlives the call.
         check(
+            // SAFETY: the session is open and `preset` outlives the call.
             unsafe {
                 call!(api, nvEncGetEncodePresetConfigEx)(
                     self.session,
@@ -520,8 +524,8 @@ impl Encoder {
             tuningInfo: NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
             ..Default::default()
         });
-        // SAFETY: `init` and the `config` it points to outlive the call.
         check(
+            // SAFETY: `init` and the `config` it points to outlive the call.
             unsafe { call!(api, nvEncInitializeEncoder)(self.session, &mut *self.init) },
             "NVENC refused the settings",
         )
@@ -534,8 +538,8 @@ impl Encoder {
             bufferFmt: NV_ENC_BUFFER_FORMAT_ARGB,
             ..Default::default()
         };
-        // SAFETY: the session is initialized; `input` outlives the call.
         check(
+            // SAFETY: the session is initialized; `input` outlives the call.
             unsafe { call!(api, nvEncCreateInputBuffer)(self.session, &mut input) },
             "NVENC has no input buffer",
         )?;
@@ -544,8 +548,8 @@ impl Encoder {
             version: struct_version(1, false),
             ..Default::default()
         };
-        // SAFETY: as above.
         check(
+            // SAFETY: as above.
             unsafe { call!(api, nvEncCreateBitstreamBuffer)(self.session, &mut output) },
             "NVENC has no output buffer",
         )?;
@@ -596,8 +600,8 @@ impl Encoder {
             inputBuffer: self.input,
             ..Default::default()
         };
-        // SAFETY: the input buffer belongs to this session.
         check(
+            // SAFETY: the input buffer belongs to this session.
             unsafe { call!(api, nvEncLockInputBuffer)(self.session, &mut lock) },
             "NVENC rejected the frame",
         )?;
@@ -642,8 +646,8 @@ impl Encoder {
             pictureStruct: NV_ENC_PIC_STRUCT_FRAME,
             ..Default::default()
         });
-        // SAFETY: both buffers belong to this session; `picture` outlives it.
         check(
+            // SAFETY: both buffers belong to this session; `picture` outlives it.
             unsafe { call!(api, nvEncEncodePicture)(self.session, &mut *picture) },
             "NVENC rejected the frame",
         )?;
@@ -653,8 +657,8 @@ impl Encoder {
             outputBitstream: self.output,
             ..Default::default()
         };
-        // SAFETY: waits for the picture just encoded into this buffer.
         check(
+            // SAFETY: waits for the picture just encoded into this buffer.
             unsafe { call!(api, nvEncLockBitstream)(self.session, &mut bitstream) },
             "NVENC rejected the frame",
         )?;
@@ -670,8 +674,8 @@ impl Encoder {
             }
             .to_vec()
         };
-        // SAFETY: unlocks the bitstream locked above.
         check(
+            // SAFETY: unlocks the bitstream locked above.
             unsafe { call!(api, nvEncUnlockBitstream)(self.session, self.output) },
             "NVENC rejected the frame",
         )?;
@@ -703,9 +707,9 @@ impl Encoder {
     /// Releases this session's buffers, then the session.
     fn close(&mut self) {
         let api = self.api;
-        let Ok(_current) = Current::new(api, self.context) else {
-            return;
-        };
+        // A context that cannot be made current still lets the session end:
+        // returning here would leave the session and its buffers allocated.
+        let _current = Current::new(api, self.context).ok();
         // SAFETY: each was created by this session and is not used again.
         unsafe {
             if let (false, Some(destroy)) =

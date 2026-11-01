@@ -11,7 +11,7 @@ use crate::portal::{PortalPhase, PortalSession, ONE_PORTAL_SESSION_IS_UNIVERSAL}
 
 #[test]
 fn portal_phases_follow_the_screen_cast_sequence() {
-    assert!(!ONE_PORTAL_SESSION_IS_UNIVERSAL);
+    const { assert!(!ONE_PORTAL_SESSION_IS_UNIVERSAL) };
     let mut session = PortalSession::new();
     assert_eq!(session.phase(), PortalPhase::Idle);
     assert!(matches!(

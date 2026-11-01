@@ -14,14 +14,22 @@
 //! connection already names the sender. A later reconnect dials this stored
 //! list instead of the addresses from the original invitation.
 //!
-//! The relay list is what [`crate::RelaySettings::relay_urls`] reports: empty
-//! while the installation uses the public relays, the configured home relay
-//! URLs otherwise. Direct sockets are the endpoint's current ones. A frame
+//! The relay list is the configured home relay URLs, or with the public
+//! relays the home relay the endpoint has reached (none before it has
+//! reached one). Direct sockets are the endpoint's bound and discovered
+//! ones. A frame
 //! with more relays or sockets than the invitation allows, a repeated relay
 //! or an unparsable URL is [`Error::Malformed`]. A failed save in the
 //! receiver keeps the previous stored list.
+//!
+//! A peer chooses what its announcement says, and this computer later dials
+//! it. [`decode`] therefore keeps only what a remote computer can own: an
+//! HTTPS relay on a public name or address, and a direct socket that is not
+//! a multicast or broadcast group. Anything else is dropped from the
+//! announcement; the rest is kept. A loopback socket stays, because a peer
+//! on this same computer is a legitimate peer.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::codec::{read_array, read_sockaddr, read_u8, write_sockaddr};
 use crate::error::Error;
@@ -125,13 +133,156 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Announcement, Error> {
     if cursor != bytes.len() {
         return Err(Error::Malformed);
     }
-    canonical(&relays, &direct)
+    let announcement = canonical(&relays, &direct)?;
+    Ok(reachable(announcement))
+}
+
+/// What a remote peer may ask this computer to dial.
+fn reachable(announcement: Announcement) -> Announcement {
+    Announcement {
+        relays: announcement
+            .relays
+            .into_iter()
+            .filter(|relay| relay_is_remote(relay))
+            .collect(),
+        direct: announcement
+            .direct
+            .into_iter()
+            .filter(|addr| !is_group_address(addr.ip()))
+            .collect(),
+    }
+}
+
+fn relay_is_remote(relay: &str) -> bool {
+    let Ok(url) = relay::parse_relay_url(relay) else {
+        return false;
+    };
+    if url.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<IpAddr>() {
+        Ok(ip) => is_global_unicast(ip),
+        Err(_) => !host.eq_ignore_ascii_case("localhost") && host.contains('.'),
+    }
+}
+
+fn is_group_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_multicast() || v4.is_broadcast(),
+        IpAddr::V6(v6) => v6.is_multicast(),
+    }
+}
+
+/// A relay on an IP literal must be reachable from outside its own network.
+fn is_global_unicast(ip: IpAddr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() || is_group_address(ip) {
+        return false;
+    }
+    match ip {
+        IpAddr::V4(v4) => !(v4.is_private() || v4.is_link_local()),
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            let unique_local = first & 0xfe00 == 0xfc00;
+            let link_local = first & 0xffc0 == 0xfe80;
+            !(unique_local || link_local)
+        }
+    }
+}
+
+/// How many announcements a link may have saved in a burst, and how long
+/// each one then takes to come back. Each saved announcement rewrites the
+/// installation record, so a peer cannot choose the write rate.
+const ANNOUNCEMENT_BURST: u32 = 4;
+const ANNOUNCEMENT_REFILL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Admits the address announcements of one link. A refused announcement is
+/// dropped: the peer sends its addresses again whenever they change, and on
+/// its next connection.
+pub(crate) struct AnnouncementBudget {
+    left: u32,
+    since: std::time::Instant,
+}
+
+impl AnnouncementBudget {
+    pub(crate) fn new(now: std::time::Instant) -> Self {
+        Self {
+            left: ANNOUNCEMENT_BURST,
+            since: now,
+        }
+    }
+
+    pub(crate) fn admit(&mut self, now: std::time::Instant) -> bool {
+        let earned = (now.saturating_duration_since(self.since).as_millis()
+            / ANNOUNCEMENT_REFILL.as_millis()) as u32;
+        if earned > 0 {
+            self.left = (self.left + earned).min(ANNOUNCEMENT_BURST);
+            self.since += ANNOUNCEMENT_REFILL * earned;
+        }
+        if self.left == 0 {
+            return false;
+        }
+        self.left -= 1;
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::ControlMessage;
+
+    #[test]
+    fn a_link_saves_a_burst_of_announcements_and_then_one_per_refill() {
+        let start = std::time::Instant::now();
+        let mut budget = AnnouncementBudget::new(start);
+        let admitted = (0..10).filter(|_| budget.admit(start)).count();
+        assert_eq!(admitted as u32, ANNOUNCEMENT_BURST);
+        assert!(!budget.admit(start + ANNOUNCEMENT_REFILL / 2));
+        assert!(budget.admit(start + ANNOUNCEMENT_REFILL));
+        assert!(!budget.admit(start + ANNOUNCEMENT_REFILL));
+        let later = start + ANNOUNCEMENT_REFILL * 100;
+        let admitted = (0..10).filter(|_| budget.admit(later)).count();
+        assert_eq!(
+            admitted as u32, ANNOUNCEMENT_BURST,
+            "idle time does not bank more than a burst"
+        );
+    }
+
+    #[test]
+    fn a_peer_cannot_make_this_computer_dial_its_own_services() {
+        let relays = vec![
+            "http://127.0.0.1:9".to_string(),
+            "https://localhost".to_string(),
+            "https://10.0.0.5".to_string(),
+            "https://[::1]".to_string(),
+            "https://intranet".to_string(),
+            "https://relay.example.com".to_string(),
+        ];
+        let direct = vec![
+            "127.0.0.1:9".parse().unwrap(),
+            "224.0.0.1:9".parse().unwrap(),
+            "255.255.255.255:9".parse().unwrap(),
+            "[ff02::1]:9".parse().unwrap(),
+            "203.0.113.7:9".parse().unwrap(),
+        ];
+        let sent = canonical(&relays, &direct).unwrap();
+        let received = decode(&encode(&sent.relays, &sent.direct)).unwrap();
+        assert_eq!(
+            received.relays,
+            vec!["https://relay.example.com/".to_string()]
+        );
+        assert_eq!(
+            received.direct,
+            vec![
+                "127.0.0.1:9".parse().unwrap(),
+                "203.0.113.7:9".parse().unwrap()
+            ]
+        );
+    }
 
     #[test]
     fn an_announcement_round_trips_and_keeps_grants() {

@@ -27,16 +27,25 @@ pub(crate) async fn read_frame<F>(
         .map_err(Error::network_debug)?;
     let len = u32::from_be_bytes(len_buf) as usize;
     check_len(len)?;
-    let mut payload = vec![0u8; len];
-    recv.read_exact(&mut payload)
-        .await
-        .map_err(Error::network_debug)?;
+    // The prefix is the peer's claim: memory follows the bytes that arrive, so
+    // a stream that announces a large frame and sends nothing costs one step.
+    let mut payload = Vec::with_capacity(len.min(READ_STEP));
+    while payload.len() < len {
+        let start = payload.len();
+        payload.resize(len.min(start + READ_STEP), 0);
+        recv.read_exact(&mut payload[start..])
+            .await
+            .map_err(Error::network_debug)?;
+    }
     decode(&payload)
 }
 
+/// Bytes a frame's buffer grows by before more of the frame has arrived.
+const READ_STEP: usize = 64 * 1024;
+
 /// Length-prefixed frame write shared by the side streams. `did_not_write`
 /// names the stream that stayed shut.
-pub(crate) async fn write_frame<F>(
+pub(crate) async fn write_frame<F: ?Sized>(
     send: &mut iroh::endpoint::SendStream,
     frame: &F,
     encode: impl FnOnce(&F) -> Result<Vec<u8>, Error>,

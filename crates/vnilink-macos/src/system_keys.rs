@@ -86,6 +86,7 @@ extern "C" fn take(_proxy: Ref, kind: u32, event: Ref, data: *mut c_void) -> Ref
     let context = unsafe { &mut *data.cast::<Context>() };
     if kind >= TAP_DISABLED {
         // A slow callback or user input disabled the tap; taking resumes.
+        // SAFETY: `context.port` is the tap `run` created before the callback could run, and the tap is still live.
         unsafe { CGEventTapEnable(context.port, true) };
         return event;
     }
@@ -107,6 +108,7 @@ extern "C" fn take(_proxy: Ref, kind: u32, event: Ref, data: *mut c_void) -> Ref
         KEY_DOWN => true,
         KEY_UP => false,
         FLAGS_CHANGED => match modifier_flag(keycode) {
+            // SAFETY: the tap only delivers live keyboard events to its callback.
             Some(flag) => (unsafe { CGEventGetFlags(event) } & flag) != 0,
             None => return event,
         },
@@ -200,6 +202,7 @@ fn run(
     // SAFETY: `port` is a live tap; its source is released below.
     let source = unsafe { CFMachPortCreateRunLoopSource(std::ptr::null(), port, 0) };
     if source.is_null() {
+        // SAFETY: `port` is the live tap and `source` was just found null, so only the port is released; each is invalidated and released once, before this function returns.
         unsafe {
             CFMachPortInvalidate(port);
             CFRelease(port);
@@ -213,6 +216,7 @@ fn run(
     }
     // SAFETY: the run loop is this thread's; source and port are live.
     let runloop = unsafe { CFRunLoopGetCurrent() };
+    // SAFETY: `runloop` is this thread's run loop and `source` and `port` are live, so the source is added and the tap enabled on the thread that will run them.
     unsafe {
         CFRunLoopAddSource(runloop, source, kCFRunLoopDefaultMode);
         CGEventTapEnable(port, true);
@@ -223,6 +227,7 @@ fn run(
         ready.send(Ok(()))
     );
     while !stop.load(Ordering::Acquire) {
+        // SAFETY: runs the current thread's run loop in the default mode for a bounded time; nothing is borrowed across the call.
         unsafe {
             CFRunLoopRunInMode(
                 kCFRunLoopDefaultMode,

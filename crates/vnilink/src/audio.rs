@@ -87,6 +87,8 @@ pub struct AudioSource {
     failed: AtomicBool,
     queue: Mutex<VecDeque<AudioPacket>>,
     notify: tokio::sync::Notify,
+    /// Wakes a thread waiting in [`Self::wait`] for a packet or the close.
+    arrived: std::sync::Condvar,
     /// Packets dropped because nobody took them in time.
     dropped: std::sync::atomic::AtomicU64,
 }
@@ -98,6 +100,7 @@ impl AudioSource {
             failed: AtomicBool::new(false),
             queue: Mutex::new(VecDeque::with_capacity(8)),
             notify: tokio::sync::Notify::new(),
+            arrived: std::sync::Condvar::new(),
             dropped: std::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -115,6 +118,7 @@ impl AudioSource {
         queue.push_back(packet);
         drop(queue);
         self.notify.notify_one();
+        self.arrived.notify_all();
         Ok(())
     }
     /// Packets published and not yet taken to send.
@@ -136,6 +140,19 @@ impl AudioSource {
         self.stopped.store(true, Ordering::Release);
         self.queue.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.notify.notify_waiters();
+        self.arrived.notify_all();
+    }
+    /// Blocks until a packet is queued, the source closes, or `limit`
+    /// passes, whichever is first. Takes nothing: [`Self::pop`] does.
+    pub fn wait(&self, limit: std::time::Duration) {
+        let queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        drop(
+            self.arrived
+                .wait_timeout_while(queue, limit, |queue| {
+                    queue.is_empty() && !self.is_cancelled()
+                })
+                .unwrap_or_else(|e| e.into_inner()),
+        );
     }
     pub(crate) fn has_failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
@@ -212,6 +229,39 @@ mod tests {
     }
     fn packet(encoder: &mut vnilink_audio::AudioEncoder) -> AudioPacket {
         encoder.encode(&[0.125; 1920]).unwrap()
+    }
+    /// A thread waiting for audio is released by the packet, or by the
+    /// close, rather than by polling; with neither, it returns at its limit.
+    #[test]
+    fn a_waiting_thread_is_woken_by_a_packet_or_the_close() {
+        let source = AudioSource::new();
+        let mut encoder = vnilink_audio::AudioEncoder::new(AudioFormat::Stereo, false).unwrap();
+        let limit = std::time::Duration::from_secs(30);
+        let waiting = {
+            let source = source.clone();
+            std::thread::spawn(move || {
+                source.wait(limit);
+                source.pop().map(|packet| packet.sequence)
+            })
+        };
+        source.publish(packet(&mut encoder)).unwrap();
+        assert_eq!(
+            waiting.join().unwrap(),
+            Some(0),
+            "the packet woke the waiter"
+        );
+        let closing = {
+            let source = source.clone();
+            std::thread::spawn(move || source.wait(limit))
+        };
+        source.close();
+        closing.join().unwrap();
+        let started = std::time::Instant::now();
+        AudioSource::new().wait(std::time::Duration::from_millis(1));
+        assert!(
+            started.elapsed() < limit,
+            "a wait with nothing to wake it ends at its limit"
+        );
     }
     #[test]
     fn source_queue_is_bounded_and_closed_backend_cannot_be_reclaimed() {

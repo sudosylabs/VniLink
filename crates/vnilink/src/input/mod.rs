@@ -13,7 +13,6 @@ mod map;
 mod motion;
 mod queue;
 pub mod usage;
-mod window;
 
 pub(crate) use events::{key_text_problem, swap_command_key, swap_pointer_button};
 pub use events::{InputEvent, PointerButton};
@@ -26,8 +25,6 @@ pub(crate) use motion::accumulate_detents;
 pub(crate) use motion::PointerPlan;
 pub use motion::PointerSettings;
 pub(crate) use queue::{HeldInput, InputFault, InputOutbox, Outbound};
-pub(crate) use window::validate_window;
-pub use window::WindowGeometry;
 
 /// Finished text on the control stream, in bytes. This is a short phrase,
 /// not a clipboard paste. The control frame also carries the tag and the
@@ -37,6 +34,12 @@ pub const MAX_KEY_TEXT: usize = 128;
 /// How many input events may wait to be written. Pointer movement collapses
 /// instead of filling this queue. Key and button transitions do not.
 pub(crate) const INPUT_QUEUE: usize = 64;
+
+/// Extra room held for key and button releases once [`INPUT_QUEUE`] is full.
+/// A release that is refused leaves its key or button down on the host until
+/// the lease ends, so a stalled link may not turn the user's letting go into
+/// an error.
+pub(crate) const RELEASE_RESERVE: usize = 16;
 
 /// Precise-scroll units in one wheel detent. This is the Windows wheel delta.
 pub const WHEEL_DETENT: i32 = 120;

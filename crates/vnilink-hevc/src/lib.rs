@@ -63,6 +63,7 @@ pub struct Encoder {
     height: usize,
 }
 // Kvazaar has no caller thread affinity. The C shim serializes all global dispatch access.
+// SAFETY: the owner pointer is exclusively held by this value and the shim keeps no thread-local state, so moving it to another thread is sound.
 unsafe impl Send for Encoder {}
 impl Encoder {
     pub fn open(
@@ -77,8 +78,8 @@ impl Encoder {
             || height == 0
             || width > 4096
             || height > 4096
-            || width % 2 != 0
-            || height % 2 != 0
+            || !width.is_multiple_of(2)
+            || !height.is_multiple_of(2)
             || fps == 0
             || fps > 60
             || bitrate == 0
@@ -87,6 +88,7 @@ impl Encoder {
         {
             return Err(Error);
         }
+        // SAFETY: the arguments are plain integers already range-checked above; the shim returns null on failure or a fresh owner this value takes sole ownership of.
         let owner = NonNull::new(unsafe {
             vnl_hevc_encoder_open(
                 width.into(),
@@ -125,7 +127,7 @@ impl Encoder {
         let mut output = std::ptr::null();
         let mut length = 0;
         let mut key = 0;
-        // The shim borrows exactly pixels.len bytes and returns its own bounded buffer, valid until the next call.
+        // SAFETY: `owner` is live and exclusively borrowed through `&mut self`; `pixels` is a live buffer of `pixels.len()` bytes the shim only reads; the three out-pointers are valid locals. On success `output` points to `length` bytes owned by the shim and valid until the next call on this encoder.
         if unsafe {
             vnl_hevc_encode(
                 self.owner.as_ptr(),
@@ -145,12 +147,14 @@ impl Encoder {
         }
         Ok((
             key != 0,
+            // SAFETY: the shim returned `output` non-null with `length` initialised bytes (checked above), and no other call on this encoder happens before the copy.
             unsafe { std::slice::from_raw_parts(output, length) }.to_vec(),
         ))
     }
 }
 impl Drop for Encoder {
     fn drop(&mut self) {
+        // SAFETY: `owner` came from `vnl_hevc_encoder_open` and is closed exactly once, here.
         unsafe { vnl_hevc_encoder_close(self.owner.as_ptr()) }
     }
 }
@@ -164,9 +168,11 @@ pub struct Picture {
 }
 pub struct Decoder(NonNull<c_void>);
 // libde265 forbids concurrent calls, not moves. No Sync, clones or shared native references.
+// SAFETY: the owner pointer is exclusively held by this value; libde265 forbids concurrent calls on one context, not moves between threads.
 unsafe impl Send for Decoder {}
 impl Decoder {
     pub fn open() -> Result<Self, Error> {
+        // SAFETY: takes no arguments; the shim returns null on failure or a fresh owner this value takes sole ownership of.
         NonNull::new(unsafe { vnl_hevc_decoder_open() })
             .map(Self)
             .ok_or(Error)
@@ -181,6 +187,7 @@ impl Decoder {
         let mut height = 0;
         let mut matrix = 0;
         let mut full_range = 0;
+        // SAFETY: `self.0` is live and exclusively borrowed through `&mut self`; `packet` is a live buffer of `packet.len()` bytes the shim only reads; the out-pointers are valid locals. On success `output` points to `length` bytes owned by the shim and valid until the next call on this decoder.
         if unsafe {
             vnl_hevc_decode(
                 self.0.as_ptr(),
@@ -208,6 +215,7 @@ impl Decoder {
         Ok(Picture {
             width: width as usize,
             height: height as usize,
+            // SAFETY: the shim returned `output` non-null with `length` bytes (checked above), and no other call on this decoder happens before the copy.
             i420: unsafe { std::slice::from_raw_parts(output, length) }.to_vec(),
             matrix: u8::try_from(matrix).unwrap_or(2),
             full_range: full_range != 0,
@@ -216,6 +224,7 @@ impl Decoder {
 }
 impl Drop for Decoder {
     fn drop(&mut self) {
+        // SAFETY: `self.0` came from `vnl_hevc_decoder_open` and is closed exactly once, here.
         unsafe { vnl_hevc_decoder_close(self.0.as_ptr()) }
     }
 }

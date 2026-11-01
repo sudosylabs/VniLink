@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Shared control library for the VniLink remote desktop"
 publish = false
 
+[lints]
+workspace = true
+
 [features]
 # Application tests open a loopback core on a real store and read the
 # endpoint-close count. Production builds leave this off.
@@ -26,6 +29,7 @@ vnilink-rename = { version = "=0.1.0", path = "../vnilink-rename" }
 vnilink-audio = { path = "../vnilink-audio" }
 rand = "0.10"
 sha2 = "=0.11.0"
+subtle = "=2.6.1"
 blake3 = "=1.8.7"
 jpeg-encoder = "=0.6.1"
 thiserror = "2"
@@ -39,6 +43,9 @@ trash = { version = "=5.2.9", default-features = false, features = ["coinit_mult
 notify = { version = "=8.2.0", default-features = false, features = ["macos_kqueue"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "time"] }
 reed-solomon-simd = "=3.1.0"
+# File segments compress in transit; see `transfer/codec.rs`. The C library is
+# vendored in `vendor/zstd-sys`.
+zstd = { version = "=0.14.3", default-features = false }
 
 [dev-dependencies]
 jpeg-decoder = "=0.3.2"

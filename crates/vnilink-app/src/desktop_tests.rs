@@ -8,9 +8,9 @@
 use crate::tests::filesystem_location::FilesystemLocation;
 use crate::*;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Applied {
     Input(vnilink::InputEvent),
     Text(String),
@@ -85,11 +85,7 @@ fn services_connection(host: &VnilinkCore, controller: &VnilinkCore) -> crate::F
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(pending.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::session_active(controller, pending.id);
     controller.controller_session(pending.id).unwrap()
 }
 
@@ -210,11 +206,9 @@ fn service_handles_and_cancellation_cross_the_ffi_boundary() {
         }
     );
     pipe.close();
-    let until = Instant::now() + Duration::from_secs(3);
-    while !pipe.is_cancelled() || !host.hosted_services().unwrap().is_empty() {
-        assert!(Instant::now() < until, "service close did not settle");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the closed service to settle on both sides", || {
+        pipe.is_cancelled() && host.hosted_services().unwrap().is_empty()
+    });
     controller.forget_controller_service(desktop.id).unwrap();
     controller.shutdown();
     assert!(kept.is_cancelled());
@@ -277,14 +271,10 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         Applied::Input(vnilink::InputEvent::key_up(227)),
         Applied::Text("é".into()),
     ];
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while *input.lock().unwrap() != expected {
-        assert!(
-            Instant::now() < deadline,
-            "native shortcut/text sequence was not applied"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until(
+        "the native shortcut and text sequence to be applied",
+        || *input.lock().unwrap() == expected,
+    );
     desktop
         .submit_clipboard("clipboard fixture 📝".into())
         .unwrap();
@@ -331,18 +321,15 @@ fn native_desktop_contract_covers_shortcuts_clipboard_and_bidirectional_files() 
         .map(|job| job.id)
         .collect();
     assert_eq!(host_jobs.len(), 2);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while controller.inner.job_snapshot(up).unwrap().state != vnilink::JobState::Complete
-        || controller.inner.job_snapshot(down).unwrap().state != vnilink::JobState::Complete
-    {
-        assert!(Instant::now() < deadline, "ffi jobs did not complete");
+    crate::wait::wait_until("both jobs to complete", || {
         for id in &host_jobs {
             host.inner.job_poll(*id).unwrap();
         }
         controller.inner.job_poll(up).unwrap();
         controller.inner.job_poll(down).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
-    }
+        controller.inner.job_snapshot(up).unwrap().state == vnilink::JobState::Complete
+            && controller.inner.job_snapshot(down).unwrap().state == vnilink::JobState::Complete
+    });
     assert_eq!(
         std::fs::read(host_dir.join("sent.bin")).unwrap(),
         [0, 255, 10]
@@ -481,11 +468,9 @@ fn service_jobs_cross_the_ffi_boundary() {
         2
     );
     pipe.close();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.inner.job_snapshot(down).unwrap().state != vnilink::JobState::Interrupted {
-        assert!(Instant::now() < until, "owned FFI job was not interrupted");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the owned job to be interrupted", || {
+        controller.inner.job_snapshot(down).unwrap().state == vnilink::JobState::Interrupted
+    });
     assert!(!controller_root.join("cancelled").exists());
     assert!(controller
         .files_service_download(
@@ -571,19 +556,7 @@ fn neutral_connections_cross_ffi_without_desktop_or_transfer_grants() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    loop {
-        let session = controller.controller_session(pending.id).unwrap();
-        if session.phase == FfiSessionPhase::Active {
-            break;
-        }
-        assert!(
-            Instant::now() < until,
-            "neutral FFI connection did not activate: {:?}",
-            session.phase
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::session_active(&controller, pending.id);
     let session = controller.controller_session(pending.id).unwrap();
     assert!(
         controller
@@ -656,11 +629,7 @@ fn recording_ffi_checks_installation_and_consent_before_creating_files() {
     let session = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(session.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    crate::wait::session_active(&controller, session.id);
     let session = controller.controller_session(session.id).unwrap();
     let owner = controller
         .attach_controller_service(session.id, session.generation, FfiServiceKind::Desktop)
@@ -686,11 +655,9 @@ fn recording_ffi_checks_installation_and_consent_before_creating_files() {
     assert_eq!(denied.err(), Some(FfiError::Unauthorized));
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
     host.set_recording_sharing(true).unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while !desktop.inner.recording_allowed().unwrap() {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    crate::wait::wait_until("the host's recording grant to reach the viewer", || {
+        desktop.inner.recording_allowed().unwrap()
+    });
     assert!(matches!(
         host.start_desktop_recording(desktop.clone(), path.clone(), limits, None),
         Err(FfiError::Unauthorized)
@@ -713,11 +680,9 @@ fn recording_ffi_checks_installation_and_consent_before_creating_files() {
         .unwrap();
     assert_eq!(recording.status().phase, FfiRecordingPhase::Starting);
     host.set_recording_sharing(false).unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while recording.status().phase != FfiRecordingPhase::Failed {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    crate::wait::wait_until("the recording to fail once sharing is withdrawn", || {
+        recording.status().phase == FfiRecordingPhase::Failed
+    });
     assert_eq!(
         recording.status().failure,
         Some(FfiRecordingFailure::Startup)
@@ -745,11 +710,7 @@ fn neutral_desktop_input_video_and_reopen_cross_ffi() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(pending.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::session_active(&controller, pending.id);
     let parent = controller.controller_session(pending.id).unwrap();
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)
@@ -773,11 +734,9 @@ fn neutral_desktop_input_video_and_reopen_cross_ffi() {
     );
     first.submit_key(4, true).unwrap();
     first.submit_text("hello".into()).unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while applied.lock().unwrap().len() != 2 {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the host to apply two inputs", || {
+        applied.lock().unwrap().len() == 2
+    });
     assert_eq!(
         *applied.lock().unwrap(),
         vec![
@@ -790,22 +749,18 @@ fn neutral_desktop_input_video_and_reopen_cross_ffi() {
         FfiDesktopControlState::Controlling
     );
     first.yield_control().unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while first.control_state().unwrap() != FfiDesktopControlState::Viewing {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the viewer to yield control", || {
+        first.control_state().unwrap() == FfiDesktopControlState::Viewing
+    });
     assert_eq!(
         applied.lock().unwrap().last(),
         Some(&Applied::Input(vnilink::InputEvent::key_up(4)))
     );
     assert!(!first.is_cancelled());
     first.acquire_control().unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while first.control_state().unwrap() != FfiDesktopControlState::Controlling {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the viewer to take control back", || {
+        first.control_state().unwrap() == FfiDesktopControlState::Controlling
+    });
     first.close();
     let next = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)
@@ -818,19 +773,13 @@ fn neutral_desktop_input_video_and_reopen_cross_ffi() {
     assert!(first.submit_pointer(20, 30, 1, 1).is_err());
     // Local close is immediate; the host observes its stream retirement
     // asynchronously. Reopening another stream does not order that delivery.
-    let until = Instant::now() + Duration::from_secs(5);
-    while host
-        .hosted_services()
-        .unwrap()
-        .iter()
-        .any(|service| service.id == remote.id && service.phase == FfiServicePhase::Active)
-    {
-        assert!(
-            Instant::now() < until,
-            "closed Desktop owner remained active on the host"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the closed Desktop owner to retire on the host", || {
+        !host
+            .hosted_services()
+            .unwrap()
+            .iter()
+            .any(|service| service.id == remote.id && service.phase == FfiServicePhase::Active)
+    });
     assert!(host
         .publish_desktop_video(remote.id, remote.generation, true, 11, vec![9])
         .is_err());
@@ -852,11 +801,7 @@ fn desktop_keyboard_settings_and_character_planning_cross_ffi() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(pending.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::session_active(&controller, pending.id);
     let parent = controller.controller_session(pending.id).unwrap();
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)
@@ -869,11 +814,9 @@ fn desktop_keyboard_settings_and_character_planning_cross_ffi() {
         .submit_local_key(vnilink::usage::GRAVE, true, "@".into(), false)
         .unwrap();
     assert!(desktop.set_keyboard_mode(FfiKeyboardMode::Map).is_err());
-    let until = Instant::now() + Duration::from_secs(5);
-    while applied.lock().unwrap().len() != 1 {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the host to apply one input", || {
+        applied.lock().unwrap().len() == 1
+    });
     desktop
         .submit_local_key(vnilink::usage::GRAVE, false, "".into(), false)
         .unwrap();
@@ -882,18 +825,14 @@ fn desktop_keyboard_settings_and_character_planning_cross_ffi() {
     assert!(desktop.swap_control_and_command().unwrap());
     desktop.submit_key(vnilink::usage::LEFT_META, true).unwrap();
     assert!(desktop.set_swap_control_and_command(false).is_err());
-    let until = Instant::now() + Duration::from_secs(5);
-    while applied.lock().unwrap().len() != 2 {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the host to apply two inputs", || {
+        applied.lock().unwrap().len() == 2
+    });
     desktop.release_input().unwrap();
     desktop.set_swap_control_and_command(false).unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while applied.lock().unwrap().len() != 3 {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the host to apply three inputs", || {
+        applied.lock().unwrap().len() == 3
+    });
     assert_eq!(
         *applied.lock().unwrap(),
         vec![
@@ -920,11 +859,7 @@ fn desktop_clipboard_ack_and_owner_event_cross_ffi() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(pending.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::session_active(&controller, pending.id);
     let parent = controller.controller_session(pending.id).unwrap();
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)
@@ -1010,11 +945,7 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     let parent = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(parent.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::session_active(&controller, parent.id);
     let parent = controller.controller_session(parent.id).unwrap();
     let info = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Files)
@@ -1043,11 +974,9 @@ fn files_handle_owns_submission_queue_and_cleanup() {
     assert_eq!(files.job_snapshot(job).unwrap().state, FfiJobState::Serving);
     assert_eq!(files.job_poll(job).unwrap().id, job);
     files.close();
-    let until = Instant::now() + Duration::from_secs(5);
-    while files.job_snapshot(job).unwrap().state != FfiJobState::Interrupted {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the job to be interrupted by closing Files", || {
+        files.job_snapshot(job).unwrap().state == FfiJobState::Interrupted
+    });
     assert!(files
         .upload(
             controller_files.root,
@@ -1081,16 +1010,11 @@ fn files_handle_owns_submission_queue_and_cleanup() {
             controller_files.path("download"),
         )
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(8);
-    while replacement.job_snapshot(download).unwrap().state != FfiJobState::Complete {
-        assert!(
-            Instant::now() < until,
-            "download did not complete: {:?}",
-            replacement.job_snapshot(download).unwrap()
-        );
+    crate::wait::wait_until("the download to complete", || {
         host.inner.drive_jobs().unwrap();
         replacement.job_poll(download).unwrap();
-    }
+        replacement.job_snapshot(download).unwrap().state == FfiJobState::Complete
+    });
     assert_eq!(
         std::fs::read(directory.join("controller/root/download/return.txt")).unwrap(),
         b"return contents"
@@ -1120,15 +1044,7 @@ fn terminal_ffi_round_trip_resize_exit_and_close() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let end = Instant::now() + Duration::from_secs(8);
-    let session = loop {
-        let session = controller.controller_session(pending.id).unwrap();
-        if session.phase == FfiSessionPhase::Active {
-            break session;
-        }
-        assert!(Instant::now() < end);
-        std::thread::sleep(Duration::from_millis(5));
-    };
+    let session = crate::wait::session_active(&controller, pending.id);
     let owner = controller
         .attach_controller_service(session.id, session.generation, FfiServiceKind::Terminal)
         .unwrap();
@@ -1151,8 +1067,7 @@ fn terminal_ffi_round_trip_resize_exit_and_close() {
     terminal.input(b"stty size; exit 9\n".to_vec()).unwrap();
     let mut output = Vec::new();
     let mut code = None;
-    while code.is_none() {
-        assert!(Instant::now() < end);
+    crate::wait::wait_until("the terminal to exit", || {
         while let Some(event) = terminal.poll() {
             match event {
                 FfiTerminalEvent::Output { bytes } => output.extend(bytes),
@@ -1163,8 +1078,8 @@ fn terminal_ffi_round_trip_resize_exit_and_close() {
                 }
             }
         }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+        code.is_some()
+    });
     assert_eq!(code, Some(9));
     assert!(String::from_utf8(output).unwrap().contains("31 95"));
     terminal.close();
@@ -1207,11 +1122,7 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
     let connection = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(8);
-    while controller.controller_session(connection.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    crate::wait::session_active(&controller, connection.id);
     let connection = controller.controller_session(connection.id).unwrap();
     assert_eq!(
         controller
@@ -1249,21 +1160,12 @@ fn native_camera_callback_and_frame_queue_cross_ffi() {
         timing: Default::default(),
     };
     source.publish(expected.clone()).unwrap();
-    let until = Instant::now() + Duration::from_secs(8);
-    let frame = loop {
-        if let Some(frame) = camera.poll() {
-            break frame;
-        }
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(5));
-    };
+    let frame = crate::wait::wait_for("the camera frame", || camera.poll());
     assert_eq!(frame, expected);
     host.disable_camera().unwrap();
-    let until = Instant::now() + Duration::from_secs(8);
-    while !source.is_cancelled() || !camera.is_cancelled() {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    crate::wait::wait_until("both camera ends to be cancelled", || {
+        source.is_cancelled() && camera.is_cancelled()
+    });
     assert_eq!(
         controller.controller_session(connection.id).unwrap().phase,
         FfiSessionPhase::Active
@@ -1299,18 +1201,15 @@ fn ffi_pointer_policy_preserves_fractional_motion_and_swapped_button_cleanup() {
         .submit_button(FfiPointerButton::Forward, false)
         .unwrap();
     // Releasing drops what is still queued: release once the host applied it.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while seen.lock().unwrap().len() < 5 {
-        assert!(Instant::now() < deadline, "FFI pointer input did not apply");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the host to apply the pointer input", || {
+        seen.lock().unwrap().len() >= 5
+    });
     desktop.release_input().unwrap();
     let expected = vec![
         Applied::Input(vnilink::InputEvent::button_down(
             vnilink::PointerButton::Right,
         )),
         Applied::Input(vnilink::InputEvent::motion(1, 0)),
-        Applied::Input(vnilink::InputEvent::precise_wheel(-15, 30)),
         Applied::Input(vnilink::InputEvent::button_down(
             vnilink::PointerButton::Forward,
         )),
@@ -1321,15 +1220,18 @@ fn ffi_pointer_policy_preserves_fractional_motion_and_swapped_button_cleanup() {
             vnilink::PointerButton::Right,
         )),
     ];
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while *seen.lock().unwrap() != expected {
-        assert!(
-            Instant::now() < deadline,
-            "FFI pointer sequence did not settle: {:?}",
-            seen.lock().unwrap()
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    // The wheel rides a datagram, so it lands anywhere among the reliable
+    // events, which keep their order.
+    let wheel = Applied::Input(vnilink::InputEvent::precise_wheel(-15, 30));
+    crate::wait::wait_until("the host to apply the pointer sequence", || {
+        let seen = seen.lock().unwrap().clone();
+        let ordered: Vec<_> = seen
+            .iter()
+            .filter(|event| **event != wheel)
+            .cloned()
+            .collect();
+        ordered == expected && seen.len() == expected.len() + 1
+    });
     controller.shutdown();
     host.shutdown();
 }
@@ -1353,11 +1255,7 @@ fn camera_provider_sees_startup_cancellation_through_ffi() {
             startup: Arc<BackendStartup>,
         ) -> Result<Arc<CameraSource>, FfiError> {
             self.entered.send(()).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !startup.is_cancelled() {
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            crate::wait::wait_until("the startup to be cancelled", || startup.is_cancelled());
             assert!(startup.check().is_err());
             self.finished.send(()).unwrap();
             startup.check()?;
@@ -1376,11 +1274,7 @@ fn camera_provider_sees_startup_cancellation_through_ffi() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(pending.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    crate::wait::session_active(&controller, pending.id);
     let parent = controller.controller_session(pending.id).unwrap();
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Camera)
@@ -1511,18 +1405,7 @@ fn system_actions_cross_ffi_with_policy_refusal_and_no_side_effects() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    let session = loop {
-        let session = controller.controller_session(pending.id).unwrap();
-        if session.phase == FfiSessionPhase::Active {
-            break session;
-        }
-        assert!(
-            Instant::now() < until,
-            "system FFI connection did not activate"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let session = crate::wait::session_active(&controller, pending.id);
     let owner = controller
         .attach_controller_service(session.id, session.generation, FfiServiceKind::System)
         .unwrap();
@@ -1560,11 +1443,7 @@ fn producer_duration_report_crosses_the_ffi_boundary_into_diagnostics() {
     let pending = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(pending.id).unwrap().phase != FfiSessionPhase::Active {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::session_active(&controller, pending.id);
     let parent = controller.controller_session(pending.id).unwrap();
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)

@@ -97,41 +97,6 @@ pub fn open_single_link_file_rw(path: &Path) -> io::Result<std::fs::File> {
     }
 }
 
-#[cfg(test)]
-mod recovery_open_tests {
-    use super::*;
-    #[test]
-    fn recovery_open_refuses_aliases_and_preserves_the_original() {
-        let folder = std::env::temp_dir().join(format!(
-            "vnilink-recovery-open-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&folder).unwrap();
-        let file = folder.join("recording.part");
-        std::fs::write(&file, b"unchanged fixture").unwrap();
-        drop(open_single_link_file_rw(&file).unwrap());
-        assert!(open_single_link_file_rw(&folder).is_err());
-        let alias = folder.join("hardlink.part");
-        std::fs::hard_link(&file, &alias).unwrap();
-        assert!(open_single_link_file_rw(&file).is_err());
-        assert!(open_single_link_file_rw(&alias).is_err());
-        std::fs::remove_file(&alias).unwrap();
-        #[cfg(unix)]
-        {
-            let symlink = folder.join("symlink.part");
-            std::os::unix::fs::symlink(&file, &symlink).unwrap();
-            assert!(open_single_link_file_rw(&symlink).is_err());
-        }
-        assert_eq!(std::fs::read(&file).unwrap(), b"unchanged fixture");
-        drop(open_single_link_file_rw(&file).unwrap());
-        std::fs::remove_dir_all(folder).unwrap();
-    }
-}
-
 /// Renames `old` to `new` without replacing an existing destination.
 ///
 /// On success the source is gone and the destination is the renamed object.
@@ -241,4 +206,39 @@ pub fn create_recording_file(path: &Path) -> io::Result<std::fs::File> {
             .share_mode(1 | 2 | 4);
     }
     options.open(path)
+}
+
+#[cfg(test)]
+mod recovery_open_tests {
+    use super::*;
+    #[test]
+    fn recovery_open_refuses_aliases_and_preserves_the_original() {
+        let folder = std::env::temp_dir().join(format!(
+            "vnilink-recovery-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("recording.part");
+        std::fs::write(&file, b"unchanged fixture").unwrap();
+        drop(open_single_link_file_rw(&file).unwrap());
+        assert!(open_single_link_file_rw(&folder).is_err());
+        let alias = folder.join("hardlink.part");
+        std::fs::hard_link(&file, &alias).unwrap();
+        assert!(open_single_link_file_rw(&file).is_err());
+        assert!(open_single_link_file_rw(&alias).is_err());
+        std::fs::remove_file(&alias).unwrap();
+        #[cfg(unix)]
+        {
+            let symlink = folder.join("symlink.part");
+            std::os::unix::fs::symlink(&file, &symlink).unwrap();
+            assert!(open_single_link_file_rw(&symlink).is_err());
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), b"unchanged fixture");
+        drop(open_single_link_file_rw(&file).unwrap());
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 }

@@ -14,7 +14,9 @@
 //! status byte; when it sends, the rest of that segment and each segment
 //! after it to the manifest size follow, every segment ending with its
 //! 32-byte BLAKE3 chaining value, and the sender finishes the stream after
-//! the last one.
+//! the last one. A segment's bytes start with a mode byte and are raw or
+//! zstd blocks (`codec`); a segment the receiver holds whole has no bytes
+//! and no mode byte, only its value.
 
 use crate::error::Error;
 

@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::events::{EventHub, EventSubscription};
 use crate::installation::{self, InstallationStore};
 use crate::invitation::ReplayCache;
-use crate::keyboard::{self, KeyboardMode};
+use crate::keyboard::KeyboardMode;
 use crate::protocol::Capabilities;
 use crate::relay::RelaySettings;
 use crate::trust::Trust;
@@ -271,10 +271,7 @@ impl Core {
             close_count: AtomicUsize::new(0),
             #[cfg(feature = "test-probes")]
             agent: Mutex::new(None),
-            #[cfg(test)]
-            teardown_budget_ms: AtomicU64::new(0),
-            #[cfg(test)]
-            block_endpoint_close: AtomicBool::new(false),
+            endpoint_close: Mutex::new(Arc::new(CloseIroh)),
             events: EventHub::new(event_capacity),
             state: Mutex::new(State {
                 input_cleanup: input_cleanup.clone(),
@@ -312,6 +309,7 @@ impl Core {
                 presence_links: false,
                 presence: HashMap::new(),
                 link_refused: std::collections::HashSet::new(),
+                link_unauthorized: std::collections::HashSet::new(),
             }),
             desktop: Arc::new(Mutex::new(None)),
             desktop_info: Mutex::new(None),
@@ -340,6 +338,7 @@ impl Core {
             secure_desktop: std::sync::atomic::AtomicBool::new(false),
             last_desktop_end: Mutex::new(None),
             desktop_routers: Mutex::new(std::collections::HashSet::new()),
+            input_routers: Mutex::new(std::collections::HashSet::new()),
             topology: Mutex::new(super::topology::TopologySnapshot {
                 revision: 0,
                 displays: Vec::new(),
@@ -353,6 +352,7 @@ impl Core {
             file_roots: Mutex::new(crate::fs::RootSet::default()),
             transfer_dir: Mutex::new(None),
             files_serving: Mutex::new(std::collections::HashMap::new()),
+            unadmitted: Arc::new(tokio::sync::Semaphore::new(super::host::MAX_UNADMITTED)),
             files_fetching: Mutex::new(std::collections::HashMap::new()),
             files_dialing: tokio::sync::Mutex::new(()),
             files_gate: Default::default(),
@@ -376,6 +376,7 @@ impl Core {
             file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
             backend_state: Mutex::new(std::collections::HashMap::new()),
             presence_wake: Mutex::new(HashMap::new()),
+            presence_reconcile: tokio::sync::Notify::new(),
         });
         let accept = Arc::clone(&shared);
         runtime.spawn(async move { accept_loop(accept).await });
@@ -395,6 +396,7 @@ impl Core {
                 stop_owned_work(&mut state, &self.shared);
             }
         }
+        self.shared.presence_reconcile.notify_one();
         self.finish_endpoint_close();
         // Its jobs are interrupted before it says it has shut down, not when
         // their streams next notice: after its links closed saying it shut
@@ -417,19 +419,11 @@ impl Core {
             }
         }
         close_links_for_shutdown(&self.shared);
-        let blocked = take_close_block(&self.shared);
-        let limit = teardown_limit(&self.shared, blocked);
-        let endpoint = self.shared.endpoint.clone();
+        let closer = lock(&self.shared.endpoint_close).clone();
+        let (closing, limit) = closer.close(self.shared.endpoint.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         self.runtime.spawn(async move {
-            let closed = tokio::time::timeout(limit, async move {
-                if blocked {
-                    std::future::pending::<()>().await;
-                }
-                endpoint.close().await;
-            })
-            .await
-            .is_ok();
+            let closed = tokio::time::timeout(limit, closing).await.is_ok();
             crate::ignored!(
                 crate::trace::SESSION,
                 "the caller stopped waiting for its answer",
@@ -456,6 +450,10 @@ impl Core {
     /// [`Core::open`] already saves this secret in the installation record.
     /// After [`Core::reset_identity`], the new secret is only in the store.
     /// This stopped core still reports the key it bound.
+    ///
+    /// Only the `test-probes` build has it: no application path needs the
+    /// secret outside the store, so a production build cannot hand it out.
+    #[cfg(any(test, feature = "test-probes"))]
     pub fn export_identity(&self) -> [u8; 32] {
         let _engine = self.engine();
         self.shared.secret.to_bytes()
@@ -518,11 +516,13 @@ impl Core {
                 &state.record_relay,
                 &Trust::default(),
                 &ReplayCache::new(),
-                &state.terminal_policy,
-                &state.file_retention_policy,
-                &state.power_policy,
-                &state.file_resource_policy,
-                &state.system_policy,
+                installation::Policies {
+                    terminal: &state.terminal_policy,
+                    file_retention: &state.file_retention_policy,
+                    power: &state.power_policy,
+                    file_resource: &state.file_resource_policy,
+                    system: &state.system_policy,
+                },
             )?;
             save_installation(&self.shared, &mut state, store.as_ref(), &bytes)?;
         }
@@ -606,17 +606,31 @@ impl Core {
         self.shared.teardown_phase.load(Ordering::Acquire)
     }
 
-    /// Shortens only a blocked endpoint close. A real close keeps the
-    /// production budget.
+    /// Makes the next endpoint close hang until `budget` passes; a later
+    /// close is the real one.
     #[cfg(test)]
     pub(crate) fn arm_blocked_teardown(&self, budget: Duration) {
-        let millis = u64::try_from(budget.as_millis()).unwrap_or(0);
-        self.shared
-            .teardown_budget_ms
-            .store(millis, Ordering::Release);
-        self.shared
-            .block_endpoint_close
-            .store(true, Ordering::Release);
+        *lock(&self.shared.endpoint_close) = Arc::new(StallOnce {
+            budget,
+            stalled: AtomicBool::new(false),
+        });
+    }
+}
+
+/// A close that hangs the first time and is the real close after.
+#[cfg(test)]
+struct StallOnce {
+    budget: Duration,
+    stalled: AtomicBool,
+}
+
+#[cfg(test)]
+impl CloseEndpoint for StallOnce {
+    fn close(&self, endpoint: Endpoint) -> EndpointClosing {
+        if self.stalled.swap(true, Ordering::AcqRel) {
+            return CloseIroh.close(endpoint);
+        }
+        (Box::pin(std::future::pending()), self.budget)
     }
 }
 
@@ -728,18 +742,18 @@ mod tests {
             host.set_desktop_sharing(all_grants()),
             Err(Error::StoreRecoveryRequired)
         ));
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while host.teardown_phase() == 1 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::test_support::wait_until(
+            "the blocked teardown to leave its first phase",
+            Duration::from_secs(2),
+            || host.teardown_phase() != 1,
+        );
         assert_eq!(host.teardown_phase(), 0);
         assert!(!host.endpoint_is_closed());
         assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
         host.shutdown();
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !host.endpoint_is_closed() && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::test_support::wait_until("the endpoint to close", Duration::from_secs(2), || {
+            host.endpoint_is_closed()
+        });
         assert!(host.endpoint_is_closed());
         assert_eq!(host.teardown_phase(), 2);
         assert_eq!(host.endpoint_close_count(), 2);

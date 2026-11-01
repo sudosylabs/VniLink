@@ -15,6 +15,7 @@ use vnilink::{
     Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
 };
 
+use super::wait::{wait_active, wait_until};
 use crate::error::Error;
 use crate::frame::RawFrame;
 use crate::pump::{EncodeParams, EncodedSample, VideoEncoder};
@@ -189,14 +190,6 @@ fn pair(host: &Core, controller: &Core) {
     .unwrap();
 }
 
-fn wait_active(controller: &Core, id: u64) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(id).unwrap().phase != SessionPhase::Active {
-        assert!(Instant::now() < deadline, "connection was not admitted");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 #[test]
 fn a_slow_viewer_does_not_stall_or_queue_its_sibling() {
     shared_capture_workload(false);
@@ -298,14 +291,9 @@ fn shared_capture_workload(idle: bool) {
     });
 
     if idle {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while frames.load(Ordering::Relaxed) < 3 || live_encoders.load(Ordering::Relaxed) != 2 {
-            assert!(
-                Instant::now() < deadline,
-                "idle capture did not start both encoders"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        wait_until("the idle capture to start both encoders", || {
+            frames.load(Ordering::Relaxed) >= 3 && live_encoders.load(Ordering::Relaxed) == 2
+        });
         assert!(fast_frames
             .recv_timeout(Duration::from_millis(10))
             .is_none());
@@ -315,15 +303,9 @@ fn shared_capture_workload(idle: bool) {
         assert_eq!(fast_encodes.load(Ordering::Relaxed), 0);
         assert_eq!(slow_encodes.load(Ordering::Relaxed), 0);
         slow_handle.close();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while host.video_targets().unwrap().len() != 1 || live_encoders.load(Ordering::Relaxed) != 1
-        {
-            assert!(
-                Instant::now() < deadline,
-                "idle departed encoder was not released"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        wait_until("the idle departed encoder to be released", || {
+            host.video_targets().unwrap().len() == 1 && live_encoders.load(Ordering::Relaxed) == 1
+        });
         assert_eq!(
             fast.controller_session(fast_parent.id).unwrap().phase,
             SessionPhase::Active
@@ -356,18 +338,13 @@ fn shared_capture_workload(idle: bool) {
     let slow_count = slow_encodes.load(Ordering::Relaxed);
     let fast_before = fast_encodes.load(Ordering::Relaxed);
     let read_before = frames.load(Ordering::Relaxed);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while fast_encodes.load(Ordering::Relaxed) < fast_before + 8
-        || frames.load(Ordering::Relaxed) < read_before + 8
-    {
-        assert!(
-            Instant::now() < deadline,
-            "held behind the slow encoder: fast {} encodes, reader {} frames",
-            fast_encodes.load(Ordering::Relaxed) - fast_before,
-            frames.load(Ordering::Relaxed) - read_before
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_until(
+        "the fast viewer and the reader to go on past the held encoder",
+        || {
+            fast_encodes.load(Ordering::Relaxed) >= fast_before + 8
+                && frames.load(Ordering::Relaxed) >= read_before + 8
+        },
+    );
     assert_eq!(
         slow_encodes.load(Ordering::Relaxed),
         slow_count,
@@ -377,20 +354,14 @@ fn shared_capture_workload(idle: bool) {
     slow_gate.open();
 
     slow_handle.close();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while host.video_targets().unwrap().len() != 1 {
-        assert!(Instant::now() < deadline, "slow owner did not leave");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until("the slow owner to leave", || {
+        host.video_targets().unwrap().len() == 1
+    });
     let after_close = fast_encodes.load(Ordering::Relaxed);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while fast_encodes.load(Ordering::Relaxed) <= after_close {
-        assert!(
-            Instant::now() < deadline,
-            "the remaining viewer stopped when its sibling closed"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_until(
+        "the remaining viewer to keep encoding after its sibling closed",
+        || fast_encodes.load(Ordering::Relaxed) > after_close,
+    );
     assert_eq!(host.video_targets().unwrap().len(), 1);
     assert_eq!(
         fast.controller_session(fast_parent.id).unwrap().phase,
@@ -468,21 +439,16 @@ fn twin_captures_serve_selected_and_default_targets_without_flapping() {
     let second_handle = second
         .open_desktop_service(second_owner.id, second_owner.generation)
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while first_handle.topology().ok().map(|d| d.len()) != Some(2)
-        || second_handle.topology().ok().map(|d| d.len()) != Some(2)
-    {
-        assert!(Instant::now() < deadline, "topology did not propagate");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until("the topology to reach the viewer", || {
+        first_handle.topology().ok().map(|d| d.len()) == Some(2)
+            && second_handle.topology().ok().map(|d| d.len()) == Some(2)
+    });
     // One viewer selects display 2; the other stays unselected and must
     // follow that same default rather than flapping between captures.
     first_handle.select_displays(&[2]).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while host.capture_displays().unwrap() != vec![2] {
-        assert!(Instant::now() < deadline, "selection did not propagate");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until("the selection to reach the host", || {
+        host.capture_displays().unwrap() == vec![2]
+    });
     let first_frames = first_handle.subscribe_video().unwrap();
     let second_frames = second_handle.subscribe_video().unwrap();
 
@@ -544,6 +510,7 @@ fn twin_captures_serve_selected_and_default_targets_without_flapping() {
             assert_eq!(frame.revision, 9, "{name} viewer lost its revision");
         }
     }
+    // A real timer: the window in which a further capture would have opened.
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
         opens_left.load(Ordering::Relaxed),
@@ -557,14 +524,9 @@ fn twin_captures_serve_selected_and_default_targets_without_flapping() {
 
     // The unselected viewer selects display 1 and moves to its own source.
     second_handle.select_displays(&[1]).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while host.capture_displays().unwrap() != vec![1, 2] {
-        assert!(
-            Instant::now() < deadline,
-            "second selection did not propagate"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until("the second selection to reach the host", || {
+        host.capture_displays().unwrap() == vec![1, 2]
+    });
     let deadline = Instant::now() + Duration::from_secs(5);
     let moved = loop {
         let frame = second_frames
@@ -648,17 +610,13 @@ fn pinned_capture_revision_survives_topology_advance() {
     let handle = viewer
         .open_desktop_service(owner.id, owner.generation)
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while handle.topology().ok().map(|d| d.len()) != Some(1) {
-        assert!(Instant::now() < deadline, "topology did not propagate");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until("the topology to reach the viewer", || {
+        handle.topology().ok().map(|d| d.len()) == Some(1)
+    });
     handle.select_displays(&[2]).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while host.capture_displays().unwrap() != vec![2] {
-        assert!(Instant::now() < deadline, "selection did not propagate");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_until("the selection to reach the host", || {
+        host.capture_displays().unwrap() == vec![2]
+    });
     let frames = handle.subscribe_video().unwrap();
 
     let pinned = Arc::new(AtomicU64::new(7));
@@ -870,6 +828,7 @@ fn an_unchanged_screen_is_sent_once_a_second_and_a_keyframe_still_comes() {
     // The screen is read at the frame rate; what is encoded is once a
     // second at the most, so a busy computer that stretched this wait
     // allows more.
+    // A real timer: the encode rate over a window is what is under test.
     std::thread::sleep(Duration::from_millis(600));
     let encoded = encodes.load(Ordering::Relaxed);
     let seconds = serving.elapsed().as_secs() as usize;
@@ -985,6 +944,7 @@ fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
             }
         })
     };
+    // A real timer: the refine rate over a window is what is under test.
     std::thread::sleep(Duration::from_millis(600));
     let refined = encodes.load(Ordering::Relaxed);
     assert!(
@@ -992,10 +952,12 @@ fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
         "only {refined} pictures were encoded while refining"
     );
     // Past the window: back to a picture a second.
+    // A real timer: the end of the refine window is what is under test.
     std::thread::sleep(Duration::from_millis(
         crate::pump::REFINE_FOR_US / 1_000 - 600 + 300,
     ));
     let settled = encodes.load(Ordering::Relaxed);
+    // A real timer: the encode rate after the window is what is under test.
     std::thread::sleep(Duration::from_millis(600));
     let after = encodes.load(Ordering::Relaxed);
     assert_eq!(
@@ -1078,14 +1040,9 @@ fn an_encoder_failing_mid_stream_tells_the_viewer_why() {
     frames
         .recv_timeout(Duration::from_secs(5))
         .expect("a picture before the encoder fails");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while handle.end().is_none() {
-        assert!(
-            Instant::now() < deadline,
-            "the viewer never learned why the picture stopped"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_until("the viewer to learn why the picture stopped", || {
+        handle.end().is_some()
+    });
     assert_eq!(
         handle.end(),
         Some(vnilink::DesktopEnd::Host(vnilink::StreamEnd::Failed(
@@ -1547,15 +1504,14 @@ fn a_picture_is_read_when_it_arrives_not_on_a_timer() {
         source.stamps.lock().unwrap().clear();
         source.arrivals.lock().unwrap().clear();
         for gap in irregular(period, 14) {
+            // A real timer: pictures arrive at irregular gaps.
             std::thread::sleep(gap);
             source.arrive();
         }
         // The last picture is read before the stream stops.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while source.channel.generation() != source.seen.load(Ordering::Acquire) {
-            assert!(Instant::now() < deadline, "the last picture was not read");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        wait_until("the last picture to be read", || {
+            source.channel.generation() == source.seen.load(Ordering::Acquire)
+        });
     });
     let stamps = source.stamps.lock().unwrap().clone();
     let arrivals = source.arrivals.lock().unwrap().len();
@@ -1585,6 +1541,7 @@ fn pictures_faster_than_the_frame_rate_are_read_no_faster_than_it() {
         let end = Instant::now() + Duration::from_millis(900);
         while Instant::now() < end {
             source.arrive();
+            // A real timer: pictures arrive faster than the frame rate.
             std::thread::sleep(period / 4);
         }
     });
@@ -1619,6 +1576,7 @@ fn pictures_just_above_the_frame_rate_do_not_spin_the_reader() {
         let end = Instant::now() + Duration::from_millis(900);
         while Instant::now() < end {
             source.arrive();
+            // A real timer: pictures arrive just above the frame rate.
             std::thread::sleep(period.mul_f64(0.97));
         }
     });
@@ -1638,13 +1596,9 @@ fn a_still_screen_is_kept_alive_once_a_second_without_polling_at_the_frame_rate(
         let before = encodes.load(Ordering::Relaxed);
         let started = Instant::now();
         // Two keepalives, however long a busy computer takes to make them.
-        while encodes.load(Ordering::Relaxed) < before + 2 {
-            assert!(
-                started.elapsed() < Duration::from_secs(20),
-                "a still screen was not kept alive"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_until("two keepalives of a still screen", || {
+            encodes.load(Ordering::Relaxed) >= before + 2
+        });
         still = started.elapsed();
     });
     // Measured against the time the screen actually stayed still, which a
@@ -1668,9 +1622,9 @@ fn stop_is_seen_while_waiting_for_a_picture() {
     let (_, ended) = serve_pushing(&source, |_, _, _| {
         // The reader waits on an empty channel meanwhile.
         let waits = source.waits.load(Ordering::Relaxed);
-        while source.waits.load(Ordering::Relaxed) < waits + 2 {
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        wait_until("the reader to wait twice on the empty channel", || {
+            source.waits.load(Ordering::Relaxed) >= waits + 2
+        });
     });
     // A wait that ran on until a picture would never see stop: each is
     // asked to end within a few milliseconds, and a busy computer only

@@ -38,6 +38,9 @@ pub enum Error {
     ClipboardDenied,
     #[error("file transfer is not granted")]
     TransferDenied,
+    /// The disk refused what a transfer stages or writes.
+    #[error("{}", .0.message())]
+    Disk(DiskFault),
     #[error("the file already exists")]
     FileExists,
     /// A change on a drive whose file ids are entry positions (FAT,
@@ -88,6 +91,25 @@ pub enum Error {
     NoControlRequest,
 }
 
+/// Why a disk write failed, as far as a transfer tells the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskFault {
+    /// The destination's disk is full, or its quota is used up.
+    NoSpace,
+    /// Writing failed for a reason other than space.
+    Failed,
+}
+
+impl DiskFault {
+    /// The fixed text a job and the window show.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::NoSpace => "there is not enough space for this file",
+            Self::Failed => "the file could not be staged",
+        }
+    }
+}
+
 impl Error {
     /// What failed, by name, for records (`crate::trace`): unlike its text,
     /// never a library's message, an address or a path.
@@ -106,6 +128,7 @@ impl Error {
             Self::Unauthorized => "unauthorized",
             Self::ClipboardDenied => "clipboard denied",
             Self::TransferDenied => "transfer denied",
+            Self::Disk(_) => "disk",
             Self::FileExists => "file exists",
             Self::UnprovenEntry => "unproven entry",
             Self::NoSession => "no session",
@@ -136,6 +159,7 @@ impl Error {
             | Self::InvalidInvitation(reason)
             | Self::Unsupported(reason)
             | Self::InputFailed(reason) => Some(reason),
+            Self::Disk(fault) => Some(fault.message()),
             _ => None,
         }
     }

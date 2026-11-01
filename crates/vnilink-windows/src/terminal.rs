@@ -38,12 +38,18 @@ use windows::{
         Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         System::{
             Console::{ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON},
+            JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            },
             Pipes::CreatePipe,
             Threading::{
                 CreateEventW, CreateProcessW, GetCurrentThreadId, GetExitCodeProcess,
-                InitializeProcThreadAttributeList, OpenThread, SetEvent, TerminateProcess,
-                UpdateProcThreadAttribute, WaitForMultipleObjects, WaitForSingleObject,
-                EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+                InitializeProcThreadAttributeList, OpenThread, ResumeThread, SetEvent,
+                TerminateProcess, UpdateProcThreadAttribute, WaitForMultipleObjects,
+                WaitForSingleObject, CREATE_SUSPENDED, EXTENDED_STARTUPINFO_PRESENT,
+                LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES, STARTUPINFOEXW,
                 THREAD_SYNCHRONIZE, THREAD_TERMINATE,
             },
@@ -55,6 +61,8 @@ use windows::{
 /// How often an idle writer or supervisor looks whether its terminal was closed.
 const STOP_CHECK: Duration = Duration::from_millis(20);
 /// How often closing asks a writer blocked in a write to give it up.
+/// How long a shell that refuses to be terminated is given to finish exiting.
+const EXITING: Duration = Duration::from_secs(1);
 const CANCEL_RETRY: Duration = Duration::from_millis(5);
 /// Output that follows other output this closely is a busy shell's.
 const BUSY: Duration = Duration::from_millis(2);
@@ -143,16 +151,22 @@ fn coord(size: TerminalSize) -> COORD {
         Y: size.rows as i16,
     }
 }
+/// `work` for a thread of this terminal, recording as the engine that opened it.
+fn within<T>(work: impl FnOnce() -> T) -> impl FnOnce() -> T {
+    vnilink::trace::within(tracing::Span::current(), work)
+}
 fn handle(value: &impl AsRawHandle) -> HANDLE {
     HANDLE(value.as_raw_handle())
 }
 fn pipe() -> Result<(File, File), Error> {
     let mut read = HANDLE::default();
     let mut write = HANDLE::default();
+    // SAFETY: `read` and `write` are locals the call fills in; no security attributes are
+    // passed.
     unsafe {
         CreatePipe(&mut read, &mut write, None, 0).map_err(native_error)?;
     }
-    // Successful CreatePipe transfers one independently owned handle per end.
+    // SAFETY: successful CreatePipe transfers one independently owned handle per end.
     Ok(unsafe {
         (
             File::from_raw_handle(read.0),
@@ -168,14 +182,17 @@ fn millis(value: Duration) -> u32 {
 }
 /// A manual-reset event that wakes the supervisor once a worker ends.
 fn event() -> Result<Arc<OwnedHandle>, Error> {
+    // SAFETY: `CreateEventW` takes no pointers except null ones.
     let event = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }.map_err(native_error)?;
-    // A successful CreateEventW returns a handle this process owns.
+    // SAFETY: a successful CreateEventW returns a handle this process owns.
     Ok(Arc::new(unsafe { OwnedHandle::from_raw_handle(event.0) }))
 }
 /// Signals its event when the worker holding it returns or unwinds.
 struct Finished(Arc<OwnedHandle>);
 impl Drop for Finished {
     fn drop(&mut self) {
+        // SAFETY: `self.0` is the event `event()` created, which stays open as long as this
+        // `Arc` does.
         unsafe {
             ignored_hr!(
                 vnilink::trace::TERMINAL,
@@ -186,6 +203,36 @@ impl Drop for Finished {
     }
 }
 
+/// A job whose processes all end when its last handle closes, so a shell's
+/// children do not outlive the terminal that started them.
+struct KillOnClose(OwnedHandle);
+impl KillOnClose {
+    fn new() -> Result<Self, Error> {
+        // SAFETY: `CreateJobObjectW` takes no pointers except null ones.
+        let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(native_error)?;
+        // SAFETY: a successful CreateJobObjectW returns a handle this process owns.
+        let job = unsafe { OwnedHandle::from_raw_handle(job.0) };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: `limits` is a live JOBOBJECT_EXTENDED_LIMIT_INFORMATION and the
+        // size passed is its own.
+        unsafe {
+            SetInformationJobObject(
+                handle(&job),
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                std::mem::size_of_val(&limits) as u32,
+            )
+        }
+        .map_err(native_error)?;
+        Ok(Self(job))
+    }
+    fn adopt(&self, process: &OwnedHandle) -> Result<(), Error> {
+        // SAFETY: both handles are open and owned by this process.
+        unsafe { AssignProcessToJobObject(handle(&self.0), handle(process)) }.map_err(native_error)
+    }
+}
+
 struct Attributes {
     _memory: Vec<u128>,
     list: LPPROC_THREAD_ATTRIBUTE_LIST,
@@ -193,6 +240,8 @@ struct Attributes {
 impl Attributes {
     fn new(console: HPCON) -> Result<Self, Error> {
         let mut bytes = 0;
+        // SAFETY: a null list with a null size query is how the required size is asked for;
+        // `bytes` is a local out-parameter.
         unsafe {
             // Asks only for the size: it fails with ERROR_INSUFFICIENT_BUFFER by design.
             let _sized = InitializeProcThreadAttributeList(None, 1, None, &mut bytes);
@@ -202,6 +251,9 @@ impl Attributes {
         }
         let mut memory = vec![0u128; bytes.div_ceil(std::mem::size_of::<u128>())];
         let list = LPPROC_THREAD_ATTRIBUTE_LIST(memory.as_mut_ptr().cast());
+        // SAFETY: `list` points at `memory`, zeroed and 16-byte aligned, at least as large as
+        // the size the first call reported. `memory` moves into the result without
+        // reallocating, so the list stays valid.
         unsafe {
             InitializeProcThreadAttributeList(Some(list), 1, None, &mut bytes)
                 .map_err(native_error)?;
@@ -210,6 +262,8 @@ impl Attributes {
             _memory: memory,
             list,
         };
+        // SAFETY: `list` was initialized above for one attribute. The value is the
+        // pseudoconsole handle itself, passed by value with its own size.
         unsafe {
             UpdateProcThreadAttribute(
                 list,
@@ -227,6 +281,8 @@ impl Attributes {
 }
 impl Drop for Attributes {
     fn drop(&mut self) {
+        // SAFETY: `list` was initialized in `new`, deleted once here, and `_memory` holding it
+        // is dropped after this.
         unsafe {
             windows::Win32::System::Threading::DeleteProcThreadAttributeList(self.list);
         }
@@ -242,10 +298,13 @@ impl IoWorker {
         // observed its stop flag and exited; no thread is forcibly terminated.
         if let Some(thread) = &self.thread {
             loop {
+                // SAFETY: `thread` is an open handle of the writer thread with terminate
+                // rights, which `CancelSynchronousIo` needs.
                 unsafe {
                     // Nothing pending to cancel is its usual answer between retries.
                     let _cancelled = CancelSynchronousIo(handle(thread));
                 }
+                // SAFETY: `thread` is an open handle of the writer thread, owned by this value.
                 if unsafe { WaitForSingleObject(handle(thread), millis(CANCEL_RETRY)) }
                     != WAIT_TIMEOUT
                 {
@@ -261,9 +320,12 @@ impl IoWorker {
 struct Session {
     console: Option<HPCON>,
     process: Option<OwnedHandle>,
+    jobs: Option<KillOnClose>,
     reader: Option<JoinHandle<()>>,
     gatherer: Option<JoinHandle<()>>,
     writer: Option<IoWorker>,
+    /// Wakes the writer from its wait for a command when the session ends.
+    wake: Option<std::sync::mpsc::SyncSender<TerminalCommand>>,
     stop: Arc<AtomicBool>,
     writer_stop: Arc<AtomicBool>,
     drain: Arc<AtomicBool>,
@@ -274,17 +336,36 @@ impl Session {
             self.drain.store(true, Ordering::Release);
         }
         self.writer_stop.store(true, Ordering::Release);
+        if let Some(wake) = self.wake.take() {
+            // A full queue is worked through and the flag checked before the
+            // writer waits again, so only an empty one needs the wake-up.
+            vnilink::ignored!(
+                vnilink::trace::TERMINAL,
+                "a full queue is worked through, and the flag checked, before it waits",
+                wake.try_send(TerminalCommand::Stop)
+            );
+        }
         if let Some(process) = &self.process {
+            // SAFETY: `process` is an open handle of the shell this session owns, with
+            // terminate and synchronize access from `CreateProcessW`.
             unsafe {
-                if WaitForSingleObject(handle(process), 0) != WAIT_OBJECT_0 {
-                    ignored_hr!(
-                        vnilink::trace::TERMINAL,
-                        "a shell that cannot be ended ends with its console",
-                        TerminateProcess(handle(process), 1)
-                    );
+                if WaitForSingleObject(handle(process), 0) != WAIT_OBJECT_0
+                    && TerminateProcess(handle(process), 1).is_err()
+                {
+                    // Windows refuses to terminate a process that is already
+                    // exiting; the exit is what is waited for.
+                    if WaitForSingleObject(handle(process), millis(EXITING)) != WAIT_OBJECT_0 {
+                        tracing::warn!(
+                            target: vnilink::trace::TERMINAL,
+                            "a shell that cannot be ended ends with its console"
+                        );
+                    }
                 }
             }
         }
+        // Ending the job ends the shell's children too, which a console close
+        // would otherwise wait on.
+        self.jobs.take();
         if let Some(writer) = self.writer.take() {
             writer.stop();
         }
@@ -292,6 +373,8 @@ impl Session {
         // blocks until clients disconnect. It observes external cancellation
         // while waiting for bounded output admission.
         if let Some(console) = self.console.take() {
+            // SAFETY: `console` is the pseudoconsole `open` created and is closed once, after
+            // the writer that resizes it has been joined.
             unsafe {
                 ClosePseudoConsole(console);
             }
@@ -378,7 +461,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         let (read, pieces) = std::sync::mpsc::sync_channel::<Vec<u8>>(TERMINAL_QUEUE);
         let reader = std::thread::Builder::new()
             .name("vnilink-conpty-read".into())
-            .spawn(move || {
+            .spawn(within(move || {
                 let mut read = Some(read);
                 let mut bytes = vec![0; TERMINAL_CHUNK];
                 loop {
@@ -399,18 +482,22 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                         Err(_) => break,
                     }
                 }
-            })
+            }))
             .map_err(|_| Error::Unsupported("Windows terminal reader"))?;
         let mut session = Session {
             console: None,
             process: None,
+            jobs: None,
             reader: Some(reader),
             gatherer: None,
             writer: None,
+            wake: None,
             stop: stop.clone(),
             drain: drain.clone(),
             writer_stop: writer_stop.clone(),
         };
+        // SAFETY: `input_read` and `output_write` are open pipe ends this function owns. The
+        // pseudoconsole keeps its own references, so closing them after the call is correct.
         let opened = unsafe {
             CreatePseudoConsole(coord(size), handle(&input_read), handle(&output_write), 0)
                 .map_err(native_error)
@@ -425,7 +512,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         session.gatherer = Some(
             std::thread::Builder::new()
                 .name("vnilink-conpty-output".into())
-                .spawn(move || gather(pieces, out, discarding, done))
+                .spawn(within(move || gather(pieces, out, discarding, done)))
                 .map_err(|_| Error::Unsupported("Windows terminal output"))?,
         );
         startup.check()?;
@@ -446,6 +533,10 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                 .chain(Some(0))
                 .collect();
         let mut process = PROCESS_INFORMATION::default();
+        // SAFETY: `program` and `directory` are NUL-terminated and `command` is a writable
+        // NUL-terminated buffer, all outliving the call. `info` is a `STARTUPINFOEXW` whose
+        // size is set and whose attribute list is live in `attributes`; `process` is a local
+        // out-parameter.
         unsafe {
             CreateProcessW(
                 PCWSTR(program.as_ptr()),
@@ -453,7 +544,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                 None,
                 None,
                 false,
-                EXTENDED_STARTUPINFO_PRESENT,
+                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
                 None,
                 PCWSTR(directory.as_ptr()),
                 &info.StartupInfo,
@@ -461,18 +552,33 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             )
             .map_err(native_error)?;
         }
+        // SAFETY: CreateProcessW returned owned process and thread handles.
         session.process = Some(unsafe { OwnedHandle::from_raw_handle(process.hProcess.0) });
-        drop(unsafe { OwnedHandle::from_raw_handle(process.hThread.0) });
+        // SAFETY: as above: `hThread` is an owned handle that `CreateProcessW` returned.
+        let main_thread = unsafe { OwnedHandle::from_raw_handle(process.hThread.0) };
+        // The shell runs only once it is in the job, so no child escapes it.
+        let jobs = KillOnClose::new()?;
+        jobs.adopt(session.process.as_ref().unwrap())?;
+        session.jobs = Some(jobs);
+        // SAFETY: the thread handle is open and the shell was created suspended.
+        if unsafe { ResumeThread(handle(&main_thread)) } == u32::MAX {
+            return Err(native_error(windows::core::Error::from_win32()));
+        }
+        drop(main_thread);
         startup.check()?;
         let (commands, incoming) = std::sync::mpsc::sync_channel(TERMINAL_QUEUE);
+        session.wake = Some(commands.clone());
         let (ready, acknowledgement) = std::sync::mpsc::sync_channel(1);
         let writer_quit = writer_stop.clone();
+        let core_stop = stop.clone();
         let done = Finished(finished.clone());
         let writer = std::thread::Builder::new()
             .name("vnilink-conpty-write".into())
-            .spawn(move || {
+            .spawn(within(move || {
                 let _done = done;
                 // Closing cancels this thread's writes and waits for it to end.
+                // SAFETY: `OpenThread` returns a new handle for the current thread, owned from
+                // here on.
                 let thread = unsafe {
                     OpenThread(
                         THREAD_TERMINATE | THREAD_SYNCHRONIZE,
@@ -496,8 +602,10 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                         return;
                     }
                 }
-                while !writer_quit.load(Ordering::Acquire) {
-                    match incoming.recv_timeout(STOP_CHECK) {
+                // Waits for a command; a stop is set first and sent as one.
+                while !writer_quit.load(Ordering::Acquire) && !core_stop.load(Ordering::Acquire) {
+                    match incoming.recv() {
+                        Ok(TerminalCommand::Stop) => break,
                         Ok(TerminalCommand::Input(bytes)) => {
                             if bytes.is_empty()
                                 || bytes.len() > TERMINAL_CHUNK
@@ -508,6 +616,8 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                         }
                         Ok(TerminalCommand::Resize(size)) => {
                             if size.validate().is_err()
+                                // SAFETY: `console` stays open until the writer, which is the only
+                                // caller of this, has been joined by `Session::close`.
                                 || unsafe { ResizePseudoConsole(console, coord(size)) }.is_err()
                             {
                                 break;
@@ -519,18 +629,20 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                                 columns: size.columns,
                             };
                             if size.validate().is_err()
+                                // SAFETY: as above: both resizes happen on the writer thread while
+                                // the console is open.
                                 || unsafe { ResizePseudoConsole(console, coord(temporary)) }
                                     .is_err()
+                                // SAFETY: as above.
                                 || unsafe { ResizePseudoConsole(console, coord(size)) }.is_err()
                             {
                                 break;
                             }
                         }
-                        Err(RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     }
                 }
-            })
+            }))
             .map_err(|_| Error::Unsupported("Windows terminal writer"))?;
         // The thread publishes an owned cancellation handle before any write.
         session.writer = Some(IoWorker {
@@ -547,9 +659,12 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             // The child's exit, or the writer or output ending, wakes this wait.
             let waits = [child, handle(&*finished)];
             while !session.stop.load(Ordering::Acquire) {
+                // SAFETY: `waits` holds the process handle owned by `session` and the event
+                // owned by `finished`; both outlive the wait.
                 match unsafe { WaitForMultipleObjects(&waits, false, millis(STOP_CHECK)) } {
                     WAIT_OBJECT_0 => {
                         let mut status = 0;
+                        // SAFETY: `child` is the open process handle and `status` is a local.
                         if unsafe { GetExitCodeProcess(child, &mut status) }.is_ok() {
                             code = Some(status);
                         }
@@ -577,7 +692,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         };
         std::thread::Builder::new()
             .name("vnilink-conpty".into())
-            .spawn(supervisor)
+            .spawn(within(supervisor))
             .map_err(|_| Error::Unsupported("Windows terminal supervisor"))?;
         Ok(TerminalBackend {
             process_id,
@@ -627,6 +742,8 @@ mod tests {
         bytes
     }
     fn open_process(backend: &TerminalBackend) -> OwnedHandle {
+        // SAFETY: `process_id` names the shell this backend started, and the call only requests
+        // synchronize access.
         let process = unsafe {
             windows::Win32::System::Threading::OpenProcess(
                 windows::Win32::System::Threading::PROCESS_SYNCHRONIZE,
@@ -635,6 +752,7 @@ mod tests {
             )
         }
         .unwrap();
+        // SAFETY: `OpenProcess` returned a new handle that nothing else owns.
         unsafe { OwnedHandle::from_raw_handle(process.0) }
     }
     fn cmd() -> WindowsTerminalFactory {
@@ -680,8 +798,103 @@ mod tests {
         output_until(&mut backend, "VNI_CONPTY_READY_α", Duration::from_secs(5));
         drop(backend);
         assert_eq!(
+            // SAFETY: `process` is an open handle owned by this test.
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
+        );
+    }
+    /// A shell that exits ends its terminal with its code, with nobody
+    /// closing it: the writer waiting for input does not hold the exit back.
+    #[test]
+    fn a_shell_that_exits_reports_its_code() {
+        let mut backend = cmd()
+            .open(SIZE, BackendStartup::new(Duration::from_secs(5)))
+            .unwrap();
+        backend
+            .commands
+            .send(TerminalCommand::Input(b"exit 7\r\n".to_vec()))
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let exit = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(event) = backend.output.recv().await {
+                    if let TerminalEvent::Exited(code) = event {
+                        return Some(code);
+                    }
+                }
+                None
+            })
+            .await
+        });
+        assert_eq!(exit, Ok(Some(7)));
+    }
+    /// The processes whose parent is `parent`.
+    fn children_of(parent: u32) -> Vec<u32> {
+        use windows::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        };
+        // SAFETY: the snapshot flags and process id are plain values.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.unwrap();
+        // SAFETY: the snapshot handle is owned by this test.
+        let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot.0) };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut found = Vec::new();
+        // SAFETY: `snapshot` is an open snapshot handle and `entry` has its size set.
+        let mut more = unsafe { Process32FirstW(handle(&snapshot), &mut entry) }.is_ok();
+        while more {
+            if entry.th32ParentProcessID == parent {
+                found.push(entry.th32ProcessID);
+            }
+            // SAFETY: as above: `snapshot` is still open and `entry` is the same struct.
+            more = unsafe { Process32NextW(handle(&snapshot), &mut entry) }.is_ok();
+        }
+        found
+    }
+    /// Children of a shell end with its terminal. One in a console of its own is
+    /// not the pseudoconsole's to end, so before the job it outlived the terminal.
+    #[test]
+    fn closing_a_terminal_ends_the_children_of_its_shell() {
+        let mut backend = cmd()
+            .open(SIZE, BackendStartup::new(Duration::from_secs(5)))
+            .unwrap();
+        backend
+            .commands
+            .send(TerminalCommand::Input(
+                "start \"\" /min ping -n 100 127.0.0.1\r\necho VNI_CHILD_STAR^TED\r\n"
+                    .as_bytes()
+                    .to_vec(),
+            ))
+            .unwrap();
+        output_until(&mut backend, "VNI_CHILD_STARTED", Duration::from_secs(5));
+        let child = children_of(backend.process_id)
+            .into_iter()
+            .next()
+            .expect("the shell started a child");
+        // SAFETY: the id is that of a child found in the snapshot, and only synchronize access
+        // is requested.
+        let child = unsafe {
+            windows::Win32::System::Threading::OpenProcess(
+                windows::Win32::System::Threading::PROCESS_SYNCHRONIZE,
+                false,
+                child,
+            )
+        }
+        .unwrap();
+        // SAFETY: the handle is owned by this test.
+        let child = unsafe { OwnedHandle::from_raw_handle(child.0) };
+        drop(backend);
+        assert_eq!(
+            // SAFETY: `child` is an open handle owned by this test.
+            unsafe { WaitForSingleObject(handle(&child), 5000) },
+            WAIT_OBJECT_0,
+            "the shell's child outlived its terminal"
         );
     }
     /// A shell flooding output nobody reads holds the full queue; closing
@@ -703,12 +916,14 @@ mod tests {
         output_until(&mut backend, "VNI_FLOOD_1", Duration::from_secs(5));
         // Nothing reads further: the queue fills behind the shell.
         assert_eq!(
+            // SAFETY: `process` is an open handle owned by this test.
             unsafe { WaitForSingleObject(handle(&process), 500) },
             WAIT_TIMEOUT
         );
         let closed = Instant::now();
         drop(backend);
         assert_eq!(
+            // SAFETY: `process` is an open handle owned by this test.
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
         );

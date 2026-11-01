@@ -23,15 +23,18 @@
 //!    [`Core::confirm_pairing`] saves the writer (identity, hostname,
 //!    operating system, addresses) when the typed digits match the writer's
 //!    screen. That alone does not let it connect to the writer.
-//! 3. It calls [`Core::begin_connect_services`] and shows
-//!    [`Core::control_check`]. The writer's host sees an unpaired Hello. If
-//!    the window is open, unexpired and allows approval, the Hello parks in
-//!    `wait_for_control_approval` and [`crate::CoreEvent::ControlRequested`]
-//!    carries the same digits. Otherwise the Hello is refused at once with
-//!    [`Error::Unauthorized`].
-//! 4. The writer's owner types the digits into
-//!    [`Core::confirm_control_request`], which remembers that authenticated
-//!    endpoint and consumes the window. A mismatch, a rejection, a closed
+//! 3. It calls [`Core::begin_connect_services`]. The writer's host sees an
+//!    unpaired Hello. If the window is open, unexpired, allows approval and
+//!    has shown fewer than [`MAX_CONTROL_REQUESTS`] requests, the Hello
+//!    parks in `wait_for_control_approval`, the host publishes
+//!    [`crate::CoreEvent::ControlRequested`] without digits and answers
+//!    `AwaitingApproval`; the controller derives the digits from that
+//!    connection and shows them ([`crate::CoreEvent::ControlCheck`]).
+//!    Otherwise the Hello is refused at once with [`Error::Unauthorized`].
+//! 4. The writer's owner types the controller's digits into
+//!    [`Core::confirm_control_request`], which compares them here, remembers
+//!    that authenticated endpoint and consumes the window. The
+//!    [`MAX_CONTROL_FAILURES`]th wrong answer closes the window. A mismatch, a rejection, a closed
 //!    connection, a stop or the `CONTROL_APPROVAL_WAIT` timeout answers the
 //!    parked Hello with a refusal and remembers nothing; only one request can
 //!    wait at a time and a second is refused as [`Error::Busy`]. An approval
@@ -65,9 +68,9 @@ impl Core {
     pub fn create_invitation(&self, ttl: Duration) -> Result<String, Error> {
         let _engine = self.engine();
         self.ensure_alive()?;
-        let relays = self.shared.relay.relay_urls()?;
+        let relays = dialable_relays(&self.shared.relay, &self.shared.endpoint.addr())?;
         let direct = direct_addresses(&self.shared.endpoint);
-        let (token, _) = invitation::issue(
+        let (token, ..) = invitation::issue(
             &self.shared.secret,
             &relays,
             &direct,
@@ -110,9 +113,9 @@ impl Core {
         now: SystemTime,
     ) -> Result<PairingFile, Error> {
         self.ensure_alive()?;
-        let relays = self.shared.relay.relay_urls()?;
+        let relays = dialable_relays(&self.shared.relay, &self.shared.endpoint.addr())?;
         let direct = direct_addresses(&self.shared.endpoint);
-        let (token, invitation) = invitation::issue(
+        let (token, invitation, nonce) = invitation::issue(
             &self.shared.secret,
             &relays,
             &direct,
@@ -120,15 +123,11 @@ impl Core {
             now,
             self.shared.local_hostname(),
         )?;
-        let (_, nonce) = invitation::open(&token, now)?;
         let bytes = crate::pairing::enclose(&token)?;
         let check =
             crate::pairing::file_digits(&invitation.endpoint_id, &nonce, invitation.expires_at_ms);
         let mut state = self.alive_state()?;
-        state.pairing_window = Some(PairingWindow {
-            expires_at_ms: invitation.expires_at_ms,
-            allow_control,
-        });
+        state.pairing_window = Some(PairingWindow::new(invitation.expires_at_ms, allow_control));
         tracing::info!(
             target: crate::trace::PAIRING,
             ttl_s = ttl.as_secs(),
@@ -187,14 +186,6 @@ impl Core {
         self.accept_invitation(&preview.token)
     }
 
-    /// Three digits this computer shows while it is the controller.
-    ///
-    /// The host sees the same digits on [`CoreEvent::ControlRequested`].
-    pub fn control_check(&self) -> String {
-        let _engine = self.engine();
-        crate::pairing::control_digits(&self.local_endpoint_id())
-    }
-
     /// The authenticated peer waiting for this host to remember its identity.
     pub fn control_request(&self) -> Result<Option<ControlRequest>, Error> {
         let _engine = self.engine();
@@ -204,7 +195,6 @@ impl Core {
             .as_ref()
             .map(|pending| ControlRequest {
                 endpoint_id: pending.display_id.clone(),
-                check: pending.check.clone(),
             }))
     }
 
@@ -296,10 +286,15 @@ impl Core {
             // The writer named itself in the invitation: keep it for this
             // computer's device list, before the first session. An absent
             // name keeps whatever a previous pairing stored.
-            state.trust.set_os(&opened.endpoint_id, opened.os)?;
+            if let Err(error) = state.trust.set_os(&opened.endpoint_id, opened.os) {
+                state.replay = previous_replay;
+                state.trust = previous_trust;
+                return Err(error);
+            }
             if let Some(name) = opened.hostname.clone() {
                 if let Err(error) = state.trust.set_hostname(&opened.endpoint_id, name) {
                     state.replay = previous_replay;
+                    state.trust = previous_trust;
                     return Err(error);
                 }
             }
@@ -341,7 +336,20 @@ impl Core {
             .control_request
             .take()
             .ok_or(Error::NoControlRequest)?;
-        if check != pending.check {
+        if !crate::pairing::same_check(&pending.check, check) {
+            // Wrong digits spend the window: a peer that keeps asking cannot
+            // keep guessing.
+            if state
+                .pairing_window
+                .as_mut()
+                .is_some_and(PairingWindow::spend_failure)
+            {
+                state.pairing_window = None;
+                tracing::info!(
+                    target: crate::trace::PAIRING,
+                    "pairing window closed after wrong digits"
+                );
+            }
             crate::ignored!(
                 crate::trace::PAIRING,
                 "the asking computer stopped waiting for the answer",
@@ -454,6 +462,7 @@ fn persist_paired(
 pub(super) async fn wait_for_control_approval(
     shared: &Shared,
     connection: &iroh::endpoint::Connection,
+    send: &mut iroh::endpoint::SendStream,
     peer: EndpointId,
     stop_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) -> ControlAnswer {
@@ -473,20 +482,30 @@ pub(super) async fn wait_for_control_approval(
         let window_open = state
             .pairing_window
             .as_ref()
-            .is_some_and(|window| window.allow_control && now_ms < window.expires_at_ms);
+            .is_some_and(|window| window.admits_control(now_ms));
         if !window_open {
             if state
                 .pairing_window
                 .as_ref()
-                .is_some_and(|window| now_ms >= window.expires_at_ms)
+                .is_some_and(|window| window.expired(now_ms))
             {
                 state.pairing_window = None;
             }
             return ControlAnswer::Rejected(Error::Unauthorized);
         }
+        let Some(secret) = crate::pairing::control_secret(
+            connection,
+            peer.as_bytes(),
+            shared.secret.public().as_bytes(),
+        ) else {
+            return ControlAnswer::Rejected(Error::Unauthorized);
+        };
+        if let Some(window) = state.pairing_window.as_mut() {
+            window.count_request();
+        }
         let id = state.next_control_request;
         state.next_control_request = state.next_control_request.saturating_add(1);
-        let check = crate::pairing::control_digits(peer.as_bytes());
+        let check = crate::pairing::control_digits(&secret);
         let (sender, receiver) = tokio::sync::oneshot::channel();
         state.control_request = Some(PendingControl {
             id,
@@ -499,10 +518,24 @@ pub(super) async fn wait_for_control_approval(
         });
         shared.events.publish(CoreEvent::ControlRequested {
             endpoint_id: peer.to_string(),
-            check,
         });
         (id, receiver)
     };
+    // The controller shows its digits once it hears the request is parked.
+    if super::wire::write_frame(send, &crate::protocol::ControlMessage::AwaitingApproval)
+        .await
+        .is_err()
+    {
+        let mut state = lock(&shared.state);
+        if state
+            .control_request
+            .as_ref()
+            .is_some_and(|pending| pending.id == id)
+        {
+            state.control_request = None;
+        }
+        return ControlAnswer::Rejected(Error::Unauthorized);
+    }
     let approved = tokio::select! {
         decision = receiver => decision.unwrap_or(false),
         _ = tokio::time::sleep(CONTROL_APPROVAL_WAIT) => false,

@@ -20,7 +20,7 @@ const maxInvitationSize = 65_536;
 const requestPollInterval = 500;
 
 /** Digits in a pairing confirmation code. */
-const codePattern = /^[0-9]{3}$/;
+const codePattern = /^[0-9]{6}$/;
 
 const idle: PairingStep = { kind: 'idle' };
 
@@ -41,6 +41,13 @@ export class DevicePairingService extends Disposable implements IDevicePairingSe
 
 	constructor(@IDeviceService private readonly devices: IDeviceService) {
 		super();
+		// The digits belong to the connection, so they arrive once the host is waiting.
+		this._register(this.devices.onDidReceiveControlCheck(({ endpointId, check }) => {
+			const step = this.current.step;
+			if (step.kind === 'reverseCode' && step.endpointId === endpointId) {
+				this.set({ kind: 'reverseCode', code: check, endpointId });
+			}
+		}));
 		this._register(this.devices.onDidChangeDevices(known => {
 			const step = this.current.step;
 			if (step.kind === 'reverseCode' && known.some(device => device.id === step.endpointId && device.presence === 'connected')) {
@@ -84,7 +91,7 @@ export class DevicePairingService extends Disposable implements IDevicePairingSe
 
 	public submitCode(digits: string): Promise<void> {
 		if (!codePattern.test(digits)) {
-			this.setMessage(nls.localize('devices.codeFormat', 'Enter the three digits shown on the other computer.'));
+			this.setMessage(nls.localize('devices.codeFormat', 'Enter the six digits shown on the other computer.'));
 			return Promise.resolve();
 		}
 		const step = this.current.step;
@@ -92,12 +99,11 @@ export class DevicePairingService extends Disposable implements IDevicePairingSe
 			const preview = this.preview;
 			return this.run(async revision => {
 				const endpointId = await this.devices.pair(preview, digits);
-				const code = await this.devices.pairingCheck();
 				if (!this.isCurrent(revision)) {
 					return;
 				}
 				this.preview = undefined;
-				this.set({ kind: 'reverseCode', code, endpointId });
+				this.set({ kind: 'reverseCode', code: null, endpointId });
 				await this.devices.connect(endpointId);
 			});
 		}

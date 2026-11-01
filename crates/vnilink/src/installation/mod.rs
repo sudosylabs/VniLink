@@ -34,13 +34,11 @@ pub struct MemoryStore {
 
 struct MemoryInner {
     record: Option<Vec<u8>>,
-    load_fault: Option<StoreFault>,
+    #[cfg(any(test, feature = "test-probes"))]
     save_fault: Option<StoreFault>,
-    save_attempts: usize,
-    #[cfg(test)]
-    panic_on_save: bool,
 }
 
+#[cfg(any(test, feature = "test-probes"))]
 #[derive(Clone, Copy)]
 enum StoreFault {
     Locked,
@@ -48,6 +46,7 @@ enum StoreFault {
     RecoveryRequired,
 }
 
+#[cfg(any(test, feature = "test-probes"))]
 impl From<StoreFault> for Error {
     fn from(fault: StoreFault) -> Self {
         match fault {
@@ -76,31 +75,10 @@ impl MemoryStore {
         Self {
             inner: std::sync::Arc::new(std::sync::Mutex::new(MemoryInner {
                 record: None,
-                load_fault: None,
+                #[cfg(any(test, feature = "test-probes"))]
                 save_fault: None,
-                save_attempts: 0,
-                #[cfg(test)]
-                panic_on_save: false,
             })),
         }
-    }
-
-    pub(crate) fn containing(bytes: Vec<u8>) -> Self {
-        let store = Self::empty();
-        lock(&store).record = Some(bytes);
-        store
-    }
-
-    pub(crate) fn locked() -> Self {
-        let store = Self::empty();
-        lock(&store).load_fault = Some(StoreFault::Locked);
-        store
-    }
-
-    pub(crate) fn unavailable() -> Self {
-        let store = Self::empty();
-        lock(&store).load_fault = Some(StoreFault::Unavailable);
-        store
     }
 
     /// The next [`InstallationStore::save`] returns `error` once.
@@ -115,40 +93,20 @@ impl MemoryStore {
         lock(self).save_fault = Some(fault);
     }
 
-    /// The next save panics once, before it replaces the record.
     #[cfg(test)]
-    pub(crate) fn panic_next_save(&self) {
-        lock(self).panic_on_save = true;
-    }
-
     pub(crate) fn record(&self) -> Option<Vec<u8>> {
         lock(self).record.clone()
-    }
-
-    /// Saves attempted since this store was created, including injected failures.
-    #[cfg(test)]
-    pub(crate) fn save_attempts(&self) -> usize {
-        lock(self).save_attempts
     }
 }
 
 impl InstallationStore for MemoryStore {
     fn load(&self) -> Result<Option<Vec<u8>>, Error> {
-        let inner = lock(self);
-        if let Some(fault) = inner.load_fault {
-            return Err(fault.into());
-        }
-        Ok(inner.record.clone())
+        Ok(lock(self).record.clone())
     }
 
     fn save(&self, record: &[u8]) -> Result<(), Error> {
         let mut inner = lock(self);
-        inner.save_attempts = inner.save_attempts.saturating_add(1);
-        #[cfg(test)]
-        if inner.panic_on_save {
-            inner.panic_on_save = false;
-            panic!("installation store test panic");
-        }
+        #[cfg(any(test, feature = "test-probes"))]
         if let Some(fault) = inner.save_fault.take() {
             return Err(fault.into());
         }
@@ -157,7 +115,7 @@ impl InstallationStore for MemoryStore {
     }
 }
 
-pub(crate) use record::{decode, encode};
+pub(crate) use record::{decode, encode, Policies};
 
 #[cfg(test)]
 pub(crate) use record::checksum;
@@ -217,11 +175,13 @@ mod tests {
             &RelaySettings::public_n0(),
             &record_trust,
             &crate::invitation::ReplayCache::new(),
-            &crate::terminal::TerminalPolicy::default(),
-            &crate::job::FileRetentionPolicy::default(),
-            &crate::power::PowerPolicy::default(),
-            &crate::job::FileResourcePolicy::default(),
-            &crate::system::SystemPolicy::default(),
+            Policies {
+                terminal: &crate::terminal::TerminalPolicy::default(),
+                file_retention: &crate::job::FileRetentionPolicy::default(),
+                power: &crate::power::PowerPolicy::default(),
+                file_resource: &crate::job::FileResourcePolicy::default(),
+                system: &crate::system::SystemPolicy::default(),
+            },
         )
         .unwrap();
         assert_eq!(bytes[4], 1);

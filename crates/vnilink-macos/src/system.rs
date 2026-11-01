@@ -33,6 +33,7 @@ type LockScreen = unsafe extern "C" fn() -> std::ffi::c_int;
 /// The system's lock entry point, if this macOS has it.
 fn lock_screen() -> Option<LockScreen> {
     static LOCK: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    // SAFETY: `LOGIN_FRAMEWORK` and `LOCK_SYMBOL` are NUL-terminated and outlive the calls; `dlsym` is only given the handle `dlopen` just returned, checked non-null. The handle is deliberately never closed so the looked-up address stays valid for the process.
     let address = LOCK.get_or_init(|| unsafe {
         let handle = dlopen(LOGIN_FRAMEWORK.as_ptr(), RTLD_LAZY);
         if handle.is_null() {
@@ -65,6 +66,7 @@ impl HostSystemActions for MacSystemActions {
     fn lock_workstation(&self) -> Result<(), Error> {
         let lock = lock_screen().ok_or(Error::Unsupported("workstation lock is not available"))?;
         // The login window performs the transition; the call returns at once.
+        // SAFETY: `lock` was resolved from `SACLockScreenImmediate`, which takes no arguments and may be called from any thread.
         unsafe { lock() };
         Ok(())
     }

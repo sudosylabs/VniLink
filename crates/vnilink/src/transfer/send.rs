@@ -15,6 +15,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use iroh::endpoint::{RecvStream, SendStream, VarInt};
 
+use super::codec::{self, BLOCK, MODE_RAW, MODE_ZSTD};
 use super::hash::{segment_len, SegmentHasher, SEGMENT_LEN};
 use super::wire::{
     FileRequest, REQUEST_LEN, RESET_CHANGED, STATUS_DENIED, STATUS_SENDING, VALUE_LEN,
@@ -60,7 +61,13 @@ pub(crate) async fn refuse(send: &mut SendStream, status: u8) {
 
 /// What the reader hands the network, in order.
 enum Piece {
-    Bytes(Bytes),
+    /// How the bytes of the segment that follow are framed (`codec`).
+    Mode(u8),
+    /// Bytes of the stream, standing for `plain` bytes of the file.
+    Bytes {
+        wire: Bytes,
+        plain: usize,
+    },
     /// A segment's chaining value, after its bytes.
     Value([u8; VALUE_LEN]),
     /// Every segment was sent.
@@ -100,25 +107,32 @@ pub(crate) async fn send(
     let (pieces, mut arriving) = tokio::sync::mpsc::channel(READ_AHEAD);
     let reader = tokio::task::spawn_blocking(move || read_source(source, offset, held, pieces));
     let mut sent: u64 = 0;
+    let mut compressed: u64 = 0;
     let mut position = offset + held;
     let mut ended = "the reader stopped";
     while let Some(piece) = arriving.recv().await {
         match piece {
-            Piece::Bytes(bytes) => {
-                let len = bytes.len();
+            Piece::Mode(mode) => {
+                if send.write_all(&[mode]).await.is_err() {
+                    ended = "the receiver left";
+                    break;
+                }
+                compressed += u64::from(mode == MODE_ZSTD);
+            }
+            Piece::Bytes { wire, plain } => {
                 // No deadline on a write: on a slow link a write waits while
                 // the stream's window drains, for longer than any fixed time.
                 // A receiver that stops reading stops the stream itself, and
                 // a peer that is gone ends the connection.
-                if send.write_chunk(bytes).await.is_err() {
+                if send.write_chunk(wire).await.is_err() {
                     ended = "the receiver left";
                     break;
                 }
-                counters.sent(len);
-                position += len as u64;
+                counters.sent(plain);
+                position += plain as u64;
                 sent_to(position, false);
                 sent += 1;
-                if sent % RECHECK_EVERY == 0 && !may_send() {
+                if sent.is_multiple_of(RECHECK_EVERY) && !may_send() {
                     crate::ignored!(
                         crate::trace::FILES,
                         "a stream that cannot be reset is closed with its link",
@@ -174,6 +188,7 @@ pub(crate) async fn send(
         size,
         from = offset + held,
         sent = position.saturating_sub(offset + held),
+        compressed = (compressed > 0).then_some(compressed),
         took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ended,
         "file served"
@@ -183,7 +198,9 @@ pub(crate) async fn send(
 /// Whether `offset` is a segment boundary of a `size`-byte file and `held`
 /// bytes fit in the segment there.
 fn holds_within_segment(offset: u64, held: u64, size: u64) -> bool {
-    offset <= size && offset % SEGMENT_LEN == 0 && held <= segment_len(offset, size, SEGMENT_LEN)
+    offset <= size
+        && offset.is_multiple_of(SEGMENT_LEN)
+        && held <= segment_len(offset, size, SEGMENT_LEN)
 }
 
 /// Reads the held source from `offset` to its end once, segment by
@@ -209,14 +226,20 @@ fn read_source(
             size == source.size && (source.mtime_ms == 0 || mtime_ms == source.mtime_ms)
         })
     };
+    let sent_from = offset + held;
     let mut start = offset;
     while start < source.size {
         let end = start + segment_len(start, source.size, SEGMENT_LEN);
         let mut hasher = SegmentHasher::at(start);
         let mut at = start;
+        // Chosen with the first block of the segment that is sent.
+        let mut mode = None;
         while at < end {
-            let mut chunk = vec![0u8; CHUNK.min((end - at) as usize)];
-            if let Err(error) = source.file.read_exact(&mut chunk) {
+            // A read never straddles the held bytes: they are only hashed.
+            let held_block = at < sent_from;
+            let limit = if held_block { sent_from.min(end) } else { end };
+            let mut block = vec![0u8; BLOCK.min((limit - at) as usize)];
+            if let Err(error) = source.file.read_exact(&mut block) {
                 let piece = if error.kind() == std::io::ErrorKind::UnexpectedEof {
                     Piece::Changed
                 } else {
@@ -229,16 +252,12 @@ fn read_source(
                 );
                 return;
             }
-            hasher.update(&chunk);
-            let unsent = (offset + held).saturating_sub(at).min(chunk.len() as u64) as usize;
-            at += chunk.len() as u64;
-            if unsent == chunk.len() {
+            hasher.update(&block);
+            at += block.len() as u64;
+            if held_block {
                 continue;
             }
-            let mut bytes = Bytes::from(chunk);
-            // The receiver holds the first `unsent` bytes already.
-            drop(bytes.split_to(unsent));
-            if pieces.blocking_send(Piece::Bytes(bytes)).is_err() {
+            if !send_block(&pieces, &mut mode, block) {
                 return;
             }
         }
@@ -270,6 +289,55 @@ fn read_source(
     );
 }
 
+/// Hands on one block of the segment being read, as its mode asks; the
+/// first block of a segment sets that mode. False when the sender left or
+/// the block could not be framed.
+fn send_block(
+    pieces: &tokio::sync::mpsc::Sender<Piece>,
+    mode: &mut Option<u8>,
+    block: Vec<u8>,
+) -> bool {
+    let plain = block.len();
+    let first = mode.is_none();
+    let framed = match *mode {
+        None => codec::probe(&block).inspect(|frame| {
+            *mode = Some(if frame.is_some() { MODE_ZSTD } else { MODE_RAW });
+        }),
+        Some(MODE_ZSTD) => codec::encode(&block).map(Some),
+        Some(_) => Ok(None),
+    };
+    let framed = match framed {
+        Ok(framed) => framed,
+        Err(error) => {
+            tracing::warn!(target: crate::trace::FILES, %error, "a block could not be compressed");
+            crate::ignored!(
+                crate::trace::FILES,
+                "a sender that left needs no piece",
+                pieces.blocking_send(Piece::Failed)
+            );
+            return false;
+        }
+    };
+    if let (true, Some(mode)) = (first, *mode) {
+        if pieces.blocking_send(Piece::Mode(mode)).is_err() {
+            return false;
+        }
+    }
+    if let Some(frame) = framed {
+        let wire = Bytes::from(frame);
+        return pieces.blocking_send(Piece::Bytes { wire, plain }).is_ok();
+    }
+    let mut bytes = Bytes::from(block);
+    while !bytes.is_empty() {
+        let wire = bytes.split_to(CHUNK.min(bytes.len()));
+        let plain = wire.len();
+        if pieces.blocking_send(Piece::Bytes { wire, plain }).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Size and modification time of an open file, in manifest units.
 fn held_identity(file: &std::fs::File) -> Option<(u64, u64)> {
     let meta = file.metadata().ok()?;
@@ -284,6 +352,7 @@ fn held_identity(file: &std::fs::File) -> Option<(u64, u64)> {
 
 #[cfg(all(test, not(windows)))]
 mod tests {
+    use super::super::codec::Blocks;
     use super::*;
 
     fn scratch(tag: &str, bytes: &[u8]) -> (std::path::PathBuf, std::fs::File) {
@@ -307,6 +376,52 @@ mod tests {
         std::iter::from_fn(|| arriving.try_recv().ok()).collect()
     }
 
+    /// What a receiver makes of a segment's stream bytes: its mode and the
+    /// `plain_len` bytes of the file they carry.
+    fn decoded(mode: u8, wire: &[u8], plain_len: usize) -> Vec<u8> {
+        if mode == MODE_RAW {
+            return wire.to_vec();
+        }
+        let mut blocks = Blocks::default();
+        let (mut plain, mut rest) = (Vec::new(), wire);
+        while plain.len() < plain_len {
+            let (taken, block) = blocks
+                .take(rest, BLOCK.min(plain_len - plain.len()))
+                .unwrap();
+            plain.extend_from_slice(block.expect("a whole frame"));
+            rest = &rest[taken..];
+        }
+        assert!(rest.is_empty(), "the frames end with the segment");
+        plain
+    }
+
+    /// The segments of `pieces` as (mode, wire bytes, plain bytes, value),
+    /// and whether the stream ended.
+    #[allow(clippy::type_complexity)]
+    fn segments_of(pieces: Vec<Piece>) -> (Vec<(Option<u8>, Vec<u8>, usize, [u8; 32])>, bool) {
+        let (mut segments, mut ended) = (Vec::new(), false);
+        let (mut mode, mut wire, mut plain) = (None, Vec::new(), 0);
+        for piece in pieces {
+            match piece {
+                Piece::Mode(chosen) => mode = Some(chosen),
+                Piece::Bytes {
+                    wire: bytes,
+                    plain: len,
+                } => {
+                    wire.extend_from_slice(&bytes);
+                    plain += len;
+                }
+                Piece::Value(value) => {
+                    segments.push((mode.take(), std::mem::take(&mut wire), plain, value));
+                    plain = 0;
+                }
+                Piece::End => ended = true,
+                Piece::Changed | Piece::Failed => panic!("the source is unchanged"),
+            }
+        }
+        (segments, ended)
+    }
+
     /// Segments start at the offset, each followed by its own value, and
     /// their values compose into the BLAKE3 hash of the whole file.
     #[test]
@@ -322,27 +437,20 @@ mod tests {
                 size: whole.len() as u64,
                 mtime_ms,
             };
-            let mut sent = Vec::new();
-            let mut segment = Vec::new();
-            let mut ended = false;
-            for piece in pieces_of(source, offset) {
-                match piece {
-                    Piece::Bytes(bytes) => segment.extend_from_slice(&bytes),
-                    Piece::Value(value) => {
-                        let start = offset as usize + sent.len();
-                        let mut hasher = SegmentHasher::at(start as u64);
-                        hasher.update(&segment);
-                        assert_eq!(hasher.finalize(), value);
-                        if offset == 0 {
-                            values.push(value);
-                        }
-                        sent.append(&mut segment);
-                    }
-                    Piece::End => ended = true,
-                    Piece::Changed | Piece::Failed => panic!("the source is unchanged"),
-                }
-            }
+            let (segments, ended) = segments_of(pieces_of(source, offset));
             assert!(ended);
+            let mut sent = Vec::new();
+            for (mode, wire, plain, value) in segments {
+                let start = offset as usize + sent.len();
+                let segment = decoded(mode.expect("bytes have a mode"), &wire, plain);
+                let mut hasher = SegmentHasher::at(start as u64);
+                hasher.update(&segment);
+                assert_eq!(hasher.finalize(), value);
+                if offset == 0 {
+                    values.push(value);
+                }
+                sent.extend_from_slice(&segment);
+            }
             assert_eq!(sent, whole[offset as usize..]);
         }
         assert_eq!(
@@ -375,14 +483,15 @@ mod tests {
         };
         assert!(matches!(
             pieces_of(source, 0).as_slice(),
-            [Piece::Bytes(_), Piece::Changed]
+            [Piece::Mode(_), Piece::Bytes { .. }, Piece::Changed]
         ));
         let _ = std::fs::remove_file(path);
     }
 
     /// Held bytes are read for the segment's value but not sent: the rest
     /// of the segment follows, then the value of the whole segment, then
-    /// the next segment. A whole segment held sends its value alone.
+    /// the next segment. A whole segment held sends its value alone, with
+    /// no mode. The held bytes need not end on a block.
     #[test]
     fn held_bytes_count_toward_the_value_but_are_not_sent() {
         let seg = SEGMENT_LEN as usize;
@@ -391,26 +500,53 @@ mod tests {
         let mut first = SegmentHasher::at(0);
         first.update(&whole[..seg]);
         let first = first.finalize();
-        for held in [1, CHUNK as u64 + 5, SEGMENT_LEN] {
+        for held in [1, CHUNK as u64 + 5, BLOCK as u64 + 3, SEGMENT_LEN] {
             let source = Source {
                 file: file.try_clone().unwrap(),
                 size: whole.len() as u64,
                 mtime_ms: 0,
             };
-            let mut sent = Vec::new();
-            let mut values = Vec::new();
-            for piece in held_pieces_of(source, 0, held) {
-                match piece {
-                    Piece::Bytes(bytes) => sent.extend_from_slice(&bytes),
-                    Piece::Value(value) => values.push(value),
-                    Piece::End => {}
-                    Piece::Changed | Piece::Failed => panic!("the source is unchanged"),
-                }
+            let (segments, _) = segments_of(held_pieces_of(source, 0, held));
+            assert_eq!(segments.len(), 2);
+            let (mode, wire, plain, value) = &segments[0];
+            assert_eq!(*value, first, "held {held}");
+            if held == SEGMENT_LEN {
+                assert!(mode.is_none() && wire.is_empty(), "held {held}");
+            } else {
+                assert_eq!(
+                    decoded(mode.unwrap(), wire, *plain),
+                    whole[held as usize..seg],
+                    "held {held}"
+                );
             }
-            assert_eq!(sent, whole[held as usize..], "held {held}");
-            assert_eq!(values.len(), 2);
-            assert_eq!(values[0], first, "held {held}");
         }
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Text goes as compressed blocks, much smaller than the file; noise
+    /// goes raw, and a segment decides for itself.
+    #[test]
+    fn a_segment_goes_compressed_only_when_it_shrinks() {
+        let seg = SEGMENT_LEN as usize;
+        let mut whole = vec![0u8; seg];
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        whole.extend((0..seg).map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        }));
+        let (path, file) = scratch("modes", &whole);
+        let source = Source {
+            file,
+            size: whole.len() as u64,
+            mtime_ms: 0,
+        };
+        let (segments, _) = segments_of(pieces_of(source, 0));
+        let modes: Vec<_> = segments.iter().map(|segment| segment.0).collect();
+        assert_eq!(modes, [Some(MODE_ZSTD), Some(MODE_RAW)]);
+        assert!(segments[0].1.len() < seg / 100, "zeroes shrink");
+        assert_eq!(segments[1].1.len(), seg, "noise is sent as it is");
         let _ = std::fs::remove_file(path);
     }
 
@@ -437,7 +573,12 @@ mod tests {
         };
         assert!(matches!(
             pieces_of(source, 0).as_slice(),
-            [Piece::Bytes(_), Piece::Value(_), Piece::End]
+            [
+                Piece::Mode(_),
+                Piece::Bytes { .. },
+                Piece::Value(_),
+                Piece::End
+            ]
         ));
         let _ = std::fs::remove_file(path);
     }

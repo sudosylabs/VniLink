@@ -70,7 +70,7 @@ impl KeyframeRequests {
     }
 }
 
-fn patience(rtt: Duration, frame: Duration) -> Duration {
+pub(super) fn patience(rtt: Duration, frame: Duration) -> Duration {
     (rtt + frame * 2).clamp(MIN_PATIENCE, MAX_PATIENCE)
 }
 

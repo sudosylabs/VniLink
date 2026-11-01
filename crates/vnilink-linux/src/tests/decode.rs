@@ -313,10 +313,7 @@ fn idr_consumes_frame_num_and_intra_cabac_has_no_init_field() {
         let mut nal = vec![0x65];
         nal.extend_from_slice(&fields.payload());
         let slice = Slice::parse(&nal, &sps, &pps, true, 3).unwrap();
-        assert_eq!(
-            (slice.frame_num, slice.idr_pic_id, slice.poc_lsb),
-            (0, 3, 6)
-        );
+        assert_eq!((slice.frame_num, slice.poc_lsb), (0, 6));
         assert_eq!((slice.cabac_init, slice.qp_delta), (0, -2));
         assert_eq!(
             (slice.deblocking_idc, slice.alpha_offset, slice.beta_offset),

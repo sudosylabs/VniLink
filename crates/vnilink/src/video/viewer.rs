@@ -17,6 +17,7 @@
 
 use std::time::{Duration, Instant};
 
+use super::recovery::patience;
 use super::{
     EncodedFrame, FragmentCounts, FrameRole, KeyframeFlag, KeyframeRequests, Reassembler,
     Unfinished, VideoInbox, VideoPush,
@@ -96,8 +97,9 @@ impl ViewerPictures {
         }
     }
 
-    /// One datagram arrived at `now`. A frame given up asks nothing: the
-    /// picture after it says whether a stream picture is missing.
+    /// One datagram arrived at `now`. A frame given up here asks nothing:
+    /// the picture after it says whether a stream picture is missing. One
+    /// that nothing follows is [`Self::give_up_quiet`]'s.
     pub(crate) fn datagram(&mut self, fragment: &[u8], now: Instant) -> Arrival {
         let body = self.reassembler.push_at(fragment, now);
         Arrival {
@@ -105,6 +107,32 @@ impl ViewerPictures {
             fragments: self.reassembler.take_fragments(),
             unfinished: self.reassembler.take_unfinished(),
         }
+    }
+
+    /// How long a frame may go without a fragment before the viewer gives it
+    /// up and asks for what it needs: well past the jitter of a path, long
+    /// before the reassembler's own half second.
+    fn silence(rtt: Duration, frame: Duration) -> Duration {
+        (patience(rtt, frame) * 2).min(Reassembler::SILENCE)
+    }
+
+    /// Gives up the frames that went quiet and, when the newest of them
+    /// left no later picture to show it missing, wants a keyframe: a screen
+    /// that then holds still would otherwise show the old picture until
+    /// its next change, and that change would arrive undecodable. A still
+    /// is taken for a stream picture and asks the same.
+    pub(crate) fn give_up_quiet(&mut self, now: Instant, rtt: Duration, frame: Duration) {
+        if self
+            .reassembler
+            .expire_after(now, Self::silence(rtt, frame))
+        {
+            self.requests.want();
+        }
+    }
+
+    /// When the frame quiet longest will be given up, if one is incomplete.
+    pub(crate) fn quiet_at(&self, rtt: Duration, frame: Duration) -> Option<Instant> {
+        self.reassembler.quiet_at(Self::silence(rtt, frame))
     }
 
     /// Picture `sequence` arrived, by datagrams or on the stream. After a
@@ -122,19 +150,25 @@ impl ViewerPictures {
         // A still picture is not the stream's keyframe: it answers no request.
         let still = frame.role == FrameRole::Still;
         let order = self.sequence.check(sequence, still);
+        let keyframe = frame.keyframe && !still;
         match order {
             Order::Stale => return order,
+            // A keyframe is its own repair for the pictures before it.
             Order::Gap(_) => {
                 inbox.lost();
-                wanted.request();
+                if !keyframe {
+                    wanted.request();
+                }
             }
             Order::Next => {}
         }
-        let keyframe = frame.keyframe && !still;
         if matches!(inbox.push(frame), VideoPush::KeyframeNeeded) {
             wanted.request();
         }
         if keyframe {
+            // Losses raised before it, which the send loop has not yet
+            // taken, are answered by it as well.
+            wanted.take();
             self.requests.keyframe_arrived();
         }
         order

@@ -136,6 +136,8 @@ impl IMFAsyncCallback_Impl for Callback_Impl {
         // completed with.
         let event = unsafe { self.generator.EndGetEvent(result.as_ref()) };
         let kind = match &event {
+            // SAFETY: `event` is the event `EndGetEvent` returned, so both getters read an
+            // object this callback owns.
             Ok(event) => match unsafe { (event.GetType(), event.GetStatus()) } {
                 (_, Ok(status)) if status.is_err() => Event::Ended,
                 (Ok(kind), _) if kind == METransformNeedInput.0 as u32 => Event::NeedInput,

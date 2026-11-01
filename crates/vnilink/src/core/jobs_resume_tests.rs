@@ -60,6 +60,7 @@ fn drive_to_end(
             break;
         }
         if (&last_sender, &last_receiver) == (&before.0, &before.1) {
+            // A real timer: the pause between the polls that drive both jobs.
             std::thread::sleep(Duration::from_millis(1));
         }
     }

@@ -119,7 +119,7 @@ fn scale(
                 let mut guard = source
                     .lock_read_write()
                     .map_err(|_| "a writable IOSurface")?;
-                // Only this lock maps the surface's bytes.
+                // SAFETY: only this lock maps the surface's bytes, and `source` is not shared until the lock is released.
                 let bytes = unsafe { guard.as_slice_mut() }.ok_or("the IOSurface's bytes")?;
                 for (offset, byte) in bytes.iter_mut().enumerate() {
                     *byte = (offset as u8).wrapping_mul(31).wrapping_add(index * 17);

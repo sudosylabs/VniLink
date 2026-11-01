@@ -221,7 +221,7 @@ class PairingPopoverContent extends Disposable {
 		this.changeFile.textContent = nls.localize('devices.changeInvitation', 'Change…');
 		this.digits = this._register(new CodeInput(this.field, {
 			...defaultCodeInputStyles,
-			length: 3,
+			length: 6,
 			label: nls.localize('devices.enterCode', 'Code shown on the other computer'),
 			digitLabel: (position, length) => nls.localize('devices.codeDigit', 'Digit {0} of {1}', position, length),
 		}));
@@ -319,7 +319,7 @@ class PairingPopoverContent extends Disposable {
 				return {
 					progress: [2, 2],
 					heading: nls.localize('devices.approveTitle', 'Approve this computer'),
-					help: nls.localize('devices.approveHelp', 'Ask the other person for the three digits on their screen before pairing.'),
+					help: nls.localize('devices.approveHelp', 'Ask the other person for the six digits on their screen before pairing.'),
 					askCode: true,
 					primary: submit(busy ? nls.localize('devices.approving', 'Approving…') : nls.localize('devices.approve', 'Approve')),
 					secondary: { label: nls.localize('devices.reject', 'Reject'), run: () => void this.pairing.reject() },
@@ -328,7 +328,7 @@ class PairingPopoverContent extends Disposable {
 				return {
 					progress: [2, 3],
 					heading: nls.localize('devices.enterCodeTitle', 'Enter their code'),
-					help: nls.localize('devices.importHelp', 'Ask the person who created this invitation for the three digits shown on their screen.'),
+					help: nls.localize('devices.importHelp', 'Ask the person who created this invitation for the six digits shown on their screen.'),
 					fileName: shown.fileName,
 					askCode: true,
 					acceptsFile: true,
@@ -339,8 +339,10 @@ class PairingPopoverContent extends Disposable {
 					progress: [3, 3],
 					heading: nls.localize('devices.reverseTitle', 'Confirm on the other computer'),
 					help: nls.localize('devices.reverseCheck', 'Read these digits to the other person so they can approve this computer.'),
-					code: shown.code,
-					waiting: nls.localize('devices.waitingApproval', 'Waiting for them to approve this computer…'),
+					code: shown.code ?? undefined,
+					waiting: shown.code === null
+						? nls.localize('devices.waitingDigits', 'Connecting to the other computer…')
+						: nls.localize('devices.waitingApproval', 'Waiting for them to approve this computer…'),
 					primary: { ...done, label: nls.localize('devices.close', 'Close') },
 				};
 			case 'paired':

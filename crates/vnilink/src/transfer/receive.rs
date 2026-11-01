@@ -14,11 +14,12 @@ use iroh::endpoint::{Connection, ReadError, ReadExactError, RecvStream, VarInt};
 
 use crate::error::Error;
 
+use super::codec::{Blocks, BLOCK, MODE_RAW, MODE_ZSTD};
 use super::wire::{
     FileRequest, RESET_CHANGED, RESET_STALLED, STATUS_BUSY, STATUS_CHANGED, STATUS_SENDING,
     VALUE_LEN,
 };
-use super::{Partial, TransferCounters, CHUNK, STALL_WITHIN};
+use super::{Partial, TransferCounters, RECEIVE_BUFFER, STALL_WITHIN};
 
 /// How long the sender may take to answer a request. Short in tests,
 /// which hold a sender back.
@@ -162,13 +163,17 @@ async fn receive_stream(
     };
     tokio::pin!(stopped);
     let mut incoming = Incoming::after(partial);
+    // One buffer for the whole stream: a read gathers every packet that
+    // arrived since the last, so a write, a hash update and a progress
+    // report cover many packets, not one.
+    let mut buffer = vec![0u8; RECEIVE_BUFFER];
     loop {
-        let chunk = tokio::select! {
+        let read = tokio::select! {
             biased;
             _ = &mut stopped => return Ok(Received::Cancelled),
-            chunk = tokio::time::timeout(STALL_WITHIN, recv.read_chunk(CHUNK)) => chunk,
+            read = tokio::time::timeout(STALL_WITHIN, recv.read(&mut buffer)) => read,
         };
-        let Ok(chunk) = chunk else {
+        let Ok(read) = read else {
             crate::ignored!(
                 crate::trace::FILES,
                 "a stalled stream that cannot be stopped is closed with its link",
@@ -176,15 +181,15 @@ async fn receive_stream(
             );
             return Ok(Received::Stalled);
         };
-        let bytes = match chunk {
-            Ok(Some(bytes)) => bytes,
+        let len = match read {
+            Ok(Some(len)) => len,
             Ok(None) => break,
             Err(ReadError::Reset(code)) if code == VarInt::from_u32(RESET_CHANGED) => {
                 return Ok(Received::Changed);
             }
             Err(error) => return Err(Error::network(error)),
         };
-        if !incoming.feed(partial, &bytes, progress, counters)? {
+        if !incoming.feed(partial, &buffer[..len], progress, counters)? {
             return Ok(Received::Mismatch);
         }
     }
@@ -199,6 +204,10 @@ async fn receive_stream(
 struct Incoming {
     /// The value of the segment just written, while it arrives.
     value: Option<Vec<u8>>,
+    /// How the segment arriving is framed, once its mode byte has.
+    mode: Option<u8>,
+    /// The compressed blocks of the segment arriving.
+    blocks: Blocks,
 }
 
 impl Incoming {
@@ -208,11 +217,14 @@ impl Incoming {
         let whole = partial.held() > 0 && partial.segment_left() == 0;
         Self {
             value: whole.then(|| Vec::with_capacity(VALUE_LEN)),
+            mode: None,
+            blocks: Blocks::default(),
         }
     }
 
-    /// Takes the next bytes of the stream. False when a segment failed its
-    /// check; an error when the bytes cannot be part of the file.
+    /// Takes the next bytes of the stream and reports how far the partial
+    /// reached once for all of them. False when a segment failed its check;
+    /// an error when the bytes cannot be part of the file.
     fn feed(
         &mut self,
         partial: &mut Partial,
@@ -220,6 +232,7 @@ impl Incoming {
         progress: &std::sync::mpsc::Sender<u64>,
         counters: &TransferCounters,
     ) -> Result<bool, Error> {
+        let written = partial.written();
         while !bytes.is_empty() {
             if let Some(pending) = self.value.as_mut() {
                 let take = bytes.len().min(VALUE_LEN - pending.len());
@@ -232,6 +245,7 @@ impl Incoming {
                         return Ok(false);
                     }
                     self.value = None;
+                    self.mode = None;
                 }
                 continue;
             }
@@ -240,18 +254,39 @@ impl Incoming {
                 // Bytes past the file's end.
                 return Err(Error::Malformed);
             }
-            let take = bytes.len().min(left as usize);
-            partial.append(&bytes[..take])?;
-            counters.received(take);
+            let Some(mode) = self.mode else {
+                if bytes[0] != MODE_RAW && bytes[0] != MODE_ZSTD {
+                    return Err(Error::Malformed);
+                }
+                self.mode = Some(bytes[0]);
+                bytes = &bytes[1..];
+                continue;
+            };
+            let before = partial.written();
+            let take = if mode == MODE_RAW {
+                let take = bytes.len().min(left as usize);
+                partial.append(&bytes[..take])?;
+                take
+            } else {
+                let plain_len = BLOCK.min(left as usize);
+                let (take, block) = self.blocks.take(bytes, plain_len)?;
+                if let Some(block) = block {
+                    partial.append(block)?;
+                }
+                take
+            };
+            counters.received((partial.written() - before) as usize);
             bytes = &bytes[take..];
+            if partial.segment_left() == 0 {
+                self.value = Some(Vec::with_capacity(VALUE_LEN));
+            }
+        }
+        if partial.written() > written {
             crate::ignored!(
                 crate::trace::FILES,
                 "progress nobody watches is not needed",
                 progress.send(partial.written())
             );
-            if partial.segment_left() == 0 {
-                self.value = Some(Vec::with_capacity(VALUE_LEN));
-            }
         }
         Ok(true)
     }
@@ -266,17 +301,27 @@ impl Incoming {
 }
 
 /// What an honest sender sends for `bytes` cut into segments of
-/// `segment`: each segment, then its chaining value.
+/// `segment`: each segment, then its chaining value. `squeezed` sends the
+/// segments as compressed blocks, whether or not they shrink.
 #[cfg(any(test, feature = "fuzzing"))]
-pub(crate) fn stream_of(bytes: &[u8], segment: u64) -> Vec<u8> {
+pub(crate) fn stream_of(bytes: &[u8], segment: u64, squeezed: bool) -> Vec<u8> {
     let size = bytes.len() as u64;
     let mut stream = Vec::new();
     let mut start = 0;
     while start < size {
         let end = start + super::hash::segment_len(start, size, segment);
         let mut hasher = super::hash::SegmentHasher::at(start);
-        hasher.update(&bytes[start as usize..end as usize]);
-        stream.extend_from_slice(&bytes[start as usize..end as usize]);
+        let body = &bytes[start as usize..end as usize];
+        hasher.update(body);
+        if squeezed {
+            stream.push(MODE_ZSTD);
+            for block in body.chunks(BLOCK) {
+                stream.extend_from_slice(&super::codec::encode(block).expect("a block compresses"));
+            }
+        } else {
+            stream.push(MODE_RAW);
+            stream.extend_from_slice(body);
+        }
         stream.extend_from_slice(&hasher.finalize());
         start = end;
     }
@@ -327,7 +372,7 @@ mod tests {
     use iroh::{Endpoint, RelayMode};
 
     use super::super::hash::SegmentHasher;
-    use super::super::wire::{FILES_ALPN, STATUS_DENIED};
+    use super::super::wire::FILES_ALPN;
     use super::*;
 
     async fn endpoint() -> Endpoint {
@@ -420,7 +465,7 @@ mod tests {
             send.write_all(&[STATUS_SENDING]).await.unwrap();
             script(send).await;
             // Keep the connection until the receiver is done with it.
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            std::future::pending::<()>().await;
         });
         let request = FileRequest {
             job: 1,
@@ -451,8 +496,10 @@ mod tests {
         let sent = bytes.clone();
         let (received, _) =
             receive_from(&scratch, bytes.len() as u64, move |mut send| async move {
+                send.write_all(&[MODE_RAW]).await.unwrap();
                 send.write_all(&sent).await.unwrap();
                 send.write_all(&value[..7]).await.unwrap();
+                // A real timer: the gap that splits the value across two reads.
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 send.write_all(&value[7..]).await.unwrap();
                 send.finish().unwrap();
@@ -466,6 +513,7 @@ mod tests {
     async fn a_wrong_value_drops_the_segment() {
         let scratch = Scratch::new("wrong");
         let (received, partial) = receive_from(&scratch, 4, |mut send| async move {
+            send.write_all(&[MODE_RAW]).await.unwrap();
             send.write_all(b"abcd").await.unwrap();
             send.write_all(&value_of(b"abce")).await.unwrap();
             send.finish().unwrap();
@@ -480,6 +528,7 @@ mod tests {
     async fn bytes_past_the_end_are_malformed() {
         let scratch = Scratch::new("extra");
         let (received, _) = receive_from(&scratch, 4, |mut send| async move {
+            send.write_all(&[MODE_RAW]).await.unwrap();
             send.write_all(b"abcd").await.unwrap();
             send.write_all(&value_of(b"abcd")).await.unwrap();
             send.write_all(b"more").await.unwrap();
@@ -493,6 +542,7 @@ mod tests {
     async fn a_stream_that_ends_early_is_an_error() {
         let scratch = Scratch::new("short");
         let (received, partial) = receive_from(&scratch, 8, |mut send| async move {
+            send.write_all(&[MODE_RAW]).await.unwrap();
             send.write_all(b"abcd").await.unwrap();
             send.finish().unwrap();
         })
@@ -505,6 +555,7 @@ mod tests {
     async fn a_changed_source_is_reported() {
         let scratch = Scratch::new("changed");
         let (received, _) = receive_from(&scratch, 8, |mut send| async move {
+            send.write_all(&[MODE_RAW]).await.unwrap();
             send.write_all(b"abcd").await.unwrap();
             send.reset(VarInt::from_u32(RESET_CHANGED)).unwrap();
         })
@@ -516,8 +567,10 @@ mod tests {
     async fn a_silent_sender_is_stalled() {
         let scratch = Scratch::new("stalled");
         let (received, partial, took) = receive_timed(&scratch, 8, |mut send| async move {
+            send.write_all(&[MODE_RAW]).await.unwrap();
             send.write_all(b"abcd").await.unwrap();
-            tokio::time::sleep(Duration::from_secs(4)).await;
+            // The sender goes silent and keeps its stream open.
+            std::future::pending::<()>().await;
         })
         .await;
         assert_eq!(received.unwrap(), Received::Stalled);
@@ -608,7 +661,6 @@ mod tests {
         assert!(summary.segments_checked >= 1);
         assert_eq!(scratch.data(), bytes);
         assert_eq!(arrived.try_iter().last(), Some(size));
-        let _ = STATUS_DENIED;
     }
 
     /// A file whose last attempt ended mid-segment continues from the bytes
@@ -657,7 +709,11 @@ mod tests {
         const SEGMENT_LEN: u64 = 64 * 1024;
 
         fn stream_of(bytes: &[u8]) -> Vec<u8> {
-            super::super::stream_of(bytes, SEGMENT_LEN)
+            super::super::stream_of(bytes, SEGMENT_LEN, false)
+        }
+
+        fn squeezed_stream_of(bytes: &[u8]) -> Vec<u8> {
+            super::super::stream_of(bytes, SEGMENT_LEN, true)
         }
 
         /// Feeds `stream` to a fresh partial in random chunks. Ok(true) when
@@ -708,6 +764,63 @@ mod tests {
                 if !bytes.is_empty() {
                     assert_eq!(scratch.data(), bytes);
                 }
+            }
+        }
+
+        #[test]
+        fn any_chunking_lands_a_compressed_file_whole() {
+            let scratch = Scratch::new("squeezed");
+            let mut rng = StdRng::seed_from_u64(0x2e0);
+            for _ in 0..32 {
+                let mut bytes = file(&mut rng);
+                // Runs, so the blocks are not stored.
+                for run in bytes.chunks_mut(97) {
+                    run.fill(run[0]);
+                }
+                let stream = squeezed_stream_of(&bytes);
+                assert!(land(&scratch, bytes.len() as u64, &stream, &mut rng).unwrap());
+                if !bytes.is_empty() {
+                    assert_eq!(scratch.data(), bytes);
+                }
+            }
+        }
+
+        /// A changed compressed stream may decode to the same bytes, and
+        /// then lands as the file; it never lands as another.
+        #[test]
+        fn a_changed_byte_of_a_compressed_stream_never_lands_as_another_file() {
+            let scratch = Scratch::new("squeezed-flipped");
+            let mut rng = StdRng::seed_from_u64(0xf12);
+            for _ in 0..128 {
+                let mut bytes = file(&mut rng);
+                for run in bytes.chunks_mut(97) {
+                    run.fill(run[0]);
+                }
+                if bytes.is_empty() {
+                    continue;
+                }
+                let mut stream = squeezed_stream_of(&bytes);
+                let at = rng.random_range(0..stream.len());
+                stream[at] ^= 1 << rng.random_range(0..8);
+                if let Ok(true) = land(&scratch, bytes.len() as u64, &stream, &mut rng) {
+                    assert_eq!(scratch.data(), bytes, "byte {at} changed the file");
+                }
+            }
+        }
+
+        #[test]
+        fn a_cut_compressed_stream_never_lands() {
+            let scratch = Scratch::new("squeezed-cut");
+            let mut rng = StdRng::seed_from_u64(0xc08);
+            for _ in 0..64 {
+                let bytes = file(&mut rng);
+                let stream = squeezed_stream_of(&bytes);
+                if stream.is_empty() {
+                    continue;
+                }
+                let cut = rng.random_range(0..stream.len());
+                let landed = land(&scratch, bytes.len() as u64, &stream[..cut], &mut rng);
+                assert!(landed.is_err(), "cut at {cut} of {} landed", stream.len());
             }
         }
 

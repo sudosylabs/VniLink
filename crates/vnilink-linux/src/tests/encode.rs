@@ -5,7 +5,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-use vnilink_media::{parse_annex_b, Error, VideoEncoder};
+use vnilink_media::Error;
+#[cfg(target_os = "linux")]
+use vnilink_media::{parse_annex_b, VideoEncoder};
 
 use crate::encode::LinuxEncoder;
 

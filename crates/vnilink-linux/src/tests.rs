@@ -12,6 +12,7 @@ mod encode_tests;
 #[cfg(target_os = "linux")]
 #[path = "tests/gpu_picture.rs"]
 mod gpu_picture_tests;
+#[cfg(unix)]
 #[path = "tests/gpu.rs"]
 mod gpu_tests;
 #[path = "tests/grant.rs"]

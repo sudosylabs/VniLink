@@ -156,6 +156,7 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
     let set_error = |message: Option<String>| {
         *error.lock().unwrap_or_else(|e| e.into_inner()) = message;
     };
+    let mut backoff = crate::backoff::Backoff::default();
     while !stop.load(Ordering::Acquire) {
         if core.video_targets().unwrap_or_default().is_empty() {
             std::thread::sleep(Duration::from_millis(100));
@@ -168,7 +169,7 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
             Err(vnilink::Error::ShutDown) => break,
             Err(failure) => {
                 set_error(Some(failure.to_string()));
-                std::thread::sleep(Duration::from_millis(200));
+                backoff.wait(stop);
                 continue;
             }
         };
@@ -213,10 +214,22 @@ fn serve(core: &Arc<Core>, stop: &Arc<AtomicBool>, error: &Mutex<Option<String>>
             );
         }
         if result.is_err() && !stop.load(Ordering::Acquire) && !startup.is_cancelled() {
-            if secure != Some(true) {
-                set_error(Some("Screen sharing stopped. Try connecting again.".into()));
+            if secure == Some(true) {
+                // Not a failing source: the user's desktop returns when the
+                // screen unlocks, and the capture should follow at once.
+                backoff.reset();
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
             }
-            std::thread::sleep(Duration::from_millis(200));
+            set_error(Some("Screen sharing stopped. Try connecting again.".into()));
+            // A run that served is not a failing source: only runs that end
+            // at once lengthen the wait.
+            if opened_at.elapsed() >= Duration::from_secs(1) {
+                backoff.reset();
+            }
+            backoff.wait(stop);
+        } else {
+            backoff.reset();
         }
     }
 }
@@ -297,12 +310,7 @@ mod tests {
             .unwrap();
         host.set_desktop_sharing(true, false, false, false).unwrap();
         let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
-        let until = Instant::now() + Duration::from_secs(10);
-        while viewer.controller_session(parent.id).unwrap().phase != crate::FfiSessionPhase::Active
-        {
-            assert!(Instant::now() < until, "the viewer did not connect");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::session_active(&viewer, parent.id);
         let parent = viewer.controller_session(parent.id).unwrap();
         let owner = viewer
             .attach_controller_service(parent.id, parent.generation, crate::FfiServiceKind::Desktop)

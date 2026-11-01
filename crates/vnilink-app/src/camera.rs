@@ -45,7 +45,6 @@ impl From<vnilink::camera::CameraConfig> for FfiCameraConfig {
 }
 /// Called on background workers. Capture/OS consent belongs to the native
 /// provider; do not call Core inside these callbacks. Open returns a fresh source.
-
 pub trait CameraProvider: Send + Sync {
     fn devices(&self) -> Result<Vec<FfiCameraDevice>, FfiError>;
     fn start_capture(

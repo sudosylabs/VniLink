@@ -196,7 +196,7 @@ pub fn jpeg_size(jpeg: &[u8]) -> Option<(u16, u16)> {
         if len < 2 || index + len > jpeg.len() {
             return None;
         }
-        if matches!(marker, 0xc0 | 0xc1 | 0xc2) {
+        if matches!(marker, 0xc0..=0xc2) {
             if len < 7 {
                 return None;
             }

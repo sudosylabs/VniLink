@@ -47,6 +47,7 @@ use vnilink::{
     RemoteFilesService, ServiceKind, SessionInfo, SessionPhase,
 };
 
+use super::wait::wait_active;
 use crate::error::Error;
 use crate::frame::RawFrame;
 use crate::pump::{EncodeParams, EncodedSample, VideoEncoder};
@@ -390,9 +391,11 @@ fn impair(stream: &Stream, started: Instant) -> Vec<(Instant, Instant)> {
     (0..stream.bursts)
         .map(|burst| {
             let due = started + stream.warmup + spacing * burst;
+            // A real timer: the link is blacked out on a schedule.
             std::thread::sleep(due.saturating_duration_since(Instant::now()));
             let began = Instant::now();
             run_hook(start);
+            // A real timer: the length of the blackout is what is under test.
             std::thread::sleep(stream.burst);
             run_hook(end);
             (began, Instant::now())
@@ -460,6 +463,7 @@ fn sample_timeline(
                     .unwrap_or_default(),
             }));
         }
+        // A real timer: the measurement samples the link on a cadence.
         std::thread::sleep(SAMPLE_EVERY);
     }
     samples
@@ -548,14 +552,6 @@ fn percentile(sorted: &[f64], fraction: f64) -> Option<f64> {
 
 fn millis(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
-}
-
-fn wait_active(controller: &Core, id: u64) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while controller.controller_session(id).unwrap().phase != SessionPhase::Active {
-        assert!(Instant::now() < deadline, "connection was not admitted");
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }
 
 /// A fixture directory below `VNILINK_IMPAIRED_SCRATCH`, removed on drop.
@@ -720,6 +716,7 @@ fn drive_transfer(
             scope.spawn(move || {
                 while !stop.load(Ordering::Acquire) {
                     let idle = core.drive_jobs().map_or(true, |jobs| jobs.is_empty());
+                    // A real timer: the job driver paces itself as a real one does.
                     std::thread::sleep(if idle {
                         pause.max(Duration::from_millis(1))
                     } else {
@@ -747,6 +744,7 @@ fn drive_transfer(
                 }));
                 next_sample += Duration::from_secs(1);
             }
+            // A real timer: the transfer is sampled once per interval.
             std::thread::sleep(Duration::from_millis(20));
         }
         let ended = ended.unwrap_or_else(Instant::now);

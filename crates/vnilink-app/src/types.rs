@@ -249,7 +249,6 @@ pub struct FfiPairingPreview {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FfiControlRequest {
     pub endpoint_id: String,
-    pub check: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -548,6 +547,9 @@ pub enum FfiEvent {
     },
     ControlRequested {
         endpoint_id: String,
+    },
+    ControlCheck {
+        endpoint_id: String,
         check: String,
     },
     AddressesUpdated {
@@ -729,7 +731,6 @@ pub(crate) fn pairing_preview(id: u64, preview: &vnilink::PairingPreview) -> Ffi
 pub(crate) fn control_request(request: vnilink::ControlRequest) -> FfiControlRequest {
     FfiControlRequest {
         endpoint_id: request.endpoint_id,
-        check: request.check,
     }
 }
 
@@ -811,8 +812,11 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
         vnilink::CoreEvent::DeviceUnpaired { endpoint_id } => {
             FfiEvent::DeviceUnpaired { endpoint_id }
         }
-        vnilink::CoreEvent::ControlRequested { endpoint_id, check } => {
-            FfiEvent::ControlRequested { endpoint_id, check }
+        vnilink::CoreEvent::ControlRequested { endpoint_id } => {
+            FfiEvent::ControlRequested { endpoint_id }
+        }
+        vnilink::CoreEvent::ControlCheck { endpoint_id, check } => {
+            FfiEvent::ControlCheck { endpoint_id, check }
         }
         vnilink::CoreEvent::AddressesUpdated { endpoint_id } => {
             FfiEvent::AddressesUpdated { endpoint_id }
@@ -998,7 +1002,7 @@ mod bridge_serialization_tests {
         let preview = FfiPairingPreview {
             id: u64::MAX,
             endpoint_id: "peer".into(),
-            check: "123".into(),
+            check: "123456".into(),
             expires_at_ms: u64::MAX,
         };
         let value = serde_json::to_value(preview).unwrap();

@@ -13,7 +13,7 @@ use expect_test::expect;
 use std::sync::Arc;
 
 use vnilink::{CursorImage, CursorState, ServiceKind, SessionPhase};
-use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture};
+use vnilink_testkit::desktop::{delta, keyframe, next_picture, InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 use super::streams::SCREEN;
@@ -99,6 +99,40 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() -> TestRes
     "#]],
         || trace.story(&["service", "stream"]),
     );
+    Ok(())
+}
+
+/// The stream carries one picture after another well past what the host
+/// lets go unacknowledged at once: the viewer says which it has received,
+/// and the host keeps writing.
+#[test]
+fn neutral_desktop_stream_fallback_keeps_flowing_past_the_unacknowledged_limit() -> TestResult {
+    let _trace = traced();
+    let pair = Pair::for_desktop();
+    let host = &pair.host.core;
+    host.set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
+    let connection = pair.connect_services();
+    let desktop = pair.controller.open_desktop(&connection)?;
+    let remote = pair
+        .host
+        .hosted_for(ServiceKind::Desktop, &pair.controller)
+        .ok_or("the host serves the Desktop")?;
+    host.force_desktop_stream(remote.id, remote.generation)?;
+    let video = desktop.subscribe_video()?;
+    host.publish_desktop_video(remote.id, remote.generation, keyframe(0, vec![1; 2000]))?;
+    next_picture(&video, "the keyframe");
+    for number in 1..=100u64 {
+        host.publish_desktop_video(
+            remote.id,
+            remote.generation,
+            delta(number * 16_000, vec![number as u8; 2000]),
+        )?;
+        assert_eq!(
+            next_picture(&video, "the next picture").timestamp_us,
+            number * 16_000,
+            "picture {number} arrives in order on the stream"
+        );
+    }
     Ok(())
 }
 

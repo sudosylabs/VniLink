@@ -199,6 +199,13 @@ pub(super) async fn bind_endpoint(
     Ok(endpoint)
 }
 
+/// Incoming connections that have not yet shown they are anything: the
+/// handshake and the wait for a first stream. Past this a new connection is
+/// refused before its handshake costs anything.
+pub(super) const MAX_UNADMITTED: usize = 64;
+/// How long a connection may stay open without sending its first stream.
+const FIRST_STREAM_WITHIN: Duration = Duration::from_secs(10);
+
 pub(super) async fn accept_loop(shared: Arc<Shared>) {
     loop {
         if lock(&shared.state).shut_down {
@@ -208,6 +215,10 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
         let Some(incoming) = incoming else {
             break;
         };
+        let Ok(unadmitted) = shared.unadmitted.clone().try_acquire_owned() else {
+            incoming.refuse();
+            continue;
+        };
         let shared = Arc::clone(&shared);
         tokio::spawn(async move {
             match incoming.await {
@@ -216,13 +227,16 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
                     // Only a `test-probes` build has the agent's protocol.
                     #[cfg(feature = "test-probes")]
                     if super::agent::is_agent_connection(&connection) {
+                        drop(unadmitted);
                         super::agent::serve_agent_connection(shared, connection).await;
                         return;
                     }
                     if is_files_connection(&connection) {
+                        // Trust is checked before the first stream is awaited.
+                        drop(unadmitted);
                         serve_files_connection(shared, connection).await;
                     } else {
-                        host_connection(shared, connection).await;
+                        host_connection(shared, connection, unadmitted).await;
                     }
                 }
                 Err(error) => {
@@ -233,7 +247,14 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
     }
 }
 
-pub(super) async fn host_connection(shared: Arc<Shared>, connection: iroh::endpoint::Connection) {
+/// `unadmitted` is released when the first stream arrives or the wait for it
+/// ends.
+pub(super) async fn host_connection(
+    shared: Arc<Shared>,
+    connection: iroh::endpoint::Connection,
+    unadmitted: tokio::sync::OwnedSemaphorePermit,
+) {
+    let mut unadmitted = Some(unadmitted);
     let peer = connection.remote_id();
     let (stop, mut stop_rx) = tokio::sync::watch::channel(false);
     let mut owned_session = None;
@@ -247,16 +268,16 @@ pub(super) async fn host_connection(shared: Arc<Shared>, connection: iroh::endpo
                     break;
                 }
             }
-            incoming = connection.accept_bi() => {
-                let Ok((send, recv)) = incoming else {
+            incoming = tokio::time::timeout(FIRST_STREAM_WITHIN, connection.accept_bi()) => {
+                drop(unadmitted.take());
+                let Ok(Ok((send, recv))) = incoming else {
                     break;
                 };
                 match handle_host_request(
                     &shared,
                     &connection,
                     peer,
-                    send,
-                    recv,
+                    (send, recv),
                     &stop,
                     &mut stop_rx,
                     &mut owned_session,
@@ -318,8 +339,7 @@ pub(super) async fn handle_host_request(
     shared: &Arc<Shared>,
     connection: &iroh::endpoint::Connection,
     peer: EndpointId,
-    mut send: iroh::endpoint::SendStream,
-    mut recv: iroh::endpoint::RecvStream,
+    (mut send, mut recv): (iroh::endpoint::SendStream, iroh::endpoint::RecvStream),
     stop: &tokio::sync::watch::Sender<bool>,
     stop_rx: &mut tokio::sync::watch::Receiver<bool>,
     owned_session: &mut Option<u64>,
@@ -356,7 +376,9 @@ pub(super) async fn handle_host_request(
                 Err(Error::Unauthorized | Error::NotPaired)
                     if lock(&shared.state).trust.get(peer.as_bytes()).is_none() =>
                 {
-                    match wait_for_control_approval(shared, connection, peer, stop_rx).await {
+                    match wait_for_control_approval(shared, connection, &mut send, peer, stop_rx)
+                        .await
+                    {
                         ControlAnswer::Approved => admission(&lock(&shared.state), peer, version),
                         ControlAnswer::Rejected(error) => Err(error),
                     }
@@ -375,18 +397,8 @@ pub(super) async fn handle_host_request(
                 Ok(()) => {
                     // Admission counts live sessions: one Hello passes the
                     // checks and registers before the next is decided.
-                    let _gate = shared.session_gate.lock().await;
-                    let decision = admission(&lock(&shared.state), peer, version);
-                    if let Err(error) = decision {
-                        crate::ignored!(
-                            crate::trace::SESSION,
-                            "the peer may be gone before it hears why",
-                            write_frame(&mut send, &ControlMessage::Reject(error_code(&error)))
-                                .await
-                        );
-                        return HostTurn::PeerShouldClose;
-                    }
-                    match register_incoming(shared, peer, stop) {
+                    let gate = shared.session_gate.lock().await;
+                    match register_incoming(shared, peer, version, stop) {
                         Ok(info) => {
                             *owned_session = Some(info.id);
                             remember_link(shared, info.id, connection.clone());
@@ -394,7 +406,7 @@ pub(super) async fn handle_host_request(
                             // concurrent peer's Hello is not serialized behind
                             // this session's lifetime. Everything below runs
                             // per connection without shared admission state.
-                            drop(_gate);
+                            drop(gate);
                             // The peer is admitted: keep its display name for
                             // this host's device list. Persist failures stay
                             // local; the next dial refreshes the name.
@@ -480,6 +492,9 @@ pub(super) async fn handle_host_request(
                             }
                         }
                         Err(error) => {
+                            // A refusal registered nothing, so the gate is not
+                            // held while the reject is written.
+                            drop(gate);
                             crate::ignored!(
                                 crate::trace::SESSION,
                                 "the peer may be gone before it hears why",
@@ -507,15 +522,20 @@ pub(super) async fn handle_host_request(
     }
 }
 
+/// Admits and registers the peer's session under one hold of the state lock,
+/// so hosting, pairing and capacity cannot change between the decision and
+/// the record that `stop_hosting` and `unpair` look for.
 pub(super) fn register_incoming(
     shared: &Shared,
     peer: EndpointId,
+    version: u16,
     stop: &tokio::sync::watch::Sender<bool>,
 ) -> Result<SessionInfo, Error> {
     let mut state = lock(&shared.state);
     if state.shut_down {
         return Err(Error::ShutDown);
     }
+    admission(&state, peer, version)?;
     // Finished records are retained for status reads; drop them here so the
     // map holds only live sessions plus the latest finished one per id.
     state.incoming.retain(|_, s| !finished(&s.phase));
@@ -553,6 +573,7 @@ pub(super) fn register_incoming(
             stop: stop.clone(),
             link: None,
             remote_availability: None,
+            changed: tokio::sync::watch::channel(()).0,
         },
     );
     drop(state);
@@ -649,6 +670,20 @@ mod tests {
             let received = recv.read_to_end(PAYLOAD).await.unwrap();
             assert_eq!(received.len(), PAYLOAD);
         });
+    }
+
+    /// The admission decision and the session record are one step: an engine
+    /// that is not hosting registers nothing, so `stop_hosting` has no later
+    /// session to miss.
+    #[test]
+    fn a_peer_is_registered_only_while_hosting() {
+        let core = crate::test_support::loopback_core();
+        let peer = SecretKey::generate().public();
+        let (stop, _rx) = tokio::sync::watch::channel(false);
+        let refused =
+            register_incoming(&core.shared, peer, crate::protocol::PROTOCOL_VERSION, &stop);
+        assert!(matches!(refused, Err(Error::NotHosting)));
+        assert!(lock(&core.shared.state).incoming.is_empty());
     }
 
     /// An engine offers the test agent's protocol only while its agent

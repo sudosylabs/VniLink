@@ -210,12 +210,14 @@ fn stride_and_cursor_offset_follow_the_crop() {
 
 #[test]
 fn xfixes_cursor_preserves_argb_alpha_hotspot_and_bounds() {
-    let mut reply = x11rb::protocol::xfixes::GetCursorImageReply::default();
-    reply.width = 2;
-    reply.height = 1;
-    reply.xhot = 1;
-    reply.yhot = 0;
-    reply.cursor_image = vec![0xff112233, 0x80402010];
+    let mut reply = x11rb::protocol::xfixes::GetCursorImageReply {
+        width: 2,
+        height: 1,
+        xhot: 1,
+        yhot: 0,
+        cursor_image: vec![0xff112233, 0x80402010],
+        ..Default::default()
+    };
     let image = crate::x11::cursor_image(&reply).unwrap();
     assert_eq!(image.hotspot(), (1, 0));
     assert_eq!(

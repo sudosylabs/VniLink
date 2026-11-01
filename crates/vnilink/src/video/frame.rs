@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! One encoded H.264 frame. The payload is screen content: do not log it.
+//! One encoded video frame, of any codec the stream agreed. The payload is screen content: do not log it.
 
 use std::fmt;
 use std::time::Instant;
@@ -25,10 +25,11 @@ pub(crate) const VIDEO_HEADER: usize = 34;
 pub const MAX_REGIONS: usize = 64;
 
 /// The bytes the regions may add after [`VIDEO_HEADER`]: a count, then each.
-const MAX_REGION_BYTES: usize = 1 + MAX_REGIONS * 8;
+pub(crate) const MAX_REGION_BYTES: usize = 1 + MAX_REGIONS * 8;
 use super::VideoCodec;
 
-/// One encoded H.264 frame. Construct it with [`EncodedFrame::h264`].
+/// One encoded video frame. Construct it with [`EncodedFrame::new`], or
+/// [`EncodedFrame::h264`] for H.264.
 ///
 /// Fields stay visible so a caller can replace the payload.
 /// [`crate::Core::publish_desktop_video`] checks the payload again.
@@ -216,7 +217,7 @@ fn validate_payload(payload: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 pub(crate) fn check_video_len(len: usize) -> Result<(), Error> {
-    if len < VIDEO_HEADER || len > VIDEO_HEADER + MAX_REGION_BYTES + MAX_VIDEO_FRAME {
+    if !(VIDEO_HEADER..=VIDEO_HEADER + MAX_REGION_BYTES + MAX_VIDEO_FRAME).contains(&len) {
         Err(Error::Malformed)
     } else {
         Ok(())

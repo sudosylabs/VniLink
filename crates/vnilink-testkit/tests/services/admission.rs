@@ -16,6 +16,7 @@ use vnilink::{
     CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase, SharingPolicy,
     VideoCodecCaps,
 };
+use vnilink_testkit::session::wait_control_check;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 use super::support::phase;
@@ -38,6 +39,7 @@ fn a_waiting_service_closes_without_withdrawing_the_request() -> TestResult {
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     ask_before_admitting(&pair)?;
+    let controller_events = controller.subscribe()?;
     let pending = controller.begin_connect_services(&pair.host.endpoint())?;
     pair.host.wait_request();
     let service = pair.attach(&pending, ServiceKind::Desktop);
@@ -59,7 +61,10 @@ fn a_waiting_service_closes_without_withdrawing_the_request() -> TestResult {
         host.control_request()?.is_some(),
         "closing a waiting service leaves the request"
     );
-    host.confirm_control_request(&controller.control_check())?;
+    host.confirm_control_request(&wait_control_check(
+        &controller_events,
+        Duration::from_secs(5),
+    ))?;
     let session = pair.controller.wait_phase(pending.id, SessionPhase::Active);
     assert_eq!(
         phase(&pair.controller, &service),
@@ -267,10 +272,13 @@ fn a_neutral_connection_needs_the_hosts_consent_and_shares_nothing() -> TestResu
     host.core
         .export_pairing_file(Duration::from_secs(60), true)?;
     let events = host.core.subscribe()?;
+    let controller_events = controller.core.subscribe()?;
     let pending = controller.core.begin_connect_services(&host.endpoint())?;
     host.wait_request();
-    host.core
-        .confirm_control_request(&controller.core.control_check())?;
+    host.core.confirm_control_request(&wait_control_check(
+        &controller_events,
+        Duration::from_secs(5),
+    ))?;
     controller.wait_phase(pending.id, SessionPhase::Active);
     assert_eq!(
         host.core.snapshot()?.devices.len(),

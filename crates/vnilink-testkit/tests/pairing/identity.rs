@@ -164,7 +164,7 @@ fn event_capacity_must_be_between_1_and_1024() -> TestResult {
     core.start_hosting()?;
     core.stop_hosting()?;
     assert!(!core.snapshot()?.hosting, "hosting stopped");
-    assert_eq!(events.lagged(), 1, "the second event did not fit");
+    assert_eq!(events.take_lagged(), 1, "the second event did not fit");
     assert_eq!(
         events.try_recv(),
         Some(CoreEvent::HostingChanged { hosting: true }),

@@ -7,7 +7,7 @@
 
 //! Session-scoped binary data plane. Never takes the JSON bridge's State mutex.
 // trace: records every ignored failure
-use super::{core_error, parse_id, Command, CommandShape, Engine};
+use super::{core_error, parse_id, Call, CommandShape, Engine};
 use napi::{
     bindgen_prelude::{AsyncTask, Buffer, Function},
     threadsafe_function::ThreadsafeFunctionCallMode,
@@ -135,12 +135,39 @@ pub struct DesktopCursorImage {
     pub pixels: Buffer,
 }
 
+/// What a data channel carries; JavaScript names it by its lowercase word.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChannelKind {
+    Video,
+    Terminal,
+    Input,
+    Files,
+    Camera,
+    Audio,
+    Snapshot,
+}
+
+impl ChannelKind {
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "video" => Self::Video,
+            "terminal" => Self::Terminal,
+            "input" => Self::Input,
+            "files" => Self::Files,
+            "camera" => Self::Camera,
+            "audio" => Self::Audio,
+            "snapshot" => Self::Snapshot,
+            _ => return None,
+        })
+    }
+}
+
 #[napi]
 pub struct DataChannel {
     core: Arc<VnilinkCore>,
     session_id: u64,
     generation: u64,
-    kind: String,
+    kind: ChannelKind,
     input_used: std::sync::atomic::AtomicBool,
     owner: Option<(u64, u64)>,
     files: Mutex<Option<Arc<vnilink_app::FilesService>>>,
@@ -301,7 +328,7 @@ impl DataChannel {
         if let Some((id, generation)) = self.owner {
             let service = self.core.controller_service(id).map_err(core_error)?;
             let readable_exit = drain_terminal
-                && self.kind == "terminal"
+                && self.kind == ChannelKind::Terminal
                 && matches!(
                     service.phase,
                     vnilink_app::FfiServicePhase::Closed {
@@ -331,7 +358,7 @@ impl DataChannel {
 impl DataChannel {
     /// Video: why the picture stopped, once it did.
     fn desktop_end(&self) -> Option<vnilink_app::FfiDesktopEnd> {
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return None;
         }
         self.desktop
@@ -385,7 +412,7 @@ impl DataChannel {
     #[napi]
     pub fn on_ready(&self, callback: Function<(), ()>) -> Result<()> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid ready target"));
         }
         let ready = callback
@@ -414,7 +441,7 @@ impl DataChannel {
     #[napi]
     pub fn read(&self) -> Result<Option<DataEvent>> {
         self.check_for(true)?;
-        if self.kind == "video" {
+        if self.kind == ChannelKind::Video {
             let video = self
                 .video
                 .lock()
@@ -440,7 +467,7 @@ impl DataChannel {
                     metadata: serde_json::json!({ "end": desktop_end_label(end) }).to_string(),
                 }));
         }
-        if self.kind == "camera" {
+        if self.kind == ChannelKind::Camera {
             let camera = self
                 .camera
                 .lock()
@@ -464,7 +491,7 @@ impl DataChannel {
                 .to_string(),
             }));
         }
-        if self.kind == "snapshot" {
+        if self.kind == ChannelKind::Snapshot {
             let mut slot = self
                 .snapshot
                 .lock()
@@ -477,7 +504,7 @@ impl DataChannel {
                 }
             });
         }
-        if self.kind == "audio" {
+        if self.kind == ChannelKind::Audio {
             let audio = self
                 .audio
                 .lock()
@@ -494,13 +521,13 @@ impl DataChannel {
             }
             return Ok(None);
         }
-        if self.kind == "files" {
+        if self.kind == ChannelKind::Files {
             if let Some(changed) = self.folder_update()? {
                 return Ok(Some(changed));
             }
             return self.job_updates();
         }
-        if self.kind == "terminal" {
+        if self.kind == ChannelKind::Terminal {
             let terminal = self
                 .terminal
                 .lock()
@@ -614,7 +641,7 @@ impl DataChannel {
     #[napi]
     pub fn write(&self, bytes: Buffer) -> Result<()> {
         self.check()?;
-        if self.kind != "terminal" || bytes.is_empty() || bytes.len() > 16 * 1024 {
+        if self.kind != ChannelKind::Terminal || bytes.is_empty() || bytes.len() > 16 * 1024 {
             return Err(Error::from_reason("Invalid terminal input"));
         }
         let terminal = self
@@ -645,33 +672,33 @@ impl DataChannel {
     #[napi]
     pub fn input(&self, command: String) -> Result<()> {
         self.check()?;
-        if self.kind != "input" || command.len() > 8192 {
+        if self.kind != ChannelKind::Input || command.len() > 8192 {
             return Err(Error::from_reason("Invalid input"));
         }
         let raw: serde_json::Value =
             serde_json::from_str(&command).map_err(|_| Error::from_reason("Invalid input"))?;
         if !CommandShape::check(&raw)
-            || raw["sessionId"] != self.session_id.to_string()
-            || raw["generation"] != self.generation.to_string()
+            || raw["sessionId"].as_str() != Some(&self.session_id.to_string())
+            || raw["generation"].as_str() != Some(&self.generation.to_string())
         {
             return Err(Error::from_reason("Invalid input target"));
         }
-        let decoded: Command =
+        let decoded: Call =
             serde_json::from_value(raw).map_err(|_| Error::from_reason("Invalid input"))?;
         if !matches!(
             decoded,
-            Command::SubmitKey { .. }
-                | Command::SubmitPointer { .. }
-                | Command::SubmitButton { .. }
-                | Command::SubmitWheel { .. }
-                | Command::SubmitMotion { .. }
-                | Command::SubmitPreciseWheel { .. }
-                | Command::SubmitText { .. }
-                | Command::SubmitLocalKey { .. }
-                | Command::ReleaseSessionInput { .. }
-                | Command::SelectDisplays { .. }
-                | Command::SwapSessionModifiers { .. }
-                | Command::CaptureSystemKeys { .. }
+            Call::SubmitKey { .. }
+                | Call::SubmitPointer { .. }
+                | Call::SubmitButton { .. }
+                | Call::SubmitWheel { .. }
+                | Call::SubmitMotion { .. }
+                | Call::SubmitPreciseWheel { .. }
+                | Call::SubmitText { .. }
+                | Call::SubmitLocalKey { .. }
+                | Call::ReleaseSessionInput { .. }
+                | Call::SelectDisplays { .. }
+                | Call::SwapSessionModifiers { .. }
+                | Call::CaptureSystemKeys { .. }
         ) {
             return Err(Error::from_reason("Not an interactive input command"));
         }
@@ -686,8 +713,8 @@ impl DataChannel {
             .ok_or_else(|| Error::from_reason("Missing desktop owner"))?
             .service;
         match decoded {
-            Command::SubmitKey { usage, down, .. } => service.submit_key(usage, down),
-            Command::SubmitPointer {
+            Call::SubmitKey { usage, down, .. } => service.submit_key(usage, down),
+            Call::SubmitPointer {
                 x,
                 y,
                 display,
@@ -699,26 +726,26 @@ impl DataChannel {
                 parse_id(&display, "Invalid display ID")?,
                 parse_id(&revision, "Invalid topology revision")?,
             ),
-            Command::SubmitButton { button, down, .. } => {
+            Call::SubmitButton { button, down, .. } => {
                 service.submit_button(super::pointer_button(&button)?, down)
             }
-            Command::SubmitWheel { dx, dy, .. } => service.submit_wheel(dx, dy),
-            Command::SubmitMotion { dx, dy, .. } => service.submit_motion(dx, dy),
-            Command::SubmitPreciseWheel { dx, dy, .. } => service.submit_precise_wheel(dx, dy),
-            Command::SubmitText { text, .. } => service.submit_text(text),
-            Command::SubmitLocalKey {
+            Call::SubmitWheel { dx, dy, .. } => service.submit_wheel(dx, dy),
+            Call::SubmitMotion { dx, dy, .. } => service.submit_motion(dx, dy),
+            Call::SubmitPreciseWheel { dx, dy, .. } => service.submit_precise_wheel(dx, dy),
+            Call::SubmitText { text, .. } => service.submit_text(text),
+            Call::SubmitLocalKey {
                 usage,
                 down,
                 text,
                 composing,
                 ..
             } => service.submit_local_key(usage, down, text, composing),
-            Command::ReleaseSessionInput { .. } => service.release_input(),
-            Command::SwapSessionModifiers { enabled, .. } => {
+            Call::ReleaseSessionInput { .. } => service.release_input(),
+            Call::SwapSessionModifiers { enabled, .. } => {
                 service.set_swap_control_and_command(enabled)
             }
             // A computer without a hook keeps its shortcuts; the desktop stays.
-            Command::CaptureSystemKeys { enabled, .. } => {
+            Call::CaptureSystemKeys { enabled, .. } => {
                 if let Err(error) = service.capture_system_keys(enabled) {
                     tracing::info!(
                         target: vnilink::trace::INPUT,
@@ -729,7 +756,7 @@ impl DataChannel {
                 Ok(())
             }
             // The display the pointer lands on, sent in order with it.
-            Command::SelectDisplays { ids, .. } => service.select_displays(
+            Call::SelectDisplays { ids, .. } => service.select_displays(
                 ids.iter()
                     .map(|id| parse_id(id, "Invalid display ID"))
                     .collect::<Result<Vec<_>>>()?,
@@ -743,7 +770,7 @@ impl DataChannel {
     #[napi]
     pub fn file_operation(&self, command: String) -> Result<AsyncTask<FileTask>> {
         self.check()?;
-        if self.kind != "files" || command.len() > 16384 {
+        if self.kind != ChannelKind::Files || command.len() > 16384 {
             return Err(Error::from_reason("Invalid file operation"));
         }
         let operation: FileOperation = serde_json::from_str(&command)
@@ -783,7 +810,7 @@ impl DataChannel {
         stills_shown: u32,
     ) -> Result<String> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid media status target"));
         }
         let desktop = self
@@ -853,7 +880,7 @@ impl DataChannel {
     #[napi]
     pub fn cursor(&self) -> Result<Option<DesktopCursor>> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid cursor target"));
         }
         let current = {
@@ -906,7 +933,7 @@ impl DataChannel {
     #[napi]
     pub fn request_keyframe(&self) -> Result<()> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid keyframe target"));
         }
         let desktop = self
@@ -925,7 +952,7 @@ impl DataChannel {
     #[napi]
     pub fn desktop_audio(&self, operation: String) -> Result<String> {
         self.check()?;
-        if !matches!(self.kind.as_str(), "video" | "input") || operation.len() > 128 {
+        if !matches!(self.kind, ChannelKind::Video | ChannelKind::Input) || operation.len() > 128 {
             return Err(Error::from_reason("Invalid desktop audio target"));
         }
         let raw: serde_json::Value = serde_json::from_str(&operation)
@@ -976,7 +1003,7 @@ impl DataChannel {
         }
         let already = self.closed.swap(true, std::sync::atomic::Ordering::AcqRel);
         if !already
-            && self.kind == "input"
+            && self.kind == ChannelKind::Input
             && self
                 .input_used
                 .swap(false, std::sync::atomic::Ordering::AcqRel)
@@ -1112,7 +1139,7 @@ pub struct OpenChannelTask {
     cameras: Arc<CameraChannels>,
     id: u64,
     generation: u64,
-    kind: String,
+    kind: ChannelKind,
     rows: u16,
     columns: u16,
     media: Option<MediaConfig>,
@@ -1127,28 +1154,22 @@ impl Task for OpenChannelTask {
         {
             return Err(Error::from_reason("Stale session generation"));
         }
-        let desktop = if matches!(self.kind.as_str(), "video" | "input") {
+        let desktop = if matches!(self.kind, ChannelKind::Video | ChannelKind::Input) {
             Some(self.desktops.open(&self.core, self.id, self.generation)?)
         } else {
             None
         };
-        let video = if self.kind == "video" {
-            Some(
-                desktop
-                    .as_ref()
-                    .unwrap()
-                    .service
-                    .subscribe_video()
-                    .map_err(core_error)?,
-            )
-        } else {
-            None
+        let video = match (self.kind, desktop.as_ref()) {
+            (ChannelKind::Video, Some(desktop)) => {
+                Some(desktop.service.subscribe_video().map_err(core_error)?)
+            }
+            _ => None,
         };
-        let kind = match self.kind.as_str() {
-            "terminal" => Some(vnilink_app::FfiServiceKind::Terminal),
-            "files" => Some(vnilink_app::FfiServiceKind::Files),
-            "camera" => Some(vnilink_app::FfiServiceKind::Camera),
-            "audio" => Some(match &self.media {
+        let kind = match self.kind {
+            ChannelKind::Terminal => Some(vnilink_app::FfiServiceKind::Terminal),
+            ChannelKind::Files => Some(vnilink_app::FfiServiceKind::Files),
+            ChannelKind::Camera => Some(vnilink_app::FfiServiceKind::Camera),
+            ChannelKind::Audio => Some(match &self.media {
                 Some(MediaConfig::Audio { source_kind, .. }) if source_kind == "Microphone" => {
                     vnilink_app::FfiServiceKind::Microphone
                 }
@@ -1157,7 +1178,7 @@ impl Task for OpenChannelTask {
                 }
                 _ => return Err(Error::from_reason("Invalid audio source kind")),
             }),
-            _ => None,
+            ChannelKind::Video | ChannelKind::Input | ChannelKind::Snapshot => None,
         };
         let owner = kind
             .map(|kind| {
@@ -1166,7 +1187,10 @@ impl Task for OpenChannelTask {
             })
             .transpose()
             .map_err(core_error)?;
-        let terminal = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "terminal") {
+        let terminal = if let Some(owner) = owner
+            .as_ref()
+            .filter(|_| self.kind == ChannelKind::Terminal)
+        {
             match self.core.open_terminal_service(
                 owner.id,
                 owner.generation,
@@ -1184,7 +1208,8 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
-        let files = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "files") {
+        let files = if let Some(owner) = owner.as_ref().filter(|_| self.kind == ChannelKind::Files)
+        {
             match self.core.open_files_service(owner.id, owner.generation) {
                 Ok(service) => Some(service),
                 Err(error) => {
@@ -1195,40 +1220,42 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
-        let camera = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "camera") {
-            let Some(MediaConfig::Camera {
-                device_id,
-                width,
-                height,
-                fps,
-            }) = &self.media
-            else {
-                retire_service(&self.core, owner.id, owner.generation);
-                return Err(Error::from_reason("Invalid camera configuration"));
-            };
-            match self.core.open_camera_service(
-                owner.id,
-                owner.generation,
-                vnilink_app::FfiCameraConfig {
-                    device_id: device_id.clone(),
-                    width: *width,
-                    height: *height,
-                    fps: *fps,
-                },
-            ) {
-                Ok(service) => {
-                    self.cameras.register(self.id, self.generation, &service);
-                    Some(service)
-                }
-                Err(error) => {
+        let camera =
+            if let Some(owner) = owner.as_ref().filter(|_| self.kind == ChannelKind::Camera) {
+                let Some(MediaConfig::Camera {
+                    device_id,
+                    width,
+                    height,
+                    fps,
+                }) = &self.media
+                else {
                     retire_service(&self.core, owner.id, owner.generation);
-                    return Err(core_error(error));
+                    return Err(Error::from_reason("Invalid camera configuration"));
+                };
+                match self.core.open_camera_service(
+                    owner.id,
+                    owner.generation,
+                    vnilink_app::FfiCameraConfig {
+                        device_id: device_id.clone(),
+                        width: *width,
+                        height: *height,
+                        fps: *fps,
+                    },
+                ) {
+                    Ok(service) => {
+                        self.cameras.register(self.id, self.generation, &service);
+                        Some(service)
+                    }
+                    Err(error) => {
+                        retire_service(&self.core, owner.id, owner.generation);
+                        return Err(core_error(error));
+                    }
                 }
-            }
-        } else {
-            None
-        };
-        let audio = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "audio") {
+            } else {
+                None
+            };
+        let audio = if let Some(owner) = owner.as_ref().filter(|_| self.kind == ChannelKind::Audio)
+        {
             let Some(MediaConfig::Audio {
                 device_id,
                 source_kind,
@@ -1264,12 +1291,12 @@ impl Task for OpenChannelTask {
             None
         };
         let snapshot_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let snapshot = Arc::new(Mutex::new(if self.kind == "snapshot" {
+        let snapshot = Arc::new(Mutex::new(if self.kind == ChannelKind::Snapshot {
             SnapshotState::Pending
         } else {
             SnapshotState::Idle
         }));
-        if self.kind == "snapshot" {
+        if self.kind == ChannelKind::Snapshot {
             let core = Arc::clone(&self.core);
             let cancel = Arc::clone(&snapshot_cancel);
             let mailbox = Arc::clone(&snapshot);
@@ -1295,7 +1322,7 @@ impl Task for OpenChannelTask {
             core: self.core.clone(),
             session_id: self.id,
             generation: self.generation,
-            kind: self.kind.clone(),
+            kind: self.kind,
             input_used: std::sync::atomic::AtomicBool::new(false),
             owner: owner.map(|owner| (owner.id, owner.generation)),
             files: Mutex::new(files),
@@ -1330,12 +1357,8 @@ impl Engine {
         columns: u16,
         media: Option<String>,
     ) -> Result<AsyncTask<OpenChannelTask>> {
-        if !matches!(
-            kind.as_str(),
-            "video" | "terminal" | "input" | "files" | "camera" | "audio" | "snapshot"
-        ) {
-            return Err(Error::from_reason("Invalid channel kind"));
-        }
+        let kind =
+            ChannelKind::parse(&kind).ok_or_else(|| Error::from_reason("Invalid channel kind"))?;
         let config = media
             .map(|raw| {
                 if raw.len() > 4096 {
@@ -1345,11 +1368,11 @@ impl Engine {
                     .map_err(|_| Error::from_reason("Invalid media configuration"))
             })
             .transpose()?;
-        match (&*kind, &config) {
-            ("camera", Some(MediaConfig::Camera { .. }))
-            | ("audio", Some(MediaConfig::Audio { .. }))
-            | ("snapshot", Some(MediaConfig::Snapshot { .. })) => {}
-            ("camera" | "audio" | "snapshot", _) => {
+        match (kind, &config) {
+            (ChannelKind::Camera, Some(MediaConfig::Camera { .. }))
+            | (ChannelKind::Audio, Some(MediaConfig::Audio { .. }))
+            | (ChannelKind::Snapshot, Some(MediaConfig::Snapshot { .. })) => {}
+            (ChannelKind::Camera | ChannelKind::Audio | ChannelKind::Snapshot, _) => {
                 return Err(Error::from_reason("Media configuration required"))
             }
             (_, Some(_)) => return Err(Error::from_reason("Unexpected media configuration")),
@@ -1688,7 +1711,6 @@ impl FileTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
     fn pair(from: &VnilinkCore, to: &VnilinkCore) {
         let file = from.export_pairing_file(60, true).unwrap();
         let preview = to.open_pairing_file(file.bytes).unwrap();
@@ -1721,14 +1743,7 @@ mod tests {
         let pending = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
-        while controller.controller_session(pending.id).unwrap().phase
-            != vnilink_app::FfiSessionPhase::Active
-        {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let session = controller.controller_session(pending.id).unwrap();
+        let session = crate::wait::session_active(&controller, pending.id);
         let desktops = Arc::new(DesktopChannels::default());
         let mut open = OpenChannelTask {
             core: controller.clone(),
@@ -1736,7 +1751,7 @@ mod tests {
             cameras: Arc::new(CameraChannels::default()),
             id: session.id,
             generation: session.generation,
-            kind: "video".into(),
+            kind: ChannelKind::Video,
             rows: 24,
             columns: 80,
             media: None,
@@ -1760,7 +1775,7 @@ mod tests {
             "a stale generation must be rejected"
         );
         open.generation = session.generation;
-        open.kind = "input".into();
+        open.kind = ChannelKind::Input;
         let input = open.compute().unwrap();
         let status: serde_json::Value =
             serde_json::from_str(&video.desktop_audio(r#"{"type":"status"}"#.into()).unwrap())
@@ -1811,22 +1826,13 @@ mod tests {
             .unwrap();
         host.publish_desktop_video(remote.id, remote.generation, true, 10, vec![0, 255, 7])
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(packet) = video.read().unwrap() {
-                assert_eq!(packet.data.unwrap().as_ref(), &[0, 255, 7]);
-                break;
-            }
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let packet = crate::wait::wait_for("the host's picture", || video.read().unwrap());
+        assert_eq!(packet.data.unwrap().as_ref(), &[0, 255, 7]);
         let key = serde_json::json!({"type":"submitKey", "sessionId":session.id.to_string(), "generation":session.generation.to_string(), "usage":4, "down":true}).to_string();
         input.input(key.clone()).unwrap();
-        let end = Instant::now() + Duration::from_secs(5);
-        while applied.load(Ordering::Relaxed) < 1 {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the host to apply the key", || {
+            applied.load(Ordering::Relaxed) >= 1
+        });
         input.take_cleanup().compute().unwrap();
         assert!(input.input(key.clone()).is_err());
         assert!(input.desktop_audio(r#"{"type":"status"}"#.into()).is_err());
@@ -1835,11 +1841,9 @@ mod tests {
             vnilink_app::FfiServicePhase::Active
         );
         // Closing input releases pressed keys, while video retains the Desktop owner.
-        let end = Instant::now() + Duration::from_secs(5);
-        while applied.load(Ordering::Relaxed) < 2 {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the host to apply the key release", || {
+            applied.load(Ordering::Relaxed) >= 2
+        });
         let replacement = open.compute().unwrap();
         video.take_cleanup().compute().unwrap();
         replacement.input(key).unwrap();
@@ -1849,7 +1853,7 @@ mod tests {
             controller.controller_session(session.id).unwrap().phase,
             vnilink_app::FfiSessionPhase::Active
         );
-        open.kind = "video".into();
+        open.kind = ChannelKind::Video;
         let reopened = open.compute().unwrap();
         assert_ne!(
             reopened
@@ -1937,29 +1941,14 @@ mod tests {
         let pending = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(15);
-        loop {
-            if matches!(
-                controller.controller_session(pending.id).unwrap().phase,
-                vnilink_app::FfiSessionPhase::Active
-            ) {
-                break;
-            }
-            assert!(
-                Instant::now() < end,
-                "neutral connection did not become active: {:?}",
-                controller.controller_session(pending.id).unwrap().phase
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let active = controller.controller_session(pending.id).unwrap();
+        let active = crate::wait::session_active(&controller, pending.id);
         let mut task = OpenChannelTask {
             core: controller.clone(),
             desktops: Arc::new(DesktopChannels::default()),
             cameras: Arc::new(CameraChannels::default()),
             id: active.id,
             generation: active.generation,
-            kind: "terminal".into(),
+            kind: ChannelKind::Terminal,
             rows: 24,
             columns: 80,
             media: None,
@@ -1972,42 +1961,30 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
         let mut output: Vec<u8> = Vec::new();
-        loop {
-            if let Some(packet) = channel.read().unwrap() {
-                if let Some(bytes) = packet.data {
-                    output.extend(bytes.as_ref());
-                }
-                if output
-                    .windows(b"native-binary-channel".len())
-                    .any(|part| part == b"native-binary-channel")
-                {
-                    break;
-                }
+        crate::wait::wait_until("the terminal's output", || {
+            if let Some(bytes) = channel.read().unwrap().and_then(|packet| packet.data) {
+                output.extend(bytes.as_ref());
             }
-            assert!(Instant::now() < end, "terminal output did not arrive");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+            output
+                .windows(b"native-binary-channel".len())
+                .any(|part| part == b"native-binary-channel")
+        });
         channel.write(b"exit 7\n".to_vec().into()).unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(packet) = channel.read().unwrap() {
-                if packet.kind == "exited" {
-                    assert!(packet.metadata.contains('7'));
-                    break;
-                }
-            }
-            assert!(Instant::now() < end, "terminal exit did not arrive");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let exited = crate::wait::wait_for("the terminal's exit", || {
+            channel
+                .read()
+                .unwrap()
+                .filter(|packet| packet.kind == "exited")
+        });
+        assert!(exited.metadata.contains('7'));
         let mut file_open = OpenChannelTask {
             core: controller.clone(),
             desktops: Arc::new(DesktopChannels::default()),
             cameras: Arc::new(CameraChannels::default()),
             id: active.id,
             generation: active.generation,
-            kind: "files".into(),
+            kind: ChannelKind::Files,
             rows: 24,
             columns: 80,
             media: None,
@@ -2112,23 +2089,17 @@ mod tests {
             }),
         };
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
-        std::thread::sleep(Duration::from_millis(500));
-        std::fs::write(destination.join("outside.txt"), b"outside").unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            if files
+        // The watch arms in the background and says nothing when it has, so a
+        // new file is made each time until one of them is pushed.
+        let mut made = 0;
+        crate::wait::wait_until("a change on the other computer to be pushed", || {
+            made += 1;
+            std::fs::write(destination.join(format!("outside-{made}.txt")), b"outside").unwrap();
+            files
                 .read()
                 .unwrap()
                 .is_some_and(|event| event.kind == "folderChanged")
-            {
-                break;
-            }
-            assert!(
-                Instant::now() < end,
-                "a change on the other computer was never pushed"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        });
         file_task.operation = FileOperation::Watch { folder: None };
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
         // Both cores' drivers finish the transfer; the channel reports it
@@ -2144,9 +2115,8 @@ mod tests {
             dst_path: format!("{destination_path}/completed.bin"),
         };
         let submitted = answer(&mut file_task)["ok"].clone();
-        let end = Instant::now() + Duration::from_secs(15);
         let mut states = Vec::new();
-        loop {
+        crate::wait::wait_until("the transfer's completion to be pushed", || {
             if let Some(event) = files.read().unwrap() {
                 assert_eq!(event.kind, "jobs");
                 let update: serde_json::Value = serde_json::from_str(&event.metadata).unwrap();
@@ -2155,16 +2125,9 @@ mod tests {
                         states.push(job["state"].as_str().unwrap().to_owned());
                     }
                 }
-                if states.last().is_some_and(|state| state == "Complete") {
-                    break;
-                }
             }
-            assert!(
-                Instant::now() < end,
-                "the transfer's completion was never pushed: {states:?}"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+            states.last().is_some_and(|state| state == "Complete")
+        });
         assert_eq!(
             std::fs::read(destination.join("completed.bin/test.bin")).unwrap(),
             [0, 255, 17, 42]

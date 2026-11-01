@@ -213,22 +213,18 @@ mod tests {
         let jobs = lock(&core.shared.jobs);
         std::thread::scope(|scope| {
             let snapshot = scope.spawn(|| core.diagnostic_snapshot().map(|_| ()));
+            // A real timer: the snapshot thread parks on the jobs lock, which
+            // signals nothing, and the hazard shows only once it has.
             std::thread::sleep(std::time::Duration::from_millis(100));
             // Other engine tasks take state briefly; a snapshot holding it
             // while it waits would keep it taken throughout.
-            let state_free = (0..100).any(|_| {
-                let free = core.shared.state.try_lock().is_ok();
-                if !free {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                free
-            });
+            crate::test_support::wait_until(
+                "the state lock to be free while the snapshot waits for jobs",
+                std::time::Duration::from_millis(500),
+                || core.shared.state.try_lock().is_ok(),
+            );
             drop(jobs);
             snapshot.join().unwrap().unwrap();
-            assert!(
-                state_free,
-                "the snapshot holds state while it waits for jobs"
-            );
         });
     }
 }

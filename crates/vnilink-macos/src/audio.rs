@@ -34,6 +34,7 @@ unsafe extern "C" {
 }
 fn permission() -> bool {
     // Probe only. No CGRequestScreenCaptureAccess call occurs on a remote path.
+    // SAFETY: takes no arguments and only reads the process's capture permission; it never prompts.
     unsafe { CGPreflightScreenCaptureAccess() }
 }
 fn selected_id(id: &str) -> Result<u32, vnilink::Error> {
