@@ -15,7 +15,7 @@ const electron = `import { EventEmitter } from 'node:events';
 export const state = { attempts: 0, completed: false, relaunched: 0, exitCode: undefined, windows: 0 };
 export const app = new EventEmitter();
 Object.assign(app, {
-	isPackaged: true, getPath: () => '/fixture', getVersion: () => '0.0.0', setName() { }, requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(),
+	isPackaged: true, getPath: () => '/fixture', getVersion: () => '0.0.0', setName() { }, requestSingleInstanceLock: () => state.locked !== false, whenReady: () => Promise.resolve(),
 	relaunch() { state.relaunched++; },
 	quit() { state.attempts++; let prevented = false; this.emit('before-quit', { preventDefault() { prevented = true; } }); if (!prevented) { state.completed = true; this.emit('will-quit'); } },
 	exit(code) { state.exitCode = code; },
@@ -74,9 +74,13 @@ const services = {
 	development: `export function registerDevelopmentWindow() { }`,
 	menubar: `export function installApplicationMenu() { } export function registerEditingShortcuts() { }`,
 	// The log file's native addon: the test writes no log.
-	spdlogAddon: `export const SPDLOG_DIRECTORY = 'native/spdlog';
+	spdlogAddon: `import { state } from 'electron';
+		export const SPDLOG_DIRECTORY = 'native/spdlog';
 		const logger = { trace() { }, debug() { }, info() { }, warn() { }, error() { }, critical() { }, getLevel: () => 0, setLevel() { }, setPattern() { }, clearFormatters() { }, flush() { }, drop() { } };
-		export function loadSpdlog() { return { setFlushOn() { }, createAsyncRotatingLogger: async () => logger }; }`,
+		export function loadSpdlog() { return { setFlushOn() { }, createAsyncRotatingLogger: async () => { state.logFiles = (state.logFiles ?? 0) + 1; return logger; } }; }`,
+	logsFolder: `import { state } from 'electron';
+		export function logsFolderName() { return 'run'; }
+		export async function pruneLogs() { state.pruned = (state.pruned ?? 0) + 1; }`,
 };
 
 async function load(entry, exports, extra = '') {
@@ -84,7 +88,7 @@ async function load(entry, exports, extra = '') {
 		stdin: { contents: `export { ${exports} } from '${entry}'; export { app, state } from 'electron'; ${extra}`, loader: 'ts', resolveDir: root }, bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', plugins: [{
 			name: 'main-process-fixtures', setup(builder) {
 				builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
-				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|ipc\.electron|ipcMain|development|menubar|spdlogAddon|hostingMainService|screenHostingMainService|systemSettings|trayMainService|traySupport|systemActionNotice|stateService)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
+				builder.onResolve({ filter: /\/(engineMainService|configurationMainService|windowsMainService|nativeHostMainService|permissionsMainService|recordingMainService|ipc\.electron|ipcMain|development|menubar|spdlogAddon|hostingMainService|screenHostingMainService|systemSettings|trayMainService|traySupport|systemActionNotice|stateService|logsFolder)\.js$/ }, ({ path }) => entry.endsWith('lifecycleMainService.ts') ? undefined : ({ path: path.split('/').at(-1).replace(/\.js$/, ''), namespace: 'fixture' }));
 				builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'electron' ? electron : services[path], loader: 'js', resolveDir: root }));
 			}
 		}]
@@ -200,4 +204,20 @@ test('a login launch that runs in the background hosts without opening a window'
 	await new Promise(resolve => setImmediate(resolve));
 	assert.equal(state.windows, 1, 'Activation after a hidden start did not open the window');
 	application.dispose();
+});
+
+test('a second launch writes no log and prunes none of the first launch\'s logs', async () => {
+	const { VniLinkApplication, state } = await load('./src/code/electron-main/app.ts', 'VniLinkApplication');
+	const before = { logFiles: state.logFiles ?? 0, pruned: state.pruned ?? 0, windows: state.windows };
+	state.locked = false;
+	try {
+		const application = new VniLinkApplication({ temporaryEngine: true, showWindow: false });
+		await application.start();
+		await new Promise(resolve => setImmediate(resolve));
+		assert.equal(state.logFiles ?? 0, before.logFiles, 'The second launch opened a log file');
+		assert.equal(state.pruned ?? 0, before.pruned, 'The second launch pruned logs');
+		assert.equal(state.windows, before.windows, 'The second launch opened a window');
+	} finally {
+		state.locked = true;
+	}
 });

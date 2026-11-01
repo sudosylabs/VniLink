@@ -86,6 +86,7 @@ export class VniLinkApplication extends Disposable {
 	/** This run's logs folder, `<userData>/logs/<started at>`. */
 	private readonly logsHome: URI;
 	private readonly loggerService: LoggerMainService;
+	private readonly bufferLogger: BufferLogger;
 	private readonly stateService: StateService;
 	private readonly instantiationService: InstantiationService;
 	private started: Promise<void> | undefined;
@@ -97,13 +98,9 @@ export class VniLinkApplication extends Disposable {
 		const logLevel = process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info;
 		this.logsHome = URI.file(join(app.getPath('userData'), 'logs', logsFolderName(new Date())));
 		this.loggerService = this._register(new LoggerMainService(logLevel, this.logsHome));
-		// Main logs to the console at once, and to main.log as soon as its logger exists.
-		const bufferLogger = new BufferLogger(logLevel);
-		this.logService = this._register(new LogService(bufferLogger, [new ConsoleMainLogger(logLevel)]));
-		bufferLogger.logger = this.loggerService.createLogger('main', { name: 'Main' });
-		void pruneLogs(join(app.getPath('userData'), 'logs'), this.logsHome.fsPath).catch((error: unknown) => {
-			this.logService.warn('Older logs could not be removed', error);
-		});
+		// Main logs to the console at once, and to main.log once this process holds the instance lock.
+		this.bufferLogger = new BufferLogger(logLevel);
+		this.logService = this._register(new LogService(this.bufferLogger, [new ConsoleMainLogger(logLevel)]));
 		setUnexpectedErrorHandler(error => {
 			this.logService.error(error instanceof Error ? error : new Error(String(error)));
 		});
@@ -139,10 +136,15 @@ export class VniLinkApplication extends Disposable {
 		mark('vnilink/mainStart');
 		app.setName('VniLink');
 		if (!app.requestSingleInstanceLock()) {
+			// A second launch only wakes the first: it writes no logs and prunes none of the first's.
 			this.dispose();
 			app.quit();
 			return;
 		}
+		this.bufferLogger.logger = this.loggerService.createLogger('main', { name: 'Main' });
+		void pruneLogs(join(app.getPath('userData'), 'logs'), this.logsHome.fsPath).catch((error: unknown) => {
+			this.logService.warn('Older logs could not be removed', error);
+		});
 		protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 		this.instantiationService.invokeFunction(accessor => {
 			this.registerListeners(accessor);
