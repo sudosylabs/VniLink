@@ -270,6 +270,10 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
         "the renamed file holds the new contents"
     );
     trace.wait_for_records("job state", 2);
+    // A file's bytes land on a stream task of their own while the job asks
+    // about the next conflict, so where "file received" falls among the
+    // job's states is not part of the story: the states are told without
+    // the receipts, and the receipts on their own.
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
@@ -281,9 +285,6 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
         host:
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
-          files: file received outcome=received resumed_at=0 size=100 took=100
-          files: file received outcome=received resumed_at=0 size=100 took=100
-          files: file received outcome=received resumed_at=0 size=100 took=100
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: job state from=transferring job=1 sender=false to=waiting-decision
@@ -291,7 +292,31 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
           files: received files flushed job=1
           files: job state done_bytes=300 files_done=2 from=transferring job=1 sender=false to=complete
     "#]],
-        || trace.story(&["files"]),
+        || {
+            trace
+                .tell(&["files"])
+                .only(&[
+                    "job state",
+                    "file served",
+                    "received files flushed",
+                ])
+                .to_string()
+        },
+    );
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        host:
+          files: file received outcome=received resumed_at=0 size=100 took=100
+          files: file received outcome=received resumed_at=0 size=100 took=100
+          files: file received outcome=received resumed_at=0 size=100 took=100
+    "#]],
+        || {
+            trace
+                .tell(&["files"])
+                .only(&["file received"])
+                .of("host")
+                .to_string()
+        },
     );
     Ok(())
 }
