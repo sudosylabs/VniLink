@@ -313,9 +313,14 @@ fn cancellation_during_approval_and_reconnect_do_not_stop_the_other_session() ->
         sa,
         "cancelling during approval leaves the other connection"
     );
-    if b.core.control_request()?.is_some() {
-        b.core.reject_control_request()?;
-    }
+    // The host withdraws the request when its asker leaves. It does so when
+    // it sees the connection close, which can follow the controller's own
+    // phase, so the request is waited for rather than read and then rejected.
+    wait_for(
+        "host b to withdraw the cancelled request",
+        DEFAULT_WAIT,
+        || b.core.control_request().ok()?.is_none().then_some(()),
+    );
     b.core
         .accept_invitation(&controller.core.create_invitation(INVITATION)?)?;
     b.core.set_desktop_sharing(Grants {
