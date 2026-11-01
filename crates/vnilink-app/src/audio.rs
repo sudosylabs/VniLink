@@ -241,6 +241,10 @@ impl AudioService {
     }
 }
 impl AudioService {
+    /// Blocks the playback worker until a packet arrives or `limit` passes.
+    pub(crate) fn wait_internal(&self, limit: std::time::Duration) {
+        self.inner.wait(limit);
+    }
     pub(crate) fn poll_internal(&self) -> Result<Option<FfiAudioBlock>, FfiError> {
         if self.inner.is_cancelled() {
             return Err(map_error(vnilink::Error::NoSession));

@@ -34,6 +34,12 @@ impl RemoteAudioService {
     pub fn try_recv(&self) -> Option<AudioPacket> {
         self.inbox.pop()
     }
+    /// Blocks until a packet has arrived, the service closes, or `limit`
+    /// passes, so a playback thread sleeps between packets instead of
+    /// polling for them.
+    pub fn wait(&self, limit: Duration) {
+        self.inbox.wait(limit);
+    }
     pub fn close(&self) {
         self.stop.send_replace(true);
         self.inbox.close();
