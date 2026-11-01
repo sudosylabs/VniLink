@@ -353,6 +353,7 @@ impl Core {
             file_roots: Mutex::new(crate::fs::RootSet::default()),
             transfer_dir: Mutex::new(None),
             files_serving: Mutex::new(std::collections::HashMap::new()),
+            unadmitted: Arc::new(tokio::sync::Semaphore::new(super::host::MAX_UNADMITTED)),
             files_fetching: Mutex::new(std::collections::HashMap::new()),
             files_dialing: tokio::sync::Mutex::new(()),
             files_gate: Default::default(),

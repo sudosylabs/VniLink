@@ -360,54 +360,64 @@ async fn dispatch_aux_host(
 }
 
 /// Serves host-initiated job streams on the controller: only status
-/// queries arrive here, answered from this side's records.
+/// queries arrive here, answered from this side's records. Each stream is
+/// its own task with the host side's read deadline, so one that stalls
+/// delays no other.
 pub(super) async fn serve_aux_controller(
     shared: Arc<Shared>,
     connection: iroh::endpoint::Connection,
     peer: [u8; 32],
     mut stop_rx: tokio::sync::watch::Receiver<bool>,
 ) {
+    let mut workers = tokio::task::JoinSet::new();
     loop {
         if *stop_rx.borrow() {
             break;
         }
-        let accepted = tokio::select! {
-            result = connection.accept_bi() => result,
+        tokio::select! {
+            biased;
             _ = stop_rx.changed() => break,
-        };
-        let Ok((mut send, mut recv)) = accepted else {
-            break;
-        };
-        let payload: Vec<u8> = match crate::sidestream::read_frame(
-            &mut recv,
-            |len| {
-                if len > crate::job::MAX_JOB_FRAME {
-                    Err(Error::Malformed)
-                } else {
-                    Ok(())
-                }
-            },
-            |bytes| Ok(bytes.to_vec()),
-        )
-        .await
-        {
-            Ok(payload) => payload,
-            Err(_) => continue,
-        };
-        let (tag, body) = match payload.split_first() {
-            Some((tag, body)) => (*tag, body),
-            None => continue,
-        };
-        if !super::jobs::neutral_job_control_allowed(&shared, &peer, tag, body) {
-            continue;
-        }
-        if super::jobs::handle_controller_job(&shared, &peer, &mut send, body, tag)
-            .await
-            .is_err()
-        {
-            continue;
+            _ = workers.join_next(), if !workers.is_empty() => {},
+            accepted = connection.accept_bi(), if workers.len() < 16 => {
+                let Ok((send, recv)) = accepted else { break; };
+                workers.spawn(controller_job_stream(shared.clone(), peer, send, recv));
+            }
         }
     }
+}
+
+async fn controller_job_stream(
+    shared: Arc<Shared>,
+    peer: [u8; 32],
+    mut send: iroh::endpoint::SendStream,
+    mut recv: iroh::endpoint::RecvStream,
+) {
+    let read = crate::sidestream::read_frame(
+        &mut recv,
+        |len| {
+            if len == 0 || len > crate::job::MAX_JOB_FRAME {
+                Err(Error::Malformed)
+            } else {
+                Ok(())
+            }
+        },
+        |bytes| Ok(bytes.to_vec()),
+    );
+    let Ok(Ok(payload)) = tokio::time::timeout(std::time::Duration::from_secs(5), read).await
+    else {
+        return;
+    };
+    let Some((&tag, body)) = payload.split_first() else {
+        return;
+    };
+    if !super::jobs::neutral_job_control_allowed(&shared, &peer, tag, body) {
+        return;
+    }
+    crate::ignored!(
+        crate::trace::FILES,
+        "a failed job query ends only itself",
+        super::jobs::handle_controller_job(&shared, &peer, &mut send, body, tag).await
+    );
 }
 
 /// Holds back each listing served to one controller, in milliseconds,

@@ -199,6 +199,13 @@ pub(super) async fn bind_endpoint(
     Ok(endpoint)
 }
 
+/// Incoming connections that have not yet shown they are anything: the
+/// handshake and the wait for a first stream. Past this a new connection is
+/// refused before its handshake costs anything.
+pub(super) const MAX_UNADMITTED: usize = 64;
+/// How long a connection may stay open without sending its first stream.
+const FIRST_STREAM_WITHIN: Duration = Duration::from_secs(10);
+
 pub(super) async fn accept_loop(shared: Arc<Shared>) {
     loop {
         if lock(&shared.state).shut_down {
@@ -208,6 +215,10 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
         let Some(incoming) = incoming else {
             break;
         };
+        let Ok(unadmitted) = shared.unadmitted.clone().try_acquire_owned() else {
+            incoming.refuse();
+            continue;
+        };
         let shared = Arc::clone(&shared);
         tokio::spawn(async move {
             match incoming.await {
@@ -216,13 +227,16 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
                     // Only a `test-probes` build has the agent's protocol.
                     #[cfg(feature = "test-probes")]
                     if super::agent::is_agent_connection(&connection) {
+                        drop(unadmitted);
                         super::agent::serve_agent_connection(shared, connection).await;
                         return;
                     }
                     if is_files_connection(&connection) {
+                        // Trust is checked before the first stream is awaited.
+                        drop(unadmitted);
                         serve_files_connection(shared, connection).await;
                     } else {
-                        host_connection(shared, connection).await;
+                        host_connection(shared, connection, unadmitted).await;
                     }
                 }
                 Err(error) => {
@@ -233,7 +247,14 @@ pub(super) async fn accept_loop(shared: Arc<Shared>) {
     }
 }
 
-pub(super) async fn host_connection(shared: Arc<Shared>, connection: iroh::endpoint::Connection) {
+/// `unadmitted` is released when the first stream arrives or the wait for it
+/// ends.
+pub(super) async fn host_connection(
+    shared: Arc<Shared>,
+    connection: iroh::endpoint::Connection,
+    unadmitted: tokio::sync::OwnedSemaphorePermit,
+) {
+    let mut unadmitted = Some(unadmitted);
     let peer = connection.remote_id();
     let (stop, mut stop_rx) = tokio::sync::watch::channel(false);
     let mut owned_session = None;
@@ -247,8 +268,9 @@ pub(super) async fn host_connection(shared: Arc<Shared>, connection: iroh::endpo
                     break;
                 }
             }
-            incoming = connection.accept_bi() => {
-                let Ok((send, recv)) = incoming else {
+            incoming = tokio::time::timeout(FIRST_STREAM_WITHIN, connection.accept_bi()) => {
+                drop(unadmitted.take());
+                let Ok(Ok((send, recv))) = incoming else {
                     break;
                 };
                 match handle_host_request(

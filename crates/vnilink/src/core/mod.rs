@@ -548,6 +548,9 @@ struct Shared {
     /// Incoming files connections by peer, closed on revoke and unpair so
     /// a file being served stops mid-way.
     files_serving: Mutex<HashMap<[u8; 32], Vec<iroh::endpoint::Connection>>>,
+    /// Incoming connections between their first packet and the first thing
+    /// they send, which anyone can open; a full set refuses new ones.
+    unadmitted: Arc<tokio::sync::Semaphore>,
     /// One files connection per peer, kept for the files that follow so a
     /// small file does not pay for a handshake; dropped on revoke/unpair.
     files_fetching: Mutex<HashMap<[u8; 32], transfer::Fetching>>,

@@ -145,6 +145,10 @@ impl Core {
     }
 }
 
+/// Files connections one paired computer may hold open to this one: a
+/// fetch shares one, and a redial replaces it once it is seen closed.
+const MAX_FILES_CONNECTIONS_PER_PEER: usize = 4;
+
 /// Serves one incoming files connection, one request per stream, until
 /// the peer closes it. Tracked by peer so revoke and unpair close it.
 pub(super) async fn serve_files_connection(shared: Arc<Shared>, connection: Connection) {
@@ -153,10 +157,17 @@ pub(super) async fn serve_files_connection(shared: Arc<Shared>, connection: Conn
         connection.close(0u8.into(), b"denied");
         return;
     }
-    lock(&shared.files_serving)
-        .entry(peer)
-        .or_default()
-        .push(connection.clone());
+    {
+        let mut serving = lock(&shared.files_serving);
+        let kept = serving.entry(peer).or_default();
+        kept.retain(|open| open.close_reason().is_none());
+        if kept.len() >= MAX_FILES_CONNECTIONS_PER_PEER {
+            drop(serving);
+            connection.close(0u8.into(), b"busy");
+            return;
+        }
+        kept.push(connection.clone());
+    }
     let mut streams = tokio::task::JoinSet::new();
     while let Ok((send, recv)) = connection.accept_bi().await {
         while streams.try_join_next().is_some() {}
