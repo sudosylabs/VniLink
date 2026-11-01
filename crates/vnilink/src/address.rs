@@ -20,8 +20,15 @@
 //! with more relays or sockets than the invitation allows, a repeated relay
 //! or an unparsable URL is [`Error::Malformed`]. A failed save in the
 //! receiver keeps the previous stored list.
+//!
+//! A peer chooses what its announcement says, and this computer later dials
+//! it. [`decode`] therefore keeps only what a remote computer can own: an
+//! HTTPS relay on a public name or address, and a direct socket that is not
+//! a multicast or broadcast group. Anything else is dropped from the
+//! announcement; the rest is kept. A loopback socket stays, because a peer
+//! on this same computer is a legitimate peer.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use crate::codec::{read_array, read_sockaddr, read_u8, write_sockaddr};
 use crate::error::Error;
@@ -125,7 +132,64 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Announcement, Error> {
     if cursor != bytes.len() {
         return Err(Error::Malformed);
     }
-    canonical(&relays, &direct)
+    let announcement = canonical(&relays, &direct)?;
+    Ok(reachable(announcement))
+}
+
+/// What a remote peer may ask this computer to dial.
+fn reachable(announcement: Announcement) -> Announcement {
+    Announcement {
+        relays: announcement
+            .relays
+            .into_iter()
+            .filter(|relay| relay_is_remote(relay))
+            .collect(),
+        direct: announcement
+            .direct
+            .into_iter()
+            .filter(|addr| !is_group_address(addr.ip()))
+            .collect(),
+    }
+}
+
+fn relay_is_remote(relay: &str) -> bool {
+    let Ok(url) = relay::parse_relay_url(relay) else {
+        return false;
+    };
+    if url.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<IpAddr>() {
+        Ok(ip) => is_global_unicast(ip),
+        Err(_) => !host.eq_ignore_ascii_case("localhost") && host.contains('.'),
+    }
+}
+
+fn is_group_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_multicast() || v4.is_broadcast(),
+        IpAddr::V6(v6) => v6.is_multicast(),
+    }
+}
+
+/// A relay on an IP literal must be reachable from outside its own network.
+fn is_global_unicast(ip: IpAddr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() || is_group_address(ip) {
+        return false;
+    }
+    match ip {
+        IpAddr::V4(v4) => !(v4.is_private() || v4.is_link_local()),
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            let unique_local = first & 0xfe00 == 0xfc00;
+            let link_local = first & 0xffc0 == 0xfe80;
+            !(unique_local || link_local)
+        }
+    }
 }
 
 /// How many announcements a link may have saved in a burst, and how long
@@ -184,6 +248,38 @@ mod tests {
         assert_eq!(
             admitted as u32, ANNOUNCEMENT_BURST,
             "idle time does not bank more than a burst"
+        );
+    }
+
+    #[test]
+    fn a_peer_cannot_make_this_computer_dial_its_own_services() {
+        let relays = vec![
+            "http://127.0.0.1:9".to_string(),
+            "https://localhost".to_string(),
+            "https://10.0.0.5".to_string(),
+            "https://[::1]".to_string(),
+            "https://intranet".to_string(),
+            "https://relay.example.com".to_string(),
+        ];
+        let direct = vec![
+            "127.0.0.1:9".parse().unwrap(),
+            "224.0.0.1:9".parse().unwrap(),
+            "255.255.255.255:9".parse().unwrap(),
+            "[ff02::1]:9".parse().unwrap(),
+            "203.0.113.7:9".parse().unwrap(),
+        ];
+        let sent = canonical(&relays, &direct).unwrap();
+        let received = decode(&encode(&sent.relays, &sent.direct)).unwrap();
+        assert_eq!(
+            received.relays,
+            vec!["https://relay.example.com/".to_string()]
+        );
+        assert_eq!(
+            received.direct,
+            vec![
+                "127.0.0.1:9".parse().unwrap(),
+                "203.0.113.7:9".parse().unwrap()
+            ]
         );
     }
 
