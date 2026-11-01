@@ -1783,7 +1783,7 @@ mod tests {
             "a stale generation must be rejected"
         );
         open.generation = session.generation;
-        open.kind = "input".into();
+        open.kind = ChannelKind::Input;
         let input = open.compute().unwrap();
         let status: serde_json::Value =
             serde_json::from_str(&video.desktop_audio(r#"{"type":"status"}"#.into()).unwrap())
@@ -1872,7 +1872,7 @@ mod tests {
             controller.controller_session(session.id).unwrap().phase,
             vnilink_app::FfiSessionPhase::Active
         );
-        open.kind = "video".into();
+        open.kind = ChannelKind::Video;
         let reopened = open.compute().unwrap();
         assert_ne!(
             reopened
@@ -2030,7 +2030,7 @@ mod tests {
             cameras: Arc::new(CameraChannels::default()),
             id: active.id,
             generation: active.generation,
-            kind: "files".into(),
+            kind: ChannelKind::Files,
             rows: 24,
             columns: 80,
             media: None,
