@@ -424,7 +424,7 @@ mod address_refresh_tests {
             direct.push(extra);
         }
         let secret = SecretKey::from_bytes(&core.export_identity());
-        let (token, _) = invitation::issue(
+        let (token, ..) = invitation::issue(
             &secret,
             &opened.relays,
             &direct,

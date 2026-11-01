@@ -70,7 +70,7 @@ impl Core {
         self.ensure_alive()?;
         let relays = dialable_relays(&self.shared.relay, &self.shared.endpoint.addr())?;
         let direct = direct_addresses(&self.shared.endpoint);
-        let (token, _) = invitation::issue(
+        let (token, ..) = invitation::issue(
             &self.shared.secret,
             &relays,
             &direct,
@@ -115,7 +115,7 @@ impl Core {
         self.ensure_alive()?;
         let relays = dialable_relays(&self.shared.relay, &self.shared.endpoint.addr())?;
         let direct = direct_addresses(&self.shared.endpoint);
-        let (token, invitation) = invitation::issue(
+        let (token, invitation, nonce) = invitation::issue(
             &self.shared.secret,
             &relays,
             &direct,
@@ -123,17 +123,11 @@ impl Core {
             now,
             self.shared.local_hostname(),
         )?;
-        let (_, nonce) = invitation::open(&token, now)?;
         let bytes = crate::pairing::enclose(&token)?;
         let check =
             crate::pairing::file_digits(&invitation.endpoint_id, &nonce, invitation.expires_at_ms);
         let mut state = self.alive_state()?;
-        state.pairing_window = Some(PairingWindow {
-            expires_at_ms: invitation.expires_at_ms,
-            allow_control,
-            requests: 0,
-            failures: 0,
-        });
+        state.pairing_window = Some(PairingWindow::new(invitation.expires_at_ms, allow_control));
         tracing::info!(
             target: crate::trace::PAIRING,
             ttl_s = ttl.as_secs(),
@@ -345,15 +339,16 @@ impl Core {
         if !crate::pairing::same_check(&pending.check, check) {
             // Wrong digits spend the window: a peer that keeps asking cannot
             // keep guessing.
-            if let Some(window) = state.pairing_window.as_mut() {
-                window.failures = window.failures.saturating_add(1);
-                if window.failures >= MAX_CONTROL_FAILURES {
-                    state.pairing_window = None;
-                    tracing::info!(
-                        target: crate::trace::PAIRING,
-                        "pairing window closed after wrong digits"
-                    );
-                }
+            if state
+                .pairing_window
+                .as_mut()
+                .is_some_and(PairingWindow::spend_failure)
+            {
+                state.pairing_window = None;
+                tracing::info!(
+                    target: crate::trace::PAIRING,
+                    "pairing window closed after wrong digits"
+                );
             }
             crate::ignored!(
                 crate::trace::PAIRING,
@@ -484,16 +479,15 @@ pub(super) async fn wait_for_control_approval(
             Ok(now_ms) => now_ms,
             Err(error) => return ControlAnswer::Rejected(error),
         };
-        let window_open = state.pairing_window.as_ref().is_some_and(|window| {
-            window.allow_control
-                && now_ms < window.expires_at_ms
-                && window.requests < MAX_CONTROL_REQUESTS
-        });
+        let window_open = state
+            .pairing_window
+            .as_ref()
+            .is_some_and(|window| window.admits_control(now_ms));
         if !window_open {
             if state
                 .pairing_window
                 .as_ref()
-                .is_some_and(|window| now_ms >= window.expires_at_ms)
+                .is_some_and(|window| window.expired(now_ms))
             {
                 state.pairing_window = None;
             }
@@ -507,7 +501,7 @@ pub(super) async fn wait_for_control_approval(
             return ControlAnswer::Rejected(Error::Unauthorized);
         };
         if let Some(window) = state.pairing_window.as_mut() {
-            window.requests = window.requests.saturating_add(1);
+            window.count_request();
         }
         let id = state.next_control_request;
         state.next_control_request = state.next_control_request.saturating_add(1);

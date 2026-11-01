@@ -415,6 +415,36 @@ struct PairingWindow {
     failures: u8,
 }
 
+impl PairingWindow {
+    fn new(expires_at_ms: u64, allow_control: bool) -> Self {
+        Self {
+            expires_at_ms,
+            allow_control,
+            requests: 0,
+            failures: 0,
+        }
+    }
+
+    fn expired(&self, now_ms: u64) -> bool {
+        now_ms >= self.expires_at_ms
+    }
+
+    /// Whether another control request may reach the prompt at `now_ms`.
+    fn admits_control(&self, now_ms: u64) -> bool {
+        self.allow_control && !self.expired(now_ms) && self.requests < MAX_CONTROL_REQUESTS
+    }
+
+    fn count_request(&mut self) {
+        self.requests = self.requests.saturating_add(1);
+    }
+
+    /// Counts a wrong digit; true when that was the last the window forgives.
+    fn spend_failure(&mut self) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        self.failures >= MAX_CONTROL_FAILURES
+    }
+}
+
 /// Control requests one pairing window shows its owner. A peer that keeps
 /// connecting cannot keep the prompt on screen.
 const MAX_CONTROL_REQUESTS: u8 = 5;

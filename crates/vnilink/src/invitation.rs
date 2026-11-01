@@ -116,7 +116,7 @@ pub(crate) fn issue(
     ttl: Duration,
     now: SystemTime,
     hostname: Option<String>,
-) -> Result<(String, Invitation), Error> {
+) -> Result<(String, Invitation, [u8; 16]), Error> {
     if ttl < Duration::from_secs(1) || ttl > MAX_TTL {
         return Err(Error::InvalidInvitation(
             "lifetime must be between 1 second and 15 minutes",
@@ -134,7 +134,7 @@ pub(crate) fn issue(
             .filter(|name| crate::hostname::clean_hostname(name).as_deref() == Some(name.as_str())),
     };
     let token = seal(secret, &invitation, nonce)?;
-    Ok((token, invitation))
+    Ok((token, invitation, nonce))
 }
 
 pub(crate) fn open(token: &str, now: SystemTime) -> Result<(Invitation, [u8; 16]), Error> {
@@ -426,7 +426,7 @@ mod tests {
     fn names_and_os_are_signed() {
         let secret = SecretKey::generate();
         let now = SystemTime::now();
-        let (token, _) = issue(
+        let (token, ..) = issue(
             &secret,
             &[],
             &[],
@@ -453,7 +453,7 @@ mod tests {
         let secret = SecretKey::generate();
         let relays = vec!["https://relay.example.com./".to_owned()];
         let direct = vec!["127.0.0.1:9".parse().unwrap()];
-        let (token, _) = issue(
+        let (token, ..) = issue(
             &secret,
             &relays,
             &direct,
@@ -481,7 +481,7 @@ mod tests {
     fn a_reader_whose_clock_runs_ahead_still_opens_a_fresh_invitation() {
         let secret = SecretKey::generate();
         let now = SystemTime::now();
-        let (token, invitation) =
+        let (token, invitation, _) =
             issue(&secret, &[], &[], Duration::from_secs(60), now, None).unwrap();
         let ahead = now + Duration::from_secs(60) + CLOCK_SKEW / 2;
         let (_, nonce) = open(&token, ahead).unwrap();
@@ -503,7 +503,7 @@ mod tests {
     fn an_invitation_that_outlasts_the_longest_lifetime_is_refused() {
         let secret = SecretKey::generate();
         let now = SystemTime::now();
-        let (token, _) = issue(&secret, &[], &[], MAX_TTL, now, None).unwrap();
+        let (token, ..) = issue(&secret, &[], &[], MAX_TTL, now, None).unwrap();
         let behind = now - CLOCK_SKEW / 2;
         assert!(
             open(&token, behind).is_ok(),
@@ -520,11 +520,11 @@ mod tests {
     fn expired_and_replayed_invitations_are_rejected() {
         let secret = SecretKey::generate();
         let now = SystemTime::now();
-        let (token, _) = issue(&secret, &[], &[], Duration::from_secs(1), now, None).unwrap();
+        let (token, ..) = issue(&secret, &[], &[], Duration::from_secs(1), now, None).unwrap();
         let later = now + Duration::from_secs(2) + CLOCK_SKEW;
         assert!(matches!(open(&token, later), Err(Error::InvitationExpired)));
 
-        let (token, invitation) =
+        let (token, invitation, _) =
             issue(&secret, &[], &[], Duration::from_secs(60), now, None).unwrap();
         let (_, nonce) = open(&token, now).unwrap();
         let mut cache = ReplayCache::new();
@@ -581,7 +581,7 @@ mod tests {
     fn uppercase_hex_opens_and_broken_tokens_do_not() {
         let secret = SecretKey::generate();
         let now = SystemTime::now();
-        let (token, invitation) = issue(
+        let (token, invitation, _) = issue(
             &secret,
             &["https://relay.example.com".to_owned()],
             &["[::1]:9".parse().unwrap()],
@@ -672,7 +672,7 @@ mod tests {
         let many: Vec<SocketAddr> = (1..=9)
             .map(|octet| SocketAddr::from(([10, 0, 0, octet], 9)))
             .collect();
-        let (_, invitation) =
+        let (_, invitation, _) =
             issue(&secret, &[], &many, Duration::from_secs(60), now, None).unwrap();
         assert_eq!(invitation.direct.len(), MAX_DIRECT_ADDRS);
         assert!(!invitation
