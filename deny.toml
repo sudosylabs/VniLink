@@ -1,0 +1,14 @@
+# Checked by `cargo deny check advisories bans sources` in CI. Licenses are not checked here.
+
+[advisories]
+version = 2
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
