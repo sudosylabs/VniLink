@@ -104,6 +104,9 @@ pub(crate) fn map_error(error: Error) -> FfiError {
         Error::InvitationCacheFull => FfiError::InvitationCacheFull,
         Error::NotPaired => FfiError::NotPaired,
         Error::NotHosting => FfiError::NotHosting,
+        Error::Disk(fault) => FfiError::InvalidSetting {
+            message: fault.message().to_string(),
+        },
         Error::Busy => FfiError::Busy,
         Error::Unauthorized => FfiError::Unauthorized,
         Error::ClipboardDenied => FfiError::ClipboardDenied,

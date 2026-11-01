@@ -11,14 +11,10 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use blake3::hazmat::ChainingValue;
 
-use crate::error::Error;
+use crate::error::{DiskFault, Error};
 
 use super::hash::{segment_len, SegmentHasher, SEGMENT_LEN};
 
-/// Writing the partial failed for a reason other than space.
-pub(crate) const PARTIAL_FAILED: &str = "the file could not be staged";
-/// The destination's disk is full, or its quota is used up.
-pub(crate) const NO_SPACE: &str = "there is not enough space for this file";
 const VALUE_LEN: u64 = 32;
 /// Bytes read at a time when held bytes are hashed again.
 const HOLD_CHUNK: usize = 1024 * 1024;
@@ -256,10 +252,10 @@ fn next_segment(start: u64, size: u64) -> Option<SegmentHasher> {
 }
 
 fn failed(error: std::io::Error) -> Error {
-    Error::InvalidSetting(if no_space(&error) {
-        NO_SPACE
+    Error::Disk(if no_space(&error) {
+        DiskFault::NoSpace
     } else {
-        PARTIAL_FAILED
+        DiskFault::Failed
     })
 }
 
@@ -448,12 +444,9 @@ mod tests {
     #[test]
     fn a_full_disk_is_named() {
         let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
-        assert!(matches!(failed(full), Error::InvalidSetting(NO_SPACE)));
+        assert!(matches!(failed(full), Error::Disk(DiskFault::NoSpace)));
         let other = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        assert!(matches!(
-            failed(other),
-            Error::InvalidSetting(PARTIAL_FAILED)
-        ));
+        assert!(matches!(failed(other), Error::Disk(DiskFault::Failed)));
     }
 
     #[test]

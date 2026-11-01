@@ -135,12 +135,39 @@ pub struct DesktopCursorImage {
     pub pixels: Buffer,
 }
 
+/// What a data channel carries; JavaScript names it by its lowercase word.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChannelKind {
+    Video,
+    Terminal,
+    Input,
+    Files,
+    Camera,
+    Audio,
+    Snapshot,
+}
+
+impl ChannelKind {
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "video" => Self::Video,
+            "terminal" => Self::Terminal,
+            "input" => Self::Input,
+            "files" => Self::Files,
+            "camera" => Self::Camera,
+            "audio" => Self::Audio,
+            "snapshot" => Self::Snapshot,
+            _ => return None,
+        })
+    }
+}
+
 #[napi]
 pub struct DataChannel {
     core: Arc<VnilinkCore>,
     session_id: u64,
     generation: u64,
-    kind: String,
+    kind: ChannelKind,
     input_used: std::sync::atomic::AtomicBool,
     owner: Option<(u64, u64)>,
     files: Mutex<Option<Arc<vnilink_app::FilesService>>>,
@@ -301,7 +328,7 @@ impl DataChannel {
         if let Some((id, generation)) = self.owner {
             let service = self.core.controller_service(id).map_err(core_error)?;
             let readable_exit = drain_terminal
-                && self.kind == "terminal"
+                && self.kind == ChannelKind::Terminal
                 && matches!(
                     service.phase,
                     vnilink_app::FfiServicePhase::Closed {
@@ -331,7 +358,7 @@ impl DataChannel {
 impl DataChannel {
     /// Video: why the picture stopped, once it did.
     fn desktop_end(&self) -> Option<vnilink_app::FfiDesktopEnd> {
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return None;
         }
         self.desktop
@@ -385,7 +412,7 @@ impl DataChannel {
     #[napi]
     pub fn on_ready(&self, callback: Function<(), ()>) -> Result<()> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid ready target"));
         }
         let ready = callback
@@ -414,7 +441,7 @@ impl DataChannel {
     #[napi]
     pub fn read(&self) -> Result<Option<DataEvent>> {
         self.check_for(true)?;
-        if self.kind == "video" {
+        if self.kind == ChannelKind::Video {
             let video = self
                 .video
                 .lock()
@@ -440,7 +467,7 @@ impl DataChannel {
                     metadata: serde_json::json!({ "end": desktop_end_label(end) }).to_string(),
                 }));
         }
-        if self.kind == "camera" {
+        if self.kind == ChannelKind::Camera {
             let camera = self
                 .camera
                 .lock()
@@ -464,7 +491,7 @@ impl DataChannel {
                 .to_string(),
             }));
         }
-        if self.kind == "snapshot" {
+        if self.kind == ChannelKind::Snapshot {
             let mut slot = self
                 .snapshot
                 .lock()
@@ -477,7 +504,7 @@ impl DataChannel {
                 }
             });
         }
-        if self.kind == "audio" {
+        if self.kind == ChannelKind::Audio {
             let audio = self
                 .audio
                 .lock()
@@ -494,13 +521,13 @@ impl DataChannel {
             }
             return Ok(None);
         }
-        if self.kind == "files" {
+        if self.kind == ChannelKind::Files {
             if let Some(changed) = self.folder_update()? {
                 return Ok(Some(changed));
             }
             return self.job_updates();
         }
-        if self.kind == "terminal" {
+        if self.kind == ChannelKind::Terminal {
             let terminal = self
                 .terminal
                 .lock()
@@ -614,7 +641,7 @@ impl DataChannel {
     #[napi]
     pub fn write(&self, bytes: Buffer) -> Result<()> {
         self.check()?;
-        if self.kind != "terminal" || bytes.is_empty() || bytes.len() > 16 * 1024 {
+        if self.kind != ChannelKind::Terminal || bytes.is_empty() || bytes.len() > 16 * 1024 {
             return Err(Error::from_reason("Invalid terminal input"));
         }
         let terminal = self
@@ -645,7 +672,7 @@ impl DataChannel {
     #[napi]
     pub fn input(&self, command: String) -> Result<()> {
         self.check()?;
-        if self.kind != "input" || command.len() > 8192 {
+        if self.kind != ChannelKind::Input || command.len() > 8192 {
             return Err(Error::from_reason("Invalid input"));
         }
         let raw: serde_json::Value =
@@ -743,7 +770,7 @@ impl DataChannel {
     #[napi]
     pub fn file_operation(&self, command: String) -> Result<AsyncTask<FileTask>> {
         self.check()?;
-        if self.kind != "files" || command.len() > 16384 {
+        if self.kind != ChannelKind::Files || command.len() > 16384 {
             return Err(Error::from_reason("Invalid file operation"));
         }
         let operation: FileOperation = serde_json::from_str(&command)
@@ -783,7 +810,7 @@ impl DataChannel {
         stills_shown: u32,
     ) -> Result<String> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid media status target"));
         }
         let desktop = self
@@ -853,7 +880,7 @@ impl DataChannel {
     #[napi]
     pub fn cursor(&self) -> Result<Option<DesktopCursor>> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid cursor target"));
         }
         let current = {
@@ -906,7 +933,7 @@ impl DataChannel {
     #[napi]
     pub fn request_keyframe(&self) -> Result<()> {
         self.check()?;
-        if self.kind != "video" {
+        if self.kind != ChannelKind::Video {
             return Err(Error::from_reason("Invalid keyframe target"));
         }
         let desktop = self
@@ -925,7 +952,7 @@ impl DataChannel {
     #[napi]
     pub fn desktop_audio(&self, operation: String) -> Result<String> {
         self.check()?;
-        if !matches!(self.kind.as_str(), "video" | "input") || operation.len() > 128 {
+        if !matches!(self.kind, ChannelKind::Video | ChannelKind::Input) || operation.len() > 128 {
             return Err(Error::from_reason("Invalid desktop audio target"));
         }
         let raw: serde_json::Value = serde_json::from_str(&operation)
@@ -976,7 +1003,7 @@ impl DataChannel {
         }
         let already = self.closed.swap(true, std::sync::atomic::Ordering::AcqRel);
         if !already
-            && self.kind == "input"
+            && self.kind == ChannelKind::Input
             && self
                 .input_used
                 .swap(false, std::sync::atomic::Ordering::AcqRel)
@@ -1112,7 +1139,7 @@ pub struct OpenChannelTask {
     cameras: Arc<CameraChannels>,
     id: u64,
     generation: u64,
-    kind: String,
+    kind: ChannelKind,
     rows: u16,
     columns: u16,
     media: Option<MediaConfig>,
@@ -1127,12 +1154,12 @@ impl Task for OpenChannelTask {
         {
             return Err(Error::from_reason("Stale session generation"));
         }
-        let desktop = if matches!(self.kind.as_str(), "video" | "input") {
+        let desktop = if matches!(self.kind, ChannelKind::Video | ChannelKind::Input) {
             Some(self.desktops.open(&self.core, self.id, self.generation)?)
         } else {
             None
         };
-        let video = if self.kind == "video" {
+        let video = if self.kind == ChannelKind::Video {
             Some(
                 desktop
                     .as_ref()
@@ -1144,11 +1171,11 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
-        let kind = match self.kind.as_str() {
-            "terminal" => Some(vnilink_app::FfiServiceKind::Terminal),
-            "files" => Some(vnilink_app::FfiServiceKind::Files),
-            "camera" => Some(vnilink_app::FfiServiceKind::Camera),
-            "audio" => Some(match &self.media {
+        let kind = match self.kind {
+            ChannelKind::Terminal => Some(vnilink_app::FfiServiceKind::Terminal),
+            ChannelKind::Files => Some(vnilink_app::FfiServiceKind::Files),
+            ChannelKind::Camera => Some(vnilink_app::FfiServiceKind::Camera),
+            ChannelKind::Audio => Some(match &self.media {
                 Some(MediaConfig::Audio { source_kind, .. }) if source_kind == "Microphone" => {
                     vnilink_app::FfiServiceKind::Microphone
                 }
@@ -1157,7 +1184,7 @@ impl Task for OpenChannelTask {
                 }
                 _ => return Err(Error::from_reason("Invalid audio source kind")),
             }),
-            _ => None,
+            ChannelKind::Video | ChannelKind::Input | ChannelKind::Snapshot => None,
         };
         let owner = kind
             .map(|kind| {
@@ -1166,7 +1193,10 @@ impl Task for OpenChannelTask {
             })
             .transpose()
             .map_err(core_error)?;
-        let terminal = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "terminal") {
+        let terminal = if let Some(owner) = owner
+            .as_ref()
+            .filter(|_| self.kind == ChannelKind::Terminal)
+        {
             match self.core.open_terminal_service(
                 owner.id,
                 owner.generation,
@@ -1184,7 +1214,8 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
-        let files = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "files") {
+        let files = if let Some(owner) = owner.as_ref().filter(|_| self.kind == ChannelKind::Files)
+        {
             match self.core.open_files_service(owner.id, owner.generation) {
                 Ok(service) => Some(service),
                 Err(error) => {
@@ -1195,40 +1226,42 @@ impl Task for OpenChannelTask {
         } else {
             None
         };
-        let camera = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "camera") {
-            let Some(MediaConfig::Camera {
-                device_id,
-                width,
-                height,
-                fps,
-            }) = &self.media
-            else {
-                retire_service(&self.core, owner.id, owner.generation);
-                return Err(Error::from_reason("Invalid camera configuration"));
-            };
-            match self.core.open_camera_service(
-                owner.id,
-                owner.generation,
-                vnilink_app::FfiCameraConfig {
-                    device_id: device_id.clone(),
-                    width: *width,
-                    height: *height,
-                    fps: *fps,
-                },
-            ) {
-                Ok(service) => {
-                    self.cameras.register(self.id, self.generation, &service);
-                    Some(service)
-                }
-                Err(error) => {
+        let camera =
+            if let Some(owner) = owner.as_ref().filter(|_| self.kind == ChannelKind::Camera) {
+                let Some(MediaConfig::Camera {
+                    device_id,
+                    width,
+                    height,
+                    fps,
+                }) = &self.media
+                else {
                     retire_service(&self.core, owner.id, owner.generation);
-                    return Err(core_error(error));
+                    return Err(Error::from_reason("Invalid camera configuration"));
+                };
+                match self.core.open_camera_service(
+                    owner.id,
+                    owner.generation,
+                    vnilink_app::FfiCameraConfig {
+                        device_id: device_id.clone(),
+                        width: *width,
+                        height: *height,
+                        fps: *fps,
+                    },
+                ) {
+                    Ok(service) => {
+                        self.cameras.register(self.id, self.generation, &service);
+                        Some(service)
+                    }
+                    Err(error) => {
+                        retire_service(&self.core, owner.id, owner.generation);
+                        return Err(core_error(error));
+                    }
                 }
-            }
-        } else {
-            None
-        };
-        let audio = if let Some(owner) = owner.as_ref().filter(|_| self.kind == "audio") {
+            } else {
+                None
+            };
+        let audio = if let Some(owner) = owner.as_ref().filter(|_| self.kind == ChannelKind::Audio)
+        {
             let Some(MediaConfig::Audio {
                 device_id,
                 source_kind,
@@ -1264,12 +1297,12 @@ impl Task for OpenChannelTask {
             None
         };
         let snapshot_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let snapshot = Arc::new(Mutex::new(if self.kind == "snapshot" {
+        let snapshot = Arc::new(Mutex::new(if self.kind == ChannelKind::Snapshot {
             SnapshotState::Pending
         } else {
             SnapshotState::Idle
         }));
-        if self.kind == "snapshot" {
+        if self.kind == ChannelKind::Snapshot {
             let core = Arc::clone(&self.core);
             let cancel = Arc::clone(&snapshot_cancel);
             let mailbox = Arc::clone(&snapshot);
@@ -1295,7 +1328,7 @@ impl Task for OpenChannelTask {
             core: self.core.clone(),
             session_id: self.id,
             generation: self.generation,
-            kind: self.kind.clone(),
+            kind: self.kind,
             input_used: std::sync::atomic::AtomicBool::new(false),
             owner: owner.map(|owner| (owner.id, owner.generation)),
             files: Mutex::new(files),
@@ -1330,12 +1363,8 @@ impl Engine {
         columns: u16,
         media: Option<String>,
     ) -> Result<AsyncTask<OpenChannelTask>> {
-        if !matches!(
-            kind.as_str(),
-            "video" | "terminal" | "input" | "files" | "camera" | "audio" | "snapshot"
-        ) {
-            return Err(Error::from_reason("Invalid channel kind"));
-        }
+        let kind =
+            ChannelKind::parse(&kind).ok_or_else(|| Error::from_reason("Invalid channel kind"))?;
         let config = media
             .map(|raw| {
                 if raw.len() > 4096 {
@@ -1345,11 +1374,11 @@ impl Engine {
                     .map_err(|_| Error::from_reason("Invalid media configuration"))
             })
             .transpose()?;
-        match (&*kind, &config) {
-            ("camera", Some(MediaConfig::Camera { .. }))
-            | ("audio", Some(MediaConfig::Audio { .. }))
-            | ("snapshot", Some(MediaConfig::Snapshot { .. })) => {}
-            ("camera" | "audio" | "snapshot", _) => {
+        match (kind, &config) {
+            (ChannelKind::Camera, Some(MediaConfig::Camera { .. }))
+            | (ChannelKind::Audio, Some(MediaConfig::Audio { .. }))
+            | (ChannelKind::Snapshot, Some(MediaConfig::Snapshot { .. })) => {}
+            (ChannelKind::Camera | ChannelKind::Audio | ChannelKind::Snapshot, _) => {
                 return Err(Error::from_reason("Media configuration required"))
             }
             (_, Some(_)) => return Err(Error::from_reason("Unexpected media configuration")),
@@ -1736,7 +1765,7 @@ mod tests {
             cameras: Arc::new(CameraChannels::default()),
             id: session.id,
             generation: session.generation,
-            kind: "video".into(),
+            kind: ChannelKind::Video,
             rows: 24,
             columns: 80,
             media: None,
@@ -1959,7 +1988,7 @@ mod tests {
             cameras: Arc::new(CameraChannels::default()),
             id: active.id,
             generation: active.generation,
-            kind: "terminal".into(),
+            kind: ChannelKind::Terminal,
             rows: 24,
             columns: 80,
             media: None,

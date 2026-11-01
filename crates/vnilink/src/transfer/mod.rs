@@ -53,7 +53,7 @@ pub(crate) use flush::flush_volume;
 #[cfg(test)]
 pub(crate) use hash::SegmentHasher;
 pub(crate) use hash::SEGMENT_LEN;
-pub(crate) use partial::{Partial, NO_SPACE, PARTIAL_FAILED};
+pub(crate) use partial::Partial;
 pub(crate) use receive::{ask, receive, Answer, Received};
 #[cfg(feature = "fuzzing")]
 pub(crate) use receive::{land, stream_of};

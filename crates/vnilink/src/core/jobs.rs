@@ -1712,11 +1712,7 @@ impl Core {
             Ok(Received::ShutDown) => return self.retry_later(id, SENDER_SHUT_DOWN),
             Ok(Received::Stalled) => return self.retry_later(id, STALLED),
             Ok(Received::Busy) => return self.retry_later(id, SENDER_BUSY),
-            Err(Error::InvalidSetting(reason))
-                if reason == transfer::NO_SPACE || reason == transfer::PARTIAL_FAILED =>
-            {
-                return self.mark_failed(id, reason);
-            }
+            Err(Error::Disk(fault)) => return self.mark_failed(id, fault.message()),
             Err(_) => return self.retry_later(id, UNREACHABLE),
             Ok(Received::Changed) => return self.mark_failed(id, SOURCE_CHANGED),
             Ok(Received::Mismatch) => return self.mark_failed(id, VERIFY_FAILED),
@@ -1751,7 +1747,6 @@ impl Core {
         }
         // Skip leaves the destination untouched; anything published lands
         // under its final name for verification.
-        let _ = landed;
         {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;

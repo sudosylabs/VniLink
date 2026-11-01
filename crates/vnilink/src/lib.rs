@@ -166,7 +166,7 @@ pub use diagnostics::{
     DiagnosticSnapshot, QueueDepths, ResourceCounts, ServiceSummary, SnapshotInputs,
     TransferSummary, MAX_EXPORT_BYTES, MAX_SNAPSHOT_LISTED, SNAPSHOT_VERSION,
 };
-pub use error::Error;
+pub use error::{DiskFault, Error};
 pub use events::{CoreEvent, EventSubscription};
 pub use fs::{
     DirPage, EntryKind, EntryToken, FolderKind, FsEntry, Place, PlaceRoot, Places, RevisionGate,
