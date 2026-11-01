@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { BugIndicatingError, onUnexpectedError } from './errors.js';
@@ -11,7 +11,7 @@ import { BugIndicatingError, onUnexpectedError } from './errors.js';
  * @deprecated Use `assert(...)` instead.
  * This method is usually used like this:
  * ```ts
- * import * as assert from 'vs/base/common/assert';
+ * import * as assert from 'base/common/assert';
  * assert.ok(...);
  * ```
  *
