@@ -14,7 +14,7 @@ VniLink is AGPL-3.0-only (`LICENSE`); `package.json`, the workspace `Cargo.toml`
 | Kind | Which files | Notice |
 |---|---|---|
 | original | Written for this project: Rust, TypeScript, `.mjs`, CSS, shell, PowerShell, batch, C/C++ | The project's AGPL-3.0-only notice. |
-| verbatim | Listed in `build/vscode-source.json` without `adapted`, and `build/lint/vscode/` | VS Code's notice, unchanged. A byte of difference fails `check:upstream`. |
+| verbatim | Listed in `build/vscode-source.json` (`files` or `tooling`) without `adapted`, including `pruned` copies | VS Code's notice, unchanged. A pruned copy is upstream text with whole declarations deleted; deleting adds no authorship, so it takes no modification notice. A byte of difference fails `check:upstream --checkout`. |
 | derived | Copied from VS Code and changed: `adapted` manifest entries, and files outside the manifest that start with VS Code's notice | VS Code's notice, then the modification notice (`AGPL-3.0-only AND MIT`). |
 | none | `vendor/`, generated bindings, and files that cannot carry a comment | Their own license, or `REUSE.toml` for the project's data files. |
 
@@ -32,7 +32,7 @@ npm run check:license                      # part of `npm run check` and the pre
 
 ## Copying code
 
-- **From VS Code:** import with `vscode import`; the copy keeps its notice. After editing it, run `vscode adapt`, add the line naming the adaptation to VS Code's notice (`Adapted for VniLink: …`), then run `license:apply --write`, which adds the modification notice and records the new hash. `vscode reset` restores upstream text and the manifest entry.
+- **From VS Code:** import with `vscode import`; the copy keeps its notice. To drop unused code, `vscode prune` deletes whole declarations and keeps the copy verbatim in kind. After editing it any other way, run `vscode adapt`, add the line naming the adaptation to VS Code's notice (`Adapted for VniLink: …`), then run `license:apply --write`, which adds the modification notice and records the new hash. `vscode reset` restores upstream text and the manifest entry.
 - **A file derived from VS Code that is not in the manifest** (a rewrite that restates upstream code) starts with VS Code's notice, including an `Adapted from VS Code <version> <upstream path>.` line; `license:apply --write` then adds the modification notice.
 - **From another project:** keep its license and notice, and do not add the project's. Put a whole dependency in `vendor/` with a `VNILINK.md` for local patches. Check first that its license is compatible with AGPL-3.0; GPL-2.0-only and licenses with advertising or field-of-use restrictions are not.
 - **Generated code** from a third party's header (bindgen output) carries that header's license, not the project's.

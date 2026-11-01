@@ -80,13 +80,16 @@ Never hand-copy. Use the importer:
 |---|---|
 | `node build/run.ts vscode import <checkout> src/vs/...` | Copies the file and its closure |
 | `adapt [--upstream-style] <paths>` | Records a reviewed edit |
+| `prune <checkout> <path> <names>` | Deletes whole unused declarations (`name`, `Owner.member`); the copy stays verbatim in kind |
+| `remove <paths>` | Deletes copies nothing imports, with their entries |
 | `reset <checkout> <paths>` | Restores upstream text |
 | `sync` | Re-derives entry points after imports change |
 
 Rules:
 - An adapted file names its adaptation in its header.
 - `--upstream-style` keeps VS Code's formatting and lint baseline for infrastructure.
-- `npm run check:upstream` must pass.
+- `npm run check:upstream` must pass; `-- --checkout <dir>` also compares every verbatim and pruned copy with upstream byte for byte.
+- `npm run check:unused` reports declarations nothing uses (`build/lib/unused.ts`). Prune them, or, for a use the checker cannot see (dispatch by a method's name), add an entry with its reason to `build/lint/unused-allowlist.json`.
 - A changed copy also takes the modification notice (`license:apply --write`); `licensing` owns the notices.
 - Copy only what a consumer in the same change uses.
 

@@ -8,13 +8,15 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { posix, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { manifestPath, type VsCodeManifest } from './lib/vscode/manifest.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-const manifest = JSON.parse(readFileSync(new URL('./vscode-source.json', import.meta.url), 'utf8')) as { files: { path: string; adapted?: boolean; upstreamStyle?: boolean }[] };
+// Read synchronously: the lint and format configurations import this module.
+const manifest = JSON.parse(readFileSync(resolve(root, manifestPath), 'utf8')) as VsCodeManifest;
 
-// Adapted infrastructure marked `upstreamStyle` keeps VS Code's formatting and lint baseline;
-// only its declared edits differ. Other adaptations are VniLink code held to application rules.
+// Verbatim and pruned copies, and adapted infrastructure marked `upstreamStyle`, keep VS Code's
+// formatting and lint baseline. Other adaptations are VniLink code held to application rules.
 export const upstreamFiles = manifest.files.filter(file => !file.adapted || file.upstreamStyle === true).map(file => file.path);
 
 const upstream = new Set(upstreamFiles);
@@ -49,10 +51,10 @@ export const upstreamIgnores = [...new Set(upstreamFiles.map(path => {
 	return path;
 }))];
 
-// Verbatim VS Code tooling copies (ESLint rules) keep upstream formatting.
-const upstreamToolingDirectories = ['build/lint/vscode/'];
+// Copied build tooling (ESLint rules) keeps upstream formatting unless adapted.
+const upstreamTooling = new Set(manifest.tooling.filter(file => !file.adapted).map(file => file.path));
 
 export function isApplicationFile(filename: string): boolean {
 	const path = relative(root, resolve(filename)).split(sep).join('/');
-	return !upstream.has(path) && path !== 'build/vscode-source.json' && !upstreamToolingDirectories.some(directory => path.startsWith(directory));
+	return !upstream.has(path) && !upstreamTooling.has(path) && path !== manifestPath;
 }

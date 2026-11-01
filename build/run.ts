@@ -28,9 +28,10 @@ import { checkProduct } from './lib/product.ts';
 import { buildRelease } from './lib/release.ts';
 import { benchService, launchAgentSide, runTestkitAgent, runUiTests, stressService, testRust, testService, validateLinux } from './lib/test.ts';
 import { verifyInstallers, verifyPackage, verifyRelease } from './lib/verify.ts';
+import { checkUnused } from './lib/unused.ts';
+import { verifyUpstream } from './lib/vscode/dependencies.ts';
+import { vscodeCommand } from './lib/vscode/import.ts';
 import { formatFiles } from './format.ts';
-import { verifyUpstream } from './vscodeDependencies.ts';
-import { vscodeCommand } from './vscodeImport.ts';
 
 type TaskFunction = (root: string, signal: AbortSignal, args: readonly string[]) => Promise<unknown>;
 
@@ -62,9 +63,10 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'check:license': root => checkLicense(root),
 	'license:apply': (root, _signal, args) => applyLicenseCommand(root, args),
 	'assets:tray': (root, signal) => renderTrayAssets(root, signal),
-	'check:upstream': () => verifyUpstream(),
+	'check:upstream': (root, _signal, args) => verifyUpstream(root, args),
+	'check:unused': (root, _signal, args) => checkUnused(root, args),
 	'format': (_root, _signal, args) => formatFiles(args),
-	'vscode': (_root, _signal, args) => vscodeCommand(args),
+	'vscode': (root, _signal, args) => vscodeCommand(root, args),
 	'doctor': (root, _signal, args) => doctor(root, args),
 	'docs:prerequisites': (root, _signal, args) => updatePrerequisiteDocs(root, args),
 };

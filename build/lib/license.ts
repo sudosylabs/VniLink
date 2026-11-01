@@ -15,7 +15,8 @@ import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { recordAdaptations } from '../vscodeImport.ts';
+import { recordAdaptations } from './vscode/import.ts';
+import { readManifest } from './vscode/manifest.ts';
 import { commentStyleOf, leadingMicrosoftNotice, modificationNotice, originalNotice, renderNotice, type CommentStyle } from './licenseNotice.ts';
 import { readProduct } from './product.ts';
 
@@ -24,12 +25,9 @@ const run = promisify(execFile);
 /** Third-party sources keep their own license and notice. */
 const excludedDirectories = ['vendor/'];
 
-/** Copied VS Code files that are not in the provenance manifest. */
-const verbatimDirectories = ['build/lint/vscode/'];
-
 /**
  * - `original`: written for this project.
- * - `verbatim`: VS Code's or another project's text, byte for byte; its notice stays as it is.
+ * - `verbatim`: VS Code's text, byte for byte or with whole declarations deleted; its notice stays as it is.
  * - `derived`: copied from VS Code and changed here.
  */
 export type NoticeKind = 'original' | 'verbatim' | 'derived';
@@ -46,8 +44,8 @@ interface ManifestEntry {
 
 /** The path of the pinned VS Code copies and which of them this project changed. */
 export async function readCopies(root: string): Promise<ReadonlyMap<string, ManifestEntry>> {
-	const manifest = JSON.parse(await readFile(join(root, 'build', 'vscode-source.json'), 'utf8')) as { files: ManifestEntry[] };
-	return new Map(manifest.files.map(file => [file.path, file]));
+	const manifest = await readManifest(root);
+	return new Map([...manifest.files, ...manifest.tooling].map(file => [file.path, file]));
 }
 
 /** A generated binding is the output of its header's license, not a file written here. */
@@ -67,9 +65,6 @@ export function noticeKindOf(path: string, text: string, copies: ReadonlyMap<str
 	const copy = copies.get(path);
 	if (copy) {
 		return copy.adapted ? 'derived' : 'verbatim';
-	}
-	if (verbatimDirectories.some(directory => path.startsWith(directory))) {
-		return 'verbatim';
 	}
 	return leadingMicrosoftNotice(text.slice(prelude(text, style).length), style) === undefined ? 'original' : 'derived';
 }
@@ -199,7 +194,7 @@ export interface ApplyOptions {
 	/** Writes the changes; without it they are only counted. */
 	readonly write?: boolean;
 	/** Records the new contents of adapted copies in the provenance manifest. */
-	readonly record?: (paths: readonly string[]) => Promise<void>;
+	readonly record?: (root: string, paths: readonly string[]) => Promise<void>;
 }
 
 /** Adds the notice every source file needs and returns the files it changed; throws, changing nothing, if a file cannot take one. */
@@ -230,7 +225,7 @@ export async function applyLicense(root: string, options: ApplyOptions = {}): Pr
 		}
 		const adapted = changes.map(change => change.path).filter(path => copies.get(path)?.adapted);
 		if (adapted.length > 0) {
-			await (options.record ?? recordAdaptations)(adapted);
+			await (options.record ?? recordAdaptations)(root, adapted);
 		}
 	}
 	return changes.map(change => change.path);

@@ -735,6 +735,10 @@
       "description": "Check the copied VS Code sources",
       "requires": ["node"]
     },
+    "check:unused": {
+      "description": "Find declarations in src that nothing uses",
+      "requires": ["node"]
+    },
     "check:hygiene": {
       "description": "Reject personal details in the repository",
       "requires": ["node", "git"]

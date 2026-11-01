@@ -31,6 +31,8 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !n
 const copies = new Map([
 	['src/vs/copied.ts', { path: 'src/vs/copied.ts' }],
 	['src/vs/changed.ts', { path: 'src/vs/changed.ts', adapted: true }],
+	['src/vs/pruned.ts', { path: 'src/vs/pruned.ts', pruned: ['unused'] }],
+	['build/lint/vscode/rule.ts', { path: 'build/lint/vscode/rule.ts' }],
 ]);
 
 test('a file written here carries the project notice in its language\'s comment', () => {
@@ -79,6 +81,7 @@ test('the notice kind follows the provenance manifest, then the notice a copy al
 	assert.equal(noticeKindOf('crates/a/src/lib.rs', '//! A.\n', copies), 'original');
 	assert.equal(noticeKindOf('src/vs/copied.ts', microsoft, copies), 'verbatim');
 	assert.equal(noticeKindOf('src/vs/changed.ts', microsoft, copies), 'derived');
+	assert.equal(noticeKindOf('src/vs/pruned.ts', microsoft, copies), 'verbatim', 'deleting declarations adds no authorship');
 	assert.equal(noticeKindOf('src/moved.ts', microsoft, copies), 'derived');
 	assert.equal(noticeKindOf('build/lint/vscode/rule.ts', 'code();\n', copies), 'verbatim');
 	// Naming the notice in code does not make a file a copy.
@@ -111,7 +114,7 @@ async function repository(files) {
 	const git = (...args) => run('git', ['-C', directory, '-c', 'user.name=Ada', '-c', 'user.email=ada@example.com', ...args], { env });
 	await copyFile(join(root, 'product.json'), join(directory, 'product.json'));
 	const base = {
-		'build/vscode-source.json': JSON.stringify({ files: [{ path: 'src/vs/copied.ts' }, { path: 'src/vs/changed.ts', adapted: true }] }),
+		'build/vscode-source.json': JSON.stringify({ files: [{ path: 'src/vs/copied.ts' }, { path: 'src/vs/changed.ts', adapted: true }], tooling: [] }),
 		'package.json': '{ "license": "AGPL-3.0-only" }\n',
 		'Cargo.toml': '[workspace.package]\nlicense = "AGPL-3.0-only"\n',
 		'LICENSE': '                    GNU AFFERO GENERAL PUBLIC LICENSE\n                       Version 3, 19 November 2007\n',
@@ -142,7 +145,7 @@ test('the notice is added to what lacks one, once, around a shebang or a batch f
 	});
 	try {
 		const recorded = [];
-		const options = { record: async paths => void recorded.push(...paths) };
+		const options = { record: async (_root, paths) => void recorded.push(...paths) };
 		assert.deepEqual((await applyLicense(directory, options)).sort(), ['crates/x/src/lib.rs', 'scripts/run.bat', 'scripts/run.sh', 'src/a.ts', 'src/copied.css', 'src/ui.css', 'src/vs/changed.ts'], 'a dry run lists the files');
 		assert.equal(await readFile(join(directory, 'src/a.ts'), 'utf8'), 'import "./b.js";\n');
 		await applyLicense(directory, { ...options, write: true });

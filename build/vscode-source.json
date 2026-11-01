@@ -4,192 +4,162 @@
   "commit": "2a59476c9bfcb90b3ddc372c36762471b7dfad1c",
   "sourceModifications": "Import specifiers flattened into src; adapted modules retain native window controls and service registration, integrating VniLink view tabs and contextual actions while removing editor and unrelated application services. Each adapted file is marked. Desktop composition is class-owned; adapted presentation modules use shared semantic palette variables. ARIA announcements are copied from the pinned upstream revision.",
   "runtimeIntegrated": true,
+  "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
   "files": [
     {
       "path": "src/base/browser/browser.ts",
       "upstreamPath": "src/vs/base/browser/browser.ts",
-      "sha256": "8dbb98957266777088901ebc896da986eecba73f16db3b8a5929d0394342399a",
-      "changedImports": 0
+      "sha256": "8dbb98957266777088901ebc896da986eecba73f16db3b8a5929d0394342399a"
     },
     {
       "path": "src/base/browser/canIUse.ts",
       "upstreamPath": "src/vs/base/browser/canIUse.ts",
-      "sha256": "0d0e1910902339bb7bc37c2fed83e800dc8ef4d020e9aa79f26f14d5b0383886",
-      "changedImports": 0
+      "sha256": "0d0e1910902339bb7bc37c2fed83e800dc8ef4d020e9aa79f26f14d5b0383886"
     },
     {
       "path": "src/base/browser/contextmenu.ts",
       "upstreamPath": "src/vs/base/browser/contextmenu.ts",
-      "sha256": "a8727762bdf48e93b265185774b9c94878d9068030df5365acae389e4f58d064",
-      "changedImports": 0
+      "sha256": "a8727762bdf48e93b265185774b9c94878d9068030df5365acae389e4f58d064"
     },
     {
       "path": "src/base/browser/cssValue.ts",
       "upstreamPath": "src/vs/base/browser/cssValue.ts",
-      "sha256": "9658ca3ef7224212adf41906561e39d20c81e28357afe61fe6993048420be27a",
-      "changedImports": 0
+      "sha256": "9658ca3ef7224212adf41906561e39d20c81e28357afe61fe6993048420be27a"
     },
     {
       "path": "src/base/browser/dnd.ts",
       "upstreamPath": "src/vs/base/browser/dnd.ts",
-      "sha256": "6afe2bb7e5bbaf9a9f4eee9c258a88b8efa3e4190573716a7d2a07c98532b1f1",
-      "changedImports": 0
+      "sha256": "6afe2bb7e5bbaf9a9f4eee9c258a88b8efa3e4190573716a7d2a07c98532b1f1"
     },
     {
       "path": "src/base/browser/dom.ts",
       "upstreamPath": "src/vs/base/browser/dom.ts",
-      "sha256": "5963e909ab4c16e4810714f39dac72e5e2253d53ed85129b04ce21b90571af8f",
-      "changedImports": 0
+      "sha256": "5963e909ab4c16e4810714f39dac72e5e2253d53ed85129b04ce21b90571af8f"
     },
     {
       "path": "src/base/browser/dompurify/cgmanifest.json",
       "upstreamPath": "src/vs/base/browser/dompurify/cgmanifest.json",
-      "sha256": "7535bcdd82daecb90f05f219d2e57398130543cb2fd7500446b7cb102608403f",
-      "changedImports": 0
+      "sha256": "7535bcdd82daecb90f05f219d2e57398130543cb2fd7500446b7cb102608403f"
     },
     {
       "path": "src/base/browser/dompurify/dompurify.d.ts",
       "upstreamPath": "src/vs/base/browser/dompurify/dompurify.d.ts",
-      "sha256": "eac2c68b4bac38b10b1ca1378bfcd83a305631f7e7692fb5a73a8bbc4bf4783a",
-      "changedImports": 0
+      "sha256": "eac2c68b4bac38b10b1ca1378bfcd83a305631f7e7692fb5a73a8bbc4bf4783a"
     },
     {
       "path": "src/base/browser/dompurify/dompurify.js",
       "upstreamPath": "src/vs/base/browser/dompurify/dompurify.js",
-      "sha256": "0f5bcc52bbee29587b5589098b2b210541cf30de6a2a056b278cc1a783ea6fd3",
-      "changedImports": 0
+      "sha256": "0f5bcc52bbee29587b5589098b2b210541cf30de6a2a056b278cc1a783ea6fd3"
     },
     {
       "path": "src/base/browser/dompurify/dompurify.license.txt",
       "upstreamPath": "src/vs/base/browser/dompurify/dompurify.license.txt",
-      "sha256": "125e902252d137a2ce6902726d340b9e4f76b7f0466794c9b68b3cbd955449ce",
-      "changedImports": 0
+      "sha256": "125e902252d137a2ce6902726d340b9e4f76b7f0466794c9b68b3cbd955449ce"
     },
     {
       "path": "src/base/browser/domSanitize.ts",
       "upstreamPath": "src/vs/base/browser/domSanitize.ts",
-      "sha256": "579640075878ffd874d655731c73063fbc6a109356975fd9f540124791a87d38",
-      "changedImports": 0
+      "sha256": "579640075878ffd874d655731c73063fbc6a109356975fd9f540124791a87d38"
     },
     {
       "path": "src/base/browser/domStylesheets.ts",
       "upstreamPath": "src/vs/base/browser/domStylesheets.ts",
-      "sha256": "a0883b8e0319a82a1e1188e7ae88077790fdbe76be4f1f62850bae4b57371f49",
-      "changedImports": 0
+      "sha256": "a0883b8e0319a82a1e1188e7ae88077790fdbe76be4f1f62850bae4b57371f49"
     },
     {
       "path": "src/base/browser/event.ts",
       "upstreamPath": "src/vs/base/browser/event.ts",
-      "sha256": "c6044a4aa1704335507b1adefb221150b7bfae8d719259bf36898c5d5e433769",
-      "changedImports": 0
+      "sha256": "c6044a4aa1704335507b1adefb221150b7bfae8d719259bf36898c5d5e433769"
     },
     {
       "path": "src/base/browser/fastDomNode.ts",
       "upstreamPath": "src/vs/base/browser/fastDomNode.ts",
-      "sha256": "82053ed18d444fcf48efba8836fea208edadc599c514d4dff3d76a2078e1aabb",
-      "changedImports": 0
+      "sha256": "82053ed18d444fcf48efba8836fea208edadc599c514d4dff3d76a2078e1aabb"
     },
     {
       "path": "src/base/browser/formattedTextRenderer.ts",
       "upstreamPath": "src/vs/base/browser/formattedTextRenderer.ts",
-      "sha256": "3919097c1bdf33846e71d178171c977e6bc6e4d57a57935fd95275304f7d6d4f",
-      "changedImports": 0
+      "sha256": "3919097c1bdf33846e71d178171c977e6bc6e4d57a57935fd95275304f7d6d4f"
     },
     {
       "path": "src/base/browser/globalPointerMoveMonitor.ts",
       "upstreamPath": "src/vs/base/browser/globalPointerMoveMonitor.ts",
-      "sha256": "ff70745de738cf368059f17609e40076d36299663fcbcbd3342e3ec235448320",
-      "changedImports": 0
+      "sha256": "ff70745de738cf368059f17609e40076d36299663fcbcbd3342e3ec235448320"
     },
     {
       "path": "src/base/browser/history.ts",
       "upstreamPath": "src/vs/base/browser/history.ts",
-      "sha256": "441f93668751b08a5df3ec70fd884ac509e7040e0e165d1de781db107467a263",
-      "changedImports": 0
+      "sha256": "441f93668751b08a5df3ec70fd884ac509e7040e0e165d1de781db107467a263"
     },
     {
       "path": "src/base/browser/iframe.ts",
       "upstreamPath": "src/vs/base/browser/iframe.ts",
-      "sha256": "4bdd13fb9d4e8cc6e60e9a02ae0d627d790077fb568f46d173746d22deda8c20",
-      "changedImports": 0
+      "sha256": "4bdd13fb9d4e8cc6e60e9a02ae0d627d790077fb568f46d173746d22deda8c20"
     },
     {
       "path": "src/base/browser/keyboardEvent.ts",
       "upstreamPath": "src/vs/base/browser/keyboardEvent.ts",
-      "sha256": "c0080f6875ce679e4140d6faeae4ccb2f8d0b26fa2946d0c5f24ec5c39206aba",
-      "changedImports": 0
+      "sha256": "c0080f6875ce679e4140d6faeae4ccb2f8d0b26fa2946d0c5f24ec5c39206aba"
     },
     {
       "path": "src/base/browser/markdownRenderer.ts",
       "upstreamPath": "src/vs/base/browser/markdownRenderer.ts",
-      "sha256": "e510a568e928e5f45e45d68a38e28ae0350c4428f33f3bec389aeb7094cabdb9",
-      "changedImports": 0
+      "sha256": "e510a568e928e5f45e45d68a38e28ae0350c4428f33f3bec389aeb7094cabdb9"
     },
     {
       "path": "src/base/browser/mouseEvent.ts",
       "upstreamPath": "src/vs/base/browser/mouseEvent.ts",
-      "sha256": "1294a8d4cba678bbee9ba1e67acf1e8adcc5cfe556800b57637d1748c613c214",
-      "changedImports": 0
+      "sha256": "1294a8d4cba678bbee9ba1e67acf1e8adcc5cfe556800b57637d1748c613c214"
     },
     {
       "path": "src/base/browser/touch.ts",
       "upstreamPath": "src/vs/base/browser/touch.ts",
-      "sha256": "dcbda20ded7649b18fd4d7896bd11cc694cae7225a7124b63b44ad057c1d499e",
-      "changedImports": 0
+      "sha256": "dcbda20ded7649b18fd4d7896bd11cc694cae7225a7124b63b44ad057c1d499e"
     },
     {
       "path": "src/base/browser/trustedTypes.ts",
       "upstreamPath": "src/vs/base/browser/trustedTypes.ts",
-      "sha256": "d34c7e9145ff69023c512301b5193523be0e26ac6ba2a981e00723bbcb329efe",
-      "changedImports": 0
+      "sha256": "d34c7e9145ff69023c512301b5193523be0e26ac6ba2a981e00723bbcb329efe"
     },
     {
       "path": "src/base/browser/ui/actionbar/actionbar.css",
       "upstreamPath": "src/vs/base/browser/ui/actionbar/actionbar.css",
-      "sha256": "bc0ed88a40f2884946122f30c6753c75992238457e62045a666e27e2d686746f",
-      "changedImports": 0
+      "sha256": "bc0ed88a40f2884946122f30c6753c75992238457e62045a666e27e2d686746f"
     },
     {
       "path": "src/base/browser/ui/actionbar/actionbar.ts",
       "upstreamPath": "src/vs/base/browser/ui/actionbar/actionbar.ts",
-      "sha256": "be8b957c8d0258283566472fae76e0f130a9e389bc80c1ed2e26e7314829930e",
-      "changedImports": 0
+      "sha256": "be8b957c8d0258283566472fae76e0f130a9e389bc80c1ed2e26e7314829930e"
     },
     {
       "path": "src/base/browser/ui/actionbar/actionViewItems.ts",
       "upstreamPath": "src/vs/base/browser/ui/actionbar/actionViewItems.ts",
-      "sha256": "e7b97d3dd083829e1337dd4b121dff5091fac8b472a0a02e976c5e56910e5ee3",
-      "changedImports": 0
+      "sha256": "e7b97d3dd083829e1337dd4b121dff5091fac8b472a0a02e976c5e56910e5ee3"
     },
     {
       "path": "src/base/browser/ui/aria/aria.css",
       "upstreamPath": "src/vs/base/browser/ui/aria/aria.css",
-      "sha256": "c6cea3b56d90a2754b2ac362e81792e55495ebae36194e65e35cd655f71f9775",
-      "changedImports": 0
+      "sha256": "c6cea3b56d90a2754b2ac362e81792e55495ebae36194e65e35cd655f71f9775"
     },
     {
       "path": "src/base/browser/ui/aria/aria.ts",
       "upstreamPath": "src/vs/base/browser/ui/aria/aria.ts",
-      "sha256": "61098dabc4f0069ff9d51e4b4262147e1c29ca58713eaa0782ef243d3cd63d27",
-      "changedImports": 0
+      "sha256": "61098dabc4f0069ff9d51e4b4262147e1c29ca58713eaa0782ef243d3cd63d27"
     },
     {
       "path": "src/base/browser/ui/button/button.css",
       "upstreamPath": "src/vs/base/browser/ui/button/button.css",
-      "sha256": "dbba08ece8bb96593f71582e9949da9c31c079c26b4b8996fbc66d1b608a4e40",
-      "changedImports": 0
+      "sha256": "dbba08ece8bb96593f71582e9949da9c31c079c26b4b8996fbc66d1b608a4e40"
     },
     {
       "path": "src/base/browser/ui/button/button.ts",
       "upstreamPath": "src/vs/base/browser/ui/button/button.ts",
-      "sha256": "c600ae93affa8451ebcf189a59c31288ac7dc99a6c6d61b7721f2a4f13a1f3f0",
-      "changedImports": 0
+      "sha256": "c600ae93affa8451ebcf189a59c31288ac7dc99a6c6d61b7721f2a4f13a1f3f0"
     },
     {
       "path": "src/base/browser/ui/contextview/contextview.css",
       "upstreamPath": "src/vs/base/browser/ui/contextview/contextview.css",
-      "sha256": "4d9b79d2bc8c93757cecf239a56a3b28a79834c8375b02dd7722ab4fed50c57a",
-      "changedImports": 0
+      "sha256": "4d9b79d2bc8c93757cecf239a56a3b28a79834c8375b02dd7722ab4fed50c57a"
     },
     {
       "path": "src/base/browser/ui/contextview/contextview.ts",
@@ -201,134 +171,112 @@
     {
       "path": "src/base/browser/ui/dialog/dialog.css",
       "upstreamPath": "src/vs/base/browser/ui/dialog/dialog.css",
-      "sha256": "a940c8895b8ef5f69d669f7db78ce7112999dedfff7c5b27af106dce1be47f6f",
-      "changedImports": 0
+      "sha256": "a940c8895b8ef5f69d669f7db78ce7112999dedfff7c5b27af106dce1be47f6f"
     },
     {
       "path": "src/base/browser/ui/dialog/dialog.ts",
       "upstreamPath": "src/vs/base/browser/ui/dialog/dialog.ts",
-      "sha256": "2db358fae4d8ff09b04b4908c784672a8790c374f860f6a7eaf468d05e9c516c",
-      "changedImports": 0
+      "sha256": "2db358fae4d8ff09b04b4908c784672a8790c374f860f6a7eaf468d05e9c516c"
     },
     {
       "path": "src/base/browser/ui/dnd/dnd.css",
       "upstreamPath": "src/vs/base/browser/ui/dnd/dnd.css",
-      "sha256": "17b6ae0fe1537b02290da98654800d9b2aee30ce4e1c7ed87a8821da41eb1faa",
-      "changedImports": 0
+      "sha256": "17b6ae0fe1537b02290da98654800d9b2aee30ce4e1c7ed87a8821da41eb1faa"
     },
     {
       "path": "src/base/browser/ui/dnd/dnd.ts",
       "upstreamPath": "src/vs/base/browser/ui/dnd/dnd.ts",
-      "sha256": "7f94b96885b2f82ca8193199a0c4a6db1740e02b9107b1bdf2ea6453b6da9b73",
-      "changedImports": 0
+      "sha256": "7f94b96885b2f82ca8193199a0c4a6db1740e02b9107b1bdf2ea6453b6da9b73"
     },
     {
       "path": "src/base/browser/ui/dropdown/dropdown.css",
       "upstreamPath": "src/vs/base/browser/ui/dropdown/dropdown.css",
-      "sha256": "efcd6c2dc1760a99872dd3b8defaf48b6632e1322981ded14cc24b211147bdb5",
-      "changedImports": 0
+      "sha256": "efcd6c2dc1760a99872dd3b8defaf48b6632e1322981ded14cc24b211147bdb5"
     },
     {
       "path": "src/base/browser/ui/dropdown/dropdown.ts",
       "upstreamPath": "src/vs/base/browser/ui/dropdown/dropdown.ts",
-      "sha256": "c69297c3ec8491ea81dc702ae852b1ea89da47379a312fb89fa1a83178bf77fa",
-      "changedImports": 0
+      "sha256": "c69297c3ec8491ea81dc702ae852b1ea89da47379a312fb89fa1a83178bf77fa"
     },
     {
       "path": "src/base/browser/ui/hover/hover.ts",
       "upstreamPath": "src/vs/base/browser/ui/hover/hover.ts",
-      "sha256": "0005bdd15e14ce6266500518d22786cfd8d73c1d89494ff3cddc806844d3dad2",
-      "changedImports": 0
+      "sha256": "0005bdd15e14ce6266500518d22786cfd8d73c1d89494ff3cddc806844d3dad2"
     },
     {
       "path": "src/base/browser/ui/hover/hoverDelegate.ts",
       "upstreamPath": "src/vs/base/browser/ui/hover/hoverDelegate.ts",
-      "sha256": "11b9cc96952f58edb12b7dbe7a2c531914b656d9b2368ce97c5223ade5c29c03",
-      "changedImports": 0
+      "sha256": "11b9cc96952f58edb12b7dbe7a2c531914b656d9b2368ce97c5223ade5c29c03"
     },
     {
       "path": "src/base/browser/ui/hover/hoverDelegate2.ts",
       "upstreamPath": "src/vs/base/browser/ui/hover/hoverDelegate2.ts",
-      "sha256": "e4278dcec596f2bb0bc1406120c082d912c49f1342b5c3cf3640cd99fbed54b0",
-      "changedImports": 0
+      "sha256": "e4278dcec596f2bb0bc1406120c082d912c49f1342b5c3cf3640cd99fbed54b0"
     },
     {
       "path": "src/base/browser/ui/hover/hoverDelegateFactory.ts",
       "upstreamPath": "src/vs/base/browser/ui/hover/hoverDelegateFactory.ts",
-      "sha256": "be86b306258120e8f8272e28acfdbb4e1e95e26cc9f0dde220fe4f7dfac0359d",
-      "changedImports": 0
+      "sha256": "be86b306258120e8f8272e28acfdbb4e1e95e26cc9f0dde220fe4f7dfac0359d"
     },
     {
       "path": "src/base/browser/ui/hover/hoverWidget.css",
       "upstreamPath": "src/vs/base/browser/ui/hover/hoverWidget.css",
-      "sha256": "c37e970f3c7ba579d185624ea272fbfa78a33e3c8203eed1e40e96c92eb6b264",
-      "changedImports": 0
+      "sha256": "c37e970f3c7ba579d185624ea272fbfa78a33e3c8203eed1e40e96c92eb6b264"
     },
     {
       "path": "src/base/browser/ui/hover/hoverWidget.ts",
       "upstreamPath": "src/vs/base/browser/ui/hover/hoverWidget.ts",
-      "sha256": "23f3b55a1c6cad7c134456bb89f95dc431f1d9c13923951a1fd8f9163e74c52c",
-      "changedImports": 0
+      "sha256": "23f3b55a1c6cad7c134456bb89f95dc431f1d9c13923951a1fd8f9163e74c52c"
     },
     {
       "path": "src/base/browser/ui/iconLabel/iconLabels.ts",
       "upstreamPath": "src/vs/base/browser/ui/iconLabel/iconLabels.ts",
-      "sha256": "00f8789bc951f34863fba861d5eec12706b3aedc141e3a504f797712ee35c318",
-      "changedImports": 0
+      "sha256": "00f8789bc951f34863fba861d5eec12706b3aedc141e3a504f797712ee35c318"
     },
     {
       "path": "src/base/browser/ui/inputbox/inputBox.css",
       "upstreamPath": "src/vs/base/browser/ui/inputbox/inputBox.css",
-      "sha256": "f8915354d2bb99998466d59d497378035ee36f83b9d78d3ed5973461c11fc990",
-      "changedImports": 0
+      "sha256": "f8915354d2bb99998466d59d497378035ee36f83b9d78d3ed5973461c11fc990"
     },
     {
       "path": "src/base/browser/ui/inputbox/inputBox.ts",
       "upstreamPath": "src/vs/base/browser/ui/inputbox/inputBox.ts",
-      "sha256": "378bd5d808a74009907dd77ccb318a673de5802060cc4e946ab26df1ef9dd58d",
-      "changedImports": 0
+      "sha256": "378bd5d808a74009907dd77ccb318a673de5802060cc4e946ab26df1ef9dd58d"
     },
     {
       "path": "src/base/browser/ui/list/list.css",
       "upstreamPath": "src/vs/base/browser/ui/list/list.css",
-      "sha256": "04a914629ae687da97e6d3f70b83da70bae2728992eaad197d18806b96cb1f03",
-      "changedImports": 0
+      "sha256": "04a914629ae687da97e6d3f70b83da70bae2728992eaad197d18806b96cb1f03"
     },
     {
       "path": "src/base/browser/ui/list/list.ts",
       "upstreamPath": "src/vs/base/browser/ui/list/list.ts",
-      "sha256": "613b56f2a23a270222ae9ff0b32936a45a0547e9118e49e969ee7fc37f34ee3c",
-      "changedImports": 0
+      "sha256": "613b56f2a23a270222ae9ff0b32936a45a0547e9118e49e969ee7fc37f34ee3c"
     },
     {
       "path": "src/base/browser/ui/list/listView.ts",
       "upstreamPath": "src/vs/base/browser/ui/list/listView.ts",
-      "sha256": "25c0ef6cf57e2c593377a4d503ef0f46c9c5052d0a2f0074ba487d21f3b37e8e",
-      "changedImports": 0
+      "sha256": "25c0ef6cf57e2c593377a4d503ef0f46c9c5052d0a2f0074ba487d21f3b37e8e"
     },
     {
       "path": "src/base/browser/ui/list/listWidget.ts",
       "upstreamPath": "src/vs/base/browser/ui/list/listWidget.ts",
-      "sha256": "569cea171bf62e17505b7791fb0a1391fac9d99d347a829efcb6da894f0ce75a",
-      "changedImports": 0
+      "sha256": "569cea171bf62e17505b7791fb0a1391fac9d99d347a829efcb6da894f0ce75a"
     },
     {
       "path": "src/base/browser/ui/list/rangeMap.ts",
       "upstreamPath": "src/vs/base/browser/ui/list/rangeMap.ts",
-      "sha256": "323546769c21f7f642ddfd9e15bb7597e644d4d749a67452d329dd9d0555e4be",
-      "changedImports": 0
+      "sha256": "323546769c21f7f642ddfd9e15bb7597e644d4d749a67452d329dd9d0555e4be"
     },
     {
       "path": "src/base/browser/ui/list/rowCache.ts",
       "upstreamPath": "src/vs/base/browser/ui/list/rowCache.ts",
-      "sha256": "f59300425a0fa516673f1a8fbfa355a2446f8b1456a41abd1322046a8691a144",
-      "changedImports": 0
+      "sha256": "f59300425a0fa516673f1a8fbfa355a2446f8b1456a41abd1322046a8691a144"
     },
     {
       "path": "src/base/browser/ui/list/splice.ts",
       "upstreamPath": "src/vs/base/browser/ui/list/splice.ts",
-      "sha256": "c27b1eafa9f346aeab891c0ef3f81e790a367ca1ec3cef56abff5dae6805645f",
-      "changedImports": 0
+      "sha256": "c27b1eafa9f346aeab891c0ef3f81e790a367ca1ec3cef56abff5dae6805645f"
     },
     {
       "path": "src/base/browser/ui/menu/menu.ts",
@@ -340,248 +288,207 @@
     {
       "path": "src/base/browser/ui/scrollbar/abstractScrollbar.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/abstractScrollbar.ts",
-      "sha256": "393b9cdeab7dd05bf1072e94ff956f4aba300eb1778cdc12dc04b4d47e5a3750",
-      "changedImports": 0
+      "sha256": "393b9cdeab7dd05bf1072e94ff956f4aba300eb1778cdc12dc04b4d47e5a3750"
     },
     {
       "path": "src/base/browser/ui/scrollbar/horizontalScrollbar.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/horizontalScrollbar.ts",
-      "sha256": "84120ecfb995b7c69ef5e27638fdb6b53e8be6b012e5d57c5e2615ee2ba95f59",
-      "changedImports": 0
+      "sha256": "84120ecfb995b7c69ef5e27638fdb6b53e8be6b012e5d57c5e2615ee2ba95f59"
     },
     {
       "path": "src/base/browser/ui/scrollbar/media/scrollbars.css",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/media/scrollbars.css",
-      "sha256": "e55c26bcadd23461727395da1e19fbca629b55091f743726df23281ba62cf2a0",
-      "changedImports": 0
+      "sha256": "e55c26bcadd23461727395da1e19fbca629b55091f743726df23281ba62cf2a0"
     },
     {
       "path": "src/base/browser/ui/scrollbar/scrollableElement.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/scrollableElement.ts",
-      "sha256": "76137a789c3e724b2d11f0637eab1429d6e1187436b9bdf0c29c2e83fa96ec2f",
-      "changedImports": 0
+      "sha256": "76137a789c3e724b2d11f0637eab1429d6e1187436b9bdf0c29c2e83fa96ec2f"
     },
     {
       "path": "src/base/browser/ui/scrollbar/scrollableElementOptions.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/scrollableElementOptions.ts",
-      "sha256": "8bf03d70f4a74772a14ca3ad0a12ad824043b09bb936b3be41afc168746ce5f6",
-      "changedImports": 0
+      "sha256": "8bf03d70f4a74772a14ca3ad0a12ad824043b09bb936b3be41afc168746ce5f6"
     },
     {
       "path": "src/base/browser/ui/scrollbar/scrollbarArrow.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/scrollbarArrow.ts",
-      "sha256": "fa7f1aca3c87c0e327c88e68b66d1fccc8bd7fb1d877908aeb61dd21224e1c04",
-      "changedImports": 0
+      "sha256": "fa7f1aca3c87c0e327c88e68b66d1fccc8bd7fb1d877908aeb61dd21224e1c04"
     },
     {
       "path": "src/base/browser/ui/scrollbar/scrollbarState.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/scrollbarState.ts",
-      "sha256": "062909ce856cfeb96a009f156f65800716b0b0b106fdde4082112999477e04de",
-      "changedImports": 0
+      "sha256": "062909ce856cfeb96a009f156f65800716b0b0b106fdde4082112999477e04de"
     },
     {
       "path": "src/base/browser/ui/scrollbar/scrollbarVisibilityController.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/scrollbarVisibilityController.ts",
-      "sha256": "236292f9b3c48616d51471a6502d5417c89e708f999c5e17536087d129055e29",
-      "changedImports": 0
+      "sha256": "236292f9b3c48616d51471a6502d5417c89e708f999c5e17536087d129055e29"
     },
     {
       "path": "src/base/browser/ui/scrollbar/verticalScrollbar.ts",
       "upstreamPath": "src/vs/base/browser/ui/scrollbar/verticalScrollbar.ts",
-      "sha256": "f3a32c3e9ad4f2f5ce73e0e2ebda624b272c96217e239ad4d67e83e1e3fb690b",
-      "changedImports": 0
+      "sha256": "f3a32c3e9ad4f2f5ce73e0e2ebda624b272c96217e239ad4d67e83e1e3fb690b"
     },
     {
       "path": "src/base/browser/ui/selectBox/selectBox.css",
       "upstreamPath": "src/vs/base/browser/ui/selectBox/selectBox.css",
-      "sha256": "061c054b8d155d561ab1728fd67d1a66960f8fd31a3a4641cd62fd0d19866762",
-      "changedImports": 0
+      "sha256": "061c054b8d155d561ab1728fd67d1a66960f8fd31a3a4641cd62fd0d19866762"
     },
     {
       "path": "src/base/browser/ui/selectBox/selectBox.ts",
       "upstreamPath": "src/vs/base/browser/ui/selectBox/selectBox.ts",
-      "sha256": "a76f305b5e6219366af30241cc172a2bb1741ffaed310c2f96b04f06bd3af527",
-      "changedImports": 0
+      "sha256": "a76f305b5e6219366af30241cc172a2bb1741ffaed310c2f96b04f06bd3af527"
     },
     {
       "path": "src/base/browser/ui/selectBox/selectBoxCustom.css",
       "upstreamPath": "src/vs/base/browser/ui/selectBox/selectBoxCustom.css",
-      "sha256": "646e2a99cee5a040541fe3a99ad9ab8a301f22da6b9701724488f2cb84b6e4c4",
-      "changedImports": 0
+      "sha256": "646e2a99cee5a040541fe3a99ad9ab8a301f22da6b9701724488f2cb84b6e4c4"
     },
     {
       "path": "src/base/browser/ui/selectBox/selectBoxCustom.ts",
       "upstreamPath": "src/vs/base/browser/ui/selectBox/selectBoxCustom.ts",
-      "sha256": "b8333a4c0bd59491819d1a093bfc3d09328c55370ad5ab542b3d669409de6eaf",
-      "changedImports": 0
+      "sha256": "b8333a4c0bd59491819d1a093bfc3d09328c55370ad5ab542b3d669409de6eaf"
     },
     {
       "path": "src/base/browser/ui/selectBox/selectBoxNative.ts",
       "upstreamPath": "src/vs/base/browser/ui/selectBox/selectBoxNative.ts",
-      "sha256": "3195fe8908ae6d21eb2b2349bfb614f383b6ba3465379c34275738e23d3543f1",
-      "changedImports": 0
+      "sha256": "3195fe8908ae6d21eb2b2349bfb614f383b6ba3465379c34275738e23d3543f1"
     },
     {
       "path": "src/base/browser/ui/toggle/toggle.css",
       "upstreamPath": "src/vs/base/browser/ui/toggle/toggle.css",
-      "sha256": "53bf61991fa98548bd3410c0e0ad6a9fa89a0fed59ea7ccba7e5588b01ed9597",
-      "changedImports": 0
+      "sha256": "53bf61991fa98548bd3410c0e0ad6a9fa89a0fed59ea7ccba7e5588b01ed9597"
     },
     {
       "path": "src/base/browser/ui/toggle/toggle.ts",
       "upstreamPath": "src/vs/base/browser/ui/toggle/toggle.ts",
-      "sha256": "60804dfaad54bf60c2e9f7bfb6681f9a977a2c856906cffa12a16b0322186ba2",
-      "changedImports": 0
+      "sha256": "60804dfaad54bf60c2e9f7bfb6681f9a977a2c856906cffa12a16b0322186ba2"
     },
     {
       "path": "src/base/browser/ui/widget.ts",
       "upstreamPath": "src/vs/base/browser/ui/widget.ts",
-      "sha256": "912c1c8573b5f0540a307ee512d9480aec7e4106219154eb0e957c73afa330de",
-      "changedImports": 0
+      "sha256": "912c1c8573b5f0540a307ee512d9480aec7e4106219154eb0e957c73afa330de"
     },
     {
       "path": "src/base/browser/window.ts",
       "upstreamPath": "src/vs/base/browser/window.ts",
-      "sha256": "8003fc60f1f022d1ae4abfa8773385399ab5a7413dccbffb825f1c0c8bdef13b",
-      "changedImports": 0
+      "sha256": "8003fc60f1f022d1ae4abfa8773385399ab5a7413dccbffb825f1c0c8bdef13b"
     },
     {
       "path": "src/base/common/actions.ts",
       "upstreamPath": "src/vs/base/common/actions.ts",
-      "sha256": "4a196f38e6352196017ac562294da28d957e34a633acc880f08af34066cd77e4",
-      "changedImports": 0
+      "sha256": "4a196f38e6352196017ac562294da28d957e34a633acc880f08af34066cd77e4"
     },
     {
       "path": "src/base/common/arrays.ts",
       "upstreamPath": "src/vs/base/common/arrays.ts",
-      "sha256": "e9a08190d445f28485a24c8b2701b5d91fda0702f3999f96d53f0cfebc032c0a",
-      "changedImports": 0
+      "sha256": "e9a08190d445f28485a24c8b2701b5d91fda0702f3999f96d53f0cfebc032c0a"
     },
     {
       "path": "src/base/common/arraysFind.ts",
       "upstreamPath": "src/vs/base/common/arraysFind.ts",
-      "sha256": "b170eb4ef83d61dabeb8aaa3355b006a95f575c6e5a9bba3176ac67f8b446a8b",
-      "changedImports": 0
+      "sha256": "b170eb4ef83d61dabeb8aaa3355b006a95f575c6e5a9bba3176ac67f8b446a8b"
     },
     {
       "path": "src/base/common/assert.ts",
       "upstreamPath": "src/vs/base/common/assert.ts",
-      "sha256": "16b9d0b4b5abe860fa90388d9db8202bc157efab7104acb5964e58dc25c020ad",
-      "changedImports": 0
+      "sha256": "16b9d0b4b5abe860fa90388d9db8202bc157efab7104acb5964e58dc25c020ad"
     },
     {
       "path": "src/base/common/async.ts",
       "upstreamPath": "src/vs/base/common/async.ts",
-      "sha256": "264987516867959d71cc650421a7edd78d49ea2f170f94c74b28e7b2dbc98b84",
-      "changedImports": 0
+      "sha256": "264987516867959d71cc650421a7edd78d49ea2f170f94c74b28e7b2dbc98b84"
     },
     {
       "path": "src/base/common/buffer.ts",
       "upstreamPath": "src/vs/base/common/buffer.ts",
-      "sha256": "5f374d79479cb42c15ea1c4bbf54f8fcf88a17541c8e2192a533aecb8698319c",
-      "changedImports": 0
+      "sha256": "5f374d79479cb42c15ea1c4bbf54f8fcf88a17541c8e2192a533aecb8698319c"
     },
     {
       "path": "src/base/common/cache.ts",
       "upstreamPath": "src/vs/base/common/cache.ts",
-      "sha256": "42019b6f65cb6d0d10a74b8d74e5aa3e7099dc018044337ef826f8d76f925591",
-      "changedImports": 0
+      "sha256": "42019b6f65cb6d0d10a74b8d74e5aa3e7099dc018044337ef826f8d76f925591"
     },
     {
       "path": "src/base/common/cancellation.ts",
       "upstreamPath": "src/vs/base/common/cancellation.ts",
-      "sha256": "0ed0f0be5f9ac280fe1e45c0e81568825283d2c8dd17d2c2b03c21c1912a8c3b",
-      "changedImports": 0
+      "sha256": "0ed0f0be5f9ac280fe1e45c0e81568825283d2c8dd17d2c2b03c21c1912a8c3b"
     },
     {
       "path": "src/base/common/charCode.ts",
       "upstreamPath": "src/vs/base/common/charCode.ts",
-      "sha256": "ddb45e08c0f66a253a52ca5eaafc705687ceda45229ce5c9a1aa64d0fb34e510",
-      "changedImports": 0
+      "sha256": "ddb45e08c0f66a253a52ca5eaafc705687ceda45229ce5c9a1aa64d0fb34e510"
     },
     {
       "path": "src/base/common/codicons.ts",
       "upstreamPath": "src/vs/base/common/codicons.ts",
-      "sha256": "b675ab8c19b3a239762885abba292a02c4372baaf95ffd824e072788efa89939",
-      "changedImports": 0
+      "sha256": "b675ab8c19b3a239762885abba292a02c4372baaf95ffd824e072788efa89939"
     },
     {
       "path": "src/base/common/codiconsLibrary.ts",
       "upstreamPath": "src/vs/base/common/codiconsLibrary.ts",
-      "sha256": "64a56d2241921075a1f9d836052c115c8548d7d7427f97a195cf16b410588556",
-      "changedImports": 0
+      "sha256": "64a56d2241921075a1f9d836052c115c8548d7d7427f97a195cf16b410588556"
     },
     {
       "path": "src/base/common/codiconsUtil.ts",
       "upstreamPath": "src/vs/base/common/codiconsUtil.ts",
-      "sha256": "a5ebd55c94548af8b5ed1b69f2f007bae3253c19b665463e33ca2649709d6117",
-      "changedImports": 0
+      "sha256": "a5ebd55c94548af8b5ed1b69f2f007bae3253c19b665463e33ca2649709d6117"
     },
     {
       "path": "src/base/common/collections.ts",
       "upstreamPath": "src/vs/base/common/collections.ts",
-      "sha256": "643a53c117abaa383e2a3d047589d5b79a826c280df1974cdd64be4d8f7835a9",
-      "changedImports": 0
+      "sha256": "643a53c117abaa383e2a3d047589d5b79a826c280df1974cdd64be4d8f7835a9"
     },
     {
       "path": "src/base/common/color.ts",
       "upstreamPath": "src/vs/base/common/color.ts",
-      "sha256": "af23ae745fe7a718d5221fa4d316a30dcd60771b2f5b5f28f409661151e8c896",
-      "changedImports": 0
+      "sha256": "af23ae745fe7a718d5221fa4d316a30dcd60771b2f5b5f28f409661151e8c896"
     },
     {
       "path": "src/base/common/decorators.ts",
       "upstreamPath": "src/vs/base/common/decorators.ts",
-      "sha256": "966ab56fac588cfc8248a1548958f26f98b55d9221c8c675992dbd77f5663da9",
-      "changedImports": 0
+      "sha256": "966ab56fac588cfc8248a1548958f26f98b55d9221c8c675992dbd77f5663da9"
     },
     {
       "path": "src/base/common/decorators/cancelPreviousCalls.ts",
       "upstreamPath": "src/vs/base/common/decorators/cancelPreviousCalls.ts",
-      "sha256": "651e601166c89f65a3b0287a239faf97a75b4b28ef4c71378ae36f5aceca21ab",
-      "changedImports": 0
+      "sha256": "651e601166c89f65a3b0287a239faf97a75b4b28ef4c71378ae36f5aceca21ab"
     },
     {
       "path": "src/base/common/defaultAccount.ts",
       "upstreamPath": "src/vs/base/common/defaultAccount.ts",
-      "sha256": "b119ae7ee3b220cfd7d93b0d9dcdd6f6276859e170143a48d6a740245e929e52",
-      "changedImports": 0
+      "sha256": "b119ae7ee3b220cfd7d93b0d9dcdd6f6276859e170143a48d6a740245e929e52"
     },
     {
       "path": "src/base/common/equals.ts",
       "upstreamPath": "src/vs/base/common/equals.ts",
-      "sha256": "62a7350742a35570062837d8ef3df1889d4faf48dd66b614162e6418aa36414c",
-      "changedImports": 0
+      "sha256": "62a7350742a35570062837d8ef3df1889d4faf48dd66b614162e6418aa36414c"
     },
     {
       "path": "src/base/common/errors.ts",
       "upstreamPath": "src/vs/base/common/errors.ts",
-      "sha256": "4771945225f0689ea9feef5fcf148dc493791edaf8693d5e11b057ce4a8d0b6e",
-      "changedImports": 0
+      "sha256": "4771945225f0689ea9feef5fcf148dc493791edaf8693d5e11b057ce4a8d0b6e"
     },
     {
       "path": "src/base/common/event.ts",
       "upstreamPath": "src/vs/base/common/event.ts",
-      "sha256": "90252004ebb0dcb55cf7a544c314a76d674c1a55dd2e0c4a74f395c8e7da87b2",
-      "changedImports": 0
+      "sha256": "90252004ebb0dcb55cf7a544c314a76d674c1a55dd2e0c4a74f395c8e7da87b2"
     },
     {
       "path": "src/base/common/extpath.ts",
       "upstreamPath": "src/vs/base/common/extpath.ts",
-      "sha256": "0c8ee50b4d29423eb2d400850a6dc156fc9a6da0db0d4859e606c2bd38e1dbc3",
-      "changedImports": 0
+      "sha256": "0c8ee50b4d29423eb2d400850a6dc156fc9a6da0db0d4859e606c2bd38e1dbc3"
     },
     {
       "path": "src/base/common/filters.ts",
       "upstreamPath": "src/vs/base/common/filters.ts",
-      "sha256": "b056e28134697fbf19364327a0905a692691a24be78d76e4bc0d95e7fc0b7920",
-      "changedImports": 0
+      "sha256": "b056e28134697fbf19364327a0905a692691a24be78d76e4bc0d95e7fc0b7920"
     },
     {
       "path": "src/base/common/functional.ts",
       "upstreamPath": "src/vs/base/common/functional.ts",
-      "sha256": "976c27e04b82913ad0e068cce30d74212c2c86a86f866038156b6fd9dca27610",
-      "changedImports": 0
+      "sha256": "976c27e04b82913ad0e068cce30d74212c2c86a86f866038156b6fd9dca27610"
     },
     {
       "path": "src/base/common/glob.ts",
@@ -599,548 +506,457 @@
     {
       "path": "src/base/common/history.ts",
       "upstreamPath": "src/vs/base/common/history.ts",
-      "sha256": "734cfdf9cf48d036e9812b9f52267a573b41d8d93ef14588ec2e104e3c7a7d1d",
-      "changedImports": 0
+      "sha256": "734cfdf9cf48d036e9812b9f52267a573b41d8d93ef14588ec2e104e3c7a7d1d"
     },
     {
       "path": "src/base/common/htmlContent.ts",
       "upstreamPath": "src/vs/base/common/htmlContent.ts",
-      "sha256": "ec745b418aa22d6cbb67f61e84e3bb9ac9e098460292f4f9407d7ef6c78f74c4",
-      "changedImports": 0
+      "sha256": "ec745b418aa22d6cbb67f61e84e3bb9ac9e098460292f4f9407d7ef6c78f74c4"
     },
     {
       "path": "src/base/common/iconLabels.ts",
       "upstreamPath": "src/vs/base/common/iconLabels.ts",
-      "sha256": "6658c587e560cf5956425b3645c1629d77b1dc72385350a4ccf35125b835489f",
-      "changedImports": 0
+      "sha256": "6658c587e560cf5956425b3645c1629d77b1dc72385350a4ccf35125b835489f"
     },
     {
       "path": "src/base/common/idGenerator.ts",
       "upstreamPath": "src/vs/base/common/idGenerator.ts",
-      "sha256": "adb4cb1c69f2a2a8bfdd5cfc9e6fc803ec8ad86d18f50c24c3390e2d2d646114",
-      "changedImports": 0
+      "sha256": "adb4cb1c69f2a2a8bfdd5cfc9e6fc803ec8ad86d18f50c24c3390e2d2d646114"
     },
     {
       "path": "src/base/common/iterator.ts",
       "upstreamPath": "src/vs/base/common/iterator.ts",
-      "sha256": "a787d959a2904785ea351dba98bffdcd37fcb367c0eb97f065277add1ce86aa6",
-      "changedImports": 0
+      "sha256": "a787d959a2904785ea351dba98bffdcd37fcb367c0eb97f065277add1ce86aa6"
     },
     {
       "path": "src/base/common/jsonSchema.ts",
       "upstreamPath": "src/vs/base/common/jsonSchema.ts",
-      "sha256": "beaa9462f26dc293df6c5ca524eea4270bf61f3572d8b99477403093886bddd9",
-      "changedImports": 0
+      "sha256": "beaa9462f26dc293df6c5ca524eea4270bf61f3572d8b99477403093886bddd9"
     },
     {
       "path": "src/base/common/keybindings.ts",
       "upstreamPath": "src/vs/base/common/keybindings.ts",
-      "sha256": "7d45fe47f4371c0c5513dfc0d544b04ccab88789ef08d5bbbf00ca93928faa49",
-      "changedImports": 0
+      "sha256": "7d45fe47f4371c0c5513dfc0d544b04ccab88789ef08d5bbbf00ca93928faa49"
     },
     {
       "path": "src/base/common/keyCodes.ts",
       "upstreamPath": "src/vs/base/common/keyCodes.ts",
-      "sha256": "7e059bb385cae572916c3aac8770831c86a0f7d4b6da250b9d0d745143bd20f1",
-      "changedImports": 0
+      "sha256": "7e059bb385cae572916c3aac8770831c86a0f7d4b6da250b9d0d745143bd20f1"
     },
     {
       "path": "src/base/common/labels.ts",
       "upstreamPath": "src/vs/base/common/labels.ts",
-      "sha256": "5501fb2982aefc62ff83e6601e6a42451a972bd62ef0ba22132143f489bc4218",
-      "changedImports": 0
+      "sha256": "5501fb2982aefc62ff83e6601e6a42451a972bd62ef0ba22132143f489bc4218"
     },
     {
       "path": "src/base/common/layout.ts",
       "upstreamPath": "src/vs/base/common/layout.ts",
-      "sha256": "8f0560e529a58f9a78b37b7e44088a36c171370ae7291d1263d648a0d81fe647",
-      "changedImports": 0
+      "sha256": "8f0560e529a58f9a78b37b7e44088a36c171370ae7291d1263d648a0d81fe647"
     },
     {
       "path": "src/base/common/lazy.ts",
       "upstreamPath": "src/vs/base/common/lazy.ts",
-      "sha256": "c24572ac4d39148c814f914e69c9fc40a7ce66836ef9eda65f80ce47f2357893",
-      "changedImports": 0
+      "sha256": "c24572ac4d39148c814f914e69c9fc40a7ce66836ef9eda65f80ce47f2357893"
     },
     {
       "path": "src/base/common/lifecycle.ts",
       "upstreamPath": "src/vs/base/common/lifecycle.ts",
-      "sha256": "3ce8457a9317bf4b5008a22ddd9fe43a6d68b3069d57f8ec7549d3188e80d424",
-      "changedImports": 0
+      "sha256": "3ce8457a9317bf4b5008a22ddd9fe43a6d68b3069d57f8ec7549d3188e80d424"
     },
     {
       "path": "src/base/common/linkedList.ts",
       "upstreamPath": "src/vs/base/common/linkedList.ts",
-      "sha256": "fc6120f8be8fb3198daf3c214eedd777001a608a6721642ce7f7e888fd9c0df1",
-      "changedImports": 0
+      "sha256": "fc6120f8be8fb3198daf3c214eedd777001a608a6721642ce7f7e888fd9c0df1"
     },
     {
       "path": "src/base/common/map.ts",
       "upstreamPath": "src/vs/base/common/map.ts",
-      "sha256": "54d5814a5f86b4900ebb64ef9b9513d468b2b72a57bbf6ac4fa189dd457a9f0d",
-      "changedImports": 0
+      "sha256": "54d5814a5f86b4900ebb64ef9b9513d468b2b72a57bbf6ac4fa189dd457a9f0d"
     },
     {
       "path": "src/base/common/marked/cgmanifest.json",
       "upstreamPath": "src/vs/base/common/marked/cgmanifest.json",
-      "sha256": "222cbb4ffe54a24b10851a4a2574d8a7a469c07ef8736c643e7da34b8f7b96ce",
-      "changedImports": 0
+      "sha256": "222cbb4ffe54a24b10851a4a2574d8a7a469c07ef8736c643e7da34b8f7b96ce"
     },
     {
       "path": "src/base/common/marked/marked.d.ts",
       "upstreamPath": "src/vs/base/common/marked/marked.d.ts",
-      "sha256": "a13228bf4645a4f13d586d6bc7bdb71073c7c2817dc51181d127dbcb48193463",
-      "changedImports": 0
+      "sha256": "a13228bf4645a4f13d586d6bc7bdb71073c7c2817dc51181d127dbcb48193463"
     },
     {
       "path": "src/base/common/marked/marked.js",
       "upstreamPath": "src/vs/base/common/marked/marked.js",
-      "sha256": "75746ae6ff08f4e9b94090ed018e5ac1bf7dbb7e8fcdb4ec48784bd6569d9fda",
-      "changedImports": 0
+      "sha256": "75746ae6ff08f4e9b94090ed018e5ac1bf7dbb7e8fcdb4ec48784bd6569d9fda"
     },
     {
       "path": "src/base/common/marked/marked.license.txt",
       "upstreamPath": "src/vs/base/common/marked/marked.license.txt",
-      "sha256": "43624283832b560f19539ec6d5766b7281acd4a63ada62e494c4e63c7a849bdb",
-      "changedImports": 0
+      "sha256": "43624283832b560f19539ec6d5766b7281acd4a63ada62e494c4e63c7a849bdb"
     },
     {
       "path": "src/base/common/marshalling.ts",
       "upstreamPath": "src/vs/base/common/marshalling.ts",
-      "sha256": "5f853ab37f0c9a4793ade19ec2c5a4232ca8aa3707be497b7fbda492d0b327d2",
-      "changedImports": 0
+      "sha256": "5f853ab37f0c9a4793ade19ec2c5a4232ca8aa3707be497b7fbda492d0b327d2"
     },
     {
       "path": "src/base/common/marshallingIds.ts",
       "upstreamPath": "src/vs/base/common/marshallingIds.ts",
-      "sha256": "3048bf85eed631d42e32ef8684a64019bcc5befe9e7eb94de445fd4c66cb9acd",
-      "changedImports": 0
+      "sha256": "3048bf85eed631d42e32ef8684a64019bcc5befe9e7eb94de445fd4c66cb9acd"
     },
     {
       "path": "src/base/common/mime.ts",
       "upstreamPath": "src/vs/base/common/mime.ts",
-      "sha256": "9e151082d6b8e73e57c796d8d50b03851e1745f7363d743c23f7e3668cc18881",
-      "changedImports": 0
+      "sha256": "9e151082d6b8e73e57c796d8d50b03851e1745f7363d743c23f7e3668cc18881"
     },
     {
       "path": "src/base/common/naturalLanguage/korean.ts",
       "upstreamPath": "src/vs/base/common/naturalLanguage/korean.ts",
-      "sha256": "d83d601048e15772da3d5140d82dff002b53755469b7def09cb6f247e179a44d",
-      "changedImports": 0
+      "sha256": "d83d601048e15772da3d5140d82dff002b53755469b7def09cb6f247e179a44d"
     },
     {
       "path": "src/base/common/navigator.ts",
       "upstreamPath": "src/vs/base/common/navigator.ts",
-      "sha256": "a651c06d33eca7b1d3f1723ec1de8745fd4e6bc0e337bbe346697ed8d4b90ba3",
-      "changedImports": 0
+      "sha256": "a651c06d33eca7b1d3f1723ec1de8745fd4e6bc0e337bbe346697ed8d4b90ba3"
     },
     {
       "path": "src/base/common/network.ts",
       "upstreamPath": "src/vs/base/common/network.ts",
-      "sha256": "bc7ceb5ac95baa7d0d222861244cacaf4617dfc73d8fa5ce5e7c33242eafee51",
-      "changedImports": 0
+      "sha256": "bc7ceb5ac95baa7d0d222861244cacaf4617dfc73d8fa5ce5e7c33242eafee51"
     },
     {
       "path": "src/base/common/normalization.ts",
       "upstreamPath": "src/vs/base/common/normalization.ts",
-      "sha256": "2d3537d499a7b5d7c61c5ef417f445c08c9a05513eeaafbcaed2e80b55ca5ef5",
-      "changedImports": 0
+      "sha256": "2d3537d499a7b5d7c61c5ef417f445c08c9a05513eeaafbcaed2e80b55ca5ef5"
     },
     {
       "path": "src/base/common/numbers.ts",
       "upstreamPath": "src/vs/base/common/numbers.ts",
-      "sha256": "1e197ffa6ca2e60f43eaa25f0930674ad4d348b293ad607a69186d0ddc744ab3",
-      "changedImports": 0
+      "sha256": "1e197ffa6ca2e60f43eaa25f0930674ad4d348b293ad607a69186d0ddc744ab3"
     },
     {
       "path": "src/base/common/objects.ts",
       "upstreamPath": "src/vs/base/common/objects.ts",
-      "sha256": "b88adc53be9775ea58c1af268db5f0c15d44d5214b5909a5afa2081971b61c14",
-      "changedImports": 0
+      "sha256": "b88adc53be9775ea58c1af268db5f0c15d44d5214b5909a5afa2081971b61c14"
     },
     {
       "path": "src/base/common/observable.ts",
       "upstreamPath": "src/vs/base/common/observable.ts",
-      "sha256": "2789ae708aa659732c5f7aa2ff2d6d6ca36e913ad07d321cb16525a9418fc6ec",
-      "changedImports": 0
+      "sha256": "2789ae708aa659732c5f7aa2ff2d6d6ca36e913ad07d321cb16525a9418fc6ec"
     },
     {
       "path": "src/base/common/observableInternal/base.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/base.ts",
-      "sha256": "2b33a3a37115c2baa7260e95c48b1575b06404d94f8b8a410f457deea0e2e7af",
-      "changedImports": 0
+      "sha256": "2b33a3a37115c2baa7260e95c48b1575b06404d94f8b8a410f457deea0e2e7af"
     },
     {
       "path": "src/base/common/observableInternal/changeTracker.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/changeTracker.ts",
-      "sha256": "c84d7cdaba852e9cdc1da2ea7e397b7fd38b13239b1dcb41ffdfddef0372f3ec",
-      "changedImports": 0
+      "sha256": "c84d7cdaba852e9cdc1da2ea7e397b7fd38b13239b1dcb41ffdfddef0372f3ec"
     },
     {
       "path": "src/base/common/observableInternal/commonFacade/cancellation.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/commonFacade/cancellation.ts",
-      "sha256": "953efad5e35be59e9bde653a3321203acddd426985501bd228298d0dd3747aad",
-      "changedImports": 0
+      "sha256": "953efad5e35be59e9bde653a3321203acddd426985501bd228298d0dd3747aad"
     },
     {
       "path": "src/base/common/observableInternal/commonFacade/deps.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/commonFacade/deps.ts",
-      "sha256": "8676718612b9c9ecccd0b701c4afdecc56a290785821621df31a504d06deaa1d",
-      "changedImports": 0
+      "sha256": "8676718612b9c9ecccd0b701c4afdecc56a290785821621df31a504d06deaa1d"
     },
     {
       "path": "src/base/common/observableInternal/debugLocation.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/debugLocation.ts",
-      "sha256": "9997049ec028cb4b16823b047e687e0a036a926909afa31b05a0a62a46f921da",
-      "changedImports": 0
+      "sha256": "9997049ec028cb4b16823b047e687e0a036a926909afa31b05a0a62a46f921da"
     },
     {
       "path": "src/base/common/observableInternal/debugName.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/debugName.ts",
-      "sha256": "c189ccb5af926454e6544da951f62c86a2ebd323b72d7012ac4644696487ff63",
-      "changedImports": 0
+      "sha256": "c189ccb5af926454e6544da951f62c86a2ebd323b72d7012ac4644696487ff63"
     },
     {
       "path": "src/base/common/observableInternal/experimental/utils.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/experimental/utils.ts",
-      "sha256": "8ab49ef66bac79bc9d95f855eda8a789f7c4de2d35fc3618e2fcc9bcc12fadf7",
-      "changedImports": 0
+      "sha256": "8ab49ef66bac79bc9d95f855eda8a789f7c4de2d35fc3618e2fcc9bcc12fadf7"
     },
     {
       "path": "src/base/common/observableInternal/index.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/index.ts",
-      "sha256": "8390e720a73bfe7e4273d95138ac78235b9a34a306433ae5fda7a05a2912f959",
-      "changedImports": 0
+      "sha256": "8390e720a73bfe7e4273d95138ac78235b9a34a306433ae5fda7a05a2912f959"
     },
     {
       "path": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/consoleObservableLogger.ts",
-      "sha256": "c28481bcc671bacc76c317578645fb7f597726b5e05d6331d1e4a659ef6789ae",
-      "changedImports": 0
+      "sha256": "c28481bcc671bacc76c317578645fb7f597726b5e05d6331d1e4a659ef6789ae"
     },
     {
       "path": "src/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
-      "sha256": "2e08910eaf64d463874ffc58c08c4ec713c9d7ae63571fc92026c690a857399e",
-      "changedImports": 0
+      "sha256": "2e08910eaf64d463874ffc58c08c4ec713c9d7ae63571fc92026c690a857399e"
     },
     {
       "path": "src/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
-      "sha256": "3a2b1bb3a1109c2049cf75eb40a4b3b3840fb25a2b26cff199cbff29496afe52",
-      "changedImports": 0
+      "sha256": "3a2b1bb3a1109c2049cf75eb40a4b3b3840fb25a2b26cff199cbff29496afe52"
     },
     {
       "path": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "sha256": "e98831cfdaf1b138aa7a90b39976070a2ce0955f8f87afb1e784044999d52d05",
-      "changedImports": 0
+      "sha256": "e98831cfdaf1b138aa7a90b39976070a2ce0955f8f87afb1e784044999d52d05"
     },
     {
       "path": "src/base/common/observableInternal/logging/debugger/rpc.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/rpc.ts",
-      "sha256": "ee59fcd74e6a13e70d7e91318cbd5dcd77f362396bda6a1fc2ea0b6e8e1ebe90",
-      "changedImports": 0
+      "sha256": "ee59fcd74e6a13e70d7e91318cbd5dcd77f362396bda6a1fc2ea0b6e8e1ebe90"
     },
     {
       "path": "src/base/common/observableInternal/logging/debugger/utils.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/utils.ts",
-      "sha256": "dcd6d1fca50c3239144d45a5d053e1293769a98a6ed44da7e09d84088c922cb3",
-      "changedImports": 0
+      "sha256": "dcd6d1fca50c3239144d45a5d053e1293769a98a6ed44da7e09d84088c922cb3"
     },
     {
       "path": "src/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/debugGetDependencyGraph.ts",
-      "sha256": "38569729ed77f3f9cab9fafa1b3ebce7997c6ce48f32394b06cfb02563309f6d",
-      "changedImports": 0
+      "sha256": "38569729ed77f3f9cab9fafa1b3ebce7997c6ce48f32394b06cfb02563309f6d"
     },
     {
       "path": "src/base/common/observableInternal/logging/logging.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/logging/logging.ts",
-      "sha256": "145ed349d1b498418d17a71baeb44d07740fa0f2512060ff1c4b81b599d8efc7",
-      "changedImports": 0
+      "sha256": "145ed349d1b498418d17a71baeb44d07740fa0f2512060ff1c4b81b599d8efc7"
     },
     {
       "path": "src/base/common/observableInternal/map.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/map.ts",
-      "sha256": "fbfc7c6a54414bbdbf9f85755006d1c0fb6e8260b99e0e1c66514759bd2689fd",
-      "changedImports": 0
+      "sha256": "fbfc7c6a54414bbdbf9f85755006d1c0fb6e8260b99e0e1c66514759bd2689fd"
     },
     {
       "path": "src/base/common/observableInternal/observables/baseObservable.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/baseObservable.ts",
-      "sha256": "52abe21ddc6a3cdc117a83d1b581fefa23d901365f51a676add325c1947e0d25",
-      "changedImports": 0
+      "sha256": "52abe21ddc6a3cdc117a83d1b581fefa23d901365f51a676add325c1947e0d25"
     },
     {
       "path": "src/base/common/observableInternal/observables/constObservable.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/constObservable.ts",
-      "sha256": "1418d6cb4b9227b7062a36ff454b2595d090ded5d9c6f59497c2bff4c7803586",
-      "changedImports": 0
+      "sha256": "1418d6cb4b9227b7062a36ff454b2595d090ded5d9c6f59497c2bff4c7803586"
     },
     {
       "path": "src/base/common/observableInternal/observables/derived.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/derived.ts",
-      "sha256": "526d7f71676220361b2072879f97efdaa5dc834f73815d6008beeccdbbea7d61",
-      "changedImports": 0
+      "sha256": "526d7f71676220361b2072879f97efdaa5dc834f73815d6008beeccdbbea7d61"
     },
     {
       "path": "src/base/common/observableInternal/observables/derivedImpl.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/derivedImpl.ts",
-      "sha256": "35042039fe1675d6b3f61f65beecd5fb803249ef16eb6b9e9f05e29af0d8123f",
-      "changedImports": 0
+      "sha256": "35042039fe1675d6b3f61f65beecd5fb803249ef16eb6b9e9f05e29af0d8123f"
     },
     {
       "path": "src/base/common/observableInternal/observables/lazyObservableValue.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/lazyObservableValue.ts",
-      "sha256": "24e3acca8dbf3be09ad943fe98bdd837219f380bd2579f6b2cf61d4b59c07ffd",
-      "changedImports": 0
+      "sha256": "24e3acca8dbf3be09ad943fe98bdd837219f380bd2579f6b2cf61d4b59c07ffd"
     },
     {
       "path": "src/base/common/observableInternal/observables/observableFromEvent.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/observableFromEvent.ts",
-      "sha256": "15788b83574263c136a22866ca970602c67eaaa9dbb738cceafd3244074ee907",
-      "changedImports": 0
+      "sha256": "15788b83574263c136a22866ca970602c67eaaa9dbb738cceafd3244074ee907"
     },
     {
       "path": "src/base/common/observableInternal/observables/observableSignal.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/observableSignal.ts",
-      "sha256": "e5a506e8f6eb95806b028bf88404574f70a71e9b4981cdf83c1bf1dde33bccb4",
-      "changedImports": 0
+      "sha256": "e5a506e8f6eb95806b028bf88404574f70a71e9b4981cdf83c1bf1dde33bccb4"
     },
     {
       "path": "src/base/common/observableInternal/observables/observableSignalFromEvent.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/observableSignalFromEvent.ts",
-      "sha256": "038a0c075663a4df41a0afe6574506f4ac1d2a4ac79614174f6a3c4411233cf8",
-      "changedImports": 0
+      "sha256": "038a0c075663a4df41a0afe6574506f4ac1d2a4ac79614174f6a3c4411233cf8"
     },
     {
       "path": "src/base/common/observableInternal/observables/observableValue.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/observableValue.ts",
-      "sha256": "7fc6638016f296c6de3b60f401c70c89baa4d15da2558c1f75c3901f195c80f9",
-      "changedImports": 0
+      "sha256": "7fc6638016f296c6de3b60f401c70c89baa4d15da2558c1f75c3901f195c80f9"
     },
     {
       "path": "src/base/common/observableInternal/observables/observableValueOpts.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/observableValueOpts.ts",
-      "sha256": "5c6663467cebd5b6dee1b5e8d1b6897d6ec6b24ed8c17436285f9877d338e47a",
-      "changedImports": 0
+      "sha256": "5c6663467cebd5b6dee1b5e8d1b6897d6ec6b24ed8c17436285f9877d338e47a"
     },
     {
       "path": "src/base/common/observableInternal/reactions/autorun.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/reactions/autorun.ts",
-      "sha256": "7c6687191a86b7bd806d555e9154a58f35078872bf58a7246884509aa39be340",
-      "changedImports": 0
+      "sha256": "7c6687191a86b7bd806d555e9154a58f35078872bf58a7246884509aa39be340"
     },
     {
       "path": "src/base/common/observableInternal/reactions/autorunImpl.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/reactions/autorunImpl.ts",
-      "sha256": "fee3dd32f467a8af34e8d44cd6513718efd47e4de651c01059840b0624e5eee5",
-      "changedImports": 0
+      "sha256": "fee3dd32f467a8af34e8d44cd6513718efd47e4de651c01059840b0624e5eee5"
     },
     {
       "path": "src/base/common/observableInternal/set.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/set.ts",
-      "sha256": "0629f0810a0f7cb3423afb25a144488017e9a0b7f5b1d4b35f0c20507853635e",
-      "changedImports": 0
+      "sha256": "0629f0810a0f7cb3423afb25a144488017e9a0b7f5b1d4b35f0c20507853635e"
     },
     {
       "path": "src/base/common/observableInternal/transaction.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/transaction.ts",
-      "sha256": "329d852ced6fbe47c88f2d12c78b5c2f2fd8b369af519425052b196c7cf61010",
-      "changedImports": 0
+      "sha256": "329d852ced6fbe47c88f2d12c78b5c2f2fd8b369af519425052b196c7cf61010"
     },
     {
       "path": "src/base/common/observableInternal/utils/promise.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/utils/promise.ts",
-      "sha256": "2b3d043ad4bb02a4020186a302cac62b6e51aee02701ca0215980798ef8d9369",
-      "changedImports": 0
+      "sha256": "2b3d043ad4bb02a4020186a302cac62b6e51aee02701ca0215980798ef8d9369"
     },
     {
       "path": "src/base/common/observableInternal/utils/runOnChange.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/utils/runOnChange.ts",
-      "sha256": "452e367a8a604698f397f149cbf4796f16027211ac4d9cd08789c6cbb09e1d20",
-      "changedImports": 0
+      "sha256": "452e367a8a604698f397f149cbf4796f16027211ac4d9cd08789c6cbb09e1d20"
     },
     {
       "path": "src/base/common/observableInternal/utils/utils.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/utils/utils.ts",
-      "sha256": "e32165425e1650fed409ef9b2adda9f836c46ec3157ce4520a5247bfcadd1fb5",
-      "changedImports": 0
+      "sha256": "e32165425e1650fed409ef9b2adda9f836c46ec3157ce4520a5247bfcadd1fb5"
     },
     {
       "path": "src/base/common/observableInternal/utils/utilsCancellation.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/utils/utilsCancellation.ts",
-      "sha256": "a9818704b05c2aaec992ff222926c3e9a4ed32325b4284ad824598a697dcadb2",
-      "changedImports": 0
+      "sha256": "a9818704b05c2aaec992ff222926c3e9a4ed32325b4284ad824598a697dcadb2"
     },
     {
       "path": "src/base/common/observableInternal/utils/valueWithChangeEvent.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/utils/valueWithChangeEvent.ts",
-      "sha256": "754910861dbaa88fe0ea553e652049ce55ce1193a359b6bdd68903544cbd550e",
-      "changedImports": 0
+      "sha256": "754910861dbaa88fe0ea553e652049ce55ce1193a359b6bdd68903544cbd550e"
     },
     {
       "path": "src/base/common/path.ts",
       "upstreamPath": "src/vs/base/common/path.ts",
-      "sha256": "3ee9852efa3c404fbb5b8015b9633f5b17b38b9ed619cfbbc38a89d2169dbacf",
-      "changedImports": 0
+      "sha256": "3ee9852efa3c404fbb5b8015b9633f5b17b38b9ed619cfbbc38a89d2169dbacf"
     },
     {
       "path": "src/base/common/platform.ts",
       "upstreamPath": "src/vs/base/common/platform.ts",
-      "sha256": "c6e8f86c52ca1b521ec5a3a852791e621a632b96e63325fc2892eea281f90d98",
-      "changedImports": 0
+      "sha256": "c6e8f86c52ca1b521ec5a3a852791e621a632b96e63325fc2892eea281f90d98"
     },
     {
       "path": "src/base/common/policy.ts",
       "upstreamPath": "src/vs/base/common/policy.ts",
-      "sha256": "4662f2fe674bdf93a50bfaa4658226aff54b2d7f97171bde2a4acce7ec7e7f31",
-      "changedImports": 0
+      "sha256": "4662f2fe674bdf93a50bfaa4658226aff54b2d7f97171bde2a4acce7ec7e7f31"
     },
     {
       "path": "src/base/common/process.ts",
       "upstreamPath": "src/vs/base/common/process.ts",
-      "sha256": "c72b499f137a9f52134cd816db076f02712b7ee279f2957b53740639f80d9083",
-      "changedImports": 0
+      "sha256": "c72b499f137a9f52134cd816db076f02712b7ee279f2957b53740639f80d9083"
     },
     {
       "path": "src/base/common/product.ts",
       "upstreamPath": "src/vs/base/common/product.ts",
-      "sha256": "7abe057dd2be1f4b6dd2fccc4c5ac58646b708d0261ad8495b37ce9ea0d8c238",
-      "changedImports": 0
+      "sha256": "7abe057dd2be1f4b6dd2fccc4c5ac58646b708d0261ad8495b37ce9ea0d8c238"
     },
     {
       "path": "src/base/common/range.ts",
       "upstreamPath": "src/vs/base/common/range.ts",
-      "sha256": "760197b89663c2c6bf03e8df4839178994f38f1ada1656906c2feb209121ac7e",
-      "changedImports": 0
+      "sha256": "760197b89663c2c6bf03e8df4839178994f38f1ada1656906c2feb209121ac7e"
     },
     {
       "path": "src/base/common/resources.ts",
       "upstreamPath": "src/vs/base/common/resources.ts",
-      "sha256": "d9035c23736ebee9d42878496d6f682c8993cdadab01ae3ffa4046c0ea39c01b",
-      "changedImports": 0
+      "sha256": "d9035c23736ebee9d42878496d6f682c8993cdadab01ae3ffa4046c0ea39c01b"
     },
     {
       "path": "src/base/common/scrollable.ts",
       "upstreamPath": "src/vs/base/common/scrollable.ts",
-      "sha256": "99ddb7823a5715e9a7c24311b185b62ec23753bbc91712ebe2aeebd0260764c0",
-      "changedImports": 0
+      "sha256": "99ddb7823a5715e9a7c24311b185b62ec23753bbc91712ebe2aeebd0260764c0"
     },
     {
       "path": "src/base/common/sequence.ts",
       "upstreamPath": "src/vs/base/common/sequence.ts",
-      "sha256": "9f7a0e0ec46e0665af3a2927b99d4b34231b0026dc2124cf72f0356456347326",
-      "changedImports": 0
+      "sha256": "9f7a0e0ec46e0665af3a2927b99d4b34231b0026dc2124cf72f0356456347326"
     },
     {
       "path": "src/base/common/stopwatch.ts",
       "upstreamPath": "src/vs/base/common/stopwatch.ts",
-      "sha256": "e56bb28c1a532616d5e85ff3576d2cfaa57d0a42f8382999e6e13859869bfae8",
-      "changedImports": 0
+      "sha256": "e56bb28c1a532616d5e85ff3576d2cfaa57d0a42f8382999e6e13859869bfae8"
     },
     {
       "path": "src/base/common/stream.ts",
       "upstreamPath": "src/vs/base/common/stream.ts",
-      "sha256": "85d62100a2eea468dc23b35ea16439f2a383b618878a24b1352e302fb15773e9",
-      "changedImports": 0
+      "sha256": "85d62100a2eea468dc23b35ea16439f2a383b618878a24b1352e302fb15773e9"
     },
     {
       "path": "src/base/common/strings.ts",
       "upstreamPath": "src/vs/base/common/strings.ts",
-      "sha256": "41a86465c9bb64edc600a7950596c73aa71fd901568f3075b69e6865753587ab",
-      "changedImports": 0
+      "sha256": "41a86465c9bb64edc600a7950596c73aa71fd901568f3075b69e6865753587ab"
     },
     {
       "path": "src/base/common/symbols.ts",
       "upstreamPath": "src/vs/base/common/symbols.ts",
-      "sha256": "bf83fa91c9eac09fd8f8da74111f12784978ff154d00c48f11c8bcce04f348d2",
-      "changedImports": 0
+      "sha256": "bf83fa91c9eac09fd8f8da74111f12784978ff154d00c48f11c8bcce04f348d2"
     },
     {
       "path": "src/base/common/ternarySearchTree.ts",
       "upstreamPath": "src/vs/base/common/ternarySearchTree.ts",
-      "sha256": "399c59addf5e0846bdf5885991529a672bc0f4a72e80bdef27d658e9e3118ec2",
-      "changedImports": 0
+      "sha256": "399c59addf5e0846bdf5885991529a672bc0f4a72e80bdef27d658e9e3118ec2"
     },
     {
       "path": "src/base/common/themables.ts",
       "upstreamPath": "src/vs/base/common/themables.ts",
-      "sha256": "28ee3f4f4cde30e6e9ee6bf9fa6f86e93d3e15f292afb329d7e1621484dc8397",
-      "changedImports": 0
+      "sha256": "28ee3f4f4cde30e6e9ee6bf9fa6f86e93d3e15f292afb329d7e1621484dc8397"
     },
     {
       "path": "src/base/common/types.ts",
       "upstreamPath": "src/vs/base/common/types.ts",
-      "sha256": "0a17b8d00093ff63b8387508fcacfe82dfb1838ddcc44bd8315eabfd48c32076",
-      "changedImports": 0
+      "sha256": "0a17b8d00093ff63b8387508fcacfe82dfb1838ddcc44bd8315eabfd48c32076"
     },
     {
       "path": "src/base/common/uint.ts",
       "upstreamPath": "src/vs/base/common/uint.ts",
-      "sha256": "0b1102ade974b21bd46bd789027c2dd7959366202e9b87287b13be0a8cf3b05a",
-      "changedImports": 0
+      "sha256": "0b1102ade974b21bd46bd789027c2dd7959366202e9b87287b13be0a8cf3b05a"
     },
     {
       "path": "src/base/common/uri.ts",
       "upstreamPath": "src/vs/base/common/uri.ts",
-      "sha256": "65bc6eefd07704297435d71a9da87dec1ca9103c0575bf29ce00f291a24114c9",
-      "changedImports": 0
+      "sha256": "65bc6eefd07704297435d71a9da87dec1ca9103c0575bf29ce00f291a24114c9"
     },
     {
       "path": "src/base/common/uriIpc.ts",
       "upstreamPath": "src/vs/base/common/uriIpc.ts",
-      "sha256": "72edaf6a10eaa605947fd0e2fa96827c1eb1db17ce69ec61f44df61c1871b431",
-      "changedImports": 0
+      "sha256": "72edaf6a10eaa605947fd0e2fa96827c1eb1db17ce69ec61f44df61c1871b431"
     },
     {
       "path": "src/base/common/uuid.ts",
       "upstreamPath": "src/vs/base/common/uuid.ts",
-      "sha256": "fe776763455e19a8126238f13f9c2c51939e7a31f387445dde1ad7d0f870b1d6",
-      "changedImports": 0
+      "sha256": "fe776763455e19a8126238f13f9c2c51939e7a31f387445dde1ad7d0f870b1d6"
     },
     {
       "path": "src/base/parts/contextmenu/common/contextmenu.ts",
       "upstreamPath": "src/vs/base/parts/contextmenu/common/contextmenu.ts",
-      "sha256": "e7ea9fff70ea81345de1bf3812581df318f6f2e1a1849a67a09be7bd2de0f947",
-      "changedImports": 0
+      "sha256": "e7ea9fff70ea81345de1bf3812581df318f6f2e1a1849a67a09be7bd2de0f947"
     },
     {
       "path": "src/base/parts/contextmenu/electron-browser/contextmenu.ts",
       "upstreamPath": "src/vs/base/parts/contextmenu/electron-browser/contextmenu.ts",
-      "sha256": "8d4db74bb95aa4d595fab33bd712d1ec97831bb1bff9424d71e0f90c21183b3b",
-      "changedImports": 0
+      "sha256": "8d4db74bb95aa4d595fab33bd712d1ec97831bb1bff9424d71e0f90c21183b3b"
     },
     {
       "path": "src/base/parts/contextmenu/electron-main/contextmenu.ts",
       "upstreamPath": "src/vs/base/parts/contextmenu/electron-main/contextmenu.ts",
-      "sha256": "9ac427c6ecb8c00e4006fab636b22c5a60b28182f2f4fcce317642add98003f5",
-      "changedImports": 0
+      "sha256": "9ac427c6ecb8c00e4006fab636b22c5a60b28182f2f4fcce317642add98003f5"
     },
     {
       "path": "src/base/parts/ipc/common/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/common/ipc.electron.ts",
-      "sha256": "2b25e501c21520d02bd59034d43c2359e02dbbbc40a8d136d783cc6f9cbf5fe1",
-      "changedImports": 0
+      "sha256": "2b25e501c21520d02bd59034d43c2359e02dbbbc40a8d136d783cc6f9cbf5fe1"
     },
     {
       "path": "src/base/parts/ipc/common/ipc.mp.ts",
       "upstreamPath": "src/vs/base/parts/ipc/common/ipc.mp.ts",
-      "sha256": "61d86288c7ef82c2ce4904a94e1dee83b38f6c9f19c00290989cd8eb429bd87d",
-      "changedImports": 0
+      "sha256": "61d86288c7ef82c2ce4904a94e1dee83b38f6c9f19c00290989cd8eb429bd87d"
     },
     {
       "path": "src/base/parts/ipc/common/ipc.ts",
       "upstreamPath": "src/vs/base/parts/ipc/common/ipc.ts",
-      "sha256": "300fc458ad994f887fce88757ff5352fd93acc0b0bdc265312c0b3aac75d864b",
-      "changedImports": 0
+      "sha256": "300fc458ad994f887fce88757ff5352fd93acc0b0bdc265312c0b3aac75d864b"
     },
     {
       "path": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-browser/ipc.electron.ts",
-      "sha256": "ae6f2f69341816e6afb55848f5b3472fbcdccf0f778a222deae205f02c49bdbd",
-      "changedImports": 0
+      "sha256": "ae6f2f69341816e6afb55848f5b3472fbcdccf0f778a222deae205f02c49bdbd"
     },
     {
       "path": "src/base/parts/ipc/electron-main/ipc.electron.ts",
@@ -1152,8 +968,7 @@
     {
       "path": "src/base/parts/ipc/electron-main/ipc.mp.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipc.mp.ts",
-      "sha256": "b86174794365814105b13626eff32670eba74d8c3f84c556ce61164e7f6bd304",
-      "changedImports": 0
+      "sha256": "b86174794365814105b13626eff32670eba74d8c3f84c556ce61164e7f6bd304"
     },
     {
       "path": "src/base/parts/ipc/electron-main/ipcMain.ts",
@@ -1165,62 +980,52 @@
     {
       "path": "src/base/parts/ipc/node/ipc.mp.ts",
       "upstreamPath": "src/vs/base/parts/ipc/node/ipc.mp.ts",
-      "sha256": "85938d088a5e6ca180535754f9b38a747912e2816bbcb44f909ea7bef3f863fb",
-      "changedImports": 0
+      "sha256": "85938d088a5e6ca180535754f9b38a747912e2816bbcb44f909ea7bef3f863fb"
     },
     {
       "path": "src/base/parts/sandbox/common/electronTypes.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/common/electronTypes.ts",
-      "sha256": "492918b28dfa80e7acfc0362f7424dfef97040c3049f5d0da723ffcd07db2b8f",
-      "changedImports": 0
+      "sha256": "492918b28dfa80e7acfc0362f7424dfef97040c3049f5d0da723ffcd07db2b8f"
     },
     {
       "path": "src/base/parts/sandbox/common/sandboxTypes.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/common/sandboxTypes.ts",
-      "sha256": "e48fdd47794b208e13f127371e18e86dda100d455ce8b200442bb9a098e4d849",
-      "changedImports": 0
+      "sha256": "e48fdd47794b208e13f127371e18e86dda100d455ce8b200442bb9a098e4d849"
     },
     {
       "path": "src/base/parts/sandbox/electron-browser/electronTypes.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/electron-browser/electronTypes.ts",
-      "sha256": "97411961d8cd31ec42b7c1f364eca2effdd82fc4916fc2354e25f0e61274f999",
-      "changedImports": 0
+      "sha256": "97411961d8cd31ec42b7c1f364eca2effdd82fc4916fc2354e25f0e61274f999"
     },
     {
       "path": "src/base/parts/sandbox/electron-browser/globals.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/electron-browser/globals.ts",
-      "sha256": "9dddf637e9e0758280fce6b53f58f82e50eff426ac94ea7b8f14e200980c94f7",
-      "changedImports": 0
+      "sha256": "9dddf637e9e0758280fce6b53f58f82e50eff426ac94ea7b8f14e200980c94f7"
     },
     {
       "path": "src/base/parts/sandbox/node/electronTypes.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/node/electronTypes.ts",
-      "sha256": "7aff405e29233bf94a6d989c467e71f3bf10a738598b2930521085616d7f0949",
-      "changedImports": 0
+      "sha256": "7aff405e29233bf94a6d989c467e71f3bf10a738598b2930521085616d7f0949"
     },
     {
       "path": "src/nls.ts",
       "upstreamPath": "src/vs/nls.ts",
-      "sha256": "48840e7c0453b4998e3b2e1eb881f42ca78fb54e807589f1e0fe218a03de5616",
-      "changedImports": 0
+      "sha256": "48840e7c0453b4998e3b2e1eb881f42ca78fb54e807589f1e0fe218a03de5616"
     },
     {
       "path": "src/platform/action/common/action.ts",
       "upstreamPath": "src/vs/platform/action/common/action.ts",
-      "sha256": "dd7d651adcb0aa1fc503a51acc418ad77f3c85c478c55c5a6f0462e10c90d536",
-      "changedImports": 0
+      "sha256": "dd7d651adcb0aa1fc503a51acc418ad77f3c85c478c55c5a6f0462e10c90d536"
     },
     {
       "path": "src/platform/action/common/actionCommonCategories.ts",
       "upstreamPath": "src/vs/platform/action/common/actionCommonCategories.ts",
-      "sha256": "595eab4f485e651d9c0e29a8508cbb8a4ed63ebe10d2d92628896cc2281f7282",
-      "changedImports": 0
+      "sha256": "595eab4f485e651d9c0e29a8508cbb8a4ed63ebe10d2d92628896cc2281f7282"
     },
     {
       "path": "src/platform/actions/common/actions.ts",
       "upstreamPath": "src/vs/platform/actions/common/actions.ts",
-      "sha256": "859103c32e603873d76592f6b13d313d5caff56db065fe9a2646a6129b9e7580",
-      "changedImports": 0
+      "sha256": "859103c32e603873d76592f6b13d313d5caff56db065fe9a2646a6129b9e7580"
     },
     {
       "path": "src/platform/actions/common/menuService.ts",
@@ -1238,14 +1043,12 @@
     {
       "path": "src/platform/commands/common/commands.ts",
       "upstreamPath": "src/vs/platform/commands/common/commands.ts",
-      "sha256": "d574605719503256980bb457258f3fe14054f3e84f1cfc32e9b748b885206c36",
-      "changedImports": 0
+      "sha256": "d574605719503256980bb457258f3fe14054f3e84f1cfc32e9b748b885206c36"
     },
     {
       "path": "src/platform/configuration/common/configuration.ts",
       "upstreamPath": "src/vs/platform/configuration/common/configuration.ts",
-      "sha256": "33752c37aa43da23bf0ce2167fdd756e9c4c1b67b3bd9ff611cd44402de44e36",
-      "changedImports": 0
+      "sha256": "33752c37aa43da23bf0ce2167fdd756e9c4c1b67b3bd9ff611cd44402de44e36"
     },
     {
       "path": "src/platform/configuration/common/configurationRegistry.ts",
@@ -1257,26 +1060,22 @@
     {
       "path": "src/platform/contextkey/browser/contextKeyService.ts",
       "upstreamPath": "src/vs/platform/contextkey/browser/contextKeyService.ts",
-      "sha256": "8cbb8a4af22e671d4543852f20e217d18bd2e1956fb85cbfc50022fa6b9139a8",
-      "changedImports": 0
+      "sha256": "8cbb8a4af22e671d4543852f20e217d18bd2e1956fb85cbfc50022fa6b9139a8"
     },
     {
       "path": "src/platform/contextkey/common/contextkey.ts",
       "upstreamPath": "src/vs/platform/contextkey/common/contextkey.ts",
-      "sha256": "ea20ae6145c878b32eb658398143cf34588a3d8686a69b5de9b54a11c54481f9",
-      "changedImports": 0
+      "sha256": "ea20ae6145c878b32eb658398143cf34588a3d8686a69b5de9b54a11c54481f9"
     },
     {
       "path": "src/platform/contextkey/common/contextkeys.ts",
       "upstreamPath": "src/vs/platform/contextkey/common/contextkeys.ts",
-      "sha256": "5af84e07bc788c4005fc19962665f3b52605f0ff6056626cb20d17eaf9333b20",
-      "changedImports": 0
+      "sha256": "5af84e07bc788c4005fc19962665f3b52605f0ff6056626cb20d17eaf9333b20"
     },
     {
       "path": "src/platform/contextkey/common/scanner.ts",
       "upstreamPath": "src/vs/platform/contextkey/common/scanner.ts",
-      "sha256": "b3e56cd6e1bb2790579c1ce082abdab509c47167a94c12895a4b43e006363866",
-      "changedImports": 0
+      "sha256": "b3e56cd6e1bb2790579c1ce082abdab509c47167a94c12895a4b43e006363866"
     },
     {
       "path": "src/platform/contextview/browser/contextMenuHandler.ts",
@@ -1295,134 +1094,112 @@
     {
       "path": "src/platform/contextview/browser/contextView.ts",
       "upstreamPath": "src/vs/platform/contextview/browser/contextView.ts",
-      "sha256": "a384a0dfbf6452a71a08089c2ebef1c3452e425cb33c1b37654e2fd7448ebe6e",
-      "changedImports": 0
+      "sha256": "a384a0dfbf6452a71a08089c2ebef1c3452e425cb33c1b37654e2fd7448ebe6e"
     },
     {
       "path": "src/platform/contextview/browser/contextViewService.ts",
       "upstreamPath": "src/vs/platform/contextview/browser/contextViewService.ts",
-      "sha256": "616e8c2b61b11ad33264aa12c04c40518cf2d597205fb5a2f0c841e55428eb1f",
-      "changedImports": 0
+      "sha256": "616e8c2b61b11ad33264aa12c04c40518cf2d597205fb5a2f0c841e55428eb1f"
     },
     {
       "path": "src/platform/environment/common/argv.ts",
       "upstreamPath": "src/vs/platform/environment/common/argv.ts",
-      "sha256": "337e49b6b107d77a9df4571adfb8ca54d8e4c974c8cf5710fdb646d582bcaa3c",
-      "changedImports": 0
+      "sha256": "337e49b6b107d77a9df4571adfb8ca54d8e4c974c8cf5710fdb646d582bcaa3c"
     },
     {
       "path": "src/platform/environment/common/environment.ts",
       "upstreamPath": "src/vs/platform/environment/common/environment.ts",
-      "sha256": "0371c719072d11e333d5706162e66f4eecd32f9a21e62549688597da8e5a6957",
-      "changedImports": 0
+      "sha256": "0371c719072d11e333d5706162e66f4eecd32f9a21e62549688597da8e5a6957"
     },
     {
       "path": "src/platform/files/common/files.ts",
       "upstreamPath": "src/vs/platform/files/common/files.ts",
-      "sha256": "91c6e6ab8162d1a5d706fdc5f3a41e6ad669c8d21cf86ed80178e607a47554ee",
-      "changedImports": 0
+      "sha256": "91c6e6ab8162d1a5d706fdc5f3a41e6ad669c8d21cf86ed80178e607a47554ee"
     },
     {
       "path": "src/platform/instantiation/common/descriptors.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/descriptors.ts",
-      "sha256": "3822bb2986b64bbf1eb4f644eaf5a83056a7537b9d0450bea83a552dd8c48975",
-      "changedImports": 0
+      "sha256": "3822bb2986b64bbf1eb4f644eaf5a83056a7537b9d0450bea83a552dd8c48975"
     },
     {
       "path": "src/platform/instantiation/common/extensions.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/extensions.ts",
-      "sha256": "40de914f6ca92f36c0dde943616e0b573c9a5e6f6df29213d7ec7348a388cf5d",
-      "changedImports": 0
+      "sha256": "40de914f6ca92f36c0dde943616e0b573c9a5e6f6df29213d7ec7348a388cf5d"
     },
     {
       "path": "src/platform/instantiation/common/graph.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/graph.ts",
-      "sha256": "b8ae77bb498c985066239a4c819882530a933768ae0e4bb399bc43de78f71f42",
-      "changedImports": 0
+      "sha256": "b8ae77bb498c985066239a4c819882530a933768ae0e4bb399bc43de78f71f42"
     },
     {
       "path": "src/platform/instantiation/common/instantiation.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/instantiation.ts",
-      "sha256": "87247ec79a014320fd3d3d7a4a763308b94219c95a9cf58b53c3e3a1e3aa89a6",
-      "changedImports": 0
+      "sha256": "87247ec79a014320fd3d3d7a4a763308b94219c95a9cf58b53c3e3a1e3aa89a6"
     },
     {
       "path": "src/platform/instantiation/common/instantiationService.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/instantiationService.ts",
-      "sha256": "c28e1155e8fe44d81603e2779c2a474e01e234665621658f4da1a79f39aa5d71",
-      "changedImports": 0
+      "sha256": "c28e1155e8fe44d81603e2779c2a474e01e234665621658f4da1a79f39aa5d71"
     },
     {
       "path": "src/platform/instantiation/common/serviceCollection.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/serviceCollection.ts",
-      "sha256": "be9a3d6b1d53412f259aa39e23eada52fcf81af45d5d2113686965251e21d38f",
-      "changedImports": 0
+      "sha256": "be9a3d6b1d53412f259aa39e23eada52fcf81af45d5d2113686965251e21d38f"
     },
     {
       "path": "src/platform/ipc/common/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/common/mainProcessService.ts",
-      "sha256": "c71da92aa9f523c3f1be27d12f3aa61362de527363c1f09c8288991124f7d063",
-      "changedImports": 0
+      "sha256": "c71da92aa9f523c3f1be27d12f3aa61362de527363c1f09c8288991124f7d063"
     },
     {
       "path": "src/platform/ipc/common/services.ts",
       "upstreamPath": "src/vs/platform/ipc/common/services.ts",
-      "sha256": "5d34abed83702e5703051493f07fddb62a36a6e5cd20a0270ea598f3a87312a6",
-      "changedImports": 0
+      "sha256": "5d34abed83702e5703051493f07fddb62a36a6e5cd20a0270ea598f3a87312a6"
     },
     {
       "path": "src/platform/ipc/electron-browser/mainProcessService.ts",
       "upstreamPath": "src/vs/platform/ipc/electron-browser/mainProcessService.ts",
-      "sha256": "3dfba329158fa235b5985ea849c3a24c4691e9919d62f54d0f1cb5e3154d8174",
-      "changedImports": 0
+      "sha256": "3dfba329158fa235b5985ea849c3a24c4691e9919d62f54d0f1cb5e3154d8174"
     },
     {
       "path": "src/platform/ipc/electron-browser/services.ts",
       "upstreamPath": "src/vs/platform/ipc/electron-browser/services.ts",
-      "sha256": "f63acc197d330d47ab465c2cef7f4c94e4905a2ee3b2b99c949951ee4f3347af",
-      "changedImports": 0
+      "sha256": "f63acc197d330d47ab465c2cef7f4c94e4905a2ee3b2b99c949951ee4f3347af"
     },
     {
       "path": "src/platform/jsonschemas/common/jsonContributionRegistry.ts",
       "upstreamPath": "src/vs/platform/jsonschemas/common/jsonContributionRegistry.ts",
-      "sha256": "3a497efbc8ffbffc275e8bf3ff4bdd918a3a5bf83e3c9279c0df205aab20c926",
-      "changedImports": 0
+      "sha256": "3a497efbc8ffbffc275e8bf3ff4bdd918a3a5bf83e3c9279c0df205aab20c926"
     },
     {
       "path": "src/platform/keybinding/common/keybindingsRegistry.ts",
       "upstreamPath": "src/vs/platform/keybinding/common/keybindingsRegistry.ts",
-      "sha256": "925154911545a52dcdcef30df728b48df912cbb22ff7c83e9dde1a40142e8e99",
-      "changedImports": 0
+      "sha256": "925154911545a52dcdcef30df728b48df912cbb22ff7c83e9dde1a40142e8e99"
     },
     {
       "path": "src/platform/layout/browser/layoutService.ts",
       "upstreamPath": "src/vs/platform/layout/browser/layoutService.ts",
-      "sha256": "1a8d014691b81499a07c6d3a284a5eff057745b81924dc38dcf17b030bd7517e",
-      "changedImports": 0
+      "sha256": "1a8d014691b81499a07c6d3a284a5eff057745b81924dc38dcf17b030bd7517e"
     },
     {
       "path": "src/platform/log/common/logIpc.ts",
       "upstreamPath": "src/vs/platform/log/common/logIpc.ts",
-      "sha256": "932d14f99c4308967e93825f2160096dd64859f61602f752fd10d1f20f209e45",
-      "changedImports": 0
+      "sha256": "932d14f99c4308967e93825f2160096dd64859f61602f752fd10d1f20f209e45"
     },
     {
       "path": "src/platform/log/electron-main/loggerService.ts",
       "upstreamPath": "src/vs/platform/log/electron-main/loggerService.ts",
-      "sha256": "0c3381f549824d260d1d29e074be08bd5cbfb94622645d5beb0a0361903da7b5",
-      "changedImports": 0
+      "sha256": "0c3381f549824d260d1d29e074be08bd5cbfb94622645d5beb0a0361903da7b5"
     },
     {
       "path": "src/platform/log/electron-main/logIpc.ts",
       "upstreamPath": "src/vs/platform/log/electron-main/logIpc.ts",
-      "sha256": "1873a4cbe3a12a1fbf5ea203fe7b74187920effc7a0977644a63a7b335f66658",
-      "changedImports": 0
+      "sha256": "1873a4cbe3a12a1fbf5ea203fe7b74187920effc7a0977644a63a7b335f66658"
     },
     {
       "path": "src/platform/log/node/loggerService.ts",
       "upstreamPath": "src/vs/platform/log/node/loggerService.ts",
-      "sha256": "76e8b3d9f2bf31ae3c3f4e98e87065060ae43b7afefe6327d05da91c90cda8f2",
-      "changedImports": 0
+      "sha256": "76e8b3d9f2bf31ae3c3f4e98e87065060ae43b7afefe6327d05da91c90cda8f2"
     },
     {
       "path": "src/platform/log/node/spdlogLog.ts",
@@ -1452,14 +1229,12 @@
     {
       "path": "src/platform/registry/common/platform.ts",
       "upstreamPath": "src/vs/platform/registry/common/platform.ts",
-      "sha256": "5a1fceef6c96ced1a5b1da20af0bb89b73f035dc42f23f162a583d6b89dbb523",
-      "changedImports": 0
+      "sha256": "5a1fceef6c96ced1a5b1da20af0bb89b73f035dc42f23f162a583d6b89dbb523"
     },
     {
       "path": "src/platform/state/node/state.ts",
       "upstreamPath": "src/vs/platform/state/node/state.ts",
-      "sha256": "4d08893aef73c2b12d3cc5d8c745b1c43ada8a067cf7e26bd062c8af98c17c58",
-      "changedImports": 0
+      "sha256": "4d08893aef73c2b12d3cc5d8c745b1c43ada8a067cf7e26bd062c8af98c17c58"
     },
     {
       "path": "src/platform/state/node/stateService.ts",
@@ -1471,8 +1246,7 @@
     {
       "path": "src/platform/terminal/common/terminalStrings.ts",
       "upstreamPath": "src/vs/platform/terminal/common/terminalStrings.ts",
-      "sha256": "7f1d3e3561e9a17410cfd18e6f9da754a29f3bcce9062804ff4ed2ff3224a3ef",
-      "changedImports": 0
+      "sha256": "7f1d3e3561e9a17410cfd18e6f9da754a29f3bcce9062804ff4ed2ff3224a3ef"
     },
     {
       "path": "src/platform/theme/browser/themeService.ts",
@@ -1508,8 +1282,7 @@
     {
       "path": "src/platform/workspace/common/workspace.ts",
       "upstreamPath": "src/vs/platform/workspace/common/workspace.ts",
-      "sha256": "20484cdb12af9da192aabbdd3628a4c716b60e309e72f11db5d7e7019f5edcb1",
-      "changedImports": 0
+      "sha256": "20484cdb12af9da192aabbdd3628a4c716b60e309e72f11db5d7e7019f5edcb1"
     },
     {
       "path": "src/typings/base-common.d.ts",
@@ -1520,26 +1293,22 @@
     {
       "path": "src/typings/editContext.d.ts",
       "upstreamPath": "src/typings/editContext.d.ts",
-      "sha256": "348174814b3a7c4c9ad1ac2a6e467cb3fd700c3d452e065eb8875201bb74672e",
-      "changedImports": 0
+      "sha256": "348174814b3a7c4c9ad1ac2a6e467cb3fd700c3d452e065eb8875201bb74672e"
     },
     {
       "path": "src/typings/thenable.d.ts",
       "upstreamPath": "src/typings/thenable.d.ts",
-      "sha256": "6c46bfeba3e7a0183f0d4e979a4d036ba75ed53250d396d1475aea6944e6e2db",
-      "changedImports": 0
+      "sha256": "6c46bfeba3e7a0183f0d4e979a4d036ba75ed53250d396d1475aea6944e6e2db"
     },
     {
       "path": "src/typings/vscode-globals-nls.d.ts",
       "upstreamPath": "src/typings/vscode-globals-nls.d.ts",
-      "sha256": "f66baed0a13192b8f4996bf642b8658651dc22653a8c3a4d95b2452baf7680bc",
-      "changedImports": 0
+      "sha256": "f66baed0a13192b8f4996bf642b8658651dc22653a8c3a4d95b2452baf7680bc"
     },
     {
       "path": "src/typings/vscode-globals-product.d.ts",
       "upstreamPath": "src/typings/vscode-globals-product.d.ts",
-      "sha256": "f9d9755bc978c0c1964d378a80fa59495fef85307c6d83d2ad5a51a2a8c3f17c",
-      "changedImports": 0
+      "sha256": "f9d9755bc978c0c1964d378a80fa59495fef85307c6d83d2ad5a51a2a8c3f17c"
     },
     {
       "path": "src/workbench/contributions.ts",
@@ -1601,11 +1370,52 @@
     {
       "path": "src/workbench/services/lifecycle/lifecycle.ts",
       "upstreamPath": "src/vs/workbench/services/lifecycle/common/lifecycle.ts",
-      "sha256": "3f478a126192f500e8615a05430e4b05151c0865877ac7cd1e689a17153c4f11",
-      "changedImports": 3
+      "sha256": "3f478a126192f500e8615a05430e4b05151c0865877ac7cd1e689a17153c4f11"
     }
   ],
-  "scope": "Native window controls, titlebar presentation, DI registration and their recursive dependencies",
+  "tooling": [
+    {
+      "path": "build/lint/vscode/code-declare-service-brand.ts",
+      "upstreamPath": ".eslint-plugin-local/code-declare-service-brand.ts",
+      "sha256": "c1c70f7550a565893228b70710c2d7fb5409d39f8b57739175c6d3b2f83fa6c4"
+    },
+    {
+      "path": "build/lint/vscode/code-must-use-super-dispose.ts",
+      "upstreamPath": ".eslint-plugin-local/code-must-use-super-dispose.ts",
+      "sha256": "7d770363d69cd1fbafd6e38e0142dafae6e0490745fd15e764d249fbbd04d459"
+    },
+    {
+      "path": "build/lint/vscode/code-no-accessor-after-await.ts",
+      "upstreamPath": ".eslint-plugin-local/code-no-accessor-after-await.ts",
+      "sha256": "94f7f62a79f33c1db2c3480e2e9ba7a705df1da1d0902720ab059857834837c9"
+    },
+    {
+      "path": "build/lint/vscode/code-no-dangerous-type-assertions.ts",
+      "upstreamPath": ".eslint-plugin-local/code-no-dangerous-type-assertions.ts",
+      "sha256": "b988fcb4a33049d0a6325233fb8ef3de1895d0ac383fd5b794ba5f9264385181"
+    },
+    {
+      "path": "build/lint/vscode/code-no-localization-template-literals.ts",
+      "upstreamPath": ".eslint-plugin-local/code-no-localization-template-literals.ts",
+      "sha256": "85d318cdc22a0b30c82796b815b1ed0ecac25fc2167c96492bd1ccaf94616971"
+    },
+    {
+      "path": "build/lint/vscode/code-no-potentially-unsafe-disposables.ts",
+      "upstreamPath": ".eslint-plugin-local/code-no-potentially-unsafe-disposables.ts",
+      "sha256": "b9e7cdd15631ff71c33d2c0215a27291d1741d01bac6e6abe795c1098d6cf4bb"
+    },
+    {
+      "path": "build/lint/vscode/code-parameter-properties-must-have-explicit-accessibility.ts",
+      "upstreamPath": ".eslint-plugin-local/code-parameter-properties-must-have-explicit-accessibility.ts",
+      "sha256": "56cacb939c49803c7d5fa7234c93eaee27be08d516268e896f2fd99e80b93e1f"
+    },
+    {
+      "path": "build/lib/task.ts",
+      "upstreamPath": "build/lib/gulp/task.ts",
+      "sha256": "f78de10f3a7172835526b584710e39b2b677642f1408a7f3c64fb0c4b2e3e747",
+      "adapted": true
+    }
+  ],
   "roots": [
     "src/base/browser/dnd.ts",
     "src/base/browser/dom.ts",
@@ -1696,13 +1506,119 @@
     "src/workbench/services/host/nativeHostService.ts",
     "src/workbench/services/lifecycle/lifecycle.ts"
   ],
-  "externalDependencies": [
-    "electron",
-    "node:fs/promises",
-    "node:os",
-    "node:path",
-    "trusted-types/lib/index.d.ts",
-    "trusted-types/lib/index.js"
+  "entryPoints": [
+    "src/base/browser/dnd.ts",
+    "src/base/browser/dom.ts",
+    "src/base/browser/keyboardEvent.ts",
+    "src/base/browser/ui/actionbar/actionViewItems.ts",
+    "src/base/browser/ui/actionbar/actionbar.ts",
+    "src/base/browser/ui/aria/aria.ts",
+    "src/base/browser/ui/button/button.ts",
+    "src/base/browser/ui/contextview/contextview.ts",
+    "src/base/browser/ui/dialog/dialog.ts",
+    "src/base/browser/ui/inputbox/inputBox.ts",
+    "src/base/browser/ui/list/list.ts",
+    "src/base/browser/ui/list/listView.ts",
+    "src/base/browser/ui/list/listWidget.ts",
+    "src/base/browser/ui/menu/menu.ts",
+    "src/base/browser/ui/scrollbar/scrollableElement.ts",
+    "src/base/browser/ui/toggle/toggle.ts",
+    "src/base/browser/window.ts",
+    "src/base/common/actions.ts",
+    "src/base/common/arrays.ts",
+    "src/base/common/async.ts",
+    "src/base/common/buffer.ts",
+    "src/base/common/cancellation.ts",
+    "src/base/common/collections.ts",
+    "src/base/common/errors.ts",
+    "src/base/common/event.ts",
+    "src/base/common/hash.ts",
+    "src/base/common/keyCodes.ts",
+    "src/base/common/layout.ts",
+    "src/base/common/lifecycle.ts",
+    "src/base/common/map.ts",
+    "src/base/common/objects.ts",
+    "src/base/common/platform.ts",
+    "src/base/common/process.ts",
+    "src/base/common/resources.ts",
+    "src/base/common/scrollable.ts",
+    "src/base/common/themables.ts",
+    "src/base/common/types.ts",
+    "src/base/common/uri.ts",
+    "src/base/parts/contextmenu/electron-main/contextmenu.ts",
+    "src/base/parts/ipc/common/ipc.ts",
+    "src/base/parts/ipc/electron-main/ipc.electron.ts",
+    "src/base/parts/ipc/electron-main/ipc.mp.ts",
+    "src/base/parts/ipc/electron-main/ipcMain.ts",
+    "src/base/parts/ipc/node/ipc.mp.ts",
+    "src/base/parts/sandbox/electron-browser/globals.ts",
+    "src/base/parts/sandbox/node/electronTypes.ts",
+    "src/nls.ts",
+    "src/platform/actions/common/actions.ts",
+    "src/platform/actions/common/menuService.ts",
+    "src/platform/clipboard/common/clipboardService.ts",
+    "src/platform/commands/common/commands.ts",
+    "src/platform/configuration/common/configuration.ts",
+    "src/platform/configuration/common/configurationRegistry.ts",
+    "src/platform/contextkey/browser/contextKeyService.ts",
+    "src/platform/contextkey/common/contextkey.ts",
+    "src/platform/contextview/browser/contextView.ts",
+    "src/platform/contextview/browser/contextViewService.ts",
+    "src/platform/instantiation/common/descriptors.ts",
+    "src/platform/instantiation/common/extensions.ts",
+    "src/platform/instantiation/common/instantiation.ts",
+    "src/platform/instantiation/common/instantiationService.ts",
+    "src/platform/instantiation/common/serviceCollection.ts",
+    "src/platform/ipc/common/mainProcessService.ts",
+    "src/platform/ipc/electron-browser/services.ts",
+    "src/platform/layout/browser/layoutService.ts",
+    "src/platform/log/electron-main/logIpc.ts",
+    "src/platform/log/electron-main/loggerService.ts",
+    "src/platform/native/common/native.ts",
+    "src/platform/native/electron-main/nativeHostMainService.ts",
+    "src/platform/registry/common/platform.ts",
+    "src/platform/state/node/state.ts",
+    "src/platform/state/node/stateService.ts",
+    "src/platform/terminal/common/terminalStrings.ts",
+    "src/platform/theme/browser/themeService.ts",
+    "src/platform/theme/common/themeService.ts",
+    "src/platform/window/common/window.ts",
+    "src/platform/windows/electron-main/windows.ts",
+    "src/workbench/contributions.ts",
+    "src/workbench/desktop.main.ts",
+    "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
+    "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
+    "src/workbench/services/host/nativeHostService.ts",
+    "src/workbench/services/lifecycle/lifecycle.ts"
+  ],
+  "compilerSupport": [
+    "src/typings/base-common.d.ts",
+    "src/typings/thenable.d.ts",
+    "src/typings/vscode-globals-nls.d.ts",
+    "src/typings/vscode-globals-product.d.ts",
+    "src/typings/editContext.d.ts"
+  ],
+  "applicationDependencies": [
+    "src/workbench/parts/titlebar/titlebarTabsControl.ts",
+    "src/platform/window/common/titlebar.ts",
+    "src/platform/window/common/windowMaterial.ts",
+    "src/platform/windows/electron-main/windowMaterial.ts",
+    "src/workbench/workbench.ts",
+    "src/platform/engine/common/engine.ts",
+    "src/platform/windows/electron-main/windowsMainService.ts",
+    "src/platform/engine/common/engineService.ts",
+    "src/platform/engine/electron-browser/engineService.ts",
+    "src/platform/window/common/windowConfiguration.ts",
+    "src/workbench/part.ts",
+    "src/platform/log/common/log.ts",
+    "src/platform/log/common/logService.ts",
+    "src/base/common/performance.ts",
+    "src/base/browser/ui/menu/vnilinkMenu.css",
+    "src/base/browser/ui/icon/icon.ts",
+    "src/base/common/icons.ts",
+    "src/platform/actions/browser/menuEntryActionViewItem.ts",
+    "src/platform/theme/browser/defaultStyles.ts",
+    "src/platform/log/node/spdlogAddon.ts"
   ],
   "dependencyEdges": [
     {
@@ -7561,118 +7477,12 @@
       "kind": "import"
     }
   ],
-  "compilerSupport": [
-    "src/typings/base-common.d.ts",
-    "src/typings/thenable.d.ts",
-    "src/typings/vscode-globals-nls.d.ts",
-    "src/typings/vscode-globals-product.d.ts",
-    "src/typings/editContext.d.ts"
-  ],
-  "entryPoints": [
-    "src/base/browser/dnd.ts",
-    "src/base/browser/dom.ts",
-    "src/base/browser/keyboardEvent.ts",
-    "src/base/browser/ui/actionbar/actionViewItems.ts",
-    "src/base/browser/ui/actionbar/actionbar.ts",
-    "src/base/browser/ui/aria/aria.ts",
-    "src/base/browser/ui/button/button.ts",
-    "src/base/browser/ui/contextview/contextview.ts",
-    "src/base/browser/ui/dialog/dialog.ts",
-    "src/base/browser/ui/inputbox/inputBox.ts",
-    "src/base/browser/ui/list/list.ts",
-    "src/base/browser/ui/list/listView.ts",
-    "src/base/browser/ui/list/listWidget.ts",
-    "src/base/browser/ui/menu/menu.ts",
-    "src/base/browser/ui/scrollbar/scrollableElement.ts",
-    "src/base/browser/ui/toggle/toggle.ts",
-    "src/base/browser/window.ts",
-    "src/base/common/actions.ts",
-    "src/base/common/arrays.ts",
-    "src/base/common/async.ts",
-    "src/base/common/buffer.ts",
-    "src/base/common/cancellation.ts",
-    "src/base/common/collections.ts",
-    "src/base/common/errors.ts",
-    "src/base/common/event.ts",
-    "src/base/common/hash.ts",
-    "src/base/common/keyCodes.ts",
-    "src/base/common/layout.ts",
-    "src/base/common/lifecycle.ts",
-    "src/base/common/map.ts",
-    "src/base/common/objects.ts",
-    "src/base/common/platform.ts",
-    "src/base/common/process.ts",
-    "src/base/common/resources.ts",
-    "src/base/common/scrollable.ts",
-    "src/base/common/themables.ts",
-    "src/base/common/types.ts",
-    "src/base/common/uri.ts",
-    "src/base/parts/contextmenu/electron-main/contextmenu.ts",
-    "src/base/parts/ipc/common/ipc.ts",
-    "src/base/parts/ipc/electron-main/ipc.electron.ts",
-    "src/base/parts/ipc/electron-main/ipc.mp.ts",
-    "src/base/parts/ipc/electron-main/ipcMain.ts",
-    "src/base/parts/ipc/node/ipc.mp.ts",
-    "src/base/parts/sandbox/electron-browser/globals.ts",
-    "src/base/parts/sandbox/node/electronTypes.ts",
-    "src/nls.ts",
-    "src/platform/actions/common/actions.ts",
-    "src/platform/actions/common/menuService.ts",
-    "src/platform/clipboard/common/clipboardService.ts",
-    "src/platform/commands/common/commands.ts",
-    "src/platform/configuration/common/configuration.ts",
-    "src/platform/configuration/common/configurationRegistry.ts",
-    "src/platform/contextkey/browser/contextKeyService.ts",
-    "src/platform/contextkey/common/contextkey.ts",
-    "src/platform/contextview/browser/contextView.ts",
-    "src/platform/contextview/browser/contextViewService.ts",
-    "src/platform/instantiation/common/descriptors.ts",
-    "src/platform/instantiation/common/extensions.ts",
-    "src/platform/instantiation/common/instantiation.ts",
-    "src/platform/instantiation/common/instantiationService.ts",
-    "src/platform/instantiation/common/serviceCollection.ts",
-    "src/platform/ipc/common/mainProcessService.ts",
-    "src/platform/ipc/electron-browser/services.ts",
-    "src/platform/layout/browser/layoutService.ts",
-    "src/platform/log/electron-main/logIpc.ts",
-    "src/platform/log/electron-main/loggerService.ts",
-    "src/platform/native/common/native.ts",
-    "src/platform/native/electron-main/nativeHostMainService.ts",
-    "src/platform/registry/common/platform.ts",
-    "src/platform/state/node/state.ts",
-    "src/platform/state/node/stateService.ts",
-    "src/platform/terminal/common/terminalStrings.ts",
-    "src/platform/theme/browser/themeService.ts",
-    "src/platform/theme/common/themeService.ts",
-    "src/platform/window/common/window.ts",
-    "src/platform/windows/electron-main/windows.ts",
-    "src/workbench/contributions.ts",
-    "src/workbench/desktop.main.ts",
-    "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
-    "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
-    "src/workbench/services/host/nativeHostService.ts",
-    "src/workbench/services/lifecycle/lifecycle.ts"
-  ],
-  "applicationDependencies": [
-    "src/workbench/parts/titlebar/titlebarTabsControl.ts",
-    "src/platform/window/common/titlebar.ts",
-    "src/platform/window/common/windowMaterial.ts",
-    "src/platform/windows/electron-main/windowMaterial.ts",
-    "src/workbench/workbench.ts",
-    "src/platform/engine/common/engine.ts",
-    "src/platform/windows/electron-main/windowsMainService.ts",
-    "src/platform/engine/common/engineService.ts",
-    "src/platform/engine/electron-browser/engineService.ts",
-    "src/platform/window/common/windowConfiguration.ts",
-    "src/workbench/part.ts",
-    "src/platform/log/common/log.ts",
-    "src/platform/log/common/logService.ts",
-    "src/base/common/performance.ts",
-    "src/base/browser/ui/menu/vnilinkMenu.css",
-    "src/base/browser/ui/icon/icon.ts",
-    "src/base/common/icons.ts",
-    "src/platform/actions/browser/menuEntryActionViewItem.ts",
-    "src/platform/theme/browser/defaultStyles.ts",
-    "src/platform/log/node/spdlogAddon.ts"
+  "externalDependencies": [
+    "electron",
+    "node:fs/promises",
+    "node:os",
+    "node:path",
+    "trusted-types/lib/index.d.ts",
+    "trusted-types/lib/index.js"
   ]
 }

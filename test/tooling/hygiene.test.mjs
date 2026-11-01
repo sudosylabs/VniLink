@@ -87,7 +87,7 @@ test('the check fails on a seeded repository, listing each finding, and passes o
 		await copyFile(join(root, 'product.json'), join(directory, 'product.json'));
 		await mkdir(join(directory, 'vendor'));
 		await mkdir(join(directory, 'build'));
-		await writeFile(join(directory, 'build', 'vscode-source.json'), '{"files":[]}');
+		await writeFile(join(directory, 'build', 'vscode-source.json'), '{"files":[],"tooling":[]}');
 		await writeFile(join(directory, 'vendor', 'notes.md'), home('', 'Users', 'jane'));
 		await writeFile(join(directory, 'README.md'), 'VniLink.\n');
 		await git('init', '--quiet');
