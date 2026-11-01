@@ -154,6 +154,309 @@ pub(super) fn frame_period(desktop: &DesktopRuntime) -> Duration {
     Duration::from_secs(1) / u32::from(lock(&desktop.quality).max_frame_rate.max(1))
 }
 
+/// What the host's sender keeps from one picture to the next.
+struct PictureSender<'a> {
+    shared: &'a Shared,
+    desktop: &'a DesktopRuntime,
+    link: iroh::endpoint::Connection,
+    /// Groups each datagram picture's fragments, stills among them.
+    seq: u32,
+    /// The number the next stream picture takes, on either transport; a
+    /// still repeats the one before, and a picture dropped here takes none.
+    picture: u32,
+    gate: SendGate,
+    /// Whether the last picture went on the stream rather than as datagrams.
+    streaming: bool,
+    congestion: crate::video::Congestion,
+    path: Option<iroh::endpoint::PathId>,
+    /// The least backlog the gate saw since the last feedback.
+    least_backlog: Option<usize>,
+}
+
+impl<'a> PictureSender<'a> {
+    /// Sends what the encoder queued; whether any picture went out.
+    async fn send_frames(
+        &mut self,
+        send: &mut SendStream,
+        frames: Vec<crate::video::EncodedFrame>,
+    ) -> Result<bool, Error> {
+        let mut pictured = false;
+        let last_change = frames
+            .iter()
+            .rposition(|frame| frame.role == crate::FrameRole::Changed);
+        for (index, frame) in frames.into_iter().enumerate() {
+            // A still picture is stale once a changed picture follows it,
+            // and never goes while the stream owes a keyframe.
+            let still = frame.role == crate::FrameRole::Still;
+            let changed_after = last_change.is_some_and(|at| at > index);
+            if still && (changed_after || self.gate.awaiting) {
+                self.desktop.counters.still_dropped();
+                continue;
+            }
+            // After a frame was dropped, the predicted frames that follow
+            // reference it: they go too, until the keyframe owed for it.
+            if self.gate.skips(frame.keyframe) {
+                self.desktop.counters.send_dropped();
+                continue;
+            }
+            pictured |= self.send_frame(send, &frame, still).await?;
+        }
+        Ok(pictured)
+    }
+
+    /// Reads the selected path and returns its round trip time. A new path
+    /// starts its round trip floor afresh.
+    fn track_path(&mut self) -> Duration {
+        let selected = self
+            .link
+            .paths()
+            .iter()
+            .find(|candidate| candidate.is_selected())
+            .map(|selected| (selected.id(), selected.stats()));
+        let rtt = selected
+            .as_ref()
+            .map_or(Duration::ZERO, |(_, stats)| stats.rtt);
+        if selected.as_ref().map(|(id, _)| *id) != self.path {
+            self.path = selected.as_ref().map(|(id, _)| *id);
+            self.congestion = crate::video::Congestion::default();
+            lock(&self.desktop.link_rate).reset();
+        }
+        if let Some((_, stats)) = &selected {
+            lock(&self.desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
+        }
+        self.congestion.rtt(rtt, std::time::Instant::now());
+        rtt
+    }
+
+    /// Sends one picture by the transport the link offers; whether it went.
+    async fn send_frame(
+        &mut self,
+        send: &mut SendStream,
+        frame: &crate::video::EncodedFrame,
+        still: bool,
+    ) -> Result<bool, Error> {
+        let desktop = self.desktop;
+        let rtt = self.track_path();
+        let number = if still {
+            self.picture.wrapping_sub(1)
+        } else {
+            self.picture
+        };
+        let body = crate::video::encode_video_body(frame, number);
+        let max = self.link.max_datagram_size();
+        #[cfg(any(test, feature = "test-probes"))]
+        let max = if desktop
+            .force_stream
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            None
+        } else {
+            max
+        };
+        if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
+            self.streaming = false;
+            desktop
+                .datagram
+                .store(max - PREFIX, std::sync::atomic::Ordering::Relaxed);
+            self.send_datagrams(frame, still, &body, max, rtt)
+        } else if still {
+            if body.len() > desktop.still_drain() {
+                desktop.counters.still_dropped();
+                return Ok(false);
+            }
+            let mut bytes = vec![VIDEO];
+            bytes.extend_from_slice(&body);
+            write(send, &bytes).await?;
+            desktop.counters.still_sent(frame.payload.len());
+            Ok(true)
+        } else {
+            self.streaming = true;
+            // The stream holds whatever is written to it: while the
+            // viewer has not acknowledged the pictures already written,
+            // this one is dropped whole and a keyframe follows once it
+            // has.
+            if !lock(&desktop.stream_flight).may_send(std::time::Instant::now()) {
+                desktop.counters.send_dropped();
+                self.gate.dropped(frame.keyframe, body.len());
+                return Ok(false);
+            }
+            let mut bytes = vec![VIDEO];
+            bytes.extend_from_slice(&body);
+            write(send, &bytes).await?;
+            lock(&desktop.stream_flight).sent(self.picture, std::time::Instant::now());
+            self.picture = self.picture.wrapping_add(1);
+            self.gate.sent(frame.keyframe, bytes.len());
+            if frame.keyframe {
+                desktop.counters.keyframe_sent(frame.payload.len());
+            }
+            Ok(true)
+        }
+    }
+
+    /// Sends one picture as datagrams of at most `max` bytes.
+    fn send_datagrams(
+        &mut self,
+        frame: &crate::video::EncodedFrame,
+        still: bool,
+        body: &[u8],
+        max: usize,
+        rtt: Duration,
+    ) -> Result<bool, Error> {
+        let desktop = self.desktop;
+        let now = std::time::Instant::now();
+        let protection = lock(&desktop.viewer_loss).protection(
+            frame.keyframe,
+            self.congestion.congested(rtt),
+            now,
+        );
+        let datagrams = crate::video::fragment(body, self.seq, max - PREFIX, protection)
+            .into_iter()
+            .map(|fragment| {
+                let mut bytes = Vec::with_capacity(PREFIX + fragment.len());
+                bytes.extend_from_slice(&epoch(desktop.stamp));
+                bytes.extend_from_slice(&fragment);
+                bytes::Bytes::from(bytes)
+            })
+            .collect::<Vec<_>>();
+        let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
+        let backlog = super::super::host::DATAGRAM_SEND_BUFFER
+            .saturating_sub(self.link.datagram_send_buffer_space());
+        self.least_backlog = Some(
+            self.least_backlog
+                .map_or(backlog, |least| least.min(backlog)),
+        );
+        if still {
+            // A change behind it waits for what is queued and for
+            // it: both must drain within the moment a still may
+            // hold the link.
+            let space = self.link.datagram_send_buffer_space();
+            if wire > space || backlog + wire > desktop.still_drain() {
+                desktop.counters.still_dropped();
+                return Ok(false);
+            }
+            self.link
+                .send_many_datagrams(&datagrams)
+                .map_err(Error::network_debug)?;
+            self.seq = self.seq.wrapping_add(1);
+            self.gate.still_sent(wire);
+            desktop.counters.still_sent(frame.payload.len());
+            return Ok(true);
+        }
+        if dropped(self.shared, DropPoint::Gate)
+            || !self.gate.admits(
+                self.link.datagram_send_buffer_space(),
+                wire,
+                send_budget(desktop),
+            )
+        {
+            // The link is behind: sending would queue stale video, or
+            // make the transport drop older fragments and so split
+            // frames. Drop this one whole and start again from a
+            // keyframe once the backlog drains.
+            desktop.counters.send_dropped();
+            self.gate.dropped(frame.keyframe, wire);
+            return Ok(false);
+        }
+        self.link
+            .send_many_datagrams(&datagrams)
+            .map_err(Error::network_debug)?;
+        self.seq = self.seq.wrapping_add(1);
+        self.picture = self.picture.wrapping_add(1);
+        self.gate.sent(frame.keyframe, wire);
+        if frame.keyframe {
+            desktop.counters.keyframe_sent(frame.payload.len());
+        }
+        Ok(true)
+    }
+
+    /// Asks the encoder for the owed keyframe once the stream's
+    /// unacknowledged pictures let it go, or the datagram backlog has room
+    /// for it.
+    fn ask_for_keyframe(&mut self) {
+        let stream_blocked = self.streaming
+            && !lock(&self.desktop.stream_flight).may_send(std::time::Instant::now());
+        if !stream_blocked
+            && self.gate.should_ask(
+                self.link.datagram_send_buffer_space(),
+                send_budget(self.desktop),
+            )
+        {
+            self.desktop.keyframe.request();
+        }
+    }
+
+    /// The host's feedback message for the viewer.
+    fn feedback(&mut self) -> Vec<u8> {
+        let desktop = self.desktop;
+        let stats = self.link.stats();
+        let queue = desktop.video.telemetry();
+        let timing = lock(&desktop.producer_duration)
+            .as_ref()
+            .filter(|(_, _, at)| at.elapsed() <= Duration::from_secs(3))
+            .map(|(capture, encode, _)| (*capture, *encode))
+            .unwrap_or_default();
+        // Read before the feedback is built: a guard held through its
+        // fields would meet the one taken below.
+        let link_kbps = lock(&desktop.link_rate)
+            .bits_per_second()
+            .map_or(0, |bits| (bits / 1000).min(u64::from(u32::MAX)) as u32);
+        let feedback = crate::adaptation::HostFeedback {
+            sent_bytes: stats.udp_tx.bytes,
+            lost_bytes: stats.lost_bytes,
+            dropped: queue.dropped,
+            queued: queue.queued,
+            oldest_ms: queue.oldest_ms,
+            send_dropped: desktop.counters.read().send_dropped,
+            backlog_ms: (self.least_backlog.take().unwrap_or(0) as u64 * 8)
+                .checked_div(u64::from(lock(&desktop.quality).max_bitrate_kbps))
+                .unwrap_or(0)
+                .min(600_000),
+            capture_us: timing.0,
+            encode_us: timing.1,
+            link_kbps,
+            congestion_events: self
+                .link
+                .paths()
+                .iter()
+                .find(|path| path.is_selected())
+                .map_or(0, |path| {
+                    let stats = path.stats();
+                    // A still screen sends little: read the link here too.
+                    lock(&desktop.link_rate).observe(
+                        stats.cwnd,
+                        stats.rtt,
+                        std::time::Instant::now(),
+                    );
+                    stats.congestion_events
+                }),
+            flags: host_flags(self.shared, desktop),
+        };
+        let mut bytes = vec![MEDIA_FEEDBACK];
+        bytes.extend(feedback.encode());
+        bytes
+    }
+}
+
+/// Writes the pointer when it changed since `previous`.
+async fn send_cursor(
+    send: &mut SendStream,
+    current: Option<Arc<CursorState>>,
+    previous: &mut Option<Arc<CursorState>>,
+) -> Result<(), Error> {
+    if current != *previous {
+        if let Some(current) = &current {
+            let mut bytes = vec![CURSOR];
+            bytes.extend_from_slice(&crate::cursor::encode(
+                current,
+                previous.as_ref().and_then(|c| c.image.as_ref()) != current.image.as_ref(),
+            ));
+            write(send, &bytes).await?;
+        }
+        *previous = current;
+    }
+    Ok(())
+}
+
 pub(super) async fn host_send(
     shared: &Shared,
     desktop: &DesktopRuntime,
@@ -164,18 +467,18 @@ pub(super) async fn host_send(
         .get(&desktop.info.service.connection_id)
         .and_then(|s| s.link.clone())
         .ok_or(Error::NoSession)?;
-    // Groups each datagram picture's fragments, stills among them.
-    let mut seq = 0u32;
-    // The number the next stream picture takes, on either transport; a
-    // still repeats the one before, and a picture dropped here takes none.
-    let mut picture = 0u32;
-    let mut gate = SendGate::default();
-    // Whether the last picture went on the stream rather than as datagrams.
-    let mut streaming = false;
-    let mut congestion = crate::video::Congestion::default();
-    let mut path = None;
-    // The least backlog the gate saw since the last feedback.
-    let mut least_backlog: Option<usize> = None;
+    let mut sender = PictureSender {
+        shared,
+        desktop,
+        link,
+        seq: 0,
+        picture: 0,
+        gate: SendGate::default(),
+        streaming: false,
+        congestion: crate::video::Congestion::default(),
+        path: None,
+        least_backlog: None,
+    };
     let mut metrics = tokio::time::interval(Duration::from_secs(1));
     metrics.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut cursor = desktop.cursor.subscribe();
@@ -192,229 +495,30 @@ pub(super) async fn host_send(
         let notified = desktop.video.notified();
         tokio::pin!(notified);
         let frames = desktop.video.drain();
-        let mut pictured = false;
-        let last_change = frames
-            .iter()
-            .rposition(|frame| frame.role == crate::FrameRole::Changed);
-        for (index, frame) in frames.into_iter().enumerate() {
-            // A still picture is stale once a changed picture follows it,
-            // and never goes while the stream owes a keyframe.
-            let still = frame.role == crate::FrameRole::Still;
-            let changed_after = last_change.is_some_and(|at| at > index);
-            if still && (changed_after || gate.awaiting) {
-                desktop.counters.still_dropped();
-                continue;
-            }
-            // After a frame was dropped, the predicted frames that follow
-            // reference it: they go too, until the keyframe owed for it.
-            if gate.skips(frame.keyframe) {
-                desktop.counters.send_dropped();
-                continue;
-            }
-            // A new path starts its round trip floor afresh.
-            let selected = link
-                .paths()
-                .iter()
-                .find(|candidate| candidate.is_selected())
-                .map(|selected| (selected.id(), selected.stats()));
-            let rtt = selected
-                .as_ref()
-                .map_or(Duration::ZERO, |(_, stats)| stats.rtt);
-            if selected.as_ref().map(|(id, _)| *id) != path {
-                path = selected.as_ref().map(|(id, _)| *id);
-                congestion = crate::video::Congestion::default();
-                lock(&desktop.link_rate).reset();
-            }
-            if let Some((_, stats)) = &selected {
-                lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
-            }
-            congestion.rtt(rtt, std::time::Instant::now());
-            let number = if still {
-                picture.wrapping_sub(1)
-            } else {
-                picture
-            };
-            let body = crate::video::encode_video_body(&frame, number);
-            let max = link.max_datagram_size();
-            #[cfg(any(test, feature = "test-probes"))]
-            let max = if desktop
-                .force_stream
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
-                None
-            } else {
-                max
-            };
-            if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
-                streaming = false;
-                desktop
-                    .datagram
-                    .store(max - PREFIX, std::sync::atomic::Ordering::Relaxed);
-                let now = std::time::Instant::now();
-                let protection = lock(&desktop.viewer_loss).protection(
-                    frame.keyframe,
-                    congestion.congested(rtt),
-                    now,
-                );
-                let datagrams = crate::video::fragment(&body, seq, max - PREFIX, protection)
-                    .into_iter()
-                    .map(|fragment| {
-                        let mut bytes = Vec::with_capacity(PREFIX + fragment.len());
-                        bytes.extend_from_slice(&epoch(desktop.stamp));
-                        bytes.extend_from_slice(&fragment);
-                        bytes::Bytes::from(bytes)
-                    })
-                    .collect::<Vec<_>>();
-                let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
-                let backlog = super::host::DATAGRAM_SEND_BUFFER
-                    .saturating_sub(link.datagram_send_buffer_space());
-                least_backlog = Some(least_backlog.map_or(backlog, |least| least.min(backlog)));
-                if still {
-                    // A change behind it waits for what is queued and for
-                    // it: both must drain within the moment a still may
-                    // hold the link.
-                    let space = link.datagram_send_buffer_space();
-                    if wire > space || backlog + wire > desktop.still_drain() {
-                        desktop.counters.still_dropped();
-                        continue;
-                    }
-                    link.send_many_datagrams(&datagrams)
-                        .map_err(Error::network_debug)?;
-                    seq = seq.wrapping_add(1);
-                    gate.still_sent(wire);
-                    desktop.counters.still_sent(frame.payload.len());
-                    pictured = true;
-                    continue;
-                }
-                if dropped(shared, DropPoint::Gate)
-                    || !gate.admits(
-                        link.datagram_send_buffer_space(),
-                        wire,
-                        send_budget(desktop),
-                    )
-                {
-                    // The link is behind: sending would queue stale video, or
-                    // make the transport drop older fragments and so split
-                    // frames. Drop this one whole and start again from a
-                    // keyframe once the backlog drains.
-                    desktop.counters.send_dropped();
-                    gate.dropped(frame.keyframe, wire);
-                    continue;
-                }
-                link.send_many_datagrams(&datagrams)
-                    .map_err(Error::network_debug)?;
-                seq = seq.wrapping_add(1);
-                picture = picture.wrapping_add(1);
-                gate.sent(frame.keyframe, wire);
-                pictured = true;
-                if frame.keyframe {
-                    desktop.counters.keyframe_sent(frame.payload.len());
-                }
-            } else if still {
-                if body.len() > desktop.still_drain() {
-                    desktop.counters.still_dropped();
-                    continue;
-                }
-                let mut bytes = vec![VIDEO];
-                bytes.extend_from_slice(&body);
-                write(send, &bytes).await?;
-                desktop.counters.still_sent(frame.payload.len());
-                pictured = true;
-            } else {
-                streaming = true;
-                // The stream holds whatever is written to it: while the
-                // viewer has not acknowledged the pictures already written,
-                // this one is dropped whole and a keyframe follows once it
-                // has.
-                if !lock(&desktop.stream_flight).may_send(std::time::Instant::now()) {
-                    desktop.counters.send_dropped();
-                    gate.dropped(frame.keyframe, body.len());
-                    continue;
-                }
-                let mut bytes = vec![VIDEO];
-                bytes.extend_from_slice(&body);
-                write(send, &bytes).await?;
-                lock(&desktop.stream_flight).sent(picture, std::time::Instant::now());
-                picture = picture.wrapping_add(1);
-                gate.sent(frame.keyframe, bytes.len());
-                pictured = true;
-                if frame.keyframe {
-                    desktop.counters.keyframe_sent(frame.payload.len());
-                }
-            }
-        }
+        let pictured = sender.send_frames(send, frames).await?;
         if pictured && control_rx.borrow().0 == DesktopControlState::Controlling {
-            super::power::note_control_used(shared);
+            super::super::power::note_control_used(shared);
         }
-        // A keyframe is asked for once the stream's unacknowledged pictures
-        // let it go, or the datagram backlog has room for it.
-        let stream_blocked =
-            streaming && !lock(&desktop.stream_flight).may_send(std::time::Instant::now());
-        if !stream_blocked
-            && gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop))
-        {
-            desktop.keyframe.request();
-        }
+        sender.ask_for_keyframe();
         // While a keyframe is owed, look at the backlog again each frame
         // period: a still screen may bring no frame to wake on.
-        let owed_check = gate.owed().then(|| frame_period(desktop));
+        let owed_check = sender.gate.owed().then(|| frame_period(desktop));
         let current = cursor.borrow_and_update().clone();
-        if current != previous {
-            if let Some(current) = &current {
-                let mut bytes = vec![CURSOR];
-                bytes.extend_from_slice(&crate::cursor::encode(
-                    current,
-                    previous
-                        .as_ref()
-                        .and_then(|c: &Arc<CursorState>| c.image.as_ref())
-                        != current.image.as_ref(),
-                ));
-                write(send, &bytes).await?;
-            }
-            previous = current;
-        }
+        send_cursor(send, current, &mut previous).await?;
         tokio::select! {
             _ = metrics.tick() => {
-                let stats = link.stats();
-                let queue = desktop.video.telemetry();
-                let timing = lock(&desktop.producer_duration).as_ref()
-                    .filter(|(_, _, at)| at.elapsed() <= Duration::from_secs(3))
-                    .map(|(capture, encode, _)| (*capture, *encode)).unwrap_or_default();
-                // Read before the feedback is built: a guard held through its
-                // fields would meet the one taken below.
-                let link_kbps = lock(&desktop.link_rate)
-                    .bits_per_second()
-                    .map_or(0, |bits| (bits / 1000).min(u64::from(u32::MAX)) as u32);
-                let feedback = crate::adaptation::HostFeedback {
-                    sent_bytes: stats.udp_tx.bytes, lost_bytes: stats.lost_bytes,
-                    dropped: queue.dropped, queued: queue.queued, oldest_ms: queue.oldest_ms,
-                    send_dropped: desktop.counters.read().send_dropped,
-                    backlog_ms: (least_backlog.take().unwrap_or(0) as u64 * 8)
-                        .checked_div(u64::from(lock(&desktop.quality).max_bitrate_kbps))
-                        .unwrap_or(0)
-                        .min(600_000),
-                    capture_us: timing.0, encode_us: timing.1,
-                    link_kbps,
-                    congestion_events: link.paths().iter().find(|path| path.is_selected())
-                        .map_or(0, |path| {
-                            let stats = path.stats();
-                            // A still screen sends little: read the link here too.
-                            lock(&desktop.link_rate).observe(stats.cwnd, stats.rtt, std::time::Instant::now());
-                            stats.congestion_events
-                        }),
-                    flags: host_flags(shared, desktop),
-                };
-                let mut bytes = vec![MEDIA_FEEDBACK];
-                bytes.extend(feedback.encode());
+                let bytes = sender.feedback();
                 write(send, &bytes).await?;
             }
             _ = &mut notified => {},
             () = tokio::time::sleep(owed_check.unwrap_or_default()), if owed_check.is_some() => {},
             _ = cursor.changed() => {},
             changed = recording_rx.changed() => {
-                changed.map_err(|_|Error::NoSession)?;
-                let allowed=*recording_rx.borrow_and_update();
-                let mut bytes=vec![RECORDING_STATE,u8::from(allowed.0)];bytes.extend_from_slice(&allowed.1.to_be_bytes());write(send,&bytes).await?;
+                changed.map_err(|_| Error::NoSession)?;
+                let allowed = *recording_rx.borrow_and_update();
+                let mut bytes = vec![RECORDING_STATE, u8::from(allowed.0)];
+                bytes.extend_from_slice(&allowed.1.to_be_bytes());
+                write(send, &bytes).await?;
             }
             changed = control_rx.changed() => {
                 if changed.is_err() { return Err(Error::NoSession); }
