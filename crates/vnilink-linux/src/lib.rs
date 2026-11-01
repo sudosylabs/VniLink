@@ -40,7 +40,7 @@ pub use camera::LinuxCameraFactory;
 #[cfg(target_os = "linux")]
 mod codecs;
 mod encode;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 mod gpu;
 #[cfg(target_os = "linux")]
 mod gpu_picture;

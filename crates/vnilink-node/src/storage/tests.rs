@@ -23,9 +23,9 @@ use super::database::{
 use super::key::{FileVault, KeyVault, KeyringVault, MemoryVault, KEY_ACCOUNT, KEY_SERVICE};
 #[cfg(unix)]
 use super::paths::linux_app_dir;
-use super::paths::{
-    self, linux_fstype_is_remote, linux_mount_fstype, linux_path_is_remote, resolve_mount_path,
-};
+use super::paths::{self, linux_fstype_is_remote, linux_mount_fstype};
+#[cfg(unix)]
+use super::paths::{linux_path_is_remote, resolve_mount_path};
 use super::{recover_installation, EncryptedInstallationStore, Failure};
 
 const OLD_SENTINEL: &[u8] = b"VNILINK-PLAINTEXT-SENTINEL-OLD-9f3c1a";

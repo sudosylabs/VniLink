@@ -265,6 +265,10 @@ pub(crate) enum Failure {
     Panic,
     /// The write statement observes a transaction SQLite has already ended.
     EndedStatement,
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "the only test that arms it needs Unix")
+    )]
     Barrier(std::path::PathBuf),
 }
 

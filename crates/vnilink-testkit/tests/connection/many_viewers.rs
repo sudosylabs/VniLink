@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use vnilink::{Error, Grants, RemoteDesktopService, ServiceInfo, ServiceKind, SessionPhase};
 use vnilink_testkit::desktop::{delta, keyframe, InputLog};
+#[cfg(unix)]
 use vnilink_testkit::files::source;
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 

@@ -82,6 +82,7 @@ fn identity_of(caps: &NodeCaps) -> String {
 /// missing files, unreadable links, rejected characters — yields `None`
 /// and the node falls back to the serial-less identity plus the
 /// continuity rule, never to a guess.
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn read_serial(class_dir: &std::path::Path, node: &str) -> Option<String> {
     let link = class_dir.join(node).join("device");
     let target = std::fs::read_link(&link).ok()?;

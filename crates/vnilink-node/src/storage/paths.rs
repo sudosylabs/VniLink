@@ -64,7 +64,7 @@ fn sibling(database: &Path, suffix: &str) -> PathBuf {
 
 /// Linux data directory for the application, as a function of the inputs.
 /// Relative or empty `XDG_DATA_HOME` is ignored. This does not read the environment.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn linux_app_dir(
     home: Option<&Path>,
     xdg: Option<&std::ffi::OsStr>,
@@ -108,7 +108,7 @@ pub(crate) fn linux_fstype_is_remote(fstype: &str) -> bool {
 
 /// Classifies `path` after resolving symlinks in the existing prefix.
 /// The returned flag does not change the path used to create the store.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn linux_path_is_remote(mountinfo: &str, path: &Path) -> Result<bool, StoreFailure> {
     let resolved = resolve_mount_path(path)?;
     let Some(fstype) = linux_mount_fstype(mountinfo, &resolved) else {
@@ -117,13 +117,13 @@ pub(crate) fn linux_path_is_remote(mountinfo: &str, path: &Path) -> Result<bool,
     Ok(linux_fstype_is_remote(&fstype))
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 const MAX_SYMLINKS: usize = 40;
 
 /// Resolves the deepest existing prefix, then appends any missing suffix.
 /// A symlink loop past [`MAX_SYMLINKS`] fails. This does not create directories
 /// and is not a new store location.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) fn resolve_mount_path(path: &Path) -> Result<PathBuf, StoreFailure> {
     let mut hops = 0usize;
     let mut current = PathBuf::new();
@@ -173,7 +173,7 @@ pub(crate) fn resolve_mount_path(path: &Path) -> Result<PathBuf, StoreFailure> {
     Ok(current)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 #[derive(Clone)]
 enum OwnedComponent {
     Prefix(std::ffi::OsString),
@@ -183,7 +183,7 @@ enum OwnedComponent {
     Normal(std::ffi::OsString),
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn owned_components(path: &Path) -> Vec<OwnedComponent> {
     use std::path::Component;
     path.components()
@@ -197,7 +197,7 @@ fn owned_components(path: &Path) -> Vec<OwnedComponent> {
         .collect()
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn push_owned(path: &mut PathBuf, component: &OwnedComponent) {
     match component {
         OwnedComponent::Prefix(prefix) => path.push(prefix),
