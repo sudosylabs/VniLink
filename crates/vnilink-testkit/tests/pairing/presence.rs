@@ -288,7 +288,6 @@ fn unpairing_ends_the_link_for_good() -> TestResult {
           relay: presence presence=Connecting
           relay: a link to a paired computer is up paths=1 relayed=false
           relay: presence presence=Connected
-          relay: a link to a computer no longer paired ended
         host:
           relay: endpoint bound listen=Loopback relay=false
     "#]],

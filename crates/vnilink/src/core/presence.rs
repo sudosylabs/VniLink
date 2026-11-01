@@ -139,6 +139,11 @@ async fn supervise(shared: Arc<Shared>, handle: tokio::runtime::Handle) {
 async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u8; 32]) {
     let wake = Arc::new(Notify::new());
     lock(&shared.presence_wake).insert(peer, Arc::clone(&wake));
+    let _ended = LinkEnded {
+        shared: Arc::clone(&shared),
+        peer,
+        wake: Arc::clone(&wake),
+    };
     let mut failures = 0usize;
     let mut reached = false;
     while running(&shared) {
@@ -227,16 +232,30 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
             }
         }
     }
-    let mut state = lock(&shared.state);
-    if let Some(device) = state.trust.get(&peer).map(|d| d.display_id.clone()) {
-        state.presence.remove(&device);
-    }
-    state.link_refused.remove(&peer);
-    state.link_unauthorized.remove(&peer);
-    drop(state);
-    let mut wakes = lock(&shared.presence_wake);
-    if wakes.get(&peer).is_some_and(|w| Arc::ptr_eq(w, &wake)) {
-        wakes.remove(&peer);
+}
+
+/// What a computer's link leaves behind when its task ends, however it
+/// ends: the supervisor aborts the task of a computer that is unpaired.
+struct LinkEnded {
+    shared: Arc<Shared>,
+    peer: [u8; 32],
+    wake: Arc<Notify>,
+}
+
+impl Drop for LinkEnded {
+    fn drop(&mut self) {
+        let (shared, peer) = (&self.shared, self.peer);
+        let mut state = lock(&shared.state);
+        if let Some(device) = state.trust.get(&peer).map(|d| d.display_id.clone()) {
+            state.presence.remove(&device);
+        }
+        state.link_refused.remove(&peer);
+        state.link_unauthorized.remove(&peer);
+        drop(state);
+        let mut wakes = lock(&shared.presence_wake);
+        if wakes.get(&peer).is_some_and(|w| Arc::ptr_eq(w, &self.wake)) {
+            wakes.remove(&peer);
+        }
     }
 }
 
