@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "X11 capture, the Wayland portal, and VA-API video for VniLink"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 vnilink = { path = "../vnilink" }

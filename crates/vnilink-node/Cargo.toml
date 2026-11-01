@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 # rlib lets the reset binary and `cargo test` link this crate. The Node addon
 # remains the cdylib.

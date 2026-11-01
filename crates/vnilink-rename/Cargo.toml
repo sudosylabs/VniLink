@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Atomic no-replace rename primitive for the VniLink file manager"
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 path = "src/lib.rs"
 

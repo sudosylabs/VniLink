@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Shared control library for the VniLink remote desktop"
 publish = false
 
+[lints]
+workspace = true
+
 [features]
 # Application tests open a loopback core on a real store and read the
 # endpoint-close count. Production builds leave this off.

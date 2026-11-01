@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Engines on one computer, and each service's functional and performance suites"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 # The agent's protocol carries file contents as base64 in JSON.
 base64 = "=0.22.1"

@@ -21,6 +21,9 @@ license = "AGPL-3.0-only"
 version = "0.1.0"
 rust-version = "1.91"
 
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
 [profile.dev]
 debug = "line-tables-only"
 

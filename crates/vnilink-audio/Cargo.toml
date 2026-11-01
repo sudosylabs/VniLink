@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Bounded Opus audio clock and playback engine for VniLink"
 publish = false
 
+[lints]
+workspace = true
+
 [features]
 default = []
 native = ["dep:cpal"]

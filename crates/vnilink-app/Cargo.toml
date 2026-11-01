@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Application adapters for the VniLink shared library"
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 name = "vnilink_app"
 crate-type = ["rlib"]

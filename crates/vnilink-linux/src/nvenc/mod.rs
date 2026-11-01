@@ -37,6 +37,7 @@
     unnecessary_transmutes,
     unused_imports,
     clippy::all,
+    clippy::undocumented_unsafe_blocks,
     unsafe_op_in_unsafe_fn
 )]
 mod bindings;

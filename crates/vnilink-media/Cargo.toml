@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Frame pacing and H.264 Annex-B for VniLink platform adapters"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 thiserror = "2"
