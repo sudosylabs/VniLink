@@ -176,7 +176,8 @@ class SmokeSuite {
 		try {
 			for (const mode of ['light', 'dark'] as const) {
 				nativeTheme.themeSource = mode;
-				const answer = windowPrompt({ action: 'restart', name: 'Studio Mac', deadline: Date.now() + 30_000 }, new AbortController().signal);
+				const deadline = Date.now() + 30_000;
+				const answer = windowPrompt({ action: 'restart', name: 'Studio Mac', deadline }, new AbortController().signal);
 				const window = await opened();
 				assert.equal(window.webContents.getURL(), NOTICE_URL);
 				assert.equal(await window.webContents.executeJavaScript(`document.querySelector('#notice-title')?.textContent`), 'Studio Mac wants to restart this computer');
@@ -195,7 +196,14 @@ class SmokeSuite {
 				}
 				appendFileSync(join(this.application.output, 'notice.log'), `${mode}: ${material} ${root} ${body}\n`);
 				const first = await detail(window);
-				assert.match(String(first), /^Restarting in (30|29) s\. Save your work, or cancel\.$/);
+				// The seconds left are those to the deadline when the notice was drawn,
+				// however long the window took to open on this machine.
+				const readAt = Date.now();
+				const shown = /^Restarting in (\d+) s\. Save your work, or cancel\.$/.exec(String(first));
+				assert(shown, `Unexpected countdown: ${String(first)}`);
+				const left = Number(shown[1]);
+				const remaining = deadline - readAt;
+				assert(left <= 30 && left >= Math.floor(remaining / 1000), `The countdown shows ${String(left)} s with ${String(remaining)} ms left`);
 				await new Promise(resolve => setTimeout(resolve, 1300));
 				assert.notEqual(await detail(window), first, 'The notice did not count down');
 				writeFileSync(join(this.application.output, `notice-${mode}.png`), (await window.webContents.capturePage()).toPNG());
