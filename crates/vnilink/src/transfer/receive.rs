@@ -372,7 +372,7 @@ mod tests {
     use iroh::{Endpoint, RelayMode};
 
     use super::super::hash::SegmentHasher;
-    use super::super::wire::{FILES_ALPN, STATUS_DENIED};
+    use super::super::wire::FILES_ALPN;
     use super::*;
 
     async fn endpoint() -> Endpoint {
@@ -661,7 +661,6 @@ mod tests {
         assert!(summary.segments_checked >= 1);
         assert_eq!(scratch.data(), bytes);
         assert_eq!(arrived.try_iter().last(), Some(size));
-        let _ = STATUS_DENIED;
     }
 
     /// A file whose last attempt ended mid-segment continues from the bytes
