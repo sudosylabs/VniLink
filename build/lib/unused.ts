@@ -67,6 +67,15 @@ function constituents(type: ts.Type): ts.Type[] {
 	});
 }
 
+/** The object literal an initializer holds, through `as const` and parentheses. */
+function objectLiteralOf(expression: ts.Expression): ts.ObjectLiteralExpression | undefined {
+	let current = expression;
+	while (ts.isAsExpression(current) || ts.isSatisfiesExpression(current) || ts.isParenthesizedExpression(current)) {
+		current = current.expression;
+	}
+	return ts.isObjectLiteralExpression(current) ? current : undefined;
+}
+
 function literalNames(type: ts.Type): string[] {
 	return (type.isUnion() ? type.types : [type]).filter(constituent => constituent.isStringLiteral()).map(constituent => constituent.value);
 }
@@ -180,8 +189,20 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 			}
 			if (ts.isVariableStatement(statement)) {
 				for (const declaration of statement.declarationList.declarations) {
-					if (ts.isIdentifier(declaration.name)) {
-						addCandidate(prefix + declaration.name.text, [declaration], exported, owner);
+					if (!ts.isIdentifier(declaration.name)) {
+						continue;
+					}
+					const variable = addCandidate(prefix + declaration.name.text, [declaration], exported, owner);
+					// A copied table such as `codiconsLibrary` loses the entries nothing names.
+					const literal = declaration.initializer && objectLiteralOf(declaration.initializer);
+					// With a declared type, its entries are read through that type instead.
+					if (literal && !declaration.type && copied(statement.getSourceFile())) {
+						for (const property of literal.properties.filter(ts.isPropertyAssignment)) {
+							const name = nameText(property.name);
+							if (name !== undefined) {
+								addCandidate(`${variable.name}.${name}`, [property], exported, variable);
+							}
+						}
 					}
 				}
 				continue;
@@ -296,6 +317,11 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 				// `const { name } = value` reads `value.name`.
 				const property = checker.getPropertyOfType(checker.getTypeAtLocation(node.parent.parent), node.text);
 				record(property, node, isTest, file.fileName);
+			} else if (ts.isSpreadAssignment(node) && checker.getContextualType(node.parent)) {
+				// Spread into a typed object, every property passes on to whoever reads that type.
+				for (const property of checker.getTypeAtLocation(node.expression).getProperties()) {
+					record(property, node, isTest, file.fileName);
+				}
 			} else if (ts.isObjectLiteralElementLike(node) && !ts.isSpreadAssignment(node) && ts.isObjectLiteralExpression(node.parent)) {
 				// Writing a property of a contextual type passes it to whoever reads that type, often outside `src/`.
 				const name = nameText(node.name);
@@ -306,10 +332,24 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 					}
 				}
 			} else if (ts.isElementAccessExpression(node)) {
-				// `value[key]` with `key` a union of names reads each of them.
+				// `value[key]` with `key` a union of names reads each of them; any other key may read any property.
 				const objectType = checker.getTypeAtLocation(node.expression);
-				for (const name of literalNames(checker.getTypeAtLocation(node.argumentExpression))) {
-					record(checker.getPropertyOfType(objectType, name), node, isTest, file.fileName);
+				const names = literalNames(checker.getTypeAtLocation(node.argumentExpression));
+				const properties = names.length ? names.map(name => checker.getPropertyOfType(objectType, name)) : objectType.getProperties();
+				for (const property of properties) {
+					record(property, node, isTest, file.fileName);
+				}
+			} else if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+				// An object handed to a function, as to `Object.values`, may have any of its properties read.
+				for (const argument of node.arguments ?? []) {
+					if (ts.isIdentifier(argument) || ts.isPropertyAccessExpression(argument)) {
+						const type = checker.getTypeAtLocation(argument);
+						if (type.getSymbol()?.flags !== undefined && (type.getSymbol()?.flags ?? 0) & ts.SymbolFlags.ObjectLiteral) {
+							for (const property of type.getProperties()) {
+								record(property, node, isTest, file.fileName);
+							}
+						}
+					}
 				}
 			} else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.InKeyword && ts.isStringLiteral(node.left)) {
 				const objectType = checker.getTypeAtLocation(node.right);

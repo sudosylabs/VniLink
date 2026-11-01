@@ -151,3 +151,39 @@ export class Reader {
 }
 `);
 });
+
+test('pruning a table\'s entries keeps its layout and trailing comma', () => {
+	const source = `export const icons = {
+	add: register('add', 1),
+	check: register('check', 2),
+	gone: register('gone', 3),
+} as const;
+`;
+	assert.equal(pruneSource('a.ts', source, ['icons.add', 'icons.gone']), `export const icons = {
+	check: register('check', 2),
+} as const;
+`);
+});
+
+test('pruning a table keeps the comments of the entries that stay, and a missing trailing comma missing', () => {
+	const source = `export const types = {
+	/**
+	 * Gone.
+	 */
+	GONE: 'gone',
+
+	/**
+	 * Kept.
+	 */
+	KEPT: 'kept',
+	LAST: 'last'
+};
+`;
+	assert.equal(pruneSource('a.ts', source, ['types.GONE', 'types.LAST']), `export const types = {
+	/**
+	 * Kept.
+	 */
+	KEPT: 'kept'
+};
+`);
+});

@@ -36,7 +36,7 @@ function declarationName(node: ts.Node): string | undefined {
 }
 
 function memberName(member: ts.Node): string | undefined {
-	if (ts.isClassElement(member) || ts.isTypeElement(member)) {
+	if (ts.isClassElement(member) || ts.isTypeElement(member) || ts.isObjectLiteralElementLike(member)) {
 		const name = member.name;
 		if (name && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteral(name))) {
 			return name.text;
@@ -44,6 +44,15 @@ function memberName(member: ts.Node): string | undefined {
 		return undefined;
 	}
 	return declarationName(member);
+}
+
+/** The object literal a `const` holds, through `as const` and parentheses: a table such as `codiconsLibrary`. */
+function objectLiteralOf(expression: ts.Expression | undefined): ts.ObjectLiteralExpression | undefined {
+	let current = expression;
+	while (current && (ts.isAsExpression(current) || ts.isSatisfiesExpression(current) || ts.isParenthesizedExpression(current))) {
+		current = current.expression;
+	}
+	return current && ts.isObjectLiteralExpression(current) ? current : undefined;
 }
 
 function membersOf(node: ts.Node): readonly ts.Node[] | undefined {
@@ -228,6 +237,35 @@ function listElementRanges(elements: readonly ts.Node[], removed: readonly ts.No
 	});
 }
 
+/**
+ * The lines that remove `removed` from a table written one entry per line, each
+ * with its comments and its comma. Without a trailing comma, the comma before a
+ * removed last entry goes with it. A table written on one line falls back to
+ * removing the entries and their separators.
+ */
+function tableEntryRanges(text: string, table: ts.ObjectLiteralExpression, removed: readonly ts.ObjectLiteralElementLike[]): Range[] {
+	const entries = table.properties;
+	const source = table.getSourceFile();
+	const line = (position: number): number => source.getLineAndCharacterOfPosition(position).line;
+	const entryPerLine = entries.every((entry, index) => index === 0 || line(entry.getStart()) > line(entries[index - 1].getEnd()));
+	if (!entryPerLine || !removed.length) {
+		return removed.length === entries.length && removed.length
+			? [{ start: entries[0].getStart(), end: entries.hasTrailingComma ? entries.end + 1 : entries.end }]
+			: listElementRanges(entries, removed);
+	}
+	const ranges = removed.map(entry => {
+		const range = lineRange(text, entry);
+		const comma = /^[ \t]*,[ \t]*(\/\/[^\n]*)?(\r?\n|$)/.exec(text.slice(entry.getEnd()));
+		return comma ? { start: range.start, end: entry.getEnd() + comma[0].length } : range;
+	});
+	const kept = entries.filter(entry => !removed.includes(entry));
+	const last = kept.at(-1);
+	if (!entries.hasTrailingComma && last && removed.includes(entries[entries.length - 1]) && text[last.getEnd()] === ',') {
+		ranges.push({ start: last.getEnd(), end: last.getEnd() + 1 });
+	}
+	return ranges;
+}
+
 /** Joins overlapping ranges, which adjacent specifiers removed together produce. */
 function mergeRanges(ranges: readonly Range[]): Range[] {
 	const sorted = [...ranges].sort((left, right) => left.start - right.start);
@@ -289,6 +327,13 @@ export function pruneSource(path: string, content: string, names: readonly strin
 				continue;
 			}
 			if (name === undefined) {
+				continue;
+			}
+			const table = ts.isVariableStatement(statement) ? objectLiteralOf(statement.declarationList.declarations[0].initializer) : undefined;
+			if (table) {
+				const removedHere = table.properties.filter(property => wanted.has(`${name}.${memberName(property) ?? ''}`));
+				removedHere.forEach(property => found.add(`${name}.${memberName(property) ?? ''}`));
+				ranges.push(...tableEntryRanges(content, table, removedHere));
 				continue;
 			}
 			if (ts.isModuleDeclaration(statement) && statement.body && ts.isModuleBlock(statement.body)) {

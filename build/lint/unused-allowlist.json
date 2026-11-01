@@ -15,16 +15,6 @@
     "reason": "these ports are passed where Electron's MessagePortMain is required"
   },
   {
-    "path": "src/platform/keybinding/common/keybindingsRegistry.ts",
-    "name": "IKeybindings.primary",
-    "reason": "IKeybindings is assigned to a type that shares only these properties"
-  },
-  {
-    "path": "src/platform/keybinding/common/keybindingsRegistry.ts",
-    "name": "IKeybindings.secondary",
-    "reason": "IKeybindings is assigned to a type that shares only these properties"
-  },
-  {
     "path": "src/platform/native/common/native.ts",
     "name": "INativeHostService.maximizeWindow",
     "reason": "the smoke driver calls the native host channel by method name"
