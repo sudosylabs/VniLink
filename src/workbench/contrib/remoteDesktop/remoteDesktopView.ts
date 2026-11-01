@@ -9,36 +9,34 @@ import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, DisposableResizeObserver, EventType, getWindow } from '../../../base/browser/dom.js';
 import { Separator, toAction, type IAction } from '../../../base/common/actions.js';
 import { Icons } from '../../../base/common/icons.js';
-import { isMacintosh, isWindows } from '../../../base/common/platform.js';
+import { isMacintosh } from '../../../base/common/platform.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import { IMenuService } from '../../../platform/actions/common/actions.js';
 import { IContextKeyService } from '../../../platform/contextkey/common/contextkey.js';
 import type { DesktopAudioStatus } from '../../../platform/engine/common/dataChannel.js';
-import type { DisplayInfo, OperatingSystem, RecordingStatus } from '../../../platform/engine/common/engine.js';
+import type { DisplayInfo, OperatingSystem } from '../../../platform/engine/common/engine.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
-import { hidUsage } from '../../../platform/engine/common/keyUsage.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { desktopSwapModifiersKey } from '../../../platform/state/common/uiState.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { INativeRuntimeService } from '../../services/nativeRuntime/nativeRuntimeService.js';
-import { formatElapsed, SessionRecording, type RecordingStartFailure } from '../../services/recording/sessionRecording.js';
-import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type DesktopRegion, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
+import { formatElapsed, SessionRecording } from '../../services/recording/sessionRecording.js';
+import { IRemoteDesktopService, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
 import { ISystemActionService } from '../../services/systemActions/systemActionService.js';
 import { ITabService, type WorkbenchTab } from '../../services/tabs/tabService.js';
 import { IUIStateService } from '../../services/uiState/uiStateService.js';
 import { DesktopSessionBar, type DesktopBarDelegate, type DesktopBarModel } from './desktopSessionBar.js';
 import { DesktopStatsOverlay, type DesktopPhase } from './desktopStatsOverlay.js';
 import { RemoteDesktopMenu } from './remoteDesktopMenu.js';
+import { displayLabel, reconnectAtOnce, reconnectReason, recordingEndMessage, recordingStartMessage, retryable, problemAdvice, problemMessage, soundUnavailableReason, type DesktopProblem } from './desktopMessages.js';
+import { DesktopKeyboard } from './desktopKeyboard.js';
+import { NextFramePresenter } from './nextFramePresenter.js';
+import { pictureSizeFrom, pictureSizeLabel, shownSize, zooms, type PictureSize } from './pictureSize.js';
 import { StillCompositor } from './stillCompositor.js';
 
-type DesktopProblem = DesktopFailure | DesktopEnd;
 
-/** Problems another attempt may fix, tried again by themselves; the rest need a change on either computer. */
-const retryable: ReadonlySet<DesktopProblem> = new Set(['disconnected', 'unavailable', 'failed', 'linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed']);
 
-/** Ends of a running picture that are tried again at once, before any failed attempt. */
-const reconnectAtOnce: ReadonlySet<DesktopProblem> = new Set(['linkLost', 'relayUnreachable', 'peerClosed', 'hostEncoderFailed', 'hostCaptureFailed']);
 
 /** Precise wheel units in one notch, the Windows wheel delta, as the engine counts them. */
 const WHEEL_NOTCH = 120;
@@ -49,81 +47,13 @@ const WHEEL_LIMIT = WHEEL_NOTCH * 64;
 
 const buttons = ['Left', 'Middle', 'Right', 'Back', 'Forward'] as const;
 
-/** The HID usage of the left Control key, which Windows also presses for AltGr. */
-const CONTROL_LEFT = 0xe0;
-
 interface OverlayAction {
 	readonly label: string;
 	readonly primary?: boolean;
 	readonly run: () => void;
 }
 
-/**
- * `next` in place of `first`, which it replaces before it is drawn: a change
- * when either is, where either says it changed. A repeat changes nothing; a
- * still, or a change that cannot say, may have changed anything.
- */
-function replacing(first: DesktopPicture, next: DesktopPicture): DesktopPicture {
-	if (first.role !== 'changed' && next.role !== 'changed') {
-		return next;
-	}
-	const where = (picture: DesktopPicture): readonly DesktopRegion[] | undefined => picture.role === 'unchanged' ? [] : picture.role === 'changed' ? picture.regions : undefined;
-	const before = where(first);
-	const after = where(next);
-	return { ...next, role: 'changed', regions: before && after ? [...before, ...after] : undefined };
-}
 
-/**
- * Holds the newest decoded picture until the screen's next frame, then
- * draws it: pictures that arrive faster than the screen refreshes replace
- * the one waiting, so the shown picture is never behind the decoder. A
- * still waiting is not replaced by a repeat of the same screen, and a
- * picture that replaces another carries its changes too.
- */
-class NextFramePresenter extends Disposable {
-	private pending: DesktopPicture | undefined;
-	private handle: number | undefined;
-
-	constructor(
-		private readonly targetWindow: Window,
-		private readonly present: (picture: DesktopPicture) => void,
-		private readonly skip: (picture: DesktopPicture) => void,
-	) {
-		super();
-	}
-
-	public show(picture: DesktopPicture): void {
-		if (picture.role === 'unchanged' && this.pending?.role === 'still') {
-			picture.frame.close();
-			return;
-		}
-		let next = picture;
-		if (this.pending) {
-			next = replacing(this.pending, picture);
-			this.pending.frame.close();
-			this.skip(this.pending);
-		}
-		this.pending = next;
-		this.handle ??= this.targetWindow.requestAnimationFrame(() => {
-			this.handle = undefined;
-			const next = this.pending;
-			this.pending = undefined;
-			if (next) {
-				this.present(next);
-			}
-		});
-	}
-
-	public override dispose(): void {
-		if (this.handle !== undefined) {
-			this.targetWindow.cancelAnimationFrame(this.handle);
-			this.handle = undefined;
-		}
-		this.pending?.frame.close();
-		this.pending = undefined;
-		super.dispose();
-	}
-}
 
 /** Chromium ignores a CSS cursor image larger than this, in CSS pixels. */
 const MAX_CSS_CURSOR = 128;
@@ -140,89 +70,13 @@ interface PointerLook {
 	readonly hotspotY: number;
 }
 
-/**
- * How the picture is sized in its tab: fitted, never larger than its own
- * pixels; stretched to fill the tab; or zoomed, where 1 puts each pixel of
- * the picture on one pixel of this screen.
- */
-export type PictureSize = 'fit' | 'stretch' | number;
 
-/** The zooms offered beside fitting and stretching; 1 is the original size. */
-const zooms: readonly number[] = [0.5, 0.75, 1, 1.5, 2];
 
-function pictureSizeFrom(value: unknown): PictureSize {
-	if (value === 'fit' || value === 'stretch') {
-		return value;
-	}
-	if (value === 'original') {
-		return 1;
-	}
-	const zoom = Number(value);
-	return zooms.includes(zoom) ? zoom : 'fit';
-}
 
-interface Size {
-	readonly width: number;
-	readonly height: number;
-}
 
-/**
- * The picture's size on screen in CSS pixels, for a picture of `width` ×
- * `height` pixels in a stage of `stage` CSS pixels on a screen of `ratio`
- * device pixels per CSS pixel. Whole device pixels, so a picture at its
- * original size is drawn without resampling.
- */
-export function shownSize(size: PictureSize, width: number, height: number, stage: Size, ratio: number): Size {
-	const fill = Math.min(stage.width * ratio / width, stage.height * ratio / height);
-	const room = Number.isFinite(fill) && fill > 0 ? fill : 1;
-	const scale = size === 'fit' ? Math.min(1, room) : size === 'stretch' ? room : size;
-	return { width: Math.max(1, Math.floor(width * scale)) / ratio, height: Math.max(1, Math.floor(height * scale)) / ratio };
-}
 
-function pictureSizeLabel(size: PictureSize): string {
-	switch (size) {
-		case 'fit': return nls.localize('desktop.pictureFit', 'Fit');
-		case 'stretch': return nls.localize('desktop.pictureStretch', 'Stretch');
-		default:
-			return size === 1 ? nls.localize('desktop.pictureOriginal', 'Original size') : nls.localize('desktop.pictureZoom', '{0}%', Math.round(size * 100));
-	}
-}
 
-function problemMessage(name: string, problem: DesktopProblem): string {
-	switch (problem) {
-		case 'disconnected': return nls.localize('desktop.disconnected', 'Not connected to {0}.', name);
-		case 'turnedOff': return nls.localize('desktop.turnedOff', '{0} doesn’t share its screen with this computer.', name);
-		case 'needsPermission': return nls.localize('desktop.needsPermission', '{0} hasn’t allowed VniLink to share its screen.', name);
-		case 'unsupported': return nls.localize('desktop.unsupported', '{0} can’t share its screen.', name);
-		case 'unavailable': return nls.localize('desktop.unavailable', '{0} can’t open its screen right now.', name);
-		case 'failed': return nls.localize('desktop.failed', 'The screen of {0} didn’t start.', name);
-		case 'linkLost': return nls.localize('desktop.lost', 'The connection to {0} dropped.', name);
-		case 'relayUnreachable': return nls.localize('desktop.relayUnreachable', 'The relayed connection to {0} dropped.', name);
-		case 'peerClosed': return nls.localize('desktop.peerClosed', '{0} stopped sending its screen.', name);
-		case 'hostEncoderFailed': return nls.localize('desktop.hostEncoderFailed', '{0} couldn’t keep encoding its screen.', name);
-		case 'hostCaptureFailed': return nls.localize('desktop.hostCaptureFailed', '{0} stopped capturing its screen.', name);
-		case 'hostPermission': return nls.localize('desktop.hostPermission', '{0} no longer allows VniLink to record its screen.', name);
-		case 'displayGone': return nls.localize('desktop.displayGone', 'The display shown from {0} went away.', name);
-		case 'hostStopped': return nls.localize('desktop.hostStopped', '{0} stopped sharing its screen.', name);
-		case 'hostDisconnected': return nls.localize('desktop.hostDisconnected', '{0} ended the connection.', name);
-		case 'hostShutdown': return nls.localize('desktop.hostShutdown', 'VniLink quit on {0}.', name);
-		case 'revoked': return nls.localize('desktop.revoked', '{0} no longer shares its screen with this computer.', name);
-		case 'cantShow': return nls.localize('desktop.cantShow', 'This computer can’t show the screen of {0}.', name);
-	}
-}
 
-/** What the user can do about a problem, when the title alone doesn't say. */
-function problemAdvice(name: string, problem: DesktopProblem): string {
-	switch (problem) {
-		case 'hostPermission': return nls.localize('desktop.hostPermissionAdvice', 'Someone at {0} needs to allow VniLink to record the screen in its system settings. Then try again.', name);
-		case 'displayGone': return nls.localize('desktop.displayGoneAdvice', 'Try again to show another display.');
-		case 'hostShutdown': return nls.localize('desktop.hostShutdownAdvice', 'Try again once VniLink is open on {0}.', name);
-		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
-		case 'linkLost': case 'relayUnreachable': case 'peerClosed': case 'hostEncoderFailed': case 'hostCaptureFailed':
-		case 'hostStopped': case 'hostDisconnected': case 'revoked': case 'cantShow':
-			return '';
-	}
-}
 
 /**
  * Whether Control and Command are exchanged with a computer running `other`
@@ -233,33 +87,7 @@ function automaticSwap(other: OperatingSystem | null): boolean {
 	return other !== null && other !== 'other' && isMacintosh !== (other === 'macos');
 }
 
-/**
- * Why the other computer's sound isn't heard, from the engine's error
- * category and whether this computer's own output failed.
- */
-function soundUnavailableReason(name: string, sound: DesktopAudioStatus): string {
-	if (sound.playbackFailed) {
-		return nls.localize('desktop.soundPlaybackFailed', 'This computer’s speakers couldn’t play the sound of {0}.', name);
-	}
-	switch (sound.error?.code) {
-		case 'Unauthorized': return nls.localize('desktop.soundNotShared', '{0} doesn’t share its sound.', name);
-		case 'Busy': return nls.localize('desktop.soundBusy', '{0} is playing sound from another computer.', name);
-		case 'Unsupported': return nls.localize('desktop.soundUnsupported', '{0} has no sound to share. On a Mac, VniLink needs Screen & System Audio Recording.', name);
-		case undefined: default: return nls.localize('desktop.soundStopped', 'The sound of {0} stopped.', name);
-	}
-}
 
-/** Why a reconnect is under way, as the overlay's body says it. */
-function reconnectReason(name: string, problem: DesktopProblem | undefined): string {
-	switch (problem) {
-		case 'hostEncoderFailed': case 'hostCaptureFailed': case 'peerClosed': return `${problemMessage(name, problem)} ${nls.localize('desktop.reconnectingHost', 'Keys and the pointer stay here until its screen is back.')}`;
-		case 'relayUnreachable': return nls.localize('desktop.reconnectingRelay', 'The relayed connection dropped. Keys and the pointer stay here until it’s back.');
-		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
-		case 'linkLost': case 'hostPermission': case 'displayGone': case 'hostStopped': case 'hostDisconnected': case 'hostShutdown': case 'revoked': case 'cantShow':
-		case undefined:
-			return nls.localize('desktop.reconnectingBody', 'The connection dropped. Keys and the pointer stay here until it’s back.');
-	}
-}
 
 /**
  * A paired computer's screen in its tab, sized as the user chooses (fitted
@@ -331,15 +159,8 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	private selected: string | undefined;
 	private wheel = { dx: 0, dy: 0 };
 	private pressed = false;
-	/** Keys sent down and not yet up, by usage. */
-	private readonly down = new Set<number>();
-	/**
-	 * On Windows, AltGr arrives as a left Control press just before it. That
-	 * Control is held back until the next key says which it was, and dropped
-	 * with its release when it was AltGr's.
-	 */
-	private heldControl = false;
-	private phantomControl = false;
+	/** Turns this computer's keys into the other one's. */
+	private readonly keyboard: DesktopKeyboard;
 	/** Whether this desktop exchanges Control and Command, as last sent. */
 	private swapModifiers = false;
 	/** The exchange chosen from this desktop's menu for this computer, remembered between runs. */
@@ -427,6 +248,12 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				}
 			}));
 		}
+		this.keyboard = new DesktopKeyboard(input => {
+			this.pressed = true;
+			this.session.value?.send(input);
+		}, () => {
+			this.pressed = true;
+		});
 		this.registerViewControls();
 		this.updateBar();
 		if (control) {
@@ -873,10 +700,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.session.value?.send(input);
 		};
 		this._register(addDisposableListener(this.canvas, EventType.KEY_DOWN, event => {
-			this.key(event, true);
+			this.keyDown(event, true);
 		}));
 		this._register(addDisposableListener(this.canvas, EventType.KEY_UP, event => {
-			this.key(event, false);
+			this.keyDown(event, false);
 		}));
 		this._register(addDisposableListener(this.canvas, EventType.POINTER_MOVE, event => {
 			this.pointer(event);
@@ -887,7 +714,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 				return;
 			}
 			event.preventDefault();
-			this.flushControl();
+			this.keyboard.flushControl();
 			this.canvas.focus();
 			try {
 				// A drag that leaves the picture keeps going to the other computer until the button is up.
@@ -945,68 +772,9 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		}
 	}
 
-	/**
-	 * A key, by where it is on the keyboard, with the character it typed:
-	 * the other computer types that character whatever its own layout.
-	 * Shortcuts stay keys: no character travels with Control or Command, nor
-	 * on Windows with Alt, whose shortcuts type nothing. AltGr types, and so
-	 * does Option on a Mac, as both make characters there.
-	 */
-	private key(event: KeyboardEvent, down: boolean): void {
-		const usage = hidUsage(event.code);
-		if (usage === undefined || !this.session.value) {
-			return;
-		}
-		event.preventDefault();
-		event.stopPropagation();
-		if (isWindows) {
-			if (down && event.code === 'ControlLeft' && !event.repeat && !this.down.has(CONTROL_LEFT)) {
-				this.heldControl = true;
-				this.pressed = true;
-				return;
-			}
-			if (this.heldControl) {
-				this.heldControl = false;
-				if (down && event.code === 'AltRight' && event.key === 'AltGraph') {
-					this.phantomControl = true;
-				} else {
-					this.sendKey(CONTROL_LEFT, true, '', false);
-				}
-			}
-			if (!down && event.code === 'ControlLeft' && this.phantomControl) {
-				this.phantomControl = false;
-				return;
-			}
-		}
-		// Windows reports Print Screen only as it is let go.
-		if (!down && !this.down.has(usage)) {
-			this.sendKey(usage, true, '', false);
-		}
-		const altGr = event.getModifierState('AltGraph');
-		const shortcut = event.metaKey || (event.ctrlKey && !altGr) || (!isMacintosh && event.altKey && !altGr);
-		// One character, emoji included; named keys such as Enter are longer.
-		const point = event.key.codePointAt(0);
-		const character = point !== undefined && String.fromCodePoint(point) === event.key;
-		const composing = down && (event.key === 'Dead' || event.key === 'Process' || event.isComposing);
-		// A held key repeats as the other computer types it: typed characters don't repeat there by themselves.
-		this.sendKey(usage, down, down && character && !shortcut ? event.key : '', composing);
-	}
-
-	private sendKey(usage: number, down: boolean, text: string, composing: boolean): void {
-		if (down) {
-			this.down.add(usage);
-		} else {
-			this.down.delete(usage);
-		}
-		this.pressed = true;
-		this.session.value?.send({ type: 'submitLocalKey', usage, down, text, composing });
-	}
-
-	/** A Control held back for AltGr goes down before anything that isn't a key, such as Control-click. */
-	private flushControl(): void {
-		if (this.heldControl) {
-			this.heldControl = false;
-			this.sendKey(CONTROL_LEFT, true, '', false);
+	private keyDown(event: KeyboardEvent, down: boolean): void {
+		if (this.session.value) {
+			this.keyboard.key(event, down);
 		}
 	}
 
@@ -1157,9 +925,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 
 	/** Lets go of every key and button held on the other computer. */
 	private releaseInput(): void {
-		this.heldControl = false;
-		this.phantomControl = false;
-		this.down.clear();
+		this.keyboard.release();
 		if (this.pressed) {
 			this.pressed = false;
 			this.session.value?.send({ type: 'releaseSessionInput' });
@@ -1275,30 +1041,5 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 	}
 }
 
-/** A display as its menu names it: its place among the other computer's displays, and its size. */
-function displayLabel(display: DisplayInfo, index: number, withSize = true): string {
-	return withSize
-		? nls.localize('desktop.displayWithSize', 'Display {0} · {1} × {2}', index + 1, display.width, display.height)
-		: nls.localize('desktop.displayNumber', 'Display {0}', index + 1);
-}
 
-function recordingStartMessage(name: string, failure: RecordingStartFailure): string {
-	switch (failure) {
-		case 'notAllowed': return nls.localize('desktop.recordingNotAllowed', '{0} doesn’t allow recording its screen.', name);
-		case 'disconnected': return nls.localize('desktop.recordingDisconnected', '{0} isn’t connected.', name);
-		case 'failed': return nls.localize('desktop.recordingFailed', 'The recording didn’t start.');
-	}
-}
 
-function recordingEndMessage(status: RecordingStatus | undefined): string {
-	switch (status?.failure) {
-		case undefined: return nls.localize('desktop.recordingLost', 'The recording stopped.');
-		case null: return nls.localize('desktop.recordingSaved', 'Recording saved to the recordings folder.');
-		case 'Startup': return nls.localize('desktop.recordingStartup', 'The recording didn’t start.');
-		case 'Storage': return nls.localize('desktop.recordingStorage', 'The recordings folder can’t be written to.');
-		case 'SlowStorage': return nls.localize('desktop.recordingSlow', 'The recordings folder couldn’t keep up, so the recording stopped.');
-		case 'Limit': return nls.localize('desktop.recordingLimit', 'The recording reached its size limit.');
-		case 'Media':
-		case 'FormatChanged': return nls.localize('desktop.recordingMedia', 'The screen changed size, so the recording stopped.');
-	}
-}
