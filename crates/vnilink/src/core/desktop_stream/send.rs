@@ -318,6 +318,13 @@ impl<'a> PictureSender<'a> {
                 bytes::Bytes::from(bytes)
             })
             .collect::<Vec<_>>();
+        if datagrams.is_empty() {
+            // Too large to reassemble: dropped whole, as a frame the link
+            // cannot take.
+            desktop.counters.send_dropped();
+            self.gate.dropped(frame.keyframe, body.len());
+            return Ok(false);
+        }
         let wire: usize = datagrams.iter().map(bytes::Bytes::len).sum();
         let backlog = super::super::host::DATAGRAM_SEND_BUFFER
             .saturating_sub(self.link.datagram_send_buffer_space());

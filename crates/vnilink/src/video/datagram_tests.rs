@@ -486,3 +486,15 @@ fn a_frame_s_wire_size_is_known_before_it_is_fragmented() {
         }
     }
 }
+
+#[test]
+fn a_body_too_large_for_the_shard_limit_makes_no_fragments() {
+    // 64-byte shards (the smallest) hold at most MAX_FRAGMENTS * 64 bytes.
+    let fits = vec![7u8; usize::from(MAX_FRAGMENTS) * 64 - LEN_PREFIX];
+    assert_eq!(
+        fragment(&fits, 1, 64 + FRAG_HEADER, 0.0).len(),
+        usize::from(MAX_FRAGMENTS)
+    );
+    let over = vec![7u8; usize::from(MAX_FRAGMENTS) * 64 - LEN_PREFIX + 1];
+    assert!(fragment(&over, 1, 64 + FRAG_HEADER, 0.0).is_empty());
+}

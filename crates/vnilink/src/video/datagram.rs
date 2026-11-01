@@ -105,6 +105,9 @@ pub(crate) fn fragmented_size(body: usize, max_datagram: usize, protection: f64)
 /// Split `body` into datagram payloads of at most `max_datagram` bytes:
 /// its data shards, then [`parity_count`] parity shards at `protection`.
 /// `seq` identifies the frame; the caller increments it per frame.
+///
+/// A body that needs more than [`MAX_FRAGMENTS`] data shards makes none: the
+/// viewer would reassemble a truncated frame, so the caller drops it.
 pub(crate) fn fragment(
     body: &[u8],
     seq: u32,
@@ -113,14 +116,13 @@ pub(crate) fn fragment(
 ) -> Vec<Vec<u8>> {
     // Reed–Solomon shards are even in length.
     let per = max_datagram.saturating_sub(FRAG_HEADER).max(64) & !1;
+    if (LEN_PREFIX + body.len()).div_ceil(per) > usize::from(MAX_FRAGMENTS) {
+        return Vec::new();
+    }
     let mut framed = Vec::with_capacity(LEN_PREFIX + body.len());
     framed.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes());
     framed.extend_from_slice(body);
-    let mut shards: Vec<Vec<u8>> = framed
-        .chunks(per)
-        .take(usize::from(MAX_FRAGMENTS))
-        .map(<[u8]>::to_vec)
-        .collect();
+    let mut shards: Vec<Vec<u8>> = framed.chunks(per).map(<[u8]>::to_vec).collect();
     let data = shards.len();
     let mut parity = parity_count(data, protection);
     if parity > 0 {
