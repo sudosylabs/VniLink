@@ -271,10 +271,7 @@ impl Core {
             close_count: AtomicUsize::new(0),
             #[cfg(feature = "test-probes")]
             agent: Mutex::new(None),
-            #[cfg(test)]
-            teardown_budget_ms: AtomicU64::new(0),
-            #[cfg(test)]
-            block_endpoint_close: AtomicBool::new(false),
+            endpoint_close: Mutex::new(Arc::new(CloseIroh)),
             events: EventHub::new(event_capacity),
             state: Mutex::new(State {
                 input_cleanup: input_cleanup.clone(),
@@ -422,19 +419,11 @@ impl Core {
             }
         }
         close_links_for_shutdown(&self.shared);
-        let blocked = take_close_block(&self.shared);
-        let limit = teardown_limit(&self.shared, blocked);
-        let endpoint = self.shared.endpoint.clone();
+        let closer = lock(&self.shared.endpoint_close).clone();
+        let (closing, limit) = closer.close(self.shared.endpoint.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         self.runtime.spawn(async move {
-            let closed = tokio::time::timeout(limit, async move {
-                if blocked {
-                    std::future::pending::<()>().await;
-                }
-                endpoint.close().await;
-            })
-            .await
-            .is_ok();
+            let closed = tokio::time::timeout(limit, closing).await.is_ok();
             crate::ignored!(
                 crate::trace::SESSION,
                 "the caller stopped waiting for its answer",
@@ -615,17 +604,31 @@ impl Core {
         self.shared.teardown_phase.load(Ordering::Acquire)
     }
 
-    /// Shortens only a blocked endpoint close. A real close keeps the
-    /// production budget.
+    /// Makes the next endpoint close hang until `budget` passes; a later
+    /// close is the real one.
     #[cfg(test)]
     pub(crate) fn arm_blocked_teardown(&self, budget: Duration) {
-        let millis = u64::try_from(budget.as_millis()).unwrap_or(0);
-        self.shared
-            .teardown_budget_ms
-            .store(millis, Ordering::Release);
-        self.shared
-            .block_endpoint_close
-            .store(true, Ordering::Release);
+        *lock(&self.shared.endpoint_close) = Arc::new(StallOnce {
+            budget,
+            stalled: AtomicBool::new(false),
+        });
+    }
+}
+
+/// A close that hangs the first time and is the real close after.
+#[cfg(test)]
+struct StallOnce {
+    budget: Duration,
+    stalled: AtomicBool,
+}
+
+#[cfg(test)]
+impl CloseEndpoint for StallOnce {
+    fn close(&self, endpoint: Endpoint) -> EndpointClosing {
+        if self.stalled.swap(true, Ordering::AcqRel) {
+            return CloseIroh.close(endpoint);
+        }
+        (Box::pin(std::future::pending()), self.budget)
     }
 }
 

@@ -473,12 +473,8 @@ struct Shared {
     /// Where channels to the test agent go while it listens (`agent`).
     #[cfg(feature = "test-probes")]
     agent: Mutex<Option<std::sync::mpsc::Sender<agent::AgentChannel>>>,
-    /// Non-zero test budget, in milliseconds, for a blocked endpoint
-    /// close. A real close keeps the production limit.
-    #[cfg(test)]
-    teardown_budget_ms: AtomicU64,
-    #[cfg(test)]
-    block_endpoint_close: AtomicBool,
+    /// How the endpoint closes; a test swaps in a close that does not finish.
+    endpoint_close: Mutex<Arc<dyn CloseEndpoint>>,
     events: EventHub,
     state: Mutex<State>,
     desktop: Arc<Mutex<Option<Box<dyn HostDesktop>>>>,
@@ -951,27 +947,27 @@ fn claim_endpoint_close(shared: &Shared) -> bool {
     true
 }
 
-fn teardown_limit(shared: &Shared, shortened: bool) -> Duration {
-    #[cfg(test)]
-    if shortened {
-        let millis = shared.teardown_budget_ms.load(Ordering::Acquire);
-        if millis > 0 {
-            return Duration::from_millis(millis);
-        }
-    }
-    let _ = (shared, shortened);
-    Duration::from_secs(5)
+/// The future that closes an endpoint and how long shutdown waits for it.
+type EndpointClosing = (
+    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    Duration,
+);
+
+/// How the engine closes its endpoint. A test substitutes a close that
+/// never finishes to follow the timeout and retry.
+trait CloseEndpoint: Send + Sync {
+    fn close(&self, endpoint: Endpoint) -> EndpointClosing;
 }
 
-fn take_close_block(shared: &Shared) -> bool {
-    #[cfg(test)]
-    {
-        shared.block_endpoint_close.swap(false, Ordering::AcqRel)
-    }
-    #[cfg(not(test))]
-    {
-        let _ = shared;
-        false
+/// Closes the endpoint and waits for it, up to the teardown limit.
+struct CloseIroh;
+
+impl CloseEndpoint for CloseIroh {
+    fn close(&self, endpoint: Endpoint) -> EndpointClosing {
+        (
+            Box::pin(async move { endpoint.close().await }),
+            Duration::from_secs(5),
+        )
     }
 }
 
@@ -1034,17 +1030,9 @@ fn close_links_for_shutdown(shared: &Shared) {
 
 async fn close_endpoint(shared: &Arc<Shared>) -> bool {
     close_links_for_shutdown(shared);
-    let blocked = take_close_block(shared);
-    let limit = teardown_limit(shared, blocked);
-    let endpoint = shared.endpoint.clone();
-    tokio::time::timeout(limit, async move {
-        if blocked {
-            std::future::pending::<()>().await;
-        }
-        endpoint.close().await;
-    })
-    .await
-    .is_ok()
+    let closer = lock(&shared.endpoint_close).clone();
+    let (closing, limit) = closer.close(shared.endpoint.clone());
+    tokio::time::timeout(limit, closing).await.is_ok()
 }
 
 fn mark_teardown_finished(shared: &Shared) {
