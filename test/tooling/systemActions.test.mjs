@@ -183,3 +183,26 @@ test('the computer that asked reads every outcome in words', () => {
 	assert.equal(systemRequestMessage(new Error('Unsupported: input blocking')), 'Not possible there', 'a computer that refuses was reached');
 	assert.equal(systemRequestMessage(new Error('boom')), 'Couldn\'t reach it');
 });
+
+test('quitting closes an open notice and shows none after, so its unclosable window cannot cancel the quit', async () => {
+	const { engine, events, commands } = fakeEngine();
+	let open = 0;
+	const notices = new SystemActionNotices(engine, (_request, signal) => new Promise(resolve => {
+		open++;
+		signal.addEventListener('abort', () => {
+			open--;
+			resolve(undefined);
+		});
+	}), error => assert.fail(String(error)));
+	events.fire({ events: [{ type: 'systemActionScheduled', id: '3', action: 'restart', endpoint_id: 'peer', remainingMs: 30000 }], resync: false });
+	await settle();
+	assert.equal(open, 1);
+	notices.close();
+	await settle();
+	assert.equal(open, 0, 'The notice stayed open while the application quit');
+	events.fire({ events: [{ type: 'systemActionScheduled', id: '4', action: 'shutdown', endpoint_id: 'peer', remainingMs: 30000 }], resync: false });
+	await settle();
+	assert.equal(open, 0, 'A notice opened during shutdown');
+	assert(!commands.some(command => command.type === 'cancelHostedSystemAction' || command.type === 'runHostedSystemActionNow'), 'Closing for the quit answered the notice');
+	notices.dispose();
+});
