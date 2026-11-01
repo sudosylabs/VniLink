@@ -5,6 +5,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
+import { app } from 'electron';
 import { VniLinkMain } from './code/electron-main/main.js';
 
-void new VniLinkMain().main();
+new VniLinkMain().main().catch((error: unknown) => {
+	// Startup failed before the application could log it.
+	console.error(error);
+	app.exit(1);
+});

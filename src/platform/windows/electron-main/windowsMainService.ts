@@ -11,7 +11,9 @@ import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { isLinux, isMacintosh } from '../../../base/common/platform.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
+import { ILogService } from '../../log/common/log.js';
 import { WORKBENCH_URL } from '../../../base/parts/ipc/electron-main/ipcMain.js';
+import { recoverRenderer } from './rendererRecovery.js';
 import { defaultBrowserWindowOptions } from './windows.js';
 
 export const IWindowsMainService = createDecorator<WindowsMainService>('windowsMainService');
@@ -22,6 +24,10 @@ export class WindowsMainService extends Disposable {
 	private readonly windowOpened = this._register(new Emitter<BrowserWindow>());
 	public readonly onDidOpenWindow = this.windowOpened.event;
 	private mainWindow: BrowserWindow | undefined;
+
+	constructor(@ILogService private readonly logService: ILogService) {
+		super();
+	}
 
 	public getMainWindow(): BrowserWindow | undefined {
 		return this.mainWindow && !this.mainWindow.isDestroyed() ? this.mainWindow : undefined;
@@ -72,6 +78,7 @@ export class WindowsMainService extends Disposable {
 		if (!isMacintosh) {
 			window.removeMenu();
 		}
+		recoverRenderer(window, this.logService);
 		return window;
 	}
 }

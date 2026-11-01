@@ -10,9 +10,9 @@ import type { BrowserWindow as BrowserWindowType, WebContents } from 'electron';
 import { release } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { setUnexpectedErrorHandler } from '../../base/common/errors.js';
+import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { Event } from '../../base/common/event.js';
-import { Disposable, DisposableStore } from '../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, toDisposable } from '../../base/common/lifecycle.js';
 import { mark } from '../../base/common/performance.js';
 import { isMacintosh } from '../../base/common/platform.js';
 import { platform } from '../../base/common/process.js';
@@ -106,6 +106,16 @@ export class VniLinkApplication extends Disposable {
 		setUnexpectedErrorHandler(error => {
 			this.logService.error(error instanceof Error ? error : new Error(String(error)));
 		});
+		// An error nothing caught goes to the log, not to Electron's error dialog.
+		const unexpected = (error: unknown): void => {
+			onUnexpectedError(error);
+		};
+		process.on('uncaughtException', unexpected);
+		process.on('unhandledRejection', unexpected);
+		this._register(toDisposable(() => {
+			process.off('uncaughtException', unexpected);
+			process.off('unhandledRejection', unexpected);
+		}));
 		this.stateService = this._register(new StateService(SaveStrategy.DELAYED, join(app.getPath('userData'), 'storage.json'), this.logService));
 		this.instantiationService = this._register(new InstantiationService(this.createServices(), true));
 	}
