@@ -194,3 +194,20 @@ test('stopping while the engine starts settles the start at once, not at its tim
 	assert.equal(outcome, 'failed', 'The start waited for its 60 second timeout');
 	assert.equal(forks[0].killed, true);
 });
+
+test('what the engine prints on standard error reaches the main log one whole line at a time', async context => {
+	context.mock.timers.enable({ apis: ['setTimeout'] });
+	forks.length = 0;
+	const errors = [];
+	const service = new EngineMainService({ error: message => errors.push(message), warn() { } });
+	const started = service.start();
+	forks[0].stderr.emit('data', Buffer.from('thread main panicked at '));
+	forks[0].stderr.emit('data', Buffer.from('src/lib.rs:1\nnote: run with RUST_BACKTRACE\n\npartial'));
+	forks[0].emit('message', { ready: true });
+	await started;
+	assert.deepEqual(errors, ['[engine] thread main panicked at src/lib.rs:1', '[engine] note: run with RUST_BACKTRACE']);
+	forks[0].emit('exit', 101);
+	await settle();
+	assert(errors.includes('[engine] partial'), 'The last line, without its newline, was lost');
+	await service.stop();
+});

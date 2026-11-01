@@ -8,6 +8,7 @@
 import { MessageChannelMain, utilityProcess } from 'electron';
 import type { MessagePortMain, UtilityProcess } from 'electron';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { CancellationTokenSource } from '../../../base/common/cancellation.js';
 import { Emitter, Event, Relay } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
@@ -138,12 +139,23 @@ export class EngineMainService extends Disposable {
 	private async launch(): Promise<void> {
 		const child = utilityProcess.fork(join(__dirname, 'engine.cjs'), [...this.launchArguments], { serviceName: 'VniLink Engine', stdio: 'pipe' });
 		child.stdout?.resume();
-		child.stderr?.on('data', (chunk: Buffer) => {
-			for (const line of chunk.toString('utf8').split('\n')) {
-				if (line.trim()) {
-					this.logService.error(`[engine] ${line.slice(0, 2000)}`);
-				}
+		// A line may arrive in several chunks; each is logged once it is whole, the last when the engine exits.
+		let partial = '';
+		const logLine = (line: string): void => {
+			if (line.trim()) {
+				this.logService.error(`[engine] ${line.slice(0, 2000)}`);
 			}
+		};
+		// The decoder keeps a character split across chunks whole.
+		const decoder = new StringDecoder('utf8');
+		child.stderr?.on('data', (chunk: Buffer) => {
+			const lines = (partial + decoder.write(chunk)).split('\n');
+			partial = lines.pop() ?? '';
+			lines.forEach(logLine);
+		});
+		child.once('exit', () => {
+			logLine(partial + decoder.end());
+			partial = '';
 		});
 		this.child = child;
 		let supervised = false;
