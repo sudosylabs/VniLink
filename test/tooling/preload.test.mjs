@@ -40,7 +40,7 @@ test('the preload exposes only prefixed IPC, a bounded port relay and no environ
 	assert.deepEqual(Object.keys(globals.webUtils), ['getPathForFile'], 'only the path of a dropped file');
 	assert.deepEqual(globals.process.env, {});
 	assert.equal((await globals.context.resolveConfiguration()).windowId, 1);
-	assert.throws(() => globals.ipcRenderer.invoke('engine:command'), /Unsupported/);
+	assert.equal(globals.ipcRenderer.invoke, undefined, 'the page invokes nothing; only the preload asks for its configuration');
 	assert.throws(() => globals.ipcMessagePort.acquire('dataChannelPort', 'one'), /Unsupported/);
 	assert.throws(() => globals.ipcMessagePort.acquire('vnilink:dataChannelPort', 'not a nonce!'), /refused/);
 	const closed = [];
@@ -60,4 +60,18 @@ test('the preload exposes only prefixed IPC, a bounded port relay and no environ
 		globals.ipcMessagePort.acquire('vnilink:dataChannelPort', `pending-${String(index)}`);
 	}
 	assert.throws(() => globals.ipcMessagePort.acquire('vnilink:dataChannelPort', 'overflow'), /refused/);
+	globals.ipcMessagePort.release('vnilink:dataChannelPort', 'pending-0');
+	globals.ipcMessagePort.acquire('vnilink:dataChannelPort', 'after-release');
+});
+
+test('page listeners get a message\'s arguments, never Electron\'s event with its sender and ports', async () => {
+	const { exposed, ipcRenderer } = await loadPreload();
+	const received = [];
+	const listener = (event, ...args) => received.push({ event, args });
+	exposed.vnilink.ipcRenderer.on('vnilink:message', listener);
+	ipcRenderer.emit('vnilink:message', { sender: ipcRenderer, ports: [{ close() { } }] }, 'payload');
+	assert.deepEqual(received, [{ event: {}, args: ['payload'] }]);
+	exposed.vnilink.ipcRenderer.removeListener('vnilink:message', listener);
+	ipcRenderer.emit('vnilink:message', {}, 'after');
+	assert.equal(received.length, 1, 'removeListener left the listener in place');
 });

@@ -64,6 +64,9 @@ export interface IpcMessagePort {
 	 * via `e.ports[0]`.
 	 */
 	acquire(responseChannel: string, nonce: string): void;
+
+	/** Gives up an acquisition whose port will not come, freeing its slot. */
+	release(responseChannel: string, nonce: string): void;
 }
 
 export interface ISandboxContext {

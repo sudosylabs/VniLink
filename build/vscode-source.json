@@ -3303,7 +3303,7 @@
     {
       "path": "src/base/parts/sandbox/electron-browser/globals.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/electron-browser/globals.ts",
-      "sha256": "2f9086db7d6754c77656f93378a3dea09e5a29809c80fb0d1525bee1019b8cd0",
+      "sha256": "343c129cda649aed8d6dfe06469f4aff614ba315afabc764adb3d04a1fb01d23",
       "adapted": true,
       "upstreamStyle": true
     },

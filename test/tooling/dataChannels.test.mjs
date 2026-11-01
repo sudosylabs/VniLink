@@ -19,7 +19,7 @@ async function load(path) {
 const { DataChannelHost } = await load('../../src/platform/engine/electron-utility/dataChannelHost.ts');
 
 // The client reads the preload's sandbox globals when it loads.
-globalThis.vnilink = { ipcRenderer: {}, ipcMessagePort: { acquire() { } }, webFrame: {}, process: { env: {} }, context: {}, webUtils: {} };
+globalThis.vnilink = { ipcRenderer: {}, ipcMessagePort: { acquire() { }, release() { } }, webFrame: {}, process: { env: {} }, context: {}, webUtils: {} };
 
 const { DataChannelClient } = await load('../../src/platform/engine/electron-browser/dataChannelClient.ts');
 

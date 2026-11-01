@@ -126,6 +126,8 @@ export class DataChannelClient {
 				return;
 			}
 			void engine.openDataChannel(target).catch((error: unknown) => {
+				// Refused: no port will come, so its slot is free for the next attempt now.
+				ipcMessagePort.release(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
 				cleanup();
 				reject(error instanceof Error ? error : new Error('Channel unavailable'));
 			});

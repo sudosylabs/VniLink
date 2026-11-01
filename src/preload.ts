@@ -74,6 +74,27 @@ function onPortResponse(responseChannel: string) {
 	};
 }
 
+type PageListener = (event: object, ...args: unknown[]) => void;
+
+/** The bridge's listener for each page listener, so `removeListener` finds it. */
+const forwarders = new WeakMap<PageListener, (event: IpcRendererEvent, ...args: unknown[]) => void>();
+
+/**
+ * The page gets a message's arguments and an empty event: Electron's event
+ * carries `sender`, the unchecked ipcRenderer, and `ports`, which only the
+ * port relay below may hand over.
+ */
+function forwarder(listener: PageListener): (event: IpcRendererEvent, ...args: unknown[]) => void {
+	let forward = forwarders.get(listener);
+	if (!forward) {
+		forward = (_event, ...args) => {
+			listener({}, ...args);
+		};
+		forwarders.set(listener, forward);
+	}
+	return forward;
+}
+
 const globals = {
 
 	ipcRenderer: {
@@ -83,26 +104,21 @@ const globals = {
 			ipcRenderer.send(channel, ...args);
 		},
 
-		invoke(channel: string, ...args: unknown[]): Promise<unknown> {
+		on(channel: string, listener: PageListener) {
 			validateIPC(channel);
-			return ipcRenderer.invoke(channel, ...args);
-		},
-
-		on(channel: string, listener: (event: IpcRendererEvent, ...args: unknown[]) => void) {
-			validateIPC(channel);
-			ipcRenderer.on(channel, listener);
+			ipcRenderer.on(channel, forwarder(listener));
 			return this;
 		},
 
-		once(channel: string, listener: (event: IpcRendererEvent, ...args: unknown[]) => void) {
+		once(channel: string, listener: PageListener) {
 			validateIPC(channel);
-			ipcRenderer.once(channel, listener);
+			ipcRenderer.once(channel, forwarder(listener));
 			return this;
 		},
 
-		removeListener(channel: string, listener: (event: IpcRendererEvent, ...args: unknown[]) => void) {
+		removeListener(channel: string, listener: PageListener) {
 			validateIPC(channel);
-			ipcRenderer.removeListener(channel, listener);
+			ipcRenderer.removeListener(channel, forwarder(listener));
 			return this;
 		},
 	},
@@ -131,6 +147,14 @@ const globals = {
 			pending.set(nonce, setTimeout(() => {
 				pending.delete(nonce);
 			}, portTimeout));
+		},
+
+		/** Gives up an acquisition main will not answer, such as one whose request it refused. */
+		release(responseChannel: string, nonce: string): void {
+			validateIPC(responseChannel);
+			const nonces = pendingPorts.get(responseChannel);
+			clearTimeout(nonces?.get(nonce));
+			nonces?.delete(nonce);
 		},
 	},
 
