@@ -575,6 +575,7 @@ pub(super) fn register_incoming(
             stop: stop.clone(),
             link: None,
             remote_availability: None,
+            changed: tokio::sync::watch::channel(()).0,
         },
     );
     drop(state);

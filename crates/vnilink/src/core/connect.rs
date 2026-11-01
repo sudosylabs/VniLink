@@ -289,6 +289,7 @@ pub(super) fn start_outgoing(
             stop: stop.clone(),
             link: None,
             remote_availability: None,
+            changed: tokio::sync::watch::channel(()).0,
         };
         let info = session_info(&session);
         state.outgoing.insert(id, session);
@@ -728,6 +729,11 @@ pub(super) fn fail_outgoing(shared: &Shared, local_id: u64, error: &Error) {
         state.link_refused.insert(peer_key);
     } else {
         state.link_refused.remove(&peer_key);
+    }
+    if matches!(error, Error::Unauthorized) {
+        state.link_unauthorized.insert(peer_key);
+    } else {
+        state.link_unauthorized.remove(&peer_key);
     }
     drop(state);
     settle_outgoing(

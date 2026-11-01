@@ -823,6 +823,7 @@ mod listing_tests {
             stop,
             link: None,
             remote_availability: None,
+            changed: tokio::sync::watch::channel(()).0,
         };
         let mut state = lock(&host.shared.state);
         state.trust.sharing.files = true;

@@ -312,6 +312,7 @@ impl Core {
                 presence_links: false,
                 presence: HashMap::new(),
                 link_refused: std::collections::HashSet::new(),
+                link_unauthorized: std::collections::HashSet::new(),
             }),
             desktop: Arc::new(Mutex::new(None)),
             desktop_info: Mutex::new(None),
@@ -377,6 +378,7 @@ impl Core {
             file_resources: Arc::new(Mutex::new(file_resources::Resources::default())),
             backend_state: Mutex::new(std::collections::HashMap::new()),
             presence_wake: Mutex::new(HashMap::new()),
+            presence_reconcile: tokio::sync::Notify::new(),
         });
         let accept = Arc::clone(&shared);
         runtime.spawn(async move { accept_loop(accept).await });
@@ -396,6 +398,7 @@ impl Core {
                 stop_owned_work(&mut state, &self.shared);
             }
         }
+        self.shared.presence_reconcile.notify_one();
         self.finish_endpoint_close();
         // Its jobs are interrupted before it says it has shut down, not when
         // their streams next notice: after its links closed saying it shut

@@ -247,6 +247,9 @@ struct LiveSession {
     link: Option<iroh::endpoint::Connection>,
     /// On a controller's link: the host's latest report of what it allows.
     remote_availability: Option<Vec<(crate::Capability, crate::RemoteStatus)>>,
+    /// Sent on every phase change, so a watcher of this session sleeps
+    /// until the phase moves. Dropped with the session.
+    changed: tokio::sync::watch::Sender<()>,
 }
 
 impl LiveSession {
@@ -269,6 +272,7 @@ impl LiveSession {
             "session phase"
         );
         self.phase = phase;
+        self.changed.send_replace(());
     }
 
     /// Active, on a link still open. A stream that ends on such a session
@@ -397,6 +401,8 @@ struct State {
     presence: HashMap<String, crate::DevicePresence>,
     /// Paired computers whose last link was refused because they stopped hosting.
     link_refused: std::collections::HashSet<[u8; 32]>,
+    /// Paired computers that answered the last link with `Unauthorized`.
+    link_unauthorized: std::collections::HashSet<[u8; 32]>,
 }
 
 struct PairingWindow {
@@ -435,6 +441,10 @@ pub struct ControlRequest {
 struct Shared {
     /// Wakes one paired computer's link supervisor so it dials now.
     presence_wake: Mutex<HashMap<[u8; 32], Arc<tokio::sync::Notify>>>,
+    /// The presence supervisor looks again at which computers are paired:
+    /// after a trust change is saved, when presence links turn on or off and
+    /// at shutdown.
+    presence_reconcile: tokio::sync::Notify,
     /// Serializes persisted sharing changes and their native revocation cleanup.
     sharing_serial: Mutex<()>,
     power_factory: Mutex<power::Factory>,
@@ -818,6 +828,7 @@ struct Installed {
 }
 
 fn persist(shared: &Shared, state: &mut State) -> Result<(), Error> {
+    shared.presence_reconcile.notify_one();
     // What a peer may do is saved when it changes: a terminal serving a peer
     // looks again whether it still may.
     for terminal in lock(&shared.terminal_sessions).values() {
