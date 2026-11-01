@@ -65,18 +65,22 @@ fn pairing_handles_and_errors() {
     let reader = open_core();
     let file = writer.export_pairing_file(900, true).unwrap();
     assert!(!file.bytes.is_empty());
-    assert_eq!(file.check.len(), 3);
+    assert_eq!(file.check.len(), 6);
     let preview = reader.open_pairing_file(file.bytes.clone()).unwrap();
     assert_eq!(preview.check, file.check);
     // Check a guaranteed mismatch; the preview token never crosses the FFI.
-    let wrong_check = if file.check == "000" { "001" } else { "000" };
+    let wrong_check = if file.check == "000000" {
+        "000001"
+    } else {
+        "000000"
+    };
     assert!(matches!(
         reader.confirm_pairing(preview.id, wrong_check.to_string()),
         Err(FfiError::PairingCheckMismatch)
     ));
     assert!(reader.open_pairing_file(vec![0, 1, 2]).is_err());
     assert!(matches!(
-        reader.confirm_pairing(999_999, "042".to_string()),
+        reader.confirm_pairing(999_999, "042042".to_string()),
         Err(FfiError::InvalidPairingFile)
     ));
     assert!(matches!(
@@ -84,9 +88,8 @@ fn pairing_handles_and_errors() {
         Err(FfiError::InvalidInvitation { .. })
     ));
     assert!(reader.control_request().unwrap().is_none());
-    assert_eq!(reader.control_check().len(), 3);
     assert!(matches!(
-        reader.confirm_control_request("042".to_string()),
+        reader.confirm_control_request("042042".to_string()),
         Err(FfiError::NoControlRequest)
     ));
     assert!(matches!(

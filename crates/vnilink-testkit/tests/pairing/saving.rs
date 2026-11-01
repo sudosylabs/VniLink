@@ -17,7 +17,7 @@ use vnilink::{
     CoreEvent, Error, EventSubscription, Grants, RelaySettings, ServiceKind, SessionPhase,
 };
 use vnilink_testkit::events::drain;
-use vnilink_testkit::session::wait_request;
+use vnilink_testkit::session::{wait_control_check, wait_request};
 use vnilink_testkit::store::{Fault, Installed, TestStore};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult};
 
@@ -464,10 +464,12 @@ fn an_uncertain_control_approval_fences_before_the_peer_is_saved() -> TestResult
     let controller = Engine::start("controller");
     exchange(&host.core, &controller.core, true);
     host.core.start_hosting()?;
+    let controller_events = controller.core.subscribe()?;
     let _pending = controller
         .core
         .begin_connect_services(&host.core.endpoint_id())?;
-    let request = wait_request(&host.core, Duration::from_secs(5));
+    let _request = wait_request(&host.core, Duration::from_secs(5));
+    let shown = wait_control_check(&controller_events, Duration::from_secs(5));
     let before = host.store.record().ok_or("the first open saves a record")?;
     let attempts = host.store.save_attempts();
     host.store.fail_next_save(Fault::RecoveryRequired);
@@ -475,7 +477,7 @@ fn an_uncertain_control_approval_fences_before_the_peer_is_saved() -> TestResult
     drain(&events);
     assert!(
         matches!(
-            host.core.confirm_control_request(&request.check),
+            host.core.confirm_control_request(&shown),
             Err(Error::StoreRecoveryRequired)
         ),
         "an uncertain approval says the store needs recovery"

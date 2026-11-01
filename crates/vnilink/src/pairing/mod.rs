@@ -24,11 +24,14 @@
 //!    unchanged. [`crate::Core::confirm_pairing`] saves the writer when the
 //!    typed digits match the writer's screen. That saves an address book
 //!    entry. It does not let either computer use a service of the other.
-//! 4. The controller calls [`crate::Core::control_check`] and shows those
-//!    digits, then [`crate::Core::begin_connect_services`]. If the writer's
-//!    switch was on and the file has not expired, the writer sees a control
-//!    request with the same digits and
-//!    [`crate::Core::confirm_control_request`] remembers the controller.
+//! 4. The controller calls [`crate::Core::begin_connect_services`]. If the
+//!    writer's switch was on and the file has not expired, the writer parks
+//!    the Hello and tells the controller, which shows the six digits both
+//!    computers derive from that connection
+//!    ([`crate::CoreEvent::ControlCheck`]). The writer sees a control
+//!    request without digits, and its owner types the controller's into
+//!    [`crate::Core::confirm_control_request`], which compares them and
+//!    remembers the controller. Three wrong answers close the window.
 //!    What either computer may then do is decided by its sharing policy, not
 //!    by pairing.
 //!
@@ -40,7 +43,7 @@ mod file;
 
 pub use file::{PairingFile, PairingPreview};
 
-pub(crate) use check::{control_digits, file_digits};
+pub(crate) use check::{control_digits, control_secret, file_digits, same_check};
 pub(crate) use file::{enclose, inspect};
 
 /// File name suffix the app should use. The library does not write the file.
@@ -50,7 +53,7 @@ pub(crate) fn require_same_check(
     preview: &PairingPreview,
     typed: &str,
 ) -> Result<(), crate::error::Error> {
-    if typed == preview.check {
+    if check::same_check(&preview.check, typed) {
         Ok(())
     } else {
         Err(crate::error::Error::PairingCheckMismatch)

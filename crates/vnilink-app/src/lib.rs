@@ -468,10 +468,6 @@ impl VnilinkCore {
         self.inner.unpair(&endpoint_id).map_err(map_error)
     }
 
-    pub fn control_check(&self) -> String {
-        self.inner.control_check()
-    }
-
     pub fn control_request(&self) -> Result<Option<FfiControlRequest>, FfiError> {
         self.inner
             .control_request()

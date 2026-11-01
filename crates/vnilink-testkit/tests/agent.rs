@@ -120,14 +120,21 @@ fn the_agent_serves_the_one_computer_its_owner_approved_and_stops_when_idle() ->
     let scratch = Scratch::new("agent");
     let file = scratch.join("agent.vnl");
     let mut agent = AgentProcess::start_with(&file, &["--allow", "files"], &[]);
-    let check = agent.line("check digits: ")["check digits: ".len()..][..3].to_owned();
+    let check = agent.line("check digits: ")["check digits: ".len()..][..6].to_owned();
     let bytes = std::fs::read(&file)?;
 
     let suite = Engine::start("controller");
     let mut host = std::thread::scope(|scope| {
-        let pairing = scope.spawn(|| RemoteHost::pair(&suite, &bytes, &check));
+        let (digits_tx, digits_rx) = std::sync::mpsc::channel::<String>();
+        let pairing = scope.spawn(|| {
+            RemoteHost::pair_announcing(&suite, &bytes, &check, move |digits| {
+                digits_tx
+                    .send(digits.to_owned())
+                    .expect("the digits' reader");
+            })
+        });
         agent.line("a computer asks to be approved");
-        agent.type_line(&suite.core.control_check());
+        agent.type_line(&digits_rx.recv().expect("the controller's digits"));
         pairing.join().expect("the pairing thread")
     })?;
     agent.line("approved");
@@ -172,13 +179,20 @@ fn paired(
 ) -> Result<(AgentProcess, Engine, RemoteHost), PeerError> {
     let file = scratch.join("agent.vnl");
     let mut agent = AgentProcess::start_with(&file, args, &[]);
-    let check = agent.line("check digits: ")["check digits: ".len()..][..3].to_owned();
+    let check = agent.line("check digits: ")["check digits: ".len()..][..6].to_owned();
     let bytes = std::fs::read(&file).map_err(PeerError::File)?;
     let suite = Engine::start("controller");
     let host = std::thread::scope(|scope| {
-        let pairing = scope.spawn(|| RemoteHost::pair(&suite, &bytes, &check));
+        let (digits_tx, digits_rx) = std::sync::mpsc::channel::<String>();
+        let pairing = scope.spawn(|| {
+            RemoteHost::pair_announcing(&suite, &bytes, &check, move |digits| {
+                digits_tx
+                    .send(digits.to_owned())
+                    .expect("the digits' reader");
+            })
+        });
         agent.line("a computer asks to be approved");
-        agent.type_line(&suite.core.control_check());
+        agent.type_line(&digits_rx.recv().expect("the controller's digits"));
         pairing.join().expect("the pairing thread")
     })?;
     agent.line("approved");
@@ -348,7 +362,7 @@ fn paired_with_fake_side(
         &["--allow", "screen"],
         &[("VNILINK_AGENT_NODE", side.as_path())],
     );
-    let check = agent.line("check digits: ")["check digits: ".len()..][..3].to_owned();
+    let check = agent.line("check digits: ")["check digits: ".len()..][..6].to_owned();
     let bridge = BridgeProcess::start(&file, &check);
     let approve = bridge.next();
     assert_eq!(

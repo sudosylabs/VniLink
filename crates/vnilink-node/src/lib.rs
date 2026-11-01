@@ -411,8 +411,11 @@ impl EventTransfer {
             vnilink_app::FfiEvent::DeviceUnpaired { endpoint_id } => {
                 serde_json::json!({ "type": "deviceUnpaired", "endpoint_id": endpoint_id })
             }
-            vnilink_app::FfiEvent::ControlRequested { endpoint_id, check } => {
-                serde_json::json!({ "type": "controlRequested", "endpoint_id": endpoint_id, "check": check })
+            vnilink_app::FfiEvent::ControlRequested { endpoint_id } => {
+                serde_json::json!({ "type": "controlRequested", "endpoint_id": endpoint_id })
+            }
+            vnilink_app::FfiEvent::ControlCheck { endpoint_id, check } => {
+                serde_json::json!({ "type": "controlCheck", "endpoint_id": endpoint_id, "check": check })
             }
             vnilink_app::FfiEvent::AddressesUpdated { endpoint_id } => {
                 serde_json::json!({ "type": "addressesUpdated", "endpoint_id": endpoint_id })
@@ -477,7 +480,6 @@ impl EventTransfer {
 #[derive(Serialize)]
 struct TransferControlRequest {
     endpoint_id: String,
-    check: String,
 }
 
 fn pointer_button(name: &str) -> Result<vnilink_app::FfiPointerButton> {
@@ -930,7 +932,6 @@ enum Command {
     },
     SavedRelays,
     RelayRestartRequired,
-    ControlCheck,
     ControlRequest,
     ConfirmControlRequest {
         digits: String,
@@ -1032,9 +1033,6 @@ enum Reply {
     PeerAvailability {
         /// `null` until the paired computer's link has delivered a report.
         report: Option<Vec<serde_json::Value>>,
-    },
-    Check {
-        check: String,
     },
     ControlRequest {
         request: Option<TransferControlRequest>,
@@ -1794,14 +1792,10 @@ impl EngineBridge {
     /// Commands that answer incoming control requests.
     fn access(core: &VnilinkCore, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
-            Command::ControlCheck => Reply::Check {
-                check: core.control_check(),
-            },
             Command::ControlRequest => Reply::ControlRequest {
                 request: core.control_request().map_err(core_error)?.map(|request| {
                     TransferControlRequest {
                         endpoint_id: request.endpoint_id,
-                        check: request.check,
                     }
                 }),
             },
@@ -2089,8 +2083,7 @@ impl EngineBridge {
                 let core = &state.core;
                 Self::pairing(core, command)
             }
-            Command::ControlCheck
-            | Command::ControlRequest
+            Command::ControlRequest
             | Command::ConfirmControlRequest { .. }
             | Command::RejectControlRequest => {
                 let core = &state.core;

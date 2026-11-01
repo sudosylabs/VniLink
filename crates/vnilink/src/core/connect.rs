@@ -429,7 +429,24 @@ pub(super) async fn establish(
             },
         )
         .await?;
-        match read_frame_within(&mut recv, Some(super::HELLO_ANSWER_WAIT)).await? {
+        let mut answer = read_frame_within(&mut recv, Some(super::HELLO_ANSWER_WAIT)).await?;
+        if matches!(answer, ControlMessage::AwaitingApproval) {
+            // The host parked this Hello for its owner to type the digits
+            // this connection and the two ids produce. Show them while the
+            // answer is awaited.
+            if let Some(secret) = crate::pairing::control_secret(
+                &connection,
+                shared.secret.public().as_bytes(),
+                &device.endpoint_id,
+            ) {
+                shared.events.publish(CoreEvent::ControlCheck {
+                    endpoint_id: device.display_id.clone(),
+                    check: crate::pairing::control_digits(&secret),
+                });
+            }
+            answer = read_frame_within(&mut recv, Some(super::HELLO_ANSWER_WAIT)).await?;
+        }
+        match answer {
             ControlMessage::Accept {
                 stamp,
                 hostname: accept_hostname,

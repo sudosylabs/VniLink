@@ -402,7 +402,17 @@ struct State {
 struct PairingWindow {
     expires_at_ms: u64,
     allow_control: bool,
+    /// Control requests that reached the prompt in this window.
+    requests: u8,
+    /// Wrong digits typed in this window.
+    failures: u8,
 }
+
+/// Control requests one pairing window shows its owner. A peer that keeps
+/// connecting cannot keep the prompt on screen.
+const MAX_CONTROL_REQUESTS: u8 = 5;
+/// Wrong digits one pairing window forgives. The next one closes the window.
+const MAX_CONTROL_FAILURES: u8 = 3;
 
 struct PendingControl {
     id: u64,
@@ -414,12 +424,12 @@ struct PendingControl {
     decision: tokio::sync::oneshot::Sender<bool>,
 }
 
-/// A controller is waiting on this host. `check` matches [`Core::control_check`]
-/// on that controller.
+/// A controller is waiting on this host. Its owner types the digits that
+/// controller shows ([`CoreEvent::ControlCheck`]); this computer compares
+/// them and never reveals the expected ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlRequest {
     pub endpoint_id: String,
-    pub check: String,
 }
 
 struct Shared {
@@ -589,7 +599,7 @@ struct Shared {
 /// Call methods from outside the runtime this core creates. The core never
 /// invokes a UI callback. Read [`Core::snapshot`] for the current picture and
 /// poll [`Core::subscribe`] on the UI thread. A full event queue drops events
-/// for that subscriber and increments [`EventSubscription::lagged`] instead of
+/// for that subscriber and counts it for [`crate::EventSubscription::take_lagged`] instead of
 /// blocking the connection loop.
 pub struct Core {
     runtime: tokio::runtime::Runtime,

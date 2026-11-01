@@ -50,7 +50,8 @@
 //! [`Core::export_pairing_file`] returns the bytes of a `.vnl` file. The other
 //! computer opens that file and [`Core::confirm_pairing`] saves the device
 //! when the typed digits match the writer's screen. The writer remembers the
-//! importing computer after its owner confirms [`Core::control_check`].
+//! importing computer after its owner types the digits that computer shows
+//! ([`CoreEvent::ControlCheck`]).
 //! Pairing does not grant services; [`Core::change_sharing_policy`] sets
 //! installation-wide consent. The session uses the relays already
 //! configured for this installation. The flow is documented in the `pairing`

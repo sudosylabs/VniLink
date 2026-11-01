@@ -535,6 +535,14 @@ fn topology_and_one_display_selection_round_trip() {
         Err(Error::Malformed)
     ));
 
+    let awaiting = ControlMessage::AwaitingApproval;
+    assert_eq!(awaiting.encode(), vec![16]);
+    assert_eq!(ControlMessage::decode(&[16]).unwrap(), awaiting);
+    assert!(matches!(
+        ControlMessage::decode(&[16, 0]),
+        Err(Error::Malformed)
+    ));
+
     let selection = ControlMessage::SelectDisplays {
         stamp: SessionStamp::new(9, 2),
         displays: vec![2],

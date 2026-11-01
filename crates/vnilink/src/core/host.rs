@@ -356,7 +356,9 @@ pub(super) async fn handle_host_request(
                 Err(Error::Unauthorized | Error::NotPaired)
                     if lock(&shared.state).trust.get(peer.as_bytes()).is_none() =>
                 {
-                    match wait_for_control_approval(shared, connection, peer, stop_rx).await {
+                    match wait_for_control_approval(shared, connection, &mut send, peer, stop_rx)
+                        .await
+                    {
                         ControlAnswer::Approved => admission(&lock(&shared.state), peer, version),
                         ControlAnswer::Rejected(error) => Err(error),
                     }

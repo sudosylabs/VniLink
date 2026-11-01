@@ -11,7 +11,9 @@
 
 use std::time::Duration;
 
-use vnilink::{ControlRequest, Core, ServicePhase, SessionInfo, SessionPhase, SessionRole};
+use vnilink::{
+    ControlRequest, Core, CoreEvent, ServicePhase, SessionInfo, SessionPhase, SessionRole,
+};
 
 use crate::{wait_for, Engine, DEFAULT_WAIT};
 
@@ -34,6 +36,52 @@ pub fn wait_request(host: &Core, within: Duration) -> ControlRequest {
     wait_for("the host to ask its owner", within, || {
         host.control_request().ok().flatten()
     })
+}
+
+/// The digits the controller behind `events` shows once the host it dialled
+/// has parked its request, within `within`. They come from that connection
+/// alone: the host's engine never reveals them.
+pub fn wait_control_check(events: &vnilink::EventSubscription, within: Duration) -> String {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match events.recv_timeout(left) {
+            Some(CoreEvent::ControlCheck { check, .. }) => return check,
+            Some(_) => {}
+            None => panic!("the controller showed no digits within {within:?}"),
+        }
+    }
+}
+
+/// As [`wait_control_check`] for the controller session `session` of `core`,
+/// or `None` when that session ends first: a host that does not park the
+/// request turns the controller away without any digits.
+pub fn control_check_or_end(
+    core: &Core,
+    events: &vnilink::EventSubscription,
+    session: u64,
+    within: Duration,
+) -> Option<String> {
+    let deadline = std::time::Instant::now() + within;
+    while std::time::Instant::now() < deadline {
+        if let Some(CoreEvent::ControlCheck { check, .. }) =
+            events.recv_timeout(Duration::from_millis(50))
+        {
+            return Some(check);
+        }
+        let phase = core.controller_session(session).ok().map(|info| info.phase);
+        if !matches!(phase, Some(SessionPhase::Connecting)) {
+            return None;
+        }
+    }
+    panic!("the controller neither showed digits nor ended within {within:?}")
+}
+
+/// Digits that are not `check`, of the same width.
+pub fn other_check(check: &str) -> String {
+    let last = check.chars().last().unwrap_or('0');
+    let other = if last == '0' { '1' } else { '0' };
+    format!("{}{other}", &check[..check.len().saturating_sub(1)])
 }
 
 /// Whether `phase` is a service's end: closed or failed.

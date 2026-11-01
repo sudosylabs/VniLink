@@ -59,10 +59,16 @@ pub enum CoreEvent {
     },
     /// A controller opened this host's pairing file and is connecting.
     ///
-    /// `check` is the three digits on the controller's screen. Remember its identity
-    /// with [`crate::Core::confirm_control_request`] only when the person
-    /// types those digits.
+    /// The digits are on the controller's screen, not here. Remember its
+    /// identity with [`crate::Core::confirm_control_request`] only when the
+    /// person types those digits.
     ControlRequested {
+        endpoint_id: String,
+    },
+    /// This computer, as the controller, connected to `endpoint_id` and waits
+    /// for its owner to type `check` there. The digits come from this
+    /// connection and both computers' ids, so no other connection shows them.
+    ControlCheck {
         endpoint_id: String,
         check: String,
     },

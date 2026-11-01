@@ -289,6 +289,9 @@ pub(crate) enum ControlMessage {
         stamp: SessionStamp,
         picture: u32,
     },
+    /// The host parked this unpaired Hello while its owner types the digits
+    /// the controller shows. Sent once, before the answer.
+    AwaitingApproval,
 }
 
 /// Session identity stamped on every control message that belongs to one.
@@ -420,6 +423,7 @@ impl ControlMessage {
                 report.encode(&mut bytes);
                 bytes
             }
+            Self::AwaitingApproval => vec![16],
             Self::Received { stamp, picture } => {
                 let mut bytes = Vec::with_capacity(21);
                 bytes.push(15);
@@ -557,6 +561,7 @@ impl ControlMessage {
                     bytes[17..].try_into().expect("report length checked"),
                 ),
             }),
+            16 if bytes.len() == 1 => Ok(Self::AwaitingApproval),
             15 if bytes.len() == 21 => Ok(Self::Received {
                 stamp: decode_stamp(bytes),
                 picture: u32::from_be_bytes(bytes[17..21].try_into().expect("length checked")),
