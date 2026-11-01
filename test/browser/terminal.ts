@@ -19,18 +19,11 @@ import type { DeviceSummary } from '../../src/workbench/services/devices/deviceS
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 import { ITerminalService } from '../../src/workbench/services/terminal/terminalService.js';
+import { animationFrames, until } from './waits.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
 		throw new Error(message);
-	}
-}
-
-async function until(condition: () => boolean, message: string): Promise<void> {
-	const deadline = Date.now() + 3000;
-	while (!condition()) {
-		assert(Date.now() < deadline, message);
-		await new Promise(resolve => setTimeout(resolve, 20));
 	}
 }
 
@@ -178,7 +171,7 @@ export async function verifyTerminal(): Promise<boolean> {
 		if (document.createElement('canvas').getContext('webgl2') === null) {
 			await until(() => view.element.querySelector('.terminal-notice') !== null, 'A terminal that cannot draw did not say so');
 			assert(view.element.querySelector('.terminal-notice')?.getAttribute('role') === 'alert', 'The renderer notice is not announced');
-			await new Promise(resolve => setTimeout(resolve, 100));
+			await animationFrames();
 			assert(ptys.length === 0, 'A shell started in a terminal that cannot draw');
 			return true;
 		}

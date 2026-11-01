@@ -23,18 +23,11 @@ import { IDeviceService, type DeviceSummary } from '../../src/workbench/services
 import { INativeRuntimeService } from '../../src/workbench/services/nativeRuntime/nativeRuntimeService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
+import { until } from './waits.js';
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
 		throw new Error(message);
-	}
-}
-
-async function until(condition: () => boolean, message: string, timeout = 3000): Promise<void> {
-	const deadline = Date.now() + timeout;
-	while (!condition()) {
-		assert(Date.now() < deadline, message);
-		await new Promise(resolve => setTimeout(resolve, 20));
 	}
 }
 

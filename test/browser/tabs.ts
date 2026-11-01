@@ -29,6 +29,7 @@ import { ViewsPart } from '../../src/workbench/parts/views/viewsPart.js';
 import { CommandService } from '../../src/workbench/services/commands/commandService.js';
 import { ITabService, type WorkbenchTab } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
+import { FakeTimers } from './waits.js';
 
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -109,11 +110,11 @@ export async function verifyTabs(): Promise<boolean> {
 			},
 		};
 	}
-	const settle = async (): Promise<void> => {
-		for (let step = 0; step < 5; step++) {
-			await new Promise(resolve => setTimeout(resolve, 60));
-		}
-	};
+	/** The menu service waits 50 ms to rebuild a menu and 50 more to announce it. */
+	const menuDebounce = 100;
+	// The menu service rebuilds the toolbar after its debounce; the test moves that time itself.
+	const timers = disposables.add(new FakeTimers());
+	const settle = (): Promise<void> => timers.advance(menuDebounce);
 	try {
 		const home = { ...view('home'), permanent: true };
 		tabService.open(home);

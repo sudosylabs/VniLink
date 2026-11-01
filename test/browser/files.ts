@@ -22,20 +22,11 @@ import { IFilesService, type FilesFailure, type FilesItem, type FilesListing, ty
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 import { IUIStateService } from '../../src/workbench/services/uiState/uiStateService.js';
+import { animationFrames, macrotask, until } from './waits.js';
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
 		throw new Error(message);
-	}
-}
-
-async function until(condition: () => boolean, message: string): Promise<void> {
-	const deadline = performance.now() + 5000;
-	while (!condition()) {
-		if (performance.now() > deadline) {
-			throw new Error(message);
-		}
-		await new Promise(resolve => setTimeout(resolve, 10));
 	}
 }
 
@@ -414,7 +405,7 @@ export async function verifyFiles(): Promise<void> {
 		assert(dialogs[1].message.startsWith('Permanently delete “invoice.pdf” from'), `Wrong delete question: ${dialogs[1].message}`);
 		assert(localDisk.deletes.length === 0, 'A permanent delete ran without confirmation');
 		// The cancelled question settles before it is asked for again.
-		await new Promise(resolve => setTimeout(resolve, 0));
+		await macrotask();
 		// Asking twice while the question is open asks once.
 		const asked = dialogs.length;
 		let answer: (result: IDialogResult) => void = () => undefined;
@@ -424,7 +415,7 @@ export async function verifyFiles(): Promise<void> {
 		press(list(local), 'Delete', 46, true);
 		press(list(local), 'Delete', 46, true);
 		await until(() => dialogs.length === asked + 1, 'Deleting for good did not ask again');
-		await new Promise(resolve => setTimeout(resolve, 50));
+		await animationFrames();
 		assert(dialogs.length === asked + 1, `Delete asked ${String(dialogs.length - asked)} times at once`);
 		answer({ button: 0, checked: false });
 		await until(() => localDisk.deletes.join() === 'invoice.pdf:gone', 'The confirmed delete did not run');
