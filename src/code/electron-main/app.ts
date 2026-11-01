@@ -40,6 +40,8 @@ import { BufferLogger } from '../../platform/log/common/bufferLog.js';
 import { ConsoleMainLogger, ILogService, LogLevel, parseLogLevel } from '../../platform/log/common/log.js';
 import { LogService } from '../../platform/log/common/logService.js';
 import { LoggerChannel } from '../../platform/log/electron-main/logIpc.js';
+import { LOGGER_CHANNEL_NAME } from '../../platform/log/common/loggerChannel.js';
+import { WindowLoggerChannel } from '../../platform/log/electron-main/windowLoggerChannel.js';
 import { ILoggerMainService, LoggerMainService } from '../../platform/log/electron-main/loggerService.js';
 import { logsFolderName, pruneLogs } from '../../platform/log/electron-main/logsFolder.js';
 import { installApplicationMenu, registerEditingShortcuts } from '../../platform/menubar/electron-main/menubar.js';
@@ -337,7 +339,14 @@ export class VniLinkApplication extends Disposable {
 		}));
 		server.registerChannel(ENGINE_CHANNEL_NAME, disposables.add(new EngineChannel(engine, windows, nativeHost, permissions)));
 		server.registerChannel(PERMISSIONS_CHANNEL_NAME, new PermissionsChannel(permissions));
-		server.registerChannel('logger', disposables.add(new LoggerChannel(this.loggerService)));
+		server.registerChannel(LOGGER_CHANNEL_NAME, new WindowLoggerChannel(disposables.add(new LoggerChannel(this.loggerService)), this.logsHome));
+		// A closed window's loggers, and their open files, go with it.
+		disposables.add(windows.onDidOpenWindow(window => {
+			const windowId = window.id;
+			window.once('closed', () => {
+				this.loggerService.deregisterLoggers(windowId);
+			});
+		}));
 		server.registerChannel(CONFIGURATION_CHANNEL_NAME, new ConfigurationChannel(configuration));
 		server.registerChannel(UI_STATE_CHANNEL_NAME, new UIStateChannel(accessor.get(IStateService)));
 		server.registerChannel(RECORDING_CHANNEL_NAME, ProxyChannel.fromService({

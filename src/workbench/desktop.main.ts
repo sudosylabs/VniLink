@@ -22,6 +22,7 @@ import { URI } from '../base/common/uri.js';
 import { joinPath } from '../base/common/resources.js';
 import { ConsoleLogger, ILoggerService, ILogService } from '../platform/log/common/log.js';
 import { LoggerChannelClient } from '../platform/log/common/logIpc.js';
+import { LOGGER_CHANNEL_NAME } from '../platform/log/common/loggerChannel.js';
 import { LogService } from '../platform/log/common/logService.js';
 import { INativeHostService } from '../platform/native/common/native.js';
 import { NativeHostService } from '../platform/native/common/nativeHostService.js';
@@ -48,7 +49,8 @@ export class DesktopMain extends Disposable {
 		// The window's log goes through main to window<id>/renderer.log, and to the console.
 		const { windowId, logLevel, logsPath } = this.configuration;
 		const windowLogsPath = joinPath(URI.file(logsPath), `window${String(windowId)}`);
-		const loggerService = this._register(new LoggerChannelClient(windowId, logLevel, windowLogsPath, [], mainProcessService.getChannel('logger')));
+		const loggerChannel = mainProcessService.getChannel(LOGGER_CHANNEL_NAME);
+		const loggerService = this._register(new LoggerChannelClient(windowId, logLevel, windowLogsPath, [], loggerChannel));
 		serviceCollection.set(ILoggerService, loggerService);
 		const fileLogger = this._register(loggerService.createLogger(joinPath(windowLogsPath, 'renderer.log'), { id: 'renderer', name: 'Window' }));
 		const logService = this._register(new LogService(fileLogger, [new ConsoleLogger(logLevel)]));

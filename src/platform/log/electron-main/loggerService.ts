@@ -25,6 +25,9 @@ export interface ILoggerMainService extends ILoggerService {
 	createLogger(id: string, options?: Omit<ILoggerOptions, 'id'>, windowId?: number): ILogger;
 
 	registerLogger(resource: ILoggerResource, windowId?: number): void;
+
+	deregisterLoggers(windowId: number): void;
+
 }
 
 export class LoggerMainService extends LoggerService implements ILoggerMainService {
@@ -72,6 +75,14 @@ export class LoggerMainService extends LoggerService implements ILoggerMainServi
 				};
 				return r;
 			}), e => e.added.length > 0 || e.removed.length > 0);
+	}
+
+	deregisterLoggers(windowId: number): void {
+		for (const [resource, resourceWindow] of this.loggerResourcesByWindow) {
+			if (resourceWindow === windowId) {
+				this.deregisterLogger(resource);
+			}
+		}
 	}
 
 	private isInterestedLoggerResource(resource: URI, windowId: number | undefined): boolean {

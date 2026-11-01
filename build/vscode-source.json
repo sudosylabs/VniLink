@@ -4157,11 +4157,9 @@
     {
       "path": "src/platform/log/electron-main/loggerService.ts",
       "upstreamPath": "src/vs/platform/log/electron-main/loggerService.ts",
-      "sha256": "c06acc4af5ce65fdfb83342c8ef79d1250ba54725c4f435a3d041087e89c279d",
+      "sha256": "6e529910a1541df13485cfb7d6107c371e08475642c66b441d5ef2c4a1654cf5",
       "pruned": [
-        "ILoggerMainService.deregisterLoggers",
         "ILoggerMainService.getGlobalLoggers",
-        "LoggerMainService.deregisterLoggers",
         "LoggerMainService.getGlobalLoggers"
       ]
     },
@@ -4353,7 +4351,7 @@
       "path": "src/workbench/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "6fac256921f2a5404827ae3848b9735a560f8da0f2a6a209c008c490c14a7272"
+      "sha256": "a8dd753c3edf331e29b414394ebeef1bc9851dbc267a1865d69b9465f6977016"
     },
     {
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",
@@ -4652,7 +4650,8 @@
     "src/base/common/icons.ts",
     "src/platform/actions/browser/menuEntryActionViewItem.ts",
     "src/platform/theme/browser/defaultStyles.ts",
-    "src/platform/log/node/spdlogAddon.ts"
+    "src/platform/log/node/spdlogAddon.ts",
+    "src/platform/log/common/loggerChannel.ts"
   ],
   "dependencyEdges": [
     {
@@ -6403,6 +6402,11 @@
     {
       "from": "src/workbench/desktop.main.ts",
       "to": "src/platform/log/common/logIpc.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/desktop.main.ts",
+      "to": "src/platform/log/common/loggerChannel.ts",
       "kind": "import"
     },
     {
