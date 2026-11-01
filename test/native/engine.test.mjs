@@ -230,3 +230,34 @@ test('this computer\'s disk lists, makes, renames and deletes through its own en
 		rmSync(folder, { recursive: true, force: true });
 	}
 });
+
+test('the engine wakes its watcher when an event is waiting, and a closed watch stays quiet', { timeout: 30000 }, async () => {
+	const engine = await addon.openTemporaryEngine();
+	try {
+		const woken = [];
+		let ring;
+		const rang = () => new Promise(resolve => {
+			ring = resolve;
+		});
+		let next = rang();
+		const watch = engine.watchEvents(() => {
+			woken.push(true);
+			ring();
+		});
+		const { subscriptionId } = await execute(engine, { type: 'subscribeEvents' });
+		assert.deepEqual((await execute(engine, { type: 'pollEvents', subscriptionId, maxEvents: 256 })).events, []);
+		assert.equal(woken.length, 0, 'The watcher was woken with nothing to read');
+		await execute(engine, { type: 'startHosting' });
+		await next;
+		const polled = await execute(engine, { type: 'pollEvents', subscriptionId, maxEvents: 256 });
+		assert(polled.events.some(event => event.type === 'hostingChanged'), 'The wake came without a hosting event to read');
+		next = rang();
+		watch.close();
+		const before = woken.length;
+		await execute(engine, { type: 'stopHosting' });
+		await execute(engine, { type: 'releaseEvents', subscriptionId });
+		assert.equal(woken.length, before, 'A closed watch woke its watcher');
+	} finally {
+		await execute(engine, { type: 'shutdown' });
+	}
+});

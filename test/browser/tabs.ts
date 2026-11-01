@@ -58,7 +58,7 @@ export async function verifyTabs(): Promise<boolean> {
 		[ILogService, new NullLogService()],
 		[IConfigurationService, { _serviceBrand: undefined, onDidChangeConfiguration: Event.None, getValue: () => undefined }],
 		[IThemeService, { _serviceBrand: undefined, onDidColorThemeChange: Event.None, getColorTheme: () => ({ background: '#000000', foreground: '#ffffff', inactiveForeground: '#888888' }) }],
-		[IEngineService, { _serviceBrand: undefined, available: true, restartRequired: false, onDidChangeAvailability: Event.None, onDidChangeRestartRequired: Event.None, onDidReceiveEvents: Event.None, execute: () => Promise.reject(new Error('Unused')), openDataChannel: () => Promise.reject(new Error('Unused')) }],
+		[IEngineService, { _serviceBrand: undefined, available: true, restarting: false, restartRequired: false, onDidChangeAvailability: Event.None, onDidChangeRestarting: Event.None, onDidChangeRestartRequired: Event.None, onDidReceiveEvents: Event.None, execute: () => Promise.reject(new Error('Unused')), openDataChannel: () => Promise.reject(new Error('Unused')) }],
 		[IContextKeyService, new SyncDescriptor(ContextKeyService)],
 		[ICommandService, new SyncDescriptor(CommandService)],
 		[IMenuService, new SyncDescriptor(MenuService)],

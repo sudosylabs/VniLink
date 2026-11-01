@@ -42,6 +42,14 @@ export interface IEngineService {
 	readonly available: boolean;
 	readonly onDidChangeAvailability: Event<boolean>;
 
+	/**
+	 * Whether the engine stopped on its own and main is starting it again.
+	 * An unavailable engine that is not restarting has been given up for this
+	 * run.
+	 */
+	readonly restarting: boolean;
+	readonly onDidChangeRestarting: Event<boolean>;
+
 	/** Whether relay changes need an application restart to take effect. */
 	readonly restartRequired: boolean;
 	readonly onDidChangeRestartRequired: Event<boolean>;

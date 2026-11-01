@@ -13,10 +13,25 @@ const output = await build({ entryPoints: ['src/platform/engine/electron-utility
 
 const { EngineHost } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
-/** A native engine whose event queue and failures the test controls. */
+/** A native engine whose event queue and failures the test controls, and whose wake the test rings. */
 function nativeEngine() {
 	const native = {
-		calls: [], queue: [], lagged: '0', failNextPoll: false, nextSubscription: 0,
+		calls: [], queue: [], lagged: '0', failNextPoll: false, nextSubscription: 0, watches: [],
+		/** Rings the wake the way the engine does when an event is waiting. */
+		wake() {
+			for (const watch of native.watches.filter(candidate => !candidate.closed)) {
+				watch.wake();
+			}
+		},
+		watchEvents(wake) {
+			const watch = {
+				wake, closed: false, close: () => {
+					watch.closed = true;
+				}
+			};
+			native.watches.push(watch);
+			return watch;
+		},
 		async execute(json) {
 			const command = JSON.parse(json);
 			native.calls.push(command);
@@ -27,7 +42,7 @@ function nativeEngine() {
 						native.failNextPoll = false;
 						throw new Error('Subscription lost');
 					}
-					const reply = { type: 'events', events: native.queue.splice(0), lagged: native.lagged };
+					const reply = { type: 'events', events: native.queue.splice(0, command.maxEvents), lagged: native.lagged };
 					native.lagged = '0';
 					return JSON.stringify(reply);
 				}
@@ -48,44 +63,72 @@ async function openHost(native) {
 	return host;
 }
 
-test('events are read only while listened to, and gaps or failures are reported as a resync', async context => {
-	context.mock.timers.enable({ apis: ['setTimeout'] });
+const settle = async () => {
+	for (let step = 0; step < 20; step++) {
+		await Promise.resolve();
+	}
+};
+
+test('events are read when the engine wakes the host, and only while listened to', async () => {
 	const native = nativeEngine();
 	const host = await openHost(native);
-	const settle = async () => {
-		for (let step = 0; step < 20; step++) {
-			await Promise.resolve();
-		}
-	};
 	await settle();
 	assert.equal(native.calls.length, 0, 'The host read events before anyone listened');
+	assert.equal(native.watches.length, 0, 'The host watched events before anyone listened');
 	const batches = [];
 	const listener = host.onDidReceiveEvents(batch => batches.push(batch));
-	context.mock.timers.tick(0);
 	await settle();
 	assert.deepEqual(batches, [{ events: [], resync: true }], 'The first batch must ask listeners to resynchronize');
 	native.queue.push({ type: 'hostLocked', locked: true });
-	context.mock.timers.tick(500);
+	native.wake();
 	await settle();
 	assert.deepEqual(batches.at(-1), { events: [{ type: 'hostLocked', locked: true }], resync: false });
-	context.mock.timers.tick(500);
+	const reads = native.calls.length;
 	await settle();
-	assert.equal(batches.length, 2, 'An empty, gap-free poll must not produce a batch');
+	assert.equal(native.calls.length, reads, 'The host read again without a wake');
 	native.lagged = '3';
-	context.mock.timers.tick(500);
+	native.wake();
 	await settle();
-	assert.deepEqual(batches.at(-1), { events: [], resync: true });
+	assert.deepEqual(batches.at(-1), { events: [], resync: true }, 'A lagging subscription must be reported as a resync');
+	listener.dispose();
+	await settle();
+	assert.equal(native.watches.length, 1);
+	assert.equal(native.watches[0].closed, true, 'The watch outlived the last listener');
+	assert.deepEqual(native.calls.filter(command => command.type === 'releaseEvents').map(command => command.subscriptionId), ['1']);
+});
+
+test('a read that fills its batch is followed by another, and wakes during a read are not lost', async () => {
+	const native = nativeEngine();
+	const host = await openHost(native);
+	const batches = [];
+	host.onDidReceiveEvents(batch => batches.push(batch));
+	await settle();
+	const event = index => ({ type: 'hostLocked', locked: index % 2 === 0 });
+	native.queue.push(...Array.from({ length: 300 }, (_, index) => event(index)));
+	native.wake();
+	native.wake();
+	await settle();
+	assert.deepEqual(batches.slice(1).map(batch => batch.events.length), [256, 44]);
+	assert.equal(native.calls.filter(command => command.type === 'pollEvents').length, 3, 'The second wake during a read should cost one more read, not two');
+});
+
+test('a failed read is reported as a resync once the subscription is replaced', async context => {
+	context.mock.timers.enable({ apis: ['setTimeout'] });
+	const native = nativeEngine();
+	const host = await openHost(native);
+	const batches = [];
+	const listener = host.onDidReceiveEvents(batch => batches.push(batch));
+	await settle();
 	native.failNextPoll = true;
-	context.mock.timers.tick(500);
+	native.wake();
 	await settle();
+	assert.equal(batches.length, 1, 'A failed read must not produce a batch');
 	context.mock.timers.tick(500);
 	await settle();
 	assert.deepEqual(batches.at(-1), { events: [], resync: true });
 	assert.equal(native.nextSubscription, 2, 'A failed subscription was not replaced');
 	listener.dispose();
 	await settle();
-	const released = native.calls.filter(command => command.type === 'releaseEvents').map(command => command.subscriptionId);
-	assert.deepEqual(released, ['1', '2']);
 	const reads = native.calls.length;
 	context.mock.timers.tick(5000);
 	await settle();

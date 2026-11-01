@@ -95,9 +95,10 @@ export class Workbench extends Layout {
 		const engineService = accessor.get(IEngineService);
 		const lifecycleService = accessor.get(ILifecycleService);
 		const updateEngineNotice = (): void => {
-			this.setNotice(engineService.available ? undefined : Layout.engineUnavailableNotice);
+			this.setNotice(engineService.available ? undefined : engineService.restarting ? Layout.engineRestartingNotice : Layout.engineUnavailableNotice);
 		};
 		this._register(engineService.onDidChangeAvailability(updateEngineNotice));
+		this._register(engineService.onDidChangeRestarting(updateEngineNotice));
 		updateEngineNotice();
 		this._register({
 			dispose: () => {
