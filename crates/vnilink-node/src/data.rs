@@ -7,7 +7,7 @@
 
 //! Session-scoped binary data plane. Never takes the JSON bridge's State mutex.
 // trace: records every ignored failure
-use super::{core_error, parse_id, Command, CommandShape, Engine};
+use super::{core_error, parse_id, Call, CommandShape, Engine};
 use napi::{
     bindgen_prelude::{AsyncTask, Buffer, Function},
     threadsafe_function::ThreadsafeFunctionCallMode,
@@ -678,27 +678,27 @@ impl DataChannel {
         let raw: serde_json::Value =
             serde_json::from_str(&command).map_err(|_| Error::from_reason("Invalid input"))?;
         if !CommandShape::check(&raw)
-            || raw["sessionId"] != self.session_id.to_string()
-            || raw["generation"] != self.generation.to_string()
+            || raw["sessionId"].as_str() != Some(&self.session_id.to_string())
+            || raw["generation"].as_str() != Some(&self.generation.to_string())
         {
             return Err(Error::from_reason("Invalid input target"));
         }
-        let decoded: Command =
+        let decoded: Call =
             serde_json::from_value(raw).map_err(|_| Error::from_reason("Invalid input"))?;
         if !matches!(
             decoded,
-            Command::SubmitKey { .. }
-                | Command::SubmitPointer { .. }
-                | Command::SubmitButton { .. }
-                | Command::SubmitWheel { .. }
-                | Command::SubmitMotion { .. }
-                | Command::SubmitPreciseWheel { .. }
-                | Command::SubmitText { .. }
-                | Command::SubmitLocalKey { .. }
-                | Command::ReleaseSessionInput { .. }
-                | Command::SelectDisplays { .. }
-                | Command::SwapSessionModifiers { .. }
-                | Command::CaptureSystemKeys { .. }
+            Call::SubmitKey { .. }
+                | Call::SubmitPointer { .. }
+                | Call::SubmitButton { .. }
+                | Call::SubmitWheel { .. }
+                | Call::SubmitMotion { .. }
+                | Call::SubmitPreciseWheel { .. }
+                | Call::SubmitText { .. }
+                | Call::SubmitLocalKey { .. }
+                | Call::ReleaseSessionInput { .. }
+                | Call::SelectDisplays { .. }
+                | Call::SwapSessionModifiers { .. }
+                | Call::CaptureSystemKeys { .. }
         ) {
             return Err(Error::from_reason("Not an interactive input command"));
         }
@@ -713,8 +713,8 @@ impl DataChannel {
             .ok_or_else(|| Error::from_reason("Missing desktop owner"))?
             .service;
         match decoded {
-            Command::SubmitKey { usage, down, .. } => service.submit_key(usage, down),
-            Command::SubmitPointer {
+            Call::SubmitKey { usage, down, .. } => service.submit_key(usage, down),
+            Call::SubmitPointer {
                 x,
                 y,
                 display,
@@ -726,26 +726,26 @@ impl DataChannel {
                 parse_id(&display, "Invalid display ID")?,
                 parse_id(&revision, "Invalid topology revision")?,
             ),
-            Command::SubmitButton { button, down, .. } => {
+            Call::SubmitButton { button, down, .. } => {
                 service.submit_button(super::pointer_button(&button)?, down)
             }
-            Command::SubmitWheel { dx, dy, .. } => service.submit_wheel(dx, dy),
-            Command::SubmitMotion { dx, dy, .. } => service.submit_motion(dx, dy),
-            Command::SubmitPreciseWheel { dx, dy, .. } => service.submit_precise_wheel(dx, dy),
-            Command::SubmitText { text, .. } => service.submit_text(text),
-            Command::SubmitLocalKey {
+            Call::SubmitWheel { dx, dy, .. } => service.submit_wheel(dx, dy),
+            Call::SubmitMotion { dx, dy, .. } => service.submit_motion(dx, dy),
+            Call::SubmitPreciseWheel { dx, dy, .. } => service.submit_precise_wheel(dx, dy),
+            Call::SubmitText { text, .. } => service.submit_text(text),
+            Call::SubmitLocalKey {
                 usage,
                 down,
                 text,
                 composing,
                 ..
             } => service.submit_local_key(usage, down, text, composing),
-            Command::ReleaseSessionInput { .. } => service.release_input(),
-            Command::SwapSessionModifiers { enabled, .. } => {
+            Call::ReleaseSessionInput { .. } => service.release_input(),
+            Call::SwapSessionModifiers { enabled, .. } => {
                 service.set_swap_control_and_command(enabled)
             }
             // A computer without a hook keeps its shortcuts; the desktop stays.
-            Command::CaptureSystemKeys { enabled, .. } => {
+            Call::CaptureSystemKeys { enabled, .. } => {
                 if let Err(error) = service.capture_system_keys(enabled) {
                     tracing::info!(
                         target: vnilink::trace::INPUT,
@@ -756,7 +756,7 @@ impl DataChannel {
                 Ok(())
             }
             // The display the pointer lands on, sent in order with it.
-            Command::SelectDisplays { ids, .. } => service.select_displays(
+            Call::SelectDisplays { ids, .. } => service.select_displays(
                 ids.iter()
                     .map(|id| parse_id(id, "Invalid display ID"))
                     .collect::<Result<Vec<_>>>()?,

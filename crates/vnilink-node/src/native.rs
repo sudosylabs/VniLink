@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 //! Native runtime, explicit source selection, and owned capture/recording resources.
-use super::{core_error, parse_id, session_target, Command, Reply, State};
+use super::{core_error, parse_id, session_target, Call, Reply, State};
 use crate::data;
 use napi::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -139,9 +139,9 @@ impl NativeRuntimeState {
         }
     }
 }
-pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
+pub(super) fn dispatch(state: &mut State, command: &Call) -> Result<Reply> {
     match command {
-        Command::StartNativeScreenSharing {
+        Call::StartNativeScreenSharing {
             display_id,
             width,
             height,
@@ -216,7 +216,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 ))
             }
         }
-        Command::StopNativeScreenSharing => {
+        Call::StopNativeScreenSharing => {
             #[cfg(target_os = "macos")]
             {
                 state.core.stop_mac_desktop_sharing().map_err(core_error)?;
@@ -244,7 +244,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 ))
             }
         }
-        Command::NativeSharingStatus => {
+        Call::NativeSharingStatus => {
             #[cfg(target_os = "macos")]
             let displays = state
                 .native
@@ -301,7 +301,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             let displays = vec![];
             Ok(Reply::NativeSharingStatus { displays })
         }
-        Command::StartRecording {
+        Call::StartRecording {
             session_id,
             generation,
             destination,
@@ -371,7 +371,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             state.native.next_recording = next;
             Ok(Reply::RecordingStatus { status })
         }
-        Command::RecordingStatus { id } => {
+        Call::RecordingStatus { id } => {
             let id = parse_id(id, "Invalid recording ID")?;
             let recording = state
                 .native
@@ -382,7 +382,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 status: recording_status(id, &recording.handle),
             })
         }
-        Command::StopRecording { id } => {
+        Call::StopRecording { id } => {
             let id = parse_id(id, "Invalid recording ID")?;
             let recording = state
                 .native
@@ -394,7 +394,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 status: recording_status(id, &recording.handle),
             })
         }
-        Command::ReleaseRecording { id } => {
+        Call::ReleaseRecording { id } => {
             let id = parse_id(id, "Invalid recording ID")?;
             let recording = state
                 .native
@@ -413,7 +413,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             state.native.recordings.remove(&id);
             Ok(Reply::Done)
         }
-        Command::RemoteCameraDevices {
+        Call::RemoteCameraDevices {
             session_id,
             generation,
         } => {
@@ -431,7 +431,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 .collect();
             Ok(Reply::NativeDevices { devices })
         }
-        Command::RemoteAudioDevices {
+        Call::RemoteAudioDevices {
             session_id,
             generation,
             kind,
@@ -459,7 +459,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 .collect();
             Ok(Reply::NativeDevices { devices })
         }
-        Command::NativeCameraDevices => {
+        Call::NativeCameraDevices => {
             let devices = state
                 .core
                 .native_camera_devices()
@@ -473,7 +473,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 .collect();
             Ok(Reply::NativeDevices { devices })
         }
-        Command::NativeAudioDevices => {
+        Call::NativeAudioDevices => {
             let devices = state
                 .core
                 .native_audio_devices()
@@ -491,7 +491,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 .collect();
             Ok(Reply::NativeDevices { devices })
         }
-        Command::NativeAudioOutputs => {
+        Call::NativeAudioOutputs => {
             let devices = state
                 .core
                 .native_audio_output_devices()
@@ -505,7 +505,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 .collect();
             Ok(Reply::NativeDevices { devices })
         }
-        Command::SetNativeCameraSources { ids } => {
+        Call::SetNativeCameraSources { ids } => {
             if ids.len() > 32 {
                 return Err(Error::from_reason("Too many approved cameras"));
             }
@@ -519,7 +519,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             }
             Ok(Reply::Done)
         }
-        Command::SetNativeAudioSources {
+        Call::SetNativeAudioSources {
             microphones,
             system,
         } => {
@@ -533,17 +533,14 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             }
             Ok(Reply::Done)
         }
-        Command::PowerPolicy => Ok(Reply::PowerPolicy {
-            policy: state.core.power_policy().map_err(core_error)?.into(),
+        Call::PowerPolicy => Ok(Reply::PowerPolicy {
+            policy: state.core.power_policy().map_err(core_error)?,
         }),
-        Command::SetPowerPolicy { policy } => {
-            state
-                .core
-                .set_power_policy(policy.clone().into())
-                .map_err(core_error)?;
+        Call::SetPowerPolicy { policy } => {
+            state.core.set_power_policy(*policy).map_err(core_error)?;
             Ok(Reply::Done)
         }
-        Command::PowerStatus => {
+        Call::PowerStatus => {
             use vnilink_app::{FfiPowerKind as K, FfiPowerPhase as P};
             let statuses = state
                 .core
@@ -574,7 +571,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 .collect();
             Ok(Reply::PowerStatus { statuses })
         }
-        Command::NativeRuntime => {
+        Call::NativeRuntime => {
             use vnilink_app::FfiCapability as C;
             let entries = [
                 ("desktopView", C::DesktopView),
@@ -636,7 +633,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
                 capabilities,
             })
         }
-        Command::ReportNativePermissions {
+        Call::ReportNativePermissions {
             screen,
             input,
             camera,
@@ -656,7 +653,7 @@ pub(super) fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
             }
             Ok(Reply::Done)
         }
-        Command::EnableNativeInput => {
+        Call::EnableNativeInput => {
             // On Linux the portal grant carries input; X11 injection would
             // reach only X clients under Wayland.
             #[cfg(target_os = "linux")]

@@ -306,7 +306,7 @@ fn plaintext_bounds_reject_an_empty_or_oversized_record_before_sql() {
     let store = open(&fixture.engine, as_vault(&vault));
     let kept = b"kept-record".to_vec();
     store.save(kept.clone()).unwrap();
-    let before = fs::read(&fixture.database()).unwrap();
+    let before = fs::read(fixture.database()).unwrap();
     assert_eq!(
         store.save(Vec::new()).unwrap_err(),
         FfiError::StoreUnavailable
@@ -315,7 +315,7 @@ fn plaintext_bounds_reject_an_empty_or_oversized_record_before_sql() {
         store.save(vec![7; 1_048_577]).unwrap_err(),
         FfiError::StoreUnavailable
     );
-    assert_eq!(fs::read(&fixture.database()).unwrap(), before);
+    assert_eq!(fs::read(fixture.database()).unwrap(), before);
     assert_eq!(store.load().unwrap().as_deref(), Some(kept.as_slice()));
     let max = vec![9; 1_048_576];
     store.save(max.clone()).unwrap();
@@ -659,12 +659,12 @@ fn unsafe_permissions_links_and_acls_are_left_unchanged() {
     drop(store);
     assert_eq!(mode_bits(&fixture.database()), 0o600);
     assert_eq!(mode_bits(&fixture.engine.join("installation.lock")), 0o600);
-    fs::set_permissions(&fixture.database(), fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(fixture.database(), fs::Permissions::from_mode(0o644)).unwrap();
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_vault(&vault));
     assert_eq!(err.unwrap_err(), FfiError::StoreUnavailable);
     assert_eq!(mode_bits(&fixture.database()), 0o644);
 
-    fs::set_permissions(&fixture.database(), fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(fixture.database(), fs::Permissions::from_mode(0o600)).unwrap();
     let linked = fixture.engine.join("installation-link");
     fs::hard_link(fixture.database(), &linked).unwrap();
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_vault(&vault));

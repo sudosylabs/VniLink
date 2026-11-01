@@ -324,7 +324,7 @@ fn application_dir() -> Result<PathBuf, StoreFailure> {
         if location_is_remote(base)? {
             return Err(StoreFailure::Unavailable);
         }
-        return Ok(app);
+        Ok(app)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -569,11 +569,11 @@ pub(crate) fn location_is_remote(path: &Path) -> Result<bool, StoreFailure> {
     {
         let info =
             fs::read_to_string("/proc/self/mountinfo").map_err(|_| StoreFailure::Unavailable)?;
-        return linux_path_is_remote(&info, path);
+        linux_path_is_remote(&info, path)
     }
     #[cfg(target_os = "macos")]
     {
-        return macos_is_remote(path);
+        macos_is_remote(path)
     }
     #[cfg(windows)]
     {

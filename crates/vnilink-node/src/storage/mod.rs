@@ -33,6 +33,7 @@ mod crypto;
 mod database;
 mod key;
 mod paths;
+#[cfg(any(test, feature = "reset-installation"))]
 mod recover;
 
 use std::sync::atomic::{AtomicU8, Ordering};
