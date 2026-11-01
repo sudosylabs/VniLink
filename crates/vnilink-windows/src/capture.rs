@@ -161,7 +161,7 @@ impl WindowsCapture {
                 self.pointer
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .composite(frame)
+                    .composite_picture(frame, &self.pool)
             })
             .transpose()
     }
@@ -190,6 +190,12 @@ impl WindowsCapture {
     /// Waits in Desktop Duplication for the desktop's next picture, until
     /// `deadline`. Whether one arrived or the capture failed; the poll that
     /// follows returns it without acquiring again.
+    ///
+    /// The cached picture stays locked for the wait. Its only other user is
+    /// [`WindowsCapture::poll_frame`], and the one capture thread of the
+    /// frame-source seam (`vnilink-media` `stream/capture.rs`) calls both in turn,
+    /// so nothing waits on the lock; a second reader would need the wait to
+    /// release it first.
     pub fn wait_frame(&self, deadline: std::time::Instant) -> bool {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         // Rounded up: a wait must not end a millisecond early and spin.
@@ -533,14 +539,77 @@ fn presented_at(present_qpc: i64) -> Option<std::time::Instant> {
     now.checked_sub(age)
 }
 
+/// The desktop that currently receives input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputDesktop {
+    /// The signed-in user's, where Desktop Duplication works.
+    User,
+    /// The sign-in screen, a lock screen or an elevation prompt.
+    Secure,
+}
+
+/// Which desktop receives input. A process that cannot open the input desktop,
+/// or finds it is not the interactive one, is not on the user's.
+fn input_desktop() -> InputDesktop {
+    use windows::Win32::System::StationsAndDesktops::{
+        CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, DESKTOP_CONTROL_FLAGS,
+        DESKTOP_READOBJECTS, UOI_NAME,
+    };
+    // SAFETY: OpenInputDesktop returns an owned handle or an error.
+    let Ok(desktop) =
+        (unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) })
+    else {
+        return InputDesktop::Secure;
+    };
+    let mut name = [0u16; 64];
+    let mut needed = 0;
+    // SAFETY: `name` is writable for the byte length passed, and `desktop` is open.
+    let named = unsafe {
+        GetUserObjectInformationW(
+            windows::Win32::Foundation::HANDLE(desktop.0),
+            UOI_NAME,
+            Some(name.as_mut_ptr().cast()),
+            std::mem::size_of_val(&name) as u32,
+            Some(&mut needed),
+        )
+    };
+    // SAFETY: the handle was opened above and is closed once.
+    unsafe {
+        ignored_hr!(
+            vnilink::trace::CAPTURE,
+            "a desktop handle that cannot close is released with the process",
+            CloseDesktop(desktop)
+        );
+    }
+    let length = name
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(name.len());
+    if named.is_ok() && String::from_utf16_lossy(&name[..length]).eq_ignore_ascii_case("Default") {
+        InputDesktop::User
+    } else {
+        InputDesktop::Secure
+    }
+}
+
 fn map_error(err: windows::core::Error) -> Error {
     let code = err.code();
-    // Duplication loses access when the input desktop switches to the
-    // sign-in screen, a lock screen or an elevation prompt.
     if code == DXGI_ERROR_ACCESS_LOST || code == E_ACCESSDENIED {
-        return Error::SecureDesktop;
+        return access_error(code, input_desktop());
     }
     Error::CaptureFailed(code.0)
+}
+
+/// Duplication loses access when the input desktop switches to the sign-in
+/// screen, a lock screen or an elevation prompt, and also when the display
+/// mode, DPI or adapter changes, a monitor is plugged in or out, or the driver
+/// resets. Only the first is a secure desktop; the rest are failures that
+/// end the run, which opens again on the changed display.
+fn access_error(code: windows::core::HRESULT, desktop: InputDesktop) -> Error {
+    match desktop {
+        InputDesktop::Secure => Error::SecureDesktop,
+        InputDesktop::User => Error::CaptureFailed(code.0),
+    }
 }
 
 // COM allocations are owned locals at every boundary, so cancellation also
@@ -562,6 +631,27 @@ mod startup_tests {
             Err(vnilink_media::Error::CaptureRejected(
                 "Desktop capture startup ended"
             ))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+
+    #[test]
+    fn access_lost_on_the_secure_desktop_is_reported_as_one() {
+        assert!(matches!(
+            access_error(DXGI_ERROR_ACCESS_LOST, InputDesktop::Secure),
+            Error::SecureDesktop
+        ));
+    }
+
+    #[test]
+    fn access_lost_on_the_users_desktop_is_a_capture_failure_not_a_secure_desktop() {
+        assert!(matches!(
+            access_error(DXGI_ERROR_ACCESS_LOST, InputDesktop::User),
+            Error::CaptureFailed(code) if code == DXGI_ERROR_ACCESS_LOST.0
         ));
     }
 }

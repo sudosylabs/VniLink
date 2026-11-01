@@ -154,6 +154,27 @@ impl Shape {
         )
         .map_err(|_| Error::InvalidFrame("DXGI cursor image was rejected"))
     }
+    /// The part of a `width` x `height` picture the shape covers with its
+    /// corner at `position`: left, top, width and height; `None` when it is
+    /// outside.
+    pub(crate) fn area(
+        &self,
+        position: (i32, i32),
+        (width, height): (u16, u16),
+    ) -> Option<(u32, u32, u32, u32)> {
+        let left = i64::from(position.0).max(0);
+        let top = i64::from(position.1).max(0);
+        let right = (i64::from(position.0) + self.width as i64).min(i64::from(width));
+        let bottom = (i64::from(position.1) + self.height as i64).min(i64::from(height));
+        (left < right && top < bottom).then(|| {
+            (
+                left as u32,
+                top as u32,
+                (right - left) as u32,
+                (bottom - top) as u32,
+            )
+        })
+    }
     pub(crate) fn composite(
         &self,
         frame: &RawFrame,
@@ -260,6 +281,53 @@ impl Pointer {
         match self.shape.as_ref().filter(|_| self.visible) {
             Some(shape) => shape.composite(&frame, self.position),
             None => Ok(frame),
+        }
+    }
+    /// [`Self::composite`] that keeps a picture on the GPU: only the
+    /// rectangle under the pointer is read and written there, in a texture
+    /// of `pool`. A picture elsewhere, or a failed overlay, is composited in
+    /// memory.
+    pub(crate) fn composite_picture(
+        &self,
+        frame: RawFrame,
+        pool: &crate::gpu::TexturePool,
+    ) -> Result<RawFrame, Error> {
+        let Some(shape) = self.shape.as_ref().filter(|_| self.visible) else {
+            return Ok(frame);
+        };
+        let Some(picture) = frame.native_picture().and_then(|picture| {
+            picture
+                .as_any()
+                .downcast_ref::<crate::gpu::WindowsPicture>()
+        }) else {
+            return shape.composite(&frame, self.position);
+        };
+        let Some(area) = shape.area(self.position, (frame.width(), frame.height())) else {
+            return Ok(frame);
+        };
+        let (left, top, width, height) = area;
+        // SAFETY: the pool's device is the picture's, and its immediate
+        // context is used under the device's multithread protection.
+        let overlaid = unsafe {
+            pool.overlay(picture, area, |bytes| {
+                let region = RawFrame::bgra(width as u16, height as u16, 0, bytes)?;
+                let position = (self.position.0 - left as i32, self.position.1 - top as i32);
+                Ok(shape.composite(&region, position)?.pixels().to_vec())
+            })
+        };
+        match overlaid.and_then(|picture| {
+            RawFrame::native(frame.timestamp_us(), Box::new(picture))
+                .map(|moved| moved.with_captured_at(frame.captured_at()))
+        }) {
+            Ok(moved) => Ok(moved),
+            Err(error) => {
+                tracing::debug!(
+                    target: vnilink::trace::CAPTURE,
+                    ?error,
+                    "the pointer could not be drawn on the GPU; drawn in memory"
+                );
+                shape.composite(&frame, self.position)
+            }
         }
     }
 }

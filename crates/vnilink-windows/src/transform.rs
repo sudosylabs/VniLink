@@ -30,10 +30,11 @@ use windows::Win32::Foundation::LUID;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFTransform, MFCreateAttributes, MFMediaType_Video, MFTEnum2, MFTEnumEx,
-    MFT_ENUM_HARDWARE_VENDOR_ID_Attribute, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264,
-    MFVideoFormat_NV12, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_ADAPTER_LUID, MFT_ENUM_FLAG_ASYNCMFT,
-    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_REGISTER_TYPE_INFO,
-    MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK,
+    MFT_ENUM_HARDWARE_VENDOR_ID_Attribute, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_AV1,
+    MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_NV12, MFT_CATEGORY_VIDEO_ENCODER,
+    MFT_ENUM_ADAPTER_LUID, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_REGISTER_TYPE_INFO, MF_TRANSFORM_ASYNC,
+    MF_TRANSFORM_ASYNC_UNLOCK,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
 
@@ -193,6 +194,14 @@ impl Drop for CreatedTransform {
 /// `MFT_ENUM_ADAPTER_LUID`), in Media Foundation's order. Empty where the
 /// adapter has none or cannot be asked.
 pub(crate) unsafe fn hardware_encoders_on(adapter: LUID) -> Vec<H264Transform> {
+    hardware_codec_encoders_on(adapter, vnilink::VideoCodec::H264)
+}
+
+/// The hardware encoders of `codec` on one adapter, as [`hardware_encoders_on`].
+pub(crate) unsafe fn hardware_codec_encoders_on(
+    adapter: LUID,
+    codec: vnilink::VideoCodec,
+) -> Vec<H264Transform> {
     (|| {
         let mut attributes = None;
         MFCreateAttributes(&mut attributes, 1)?;
@@ -204,7 +213,7 @@ pub(crate) unsafe fn hardware_encoders_on(adapter: LUID) -> Vec<H264Transform> {
             std::mem::size_of::<LUID>(),
         );
         attributes.SetBlob(&MFT_ENUM_ADAPTER_LUID, bytes)?;
-        let (input, output) = h264_types();
+        let (input, output) = types(codec);
         let mut activates = std::ptr::null_mut::<Option<IMFActivate>>();
         let mut count = 0u32;
         MFTEnum2(
@@ -221,7 +230,25 @@ pub(crate) unsafe fn hardware_encoders_on(adapter: LUID) -> Vec<H264Transform> {
     .unwrap_or_default()
 }
 
-fn h264_types() -> (MFT_REGISTER_TYPE_INFO, MFT_REGISTER_TYPE_INFO) {
+/// The hardware encoders of a codec other than H.264 for pictures captured
+/// on `capture` (DXGI's first adapter when `None`): its adapter's first, then
+/// each other's. Microsoft ships no software encoder of these.
+pub(crate) unsafe fn hardware_encoders_of(
+    codec: vnilink::VideoCodec,
+    capture: Option<LUID>,
+) -> Vec<H264Transform> {
+    let mut adapters = adapters();
+    if let Some(capture) = capture {
+        adapters.retain(|adapter| !same(*adapter, capture));
+        adapters.insert(0, capture);
+    }
+    adapters
+        .into_iter()
+        .flat_map(|adapter| hardware_codec_encoders_on(adapter, codec))
+        .collect()
+}
+
+fn types(codec: vnilink::VideoCodec) -> (MFT_REGISTER_TYPE_INFO, MFT_REGISTER_TYPE_INFO) {
     (
         MFT_REGISTER_TYPE_INFO {
             guidMajorType: MFMediaType_Video,
@@ -229,9 +256,18 @@ fn h264_types() -> (MFT_REGISTER_TYPE_INFO, MFT_REGISTER_TYPE_INFO) {
         },
         MFT_REGISTER_TYPE_INFO {
             guidMajorType: MFMediaType_Video,
-            guidSubtype: MFVideoFormat_H264,
+            guidSubtype: subtype(codec),
         },
     )
+}
+
+/// The media subtype Media Foundation names `codec` by; H.264 for those it has no encoder of.
+pub(crate) fn subtype(codec: vnilink::VideoCodec) -> windows::core::GUID {
+    match codec {
+        vnilink::VideoCodec::H265 => MFVideoFormat_HEVC,
+        vnilink::VideoCodec::Av1 => MFVideoFormat_AV1,
+        _ => MFVideoFormat_H264,
+    }
 }
 
 /// The transforms in an array `MFTEnumEx` or `MFTEnum2` returned, freeing it.
@@ -328,7 +364,7 @@ fn same(a: LUID, b: LUID) -> bool {
 
 /// Every hardware H.264 encoder Media Foundation lists, across adapters.
 unsafe fn hardware_encoders() -> windows::core::Result<Vec<H264Transform>> {
-    let (input, output) = h264_types();
+    let (input, output) = types(vnilink::VideoCodec::H264);
     let mut activates = std::ptr::null_mut::<Option<IMFActivate>>();
     let mut count = 0u32;
     MFTEnumEx(

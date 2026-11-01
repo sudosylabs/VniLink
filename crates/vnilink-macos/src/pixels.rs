@@ -60,10 +60,39 @@ impl vnilink_media::NativePicture for MacPicture {
     }
 }
 
+/// Where ScreenCaptureKit says a frame changed, as `[x, y, width, height]`
+/// rects, without reading a pixel. Whether they are points or pixels of the
+/// picture is only certain on a display that has no scale (`scale_factor`
+/// 1.0); on any other they are not trusted and the pixels say. `None` when
+/// there are no rects.
+pub(crate) fn reported_changes(
+    rects: &[[f64; 4]],
+    scale_factor: Option<f64>,
+    (width, height): (u16, u16),
+) -> Option<vnilink_media::Changes> {
+    if rects.is_empty() || scale_factor != Some(1.0) {
+        return None;
+    }
+    Some(vnilink_media::Changes::of(
+        rects.iter().map(|[x, y, w, h]| {
+            // Outwards to whole pixels: a fraction of one has changed.
+            let (left, top) = (x.floor(), y.floor());
+            [
+                left as i64,
+                top as i64,
+                (x + w).ceil() as i64 - left as i64,
+                (y + h).ceil() as i64 - top as i64,
+            ]
+        }),
+        u32::from(width),
+        u32::from(height),
+    ))
+}
+
 /// Where the picture changed between two BGRA pixel buffers: nothing for
 /// the same picture. ScreenCaptureKit marks a frame complete at the
-/// full frame rate whether or not anything on the screen changed, and
-/// attaches no dirty rects, so only the pixels say. Both stay where they
+/// full frame rate whether or not anything on the screen changed; when it
+/// attaches no dirty rects ([`reported_changes`]) only the pixels say. Both stay where they
 /// are: on Apple silicon the buffers are in shared memory and are read in
 /// place. `None` when either cannot be read, or the sizes differ.
 #[cfg(target_os = "macos")]

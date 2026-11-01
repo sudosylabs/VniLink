@@ -16,9 +16,8 @@
 //! A driver whose output does not decode is never chosen over software.
 
 use vnilink::{CodecSupport, VideoCodec, VideoCodecCaps};
-use vnilink_media::{
-    EncodeParams, EncodedSample, Error, RawFrame, SoftwareDecoder, VideoDecoder, VideoEncoder,
-};
+pub(crate) use vnilink_media::{decodes, PROBE_SIDE};
+use vnilink_media::{EncodeParams, VideoEncoder};
 
 use crate::encode::LinuxEncoder;
 use crate::gpu::{self, EncoderChoice};
@@ -106,49 +105,4 @@ pub(crate) fn round_trips(codec: VideoCodec) -> bool {
             },
         )
     })
-}
-
-/// Width and height of the probe pictures: above NVENC's smallest sizes.
-pub(crate) const PROBE_SIDE: u16 = 256;
-
-/// Whether a red then a green picture of [`PROBE_SIDE`], put through
-/// `encode` (the first as a keyframe), decode back with the software
-/// decoder and the second shows green.
-pub(crate) fn decodes(
-    codec: VideoCodec,
-    mut encode: impl FnMut(&RawFrame, bool) -> Result<EncodedSample, Error>,
-) -> bool {
-    const SIDE: u16 = PROBE_SIDE;
-    let result = (|| -> Result<bool, Error> {
-        let mut decoder = SoftwareDecoder::open(codec)?;
-        let mut shown = None;
-        for (index, bgra) in [[0, 0, 255, 255], [0, 255, 0, 255]].into_iter().enumerate() {
-            let timestamp_us = index as u64 * 33_333;
-            let picture = RawFrame::bgra(
-                SIDE,
-                SIDE,
-                timestamp_us,
-                bgra.repeat(usize::from(SIDE) * usize::from(SIDE)),
-            )?;
-            let sample = encode(&picture, index == 0)?;
-            let frame = vnilink::EncodedFrame::new(
-                codec,
-                sample.keyframe(),
-                timestamp_us,
-                sample.bytes().to_vec(),
-            )
-            .map_err(|_| Error::EncodeRejected("probe packet"))?;
-            shown = Some(decoder.decode(&frame)?);
-        }
-        let Some(shown) = shown else {
-            return Ok(false);
-        };
-        let middle = usize::from(SIDE) / 2 * shown.stride() + usize::from(SIDE) / 2 * 4;
-        let pixel = shown.pixels().get(middle..middle + 4).unwrap_or(&[0; 4]);
-        Ok((shown.width(), shown.height()) == (SIDE, SIDE)
-            && pixel[1] > 128
-            && pixel[0] < 96
-            && pixel[2] < 96)
-    })();
-    result.unwrap_or(false)
 }

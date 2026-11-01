@@ -12,6 +12,68 @@
 use vnilink::YuvMatrix;
 use vnilink_media::{parse_annex_b, to_annex_b, AvccAccessUnit, EncodedSample, Error};
 
+/// An HEVC access unit from a hardware encoder. A keyframe that carries no
+/// VPS, SPS and PPS of its own gets the encoder's `sequence_header` (Annex-B)
+/// ahead of it.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn hevc_access_unit(
+    sample: &[u8],
+    sequence_header: &[u8],
+) -> Result<EncodedSample, Error> {
+    match vnilink_media::hevc_sample(sample.to_vec()) {
+        Err(Error::EncodeRejected(_)) if !sequence_header.is_empty() => {
+            let mut joined = sequence_header.to_vec();
+            joined.extend_from_slice(sample);
+            vnilink_media::hevc_sample(joined)
+        }
+        other => other,
+    }
+}
+
+/// An AV1 temporal unit from a hardware encoder: a keyframe when it carries a
+/// sequence header OBU, as encoders write one with each.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn av1_access_unit(sample: &[u8]) -> Result<EncodedSample, Error> {
+    let key = av1_has_sequence_header(sample)?;
+    EncodedSample::packet(vnilink::VideoCodec::Av1, key, sample.to_vec())
+}
+
+/// Whether the low-overhead OBU stream `unit` holds a sequence header
+/// (type 1). Every OBU must carry its size; one that does not, or runs past
+/// the unit, is malformed.
+pub(crate) fn av1_has_sequence_header(unit: &[u8]) -> Result<bool, Error> {
+    const MALFORMED: Error = Error::InvalidFrame("AV1 OBU");
+    let mut offset = 0;
+    let mut found = false;
+    while offset < unit.len() {
+        let header = unit[offset];
+        let kind = (header >> 3) & 15;
+        let extension = header & 4 != 0;
+        if header & 2 == 0 {
+            return Err(MALFORMED);
+        }
+        offset += 1 + usize::from(extension);
+        let mut size = 0usize;
+        for index in 0..8 {
+            let byte = *unit.get(offset).ok_or(MALFORMED)?;
+            offset += 1;
+            size |= usize::from(byte & 0x7f) << (7 * index);
+            if byte & 0x80 == 0 {
+                break;
+            }
+            if index == 7 {
+                return Err(MALFORMED);
+            }
+        }
+        if size > unit.len() - offset.min(unit.len()) {
+            return Err(MALFORMED);
+        }
+        found |= kind == 1;
+        offset += size;
+    }
+    Ok(found)
+}
+
 /// `sequence_header` is `MF_MT_MPEG_SEQUENCE_HEADER`: Annex-B, or an AVC
 /// decoder configuration record. An empty header is allowed for a predicted
 /// frame.

@@ -73,6 +73,7 @@ fn the_capture_adapter_decides_the_encoder() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &device,
                 )
@@ -122,6 +123,71 @@ fn sps_profile(annex_b: &[u8]) -> Option<u8> {
         .windows(5)
         .find(|bytes| bytes[..3] == [0, 0, 1] && bytes[3] & 0x1f == 7)
         .map(|bytes| bytes[4])
+}
+
+/// The negotiated High stream is High, still one picture out for each in, and
+/// the baseline stream stays baseline.
+#[test]
+fn the_high_stream_is_high_and_the_default_stays_baseline() {
+    let params = |force| EncodeParams {
+        force_keyframe: force,
+        recovery: false,
+        bitrate_bps: 4_000_000,
+        frame_rate: 30,
+    };
+    let Ok(mut high) =
+        WindowsEncoder::open_profile(1280, 720, 30, 4_000_000, true, vnilink::YuvMatrix::Bt709)
+    else {
+        eprintln!("no encoder opens High here");
+        return;
+    };
+    let key = high
+        .encode(&text_page(1280, 720, 0), &params(true))
+        .unwrap();
+    assert_eq!(sps_profile(key.bytes()), Some(100), "High is 100");
+    for index in 1..8 {
+        let sample = high
+            .encode(&text_page(1280, 720, index), &params(false))
+            .unwrap();
+        assert!(!sample.keyframe(), "picture {index} is a delta");
+        assert!(
+            !sample.bytes().is_empty(),
+            "no picture waits for a later one"
+        );
+    }
+    let mut base =
+        WindowsEncoder::open(1280, 720, 30, 4_000_000, vnilink::YuvMatrix::Bt709).unwrap();
+    let key = base
+        .encode(&text_page(1280, 720, 0), &params(true))
+        .unwrap();
+    assert_ne!(
+        sps_profile(key.bytes()),
+        Some(100),
+        "the default is not High"
+    );
+}
+
+/// A hardware HEVC or AV1 encoder, where the machine has one, makes a stream
+/// the shared software decoder shows in the right colour; where it has none
+/// it declines, and the caps do not offer the codec.
+#[test]
+fn a_hardware_codec_that_opens_round_trips_and_one_that_does_not_is_not_offered() {
+    let offered = crate::codecs::probe_video_codecs().additional;
+    for codec in [vnilink::VideoCodec::H265, vnilink::VideoCodec::Av1] {
+        let opens = WindowsEncoder::open_hardware_codec(
+            codec,
+            vnilink_media::PROBE_SIDE,
+            vnilink_media::PROBE_SIDE,
+            30,
+            1_000_000,
+            vnilink::YuvMatrix::Bt709,
+            None,
+        )
+        .is_ok();
+        let listed = offered.iter().any(|support| support.codec == codec);
+        eprintln!("{codec:?}: opens {opens}, offered {listed}");
+        assert!(!listed || opens, "{codec:?} is offered without an encoder");
+    }
 }
 
 /// Every transform that opens, hardware or not, returns a picture for each
@@ -397,6 +463,14 @@ fn on_device(
     frame: &vnilink_media::RawFrame,
     driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE,
 ) -> vnilink_media::RawFrame {
+    on_device_in_pool(frame, driver).0
+}
+
+/// [`on_device`] with the pool the picture was copied in.
+fn on_device_in_pool(
+    frame: &vnilink_media::RawFrame,
+    driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE,
+) -> (vnilink_media::RawFrame, crate::gpu::TexturePool) {
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -455,8 +529,42 @@ fn on_device(
             .unwrap();
         let pool = crate::gpu::TexturePool::new(device, context, (width, height));
         let picture = pool.picture(&source.unwrap()).unwrap();
-        vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap()
+        let native =
+            vnilink_media::RawFrame::native(frame.timestamp_us(), Box::new(picture)).unwrap();
+        (native, pool)
     }
+}
+
+/// The pointer is drawn into a picture on the GPU: the picture stays native,
+/// reads back as the CPU composite does, and the original is untouched.
+#[test]
+fn a_pointer_over_a_gpu_picture_leaves_it_on_the_gpu() {
+    use crate::cursor::{Kind, Pointer, Shape};
+    let page = vnilink_media::measure::text_page(640, 360, 0);
+    let (frame, pool) = on_device_in_pool(
+        &page,
+        windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+    );
+    let shape = Shape::new(Kind::Color, 2, 2, 8, [200, 100, 50, 128].repeat(4)).unwrap();
+    for position in [(10, 20), (-1, -1), (639, 359), (700, 20)] {
+        let pointer = Pointer {
+            visible: true,
+            position,
+            shape: Some(Shape::new(Kind::Color, 2, 2, 8, [200, 100, 50, 128].repeat(4)).unwrap()),
+            image: None,
+        };
+        let drawn = pointer.composite_picture(frame.clone(), &pool).unwrap();
+        assert!(
+            drawn.native_picture().is_some(),
+            "{position:?} left the GPU"
+        );
+        assert_eq!(
+            drawn.pixels(),
+            shape.composite(&page, position).unwrap().pixels(),
+            "{position:?} differs from the CPU composite"
+        );
+    }
+    assert_eq!(frame.pixels(), page.pixels());
 }
 
 /// `frame` averaged over `block` x `block` squares.
@@ -630,6 +738,7 @@ fn capture_to_encode_cost() {
                 720,
                 30,
                 4_000_000,
+                false,
                 vnilink::YuvMatrix::Bt709,
                 &captured_on,
             )
@@ -640,6 +749,7 @@ fn capture_to_encode_cost() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &shared.device(),
                 )
@@ -652,6 +762,7 @@ fn capture_to_encode_cost() {
                     720,
                     30,
                     4_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     other,
                 )
@@ -737,6 +848,7 @@ fn reopen_cost() {
                 720,
                 30,
                 4_000_000,
+                false,
                 vnilink::YuvMatrix::Bt709,
                 &device,
             )
@@ -1185,6 +1297,7 @@ fn an_encoder_opened_on_the_capture_device_reads_its_textures() {
                     height,
                     30,
                     8_000_000,
+                    false,
                     vnilink::YuvMatrix::Bt709,
                     &gpu,
                 )

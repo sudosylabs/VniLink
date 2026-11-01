@@ -43,7 +43,7 @@ use crate::gpu_picture::{
     choose_modifier, damage_is_empty, Importer, Prime, DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888,
     PREFERRED_MODIFIERS,
 };
-use crate::pixels::{raw_frame_from_bgra, raw_frame_from_bgrx};
+use crate::pixels::{raw_frame_from_bgra, raw_frame_from_bgrx, raw_frame_from_order, ByteOrder};
 
 // drm_fourcc.h: sentinel retained for delivery metadata. No GBM calls in this path.
 const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
@@ -107,11 +107,15 @@ pub struct PortalDelivery {
     pub buffer: PortalBuffer,
 }
 
-/// BGRA or BGRx, matching the bytes [`PortalCapture`] copies.
+/// The pixel arrangement of the bytes [`PortalCapture`] copies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortalFormat {
     Bgra,
     Bgrx,
+    /// Offered only for memory buffers.
+    Rgba,
+    Rgbx,
+    Xbgr,
 }
 
 /// Where the copied bytes came from.
@@ -267,7 +271,10 @@ impl PortalCapture {
 
     /// Arrangement of the frame most recently returned by [`Self::poll_frame`].
     pub fn last_delivery(&self) -> Option<PortalDelivery> {
-        *self.delivery.lock().expect("portal delivery")
+        *self
+            .delivery
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     /// Return the latest picture, retaining it while the desktop is idle.
@@ -290,7 +297,10 @@ impl PortalCapture {
                 self.seen.store(generation, Ordering::Release);
                 let (frame, delivery) = frame_from_slot(&self.shared, slot, timestamp_us)?;
                 let frame = frame.with_changed(self.shared.channel.take_changed());
-                *self.delivery.lock().expect("portal delivery") = Some(delivery);
+                *self
+                    .delivery
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(delivery);
                 return Ok(Some(frame));
             }
         }
@@ -309,7 +319,10 @@ impl PortalCapture {
         match reply_rx.recv_timeout(FRAME_TIMEOUT) {
             Ok(Ok(Some((frame, delivery)))) => {
                 self.seen.store(generation, Ordering::Release);
-                *self.delivery.lock().expect("portal delivery") = Some(delivery);
+                *self
+                    .delivery
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(delivery);
                 Ok(Some(frame.with_changed(self.shared.channel.take_changed())))
             }
             Ok(Ok(None)) => Ok(None),
@@ -504,7 +517,11 @@ fn serve(
         if let Some(reason) = shared.channel.failure() {
             return Err(Error::Unsupported(reason));
         }
-        if let Some(size) = *shared.size.lock().expect("portal size") {
+        if let Some(size) = *shared
+            .size
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+        {
             break size;
         }
         if begun.elapsed() > OPEN_TIMEOUT {
@@ -607,12 +624,12 @@ fn frame_from_slot(
     let delivery = shared
         .delivery
         .lock()
-        .expect("portal delivery")
+        .unwrap_or_else(|poison| poison.into_inner())
         .ok_or(Error::Unsupported("this PipeWire pixel format"))?;
     let format = shared
         .format
         .lock()
-        .expect("portal format")
+        .unwrap_or_else(|poison| poison.into_inner())
         .ok_or(Error::Unsupported("this PipeWire pixel format"))?;
     let frame = if slot.bytes.native_picture().is_some() {
         // A picture on the GPU: its pixels are read only if something asks.
@@ -670,7 +687,14 @@ fn remember_format(shared: &Shared, id: u32, param: Option<&Pod>) {
         return;
     }
     let format = info.format();
-    if !matches!(format, VideoFormat::BGRA | VideoFormat::BGRx) {
+    if !matches!(
+        format,
+        VideoFormat::BGRA
+            | VideoFormat::BGRx
+            | VideoFormat::RGBA
+            | VideoFormat::RGBx
+            | VideoFormat::xBGR
+    ) {
         shared.channel.fail("this PipeWire pixel format");
         return;
     }
@@ -678,9 +702,18 @@ fn remember_format(shared: &Shared, id: u32, param: Option<&Pod>) {
         .flags()
         .contains(pw::spa::param::video::VideoFlags::MODIFIER);
     shared.modifier_explicit.store(explicit, Ordering::Relaxed);
-    *shared.modifier.lock().expect("portal format") = info.modifier();
-    *shared.format.lock().expect("portal format") = Some(format);
-    *shared.size.lock().expect("portal size") = Some((width, height));
+    *shared
+        .modifier
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = info.modifier();
+    *shared
+        .format
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(format);
+    *shared
+        .size
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some((width, height));
 }
 
 pub(crate) fn delivery_of(
@@ -692,6 +725,10 @@ pub(crate) fn delivery_of(
     let format = match format {
         VideoFormat::BGRA => PortalFormat::Bgra,
         VideoFormat::BGRx => PortalFormat::Bgrx,
+        // The GPU path imports only the two formats it offers modifiers for.
+        VideoFormat::RGBA if !dma_buf => PortalFormat::Rgba,
+        VideoFormat::RGBx if !dma_buf => PortalFormat::Rgbx,
+        VideoFormat::xBGR if !dma_buf => PortalFormat::Xbgr,
         _ => return None,
     };
     let buffer = if dma_buf {
@@ -703,12 +740,22 @@ pub(crate) fn delivery_of(
 }
 
 fn record_delivery(shared: &Shared, dma_buf: bool) {
-    let Some(format) = *shared.format.lock().expect("portal format") else {
+    let Some(format) = *shared
+        .format
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+    else {
         return;
     };
-    let modifier = *shared.modifier.lock().expect("portal format");
+    let modifier = *shared
+        .modifier
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let explicit = shared.modifier_explicit.load(Ordering::Relaxed);
-    *shared.delivery.lock().expect("portal delivery") =
+    *shared
+        .delivery
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) =
         delivery_of(format, dma_buf, modifier, explicit);
 }
 
@@ -839,15 +886,32 @@ fn video_properties(layout: Layout) -> Vec<pw::spa::pod::Property> {
             Id,
             pw::spa::param::format::MediaSubtype::Raw
         ),
-        pw::spa::pod::property!(
-            pw::spa::param::format::FormatProperties::VideoFormat,
-            Choice,
-            Enum,
-            Id,
-            VideoFormat::BGRA,
-            VideoFormat::BGRA,
-            VideoFormat::BGRx,
-        ),
+        // Memory buffers take any byte order a compositor prefers; the
+        // GPU path imports only the two it offers modifiers for.
+        if matches!(layout, Layout::Memory) {
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::VideoFormat,
+                Choice,
+                Enum,
+                Id,
+                VideoFormat::BGRA,
+                VideoFormat::BGRA,
+                VideoFormat::BGRx,
+                VideoFormat::RGBA,
+                VideoFormat::RGBx,
+                VideoFormat::xBGR,
+            )
+        } else {
+            pw::spa::pod::property!(
+                pw::spa::param::format::FormatProperties::VideoFormat,
+                Choice,
+                Enum,
+                Id,
+                VideoFormat::BGRA,
+                VideoFormat::BGRA,
+                VideoFormat::BGRx,
+            )
+        },
         pw::spa::pod::property!(
             pw::spa::param::format::FormatProperties::VideoSize,
             Choice,
@@ -932,6 +996,15 @@ fn frame_from_bytes(
     match format {
         VideoFormat::BGRA => raw_frame_from_bgra(width, height, stride, timestamp_us, bytes),
         VideoFormat::BGRx => raw_frame_from_bgrx(width, height, stride, timestamp_us, bytes),
+        VideoFormat::RGBA => {
+            raw_frame_from_order(ByteOrder::Rgba, width, height, stride, timestamp_us, bytes)
+        }
+        VideoFormat::RGBx => {
+            raw_frame_from_order(ByteOrder::Rgbx, width, height, stride, timestamp_us, bytes)
+        }
+        VideoFormat::xBGR => {
+            raw_frame_from_order(ByteOrder::Xbgr, width, height, stride, timestamp_us, bytes)
+        }
         _ => Err(Error::Unsupported("this PipeWire pixel format")),
     }
 }
@@ -1180,7 +1253,11 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
     if size == 0 || end > bytes.len() {
         return;
     }
-    let Some((width, height)) = *shared.size.lock().expect("portal size") else {
+    let Some((width, height)) = *shared
+        .size
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+    else {
         return;
     };
     let stride = if stride == 0 {
@@ -1242,8 +1319,14 @@ fn push_dma_buf(
     let (Some(importer), Some(modifier), Some((width, height)), Some(format)) = (
         gpu.importer.as_mut(),
         gpu.modifier,
-        *shared.size.lock().expect("portal size"),
-        *shared.format.lock().expect("portal format"),
+        *shared
+            .size
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()),
+        *shared
+            .format
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()),
     ) else {
         shared.gpu_failed.store(true, Ordering::Relaxed);
         return;
@@ -1252,8 +1335,14 @@ fn push_dma_buf(
         VideoFormat::BGRA => DRM_FORMAT_ARGB8888,
         _ => DRM_FORMAT_XRGB8888,
     };
-    // SAFETY: the descriptor is the PipeWire buffer's, open while it is dequeued.
-    let key = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(datas[0].fd()) })
+    // A buffer without a plane, or whose plane holds no descriptor, cannot be imported.
+    let Some(fd) = datas.first().map(|data| data.fd()).filter(|fd| *fd >= 0) else {
+        shared.gpu_failed.store(true, Ordering::Relaxed);
+        return;
+    };
+    // SAFETY: the descriptor is the PipeWire buffer's, checked above to be one,
+    // and open while it is dequeued; ManuallyDrop never closes it.
+    let key = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) })
         .metadata()
         .map(|metadata| metadata.ino())
         .unwrap_or_default();

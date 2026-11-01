@@ -40,6 +40,9 @@ const TAG_PRIVACY: u8 = 4;
 /// Retained operations per host. Queries are generation-fenced, so old
 /// connections can never reach a replacement's records.
 const MAX_OPERATIONS: usize = 64;
+/// Restarts, shutdowns and locks one computer may have waiting or running at
+/// once; the next is refused until one ends.
+const MAX_IN_FLIGHT_PER_PEER: usize = 4;
 const MAX_DETAIL: usize = 256;
 const MAX_SESSION_LABEL: usize = 64;
 
@@ -630,14 +633,29 @@ fn admit_locked(state: &State, id: u64) -> Result<Admission, u8> {
     })
 }
 
+/// Forgets the oldest operations that ended once more than [`MAX_OPERATIONS`]
+/// are kept. One still counting down its notice or running is never among
+/// them: forgetting it would drop an action the host promised.
 fn prune(state: &mut State) {
-    while state.system_operations.len() > MAX_OPERATIONS {
-        if let Some(oldest) = state.system_operations.keys().min().copied() {
-            state.system_operations.remove(&oldest);
-        } else {
-            break;
-        }
+    let excess = state.system_operations.len().saturating_sub(MAX_OPERATIONS);
+    if excess == 0 {
+        return;
     }
+    let mut ended: Vec<u64> = state
+        .system_operations
+        .iter()
+        .filter(|(_, record)| !in_flight(&record.operation.state))
+        .map(|(id, _)| *id)
+        .collect();
+    ended.sort_unstable();
+    for id in ended.into_iter().take(excess) {
+        state.system_operations.remove(&id);
+    }
+}
+
+/// Whether an operation has yet to end.
+fn in_flight(state: &OperationState) -> bool {
+    matches!(state, OperationState::Scheduled | OperationState::Admitted)
 }
 
 /// Worker-start outcome: either the native call ran, or the start gate
@@ -679,6 +697,20 @@ async fn execute(
             .get(&admission.connection_id)
             .map(|session| session.peer_key)
             .ok_or(Error::NoSession)?;
+        let waiting = state
+            .system_operations
+            .values()
+            .filter(|record| record.peer == peer && in_flight(&record.operation.state))
+            .count();
+        if waiting >= MAX_IN_FLIGHT_PER_PEER {
+            let reply = refuse_locked(
+                &mut state,
+                &admission,
+                action,
+                "too many actions are waiting",
+            );
+            return Ok(reply);
+        }
         let id = state.next_operation_id;
         state.next_operation_id = id.saturating_add(1).max(1);
         // Its end is recorded as it ends; an action the computer never

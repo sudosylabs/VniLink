@@ -12,7 +12,7 @@
 use std::os::fd::OwnedFd;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc,
+    mpsc, Arc, Mutex,
 };
 use std::time::Duration;
 
@@ -41,11 +41,42 @@ enum Notify {
 }
 enum Command {
     Input(Vec<Notify>, mpsc::Sender<Result<(), vnilink::Error>>),
+    /// Pointer movement is waiting in [`Connection::moves`].
+    Moved,
     Close,
+}
+
+/// Pointer movement not yet delivered. A later move supersedes an earlier
+/// one, so a burst the worker has not caught up with arrives as one absolute
+/// position and the sum of the relative steps.
+#[derive(Default)]
+struct PendingMove {
+    absolute: Option<(f64, f64)>,
+    relative: Option<(f64, f64)>,
+}
+impl PendingMove {
+    /// Whether `event` is movement, which is now held.
+    fn add(&mut self, event: &Notify) -> bool {
+        match *event {
+            Notify::Pointer(x, y) => self.absolute = Some((x, y)),
+            Notify::Motion(dx, dy) => {
+                let (sx, sy) = self.relative.unwrap_or_default();
+                self.relative = Some((sx + dx, sy + dy));
+            }
+            _ => return false,
+        }
+        true
+    }
+    fn take(&mut self) -> Vec<Notify> {
+        let absolute = self.absolute.take().map(|(x, y)| Notify::Pointer(x, y));
+        let relative = self.relative.take().map(|(x, y)| Notify::Motion(x, y));
+        absolute.into_iter().chain(relative).collect()
+    }
 }
 struct Connection {
     tx: mpsc::SyncSender<Command>,
     closed: AtomicBool,
+    moves: Mutex<PendingMove>,
 }
 impl Connection {
     fn close(&self) {
@@ -98,12 +129,39 @@ impl WaylandInput {
 }
 impl HostDesktop for WaylandInput {
     fn apply(&mut self, event: InputEvent) -> Result<(), vnilink::Error> {
-        self.send(notifications(
-            event,
-            self.pixels,
-            self.logical,
-            self.origin,
-        )?)
+        let events = notifications(event, self.pixels, self.logical, self.origin)?;
+        let movement = !events.is_empty()
+            && events
+                .iter()
+                .all(|event| matches!(event, Notify::Pointer(..) | Notify::Motion(..)));
+        if !movement {
+            return self.send(events);
+        }
+        // Movement is not waited for: the portal is asked once for however
+        // much has arrived. A refusal ends the session, which the next call
+        // reports.
+        if self.connection.closed.load(Ordering::Acquire) {
+            return Err(vnilink::Error::InputFailed(
+                "the Wayland permission session ended",
+            ));
+        }
+        {
+            let mut moves = self
+                .connection
+                .moves
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            for event in &events {
+                moves.add(event);
+            }
+        }
+        // A full queue wakes the worker anyway.
+        vnilink::ignored!(
+            vnilink::trace::INPUT,
+            "a full queue wakes the worker without this",
+            self.connection.tx.try_send(Command::Moved)
+        );
+        Ok(())
     }
     fn type_text(&mut self, text: &str) -> Result<(), vnilink::Error> {
         if text.len() > vnilink::MAX_KEY_TEXT || text.contains('\0') {
@@ -111,10 +169,8 @@ impl HostDesktop for WaylandInput {
         }
         let events = text
             .chars()
-            .flat_map(|ch| {
-                let key = keysym(ch);
-                [Notify::Symbol(key, true), Notify::Symbol(key, false)]
-            })
+            .filter_map(keysym)
+            .flat_map(|key| [Notify::Symbol(key, true), Notify::Symbol(key, false)])
             .collect();
         self.send(events)
     }
@@ -144,6 +200,7 @@ impl WaylandCapture {
         let connection = Arc::new(Connection {
             tx,
             closed: AtomicBool::new(false),
+            moves: Mutex::new(PendingMove::default()),
         });
         let worker = connection.clone();
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -512,37 +569,44 @@ fn worker_main(
             {
                 break;
             }
+            // Movement that arrived before whatever wakes the worker goes
+            // first, so a click lands where the pointer was taken.
+            let moved = |connection: &Connection| {
+                connection
+                    .moves
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .take()
+            };
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Command::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Ok(Command::Moved) => {
+                    let events = moved(&connection);
+                    if !events.is_empty() {
+                        vnilink::ignored!(
+                            vnilink::trace::INPUT,
+                            "a refused move ends the session, which the next call reports",
+                            run_input(&runtime, &proxy, &session, node, events, &connection)
+                        );
+                    }
+                }
                 Ok(Command::Input(events, reply)) => {
-                    let count = events.len();
-                    let started = std::time::Instant::now();
-                    let result = runtime.block_on(async {
-                        tokio::time::timeout(INPUT_TIMEOUT, deliver(&proxy, &session, node, events))
-                            .await
-                    });
-                    tracing::trace!(
-                        target: vnilink::trace::INPUT,
-                        events = count,
-                        micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-                        ok = matches!(result, Ok(Ok(()))),
-                        "portal input delivered"
-                    );
-                    let result = match result {
-                        Ok(Ok(())) => Ok(()),
-                        failed => {
-                            tracing::warn!(
-                                target: vnilink::trace::INPUT,
-                                timed_out = failed.is_err(),
-                                "the portal refused input: input ends for this session"
-                            );
-                            connection.closed.store(true, Ordering::Release);
-                            Err(vnilink::Error::InputFailed(
+                    let movement = moved(&connection);
+                    if !movement.is_empty()
+                        && run_input(&runtime, &proxy, &session, node, movement, &connection)
+                            .is_err()
+                    {
+                        vnilink::ignored!(
+                            vnilink::trace::INPUT,
+                            "the caller stopped waiting for its input's answer",
+                            reply.send(Err(vnilink::Error::InputFailed(
                                 "the Wayland portal rejected input or ended the session",
-                            ))
-                        }
-                    };
+                            )))
+                        );
+                        continue;
+                    }
+                    let result = run_input(&runtime, &proxy, &session, node, events, &connection);
                     vnilink::ignored!(
                         vnilink::trace::INPUT,
                         "the caller stopped waiting for its input's answer",
@@ -559,6 +623,43 @@ fn worker_main(
         "an ending portal session is closed at best",
         runtime.block_on(async { tokio::time::timeout(INPUT_TIMEOUT, session.close()).await })
     );
+}
+/// `events` through the portal. A refusal or a timeout ends input for the
+/// session.
+fn run_input(
+    runtime: &tokio::runtime::Runtime,
+    proxy: &RemoteDesktop,
+    session: &Session<RemoteDesktop>,
+    node: u32,
+    events: Vec<Notify>,
+    connection: &Connection,
+) -> Result<(), vnilink::Error> {
+    let count = events.len();
+    let started = std::time::Instant::now();
+    let result = runtime.block_on(async {
+        tokio::time::timeout(INPUT_TIMEOUT, deliver(proxy, session, node, events)).await
+    });
+    tracing::trace!(
+        target: vnilink::trace::INPUT,
+        events = count,
+        micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        ok = matches!(result, Ok(Ok(()))),
+        "portal input delivered"
+    );
+    match result {
+        Ok(Ok(())) => Ok(()),
+        failed => {
+            tracing::warn!(
+                target: vnilink::trace::INPUT,
+                timed_out = failed.is_err(),
+                "the portal refused input: input ends for this session"
+            );
+            connection.closed.store(true, Ordering::Release);
+            Err(vnilink::Error::InputFailed(
+                "the Wayland portal rejected input or ended the session",
+            ))
+        }
+    }
 }
 async fn deliver(
     proxy: &RemoteDesktop,
@@ -691,12 +792,20 @@ fn notifications(
         }
     })
 }
-fn keysym(ch: char) -> i32 {
+/// The X11 keysym that types `ch`, or `None` for a control character that has
+/// none. Latin-1 characters are their own keysyms, but 0x00-0x1f and 0x7f-0x9f
+/// are controls, not graphics: the few that name a key use its function keysym
+/// and the rest cannot be typed.
+fn keysym(ch: char) -> Option<i32> {
     match ch {
-        '\n' | '\r' => 0xff0d,
-        '\t' => 0xff09,
-        ch if u32::from(ch) <= 0xff => ch as i32,
-        ch => (0x0100_0000 | u32::from(ch)) as i32,
+        '\n' | '\r' => Some(0xff0d),
+        '\t' => Some(0xff09),
+        '\u{8}' => Some(0xff08),
+        '\u{1b}' => Some(0xff1b),
+        '\u{7f}' => Some(0xffff),
+        ch if ch.is_control() && u32::from(ch) <= 0xff => None,
+        ch if u32::from(ch) <= 0xff => Some(ch as i32),
+        ch => Some((0x0100_0000 | u32::from(ch)) as i32),
     }
 }
 

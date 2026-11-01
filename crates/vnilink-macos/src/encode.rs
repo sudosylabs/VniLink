@@ -75,9 +75,7 @@ pub struct MacEncoder {
     width: u16,
     height: u16,
     #[cfg(target_os = "macos")]
-    frame_rate: i32,
-    #[cfg(target_os = "macos")]
-    frame_index: i64,
+    presentation: Presentation,
     #[cfg(target_os = "macos")]
     recovery_qp: RecoveryQp,
 }
@@ -218,8 +216,7 @@ impl MacEncoder {
                 scaler: Scaler::Untried,
                 width,
                 height,
-                frame_rate: i32::from(frame_rate),
-                frame_index: 0,
+                presentation: Presentation::default(),
                 recovery_qp: RecoveryQp::default(),
             })
         }
@@ -448,7 +445,11 @@ impl VideoEncoder for MacEncoder {
                     &self.surface
                 }
             };
-            let time = CMTime::new(self.frame_index, self.frame_rate);
+            let time = CMTime::new(
+                self.presentation
+                    .next(frame.captured_at(), frame.timestamp_us()),
+                PRESENTATION_TIMESCALE,
+            );
             let properties = FrameProperties::new().with_force_key_frame(params.force_keyframe);
             let floored = params.force_keyframe
                 && params.recovery
@@ -462,9 +463,7 @@ impl VideoEncoder for MacEncoder {
             let encoded =
                 encoded.map_err(|_| Error::EncodeRejected("VideoToolbox rejected the frame"))?;
             if encoded.data.is_empty() {
-                // VideoToolbox's rate control dropped the picture; the next
-                // one takes the next presentation time.
-                self.frame_index = self.frame_index.saturating_add(1);
+                // VideoToolbox's rate control dropped the picture.
                 return Err(Error::EncodeRejected(vnilink_media::FRAME_DROPPED));
             }
             if floored {
@@ -488,7 +487,6 @@ impl VideoEncoder for MacEncoder {
                     "H.264 length prefix must be 1, 2, or 4 bytes",
                 ))?;
             if self.codec == vnilink::VideoCodec::H265 {
-                self.frame_index = self.frame_index.saturating_add(1);
                 return vnilink_media::hevc_annex_b(
                     &encoded.data,
                     nal_length_size,
@@ -504,7 +502,6 @@ impl VideoEncoder for MacEncoder {
                 parameter_sets: &sets.parameter_sets,
                 keyframe,
             })?;
-            self.frame_index = self.frame_index.saturating_add(1);
             EncodedSample::annex_b(keyframe, annex_b, self.matrix)
         }
         #[cfg(not(target_os = "macos"))]
@@ -512,6 +509,40 @@ impl VideoEncoder for MacEncoder {
             let _ = params;
             Err(Error::Unsupported("VideoToolbox H.264"))
         }
+    }
+}
+
+/// Presentation times count microseconds.
+#[cfg(target_os = "macos")]
+const PRESENTATION_TIMESCALE: i32 = 1_000_000;
+
+/// The presentation time of each picture handed to VideoToolbox: when the
+/// display showed it, so rate control and the stream's durations follow the
+/// real spacing of the pictures instead of a constant cadence. Times only ever
+/// rise, as VideoToolbox requires.
+#[derive(Debug, Default)]
+pub(crate) struct Presentation {
+    origin: Option<std::time::Instant>,
+    last: Option<i64>,
+}
+
+impl Presentation {
+    /// Microseconds for a picture captured at `captured_at`; a source that
+    /// cannot say stands in with the time the picture was read, `read_us`.
+    pub(crate) fn next(&mut self, captured_at: Option<std::time::Instant>, read_us: u64) -> i64 {
+        let time = match captured_at {
+            Some(at) => {
+                let origin = *self.origin.get_or_insert(at);
+                at.saturating_duration_since(origin).as_micros()
+            }
+            None => u128::from(read_us),
+        };
+        let time = i64::try_from(time).unwrap_or(i64::MAX);
+        let time = self
+            .last
+            .map_or(time, |last| time.max(last.saturating_add(1)));
+        self.last = Some(time);
+        time
     }
 }
 

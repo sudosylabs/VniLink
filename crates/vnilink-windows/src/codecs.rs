@@ -25,9 +25,14 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
     {
         let encoder = WindowsEncoder::open(64, 64, 30, 500_000, vnilink::YuvMatrix::Bt709).ok();
         let encode = encoder.is_some();
+        // High only where an encoder opens it: a transform that refuses the
+        // profile leaves the stream baseline.
+        let high =
+            WindowsEncoder::open_profile(64, 64, 30, 500_000, true, vnilink::YuvMatrix::Bt709)
+                .is_ok();
         vnilink::VideoCodecCaps {
             encode_baseline: encode,
-            encode_high: false,
+            encode_high: high,
             decode_baseline: encode,
             decode_high: encode,
             max_width: 4096,
@@ -35,7 +40,49 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
             hardware: encoder.as_ref().is_some_and(WindowsEncoder::hardware),
             device: "mediafoundation".into(),
             chroma444: false,
-            additional: Vec::new(),
+            additional: hardware_codecs(),
         }
     }
+}
+
+/// HEVC and AV1 where a hardware encoder's output decodes, in the right
+/// colour, with the shared software decoder: a transform whose bitstream does
+/// not is never offered over software.
+#[cfg(windows)]
+fn hardware_codecs() -> Vec<vnilink::CodecSupport> {
+    use vnilink::VideoCodec;
+    use vnilink_media::{decodes, EncodeParams, VideoEncoder, PROBE_SIDE};
+    [VideoCodec::H265, VideoCodec::Av1]
+        .into_iter()
+        .filter(|codec| {
+            let Ok(mut encoder) = WindowsEncoder::open_hardware_codec(
+                *codec,
+                PROBE_SIDE,
+                PROBE_SIDE,
+                30,
+                1_000_000,
+                vnilink::YuvMatrix::Bt709,
+                None,
+            ) else {
+                return false;
+            };
+            decodes(*codec, |picture, key| {
+                encoder.encode(
+                    picture,
+                    &EncodeParams {
+                        force_keyframe: key,
+                        recovery: false,
+                        bitrate_bps: 1_000_000,
+                        frame_rate: 30,
+                    },
+                )
+            })
+        })
+        .map(|codec| vnilink::CodecSupport {
+            codec,
+            encode: true,
+            decode: false,
+            hardware: true,
+        })
+        .collect()
 }

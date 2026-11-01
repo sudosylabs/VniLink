@@ -779,6 +779,11 @@ struct Installed {
 }
 
 fn persist(shared: &Shared, state: &mut State) -> Result<(), Error> {
+    // What a peer may do is saved when it changes: a terminal serving a peer
+    // looks again whether it still may.
+    for terminal in lock(&shared.terminal_sessions).values() {
+        terminal.recheck();
+    }
     let Some(store) = &shared.store else {
         return Ok(());
     };
@@ -838,7 +843,7 @@ fn stop_owned_work(state: &mut State, shared: &Shared) {
         );
     }
     for terminal in lock(&shared.terminal_sessions).values() {
-        terminal.stop.store(true, Ordering::Release);
+        terminal.request_stop();
     }
     services::synchronize(state, &shared.events);
 }

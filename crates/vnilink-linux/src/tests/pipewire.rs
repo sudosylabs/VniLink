@@ -133,7 +133,18 @@ fn a_copied_frame_names_its_format_and_buffer() {
             },
         })
     );
-    assert_eq!(delivery_of(VideoFormat::RGBA, true, 0, true), None);
+    assert_eq!(
+        delivery_of(VideoFormat::RGBA, false, 0, false),
+        Some(PortalDelivery {
+            format: PortalFormat::Rgba,
+            buffer: PortalBuffer::Memory,
+        })
+    );
+    assert_eq!(
+        delivery_of(VideoFormat::RGBA, true, 0, true),
+        None,
+        "the GPU path imports only BGRA and BGRx"
+    );
 }
 
 #[test]

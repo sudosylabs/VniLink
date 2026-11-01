@@ -13,11 +13,11 @@ use crate::vaapi::{choose_bitrate_control, choose_entrypoint, is_render_node_nam
 fn bitrate_control_selects_supported_modes_and_rejects_fixed_quantization() {
     assert_eq!(
         choose_bitrate_control(libva::VA_RC_VBR | libva::VA_RC_CBR),
-        Some(libva::VA_RC_VBR)
+        Some(libva::VA_RC_CBR)
     );
     assert_eq!(
-        choose_bitrate_control(libva::VA_RC_CBR),
-        Some(libva::VA_RC_CBR)
+        choose_bitrate_control(libva::VA_RC_VBR),
+        Some(libva::VA_RC_VBR)
     );
     assert_eq!(choose_bitrate_control(libva::VA_RC_CQP), None);
     assert_eq!(choose_bitrate_control(libva::VA_ATTRIB_NOT_SUPPORTED), None);
