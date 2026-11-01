@@ -36,6 +36,8 @@ const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setTerminalShell', 'setPowerPolicy',
 	'setDesktopCodecDefault', 'setDesktopQualityDefaults', 'setInputDefaults',
 	'setNativeCameraSources', 'setNativeAudioSources', 'setTransferDirectory', 'enableFilesystemAccess',
+	// Only the operating system knows what was granted; main reads it and tells the engine.
+	'reportNativePermissions',
 	// The engine log's filter follows `diagnostics.engineLog`.
 	'setLogFilter',
 	// A restart or shutdown asked of this computer is answered in the main process's notice.
