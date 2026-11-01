@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use vnilink_testkit::peer::processes::runs;
 use vnilink_testkit::peer::{PeerError, RemoteHost};
-use vnilink_testkit::{terminal, traced, Engine, Scratch, TestResult};
+use vnilink_testkit::{terminal, traced, wait_for, Engine, Scratch, TestResult};
 
 /// How long the agent waits for a request before it stops, in seconds.
 const IDLE: u64 = 10;
@@ -87,17 +87,9 @@ impl AgentProcess {
 
     /// The agent's exit status, once it exited within `within`.
     fn exited(&mut self, within: Duration) -> std::process::ExitStatus {
-        let deadline = Instant::now() + within;
-        loop {
-            if let Some(status) = self.child.try_wait().expect("the agent's status") {
-                return status;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the agent did not stop within {within:?}"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        wait_for("the agent to stop", within, || {
+            self.child.try_wait().expect("the agent's status")
+        })
     }
 }
 
@@ -479,22 +471,19 @@ impl BridgeProcess {
 
     /// Polls until the scenario's side published `name`, returning its bytes.
     fn polled(&mut self, name: &str) -> Vec<u8> {
-        let deadline = Instant::now() + LINE_WAIT;
-        loop {
+        wait_for(&format!("the side to publish {name}"), LINE_WAIT, || {
             let answer = self.ask(serde_json::json!({ "op": "poll" }));
             assert_eq!(answer["ok"], true, "a running side is polled: {answer}");
-            if let Some(file) = answer["files"]
+            let file = answer["files"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|file| file["name"] == name)
-            {
-                return vnilink_testkit::peer::decode(file["data"].as_str().unwrap_or_default())
-                    .expect("base64");
-            }
-            assert!(Instant::now() < deadline, "the side never published {name}");
-            std::thread::sleep(Duration::from_millis(50));
-        }
+                .find(|file| file["name"] == name)?;
+            Some(
+                vnilink_testkit::peer::decode(file["data"].as_str().unwrap_or_default())
+                    .expect("base64"),
+            )
+        })
     }
 }
 
@@ -595,14 +584,9 @@ fn a_build_script_drives_a_launched_side_through_the_bridge() -> TestResult {
     assert_eq!(after["ok"], false, "nothing runs after stop: {after}");
 
     drop(bridge.stdin.take());
-    let deadline = Instant::now() + LINE_WAIT;
-    let status = loop {
-        if let Some(status) = bridge.child.try_wait()? {
-            break status;
-        }
-        assert!(Instant::now() < deadline, "the bridge ends with its input");
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let status = wait_for("the bridge to end with its input", LINE_WAIT, || {
+        bridge.child.try_wait().expect("the bridge's status")
+    });
     assert!(status.success(), "the bridge ends cleanly");
     agent.line("the suite went away");
     Ok(())

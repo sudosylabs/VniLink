@@ -102,6 +102,7 @@ impl HostSnapshotFactory for Hold {
         self.entered.store(true, Ordering::Release);
         // A capture in progress, as a system's screenshot prompt is.
         while !cancel.load(Ordering::Acquire) && Instant::now() < deadline {
+            // Polls a cancel flag the engine owns, which has no event source.
             std::thread::sleep(Duration::from_millis(1));
         }
         if cancel.load(Ordering::Acquire) {
