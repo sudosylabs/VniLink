@@ -9,6 +9,7 @@
 //! VideoToolbox output captured once on macOS (64x64 and 128x128 IDR frames
 //! plus a 64x64 P frame); the remuxer never parses slice content, so large
 //! filler NALs exercise byte accounting identically.
+use super::wait::{wait_active, wait_until};
 use crate::{
     scan_recording_prefix, RecordingError, RecordingFailure, RecordingLimits, RecordingRetention,
     SegmentWriter,
@@ -609,10 +610,9 @@ fn wall_roll_refreshes_status_before_stop_without_more_frames() {
     recording_totals(1, true);
 }
 fn recording_totals(frame_count: u64, wall: bool) {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use vnilink::{
-        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
-        VideoCodecCaps,
+        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, VideoCodecCaps,
     };
     let boot = || {
         Core::start(CoreConfig {
@@ -645,11 +645,7 @@ fn recording_totals(frame_count: u64, wall: bool) {
     .unwrap();
     host.set_recording_sharing(true).unwrap();
     let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_active(&peer, parent.id);
     let parent = peer.controller_session(parent.id).unwrap();
     let owner = peer
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
@@ -664,28 +660,17 @@ fn recording_totals(frame_count: u64, wall: bool) {
     }
     let recorder = crate::Recorder::start(&desktop, &dir.join("talk.mkv"), budget).unwrap();
     let target = host.video_targets().unwrap()[0];
-    let deadline = Instant::now() + Duration::from_secs(5);
     for index in 0..frame_count {
         host.publish_desktop_video(target.id, target.generation, idr64(index * 11_000_000))
             .unwrap();
-        while recorder.status().frames != index + 1 {
-            assert!(
-                Instant::now() < deadline,
-                "recorder missed frame: {:?}",
-                recorder.status()
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        wait_until("the recorder to take the published frame", || {
+            recorder.status().frames == index + 1
+        });
     }
     if wall {
-        while recorder.status().segments != 1 {
-            assert!(
-                Instant::now() < deadline,
-                "missing wall-roll status: {:?}",
-                recorder.status()
-            );
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        wait_until("the recorder to report the wall-clock roll", || {
+            recorder.status().segments == 1
+        });
         let state = recorder.status();
         assert_eq!(state.phase, crate::RecordingPhase::Recording);
         assert_eq!(
@@ -694,13 +679,12 @@ fn recording_totals(frame_count: u64, wall: bool) {
         );
     }
     recorder.stop();
-    while !matches!(
-        recorder.status().phase,
-        crate::RecordingPhase::Finished | crate::RecordingPhase::Failed
-    ) {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_until("the recorder to finish", || {
+        matches!(
+            recorder.status().phase,
+            crate::RecordingPhase::Finished | crate::RecordingPhase::Failed
+        )
+    });
     let status = recorder.status();
     let files = finished(&dir);
     let actual_bytes = files
@@ -731,10 +715,9 @@ fn recording_totals(frame_count: u64, wall: bool) {
 
 #[test]
 fn failed_recorder_preserves_finalized_segment_totals() {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use vnilink::{
-        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
-        VideoCodecCaps,
+        Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, VideoCodecCaps,
     };
     let boot = || {
         Core::start(CoreConfig {
@@ -767,11 +750,7 @@ fn failed_recorder_preserves_finalized_segment_totals() {
     .unwrap();
     host.set_recording_sharing(true).unwrap();
     let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_active(&peer, parent.id);
     let parent = peer.controller_session(parent.id).unwrap();
     let owner = peer
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
@@ -784,22 +763,15 @@ fn failed_recorder_preserves_finalized_segment_totals() {
     let target = host.video_targets().unwrap()[0];
     host.publish_desktop_video(target.id, target.generation, idr64(0))
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while recorder.status().frames != 1 {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_until("the recorder to take the first frame", || {
+        recorder.status().frames == 1
+    });
     std::fs::write(dir.join("talk.000002.mkv.part"), b"foreign pending segment").unwrap();
     host.publish_desktop_video(target.id, target.generation, idr64(11_000_000))
         .unwrap();
-    while recorder.status().phase != crate::RecordingPhase::Failed {
-        assert!(
-            Instant::now() < deadline,
-            "expected storage collision failure: {:?}",
-            recorder.status()
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_until("the recorder to fail on the storage collision", || {
+        recorder.status().phase == crate::RecordingPhase::Failed
+    });
     let status = recorder.status();
     let files = finished(&dir);
     let bytes = files

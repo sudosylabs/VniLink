@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use super::wait::{wait_active, wait_until};
 use crate::annexb::{to_annex_b, AvccAccessUnit};
 use crate::error::{Error, PublishError};
 use crate::frame::RawFrame;
@@ -139,7 +140,7 @@ fn shutdown_during_capture_read_does_not_publish_or_report_a_capture_fault() {
 
 fn capture_worker_exit(idle: bool, exit: CaptureExit) {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use vnilink::{
         Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, SessionPhase,
     };
@@ -230,11 +231,7 @@ fn capture_worker_exit(idle: bool, exit: CaptureExit) {
     let parent = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while controller.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_active(&controller, parent.id);
     let parent = controller.controller_session(parent.id).unwrap();
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
@@ -280,11 +277,7 @@ fn capture_worker_exit(idle: bool, exit: CaptureExit) {
         done_tx.send(result).unwrap();
     });
     if idle || matches!(exit, CaptureExit::DuringRead) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !polled.load(Ordering::Acquire) {
-            assert!(Instant::now() < deadline, "capture never polled");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        wait_until("the capture to poll", || polled.load(Ordering::Acquire));
         assert!(frames.recv_timeout(Duration::from_millis(20)).is_none());
     } else {
         let picture = frames

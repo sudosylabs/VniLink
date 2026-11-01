@@ -37,3 +37,5 @@ mod recovery_tests;
 mod still_tests;
 #[path = "tests/timecode.rs"]
 mod timecode_tests;
+#[path = "tests/wait.rs"]
+mod wait;
