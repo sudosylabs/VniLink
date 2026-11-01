@@ -55,8 +55,9 @@ async function startService(context) {
 	const story = [];
 	service.onDidChangeAvailability(available => story.push(available ? 'available' : 'unavailable'));
 	service.onDidChangeRestarting(restarting => story.push(restarting ? 'restarting' : 'steady'));
+	// Main re-applies defaults, settings and permissions here; services skip that work while the engine reads unavailable.
 	service.setRestartHandler(async () => {
-		story.push('defaults applied');
+		story.push(service.available ? 'defaults applied' : 'defaults skipped: engine reads unavailable');
 	});
 	const started = service.start();
 	forks[0].emit('message', { ready: true });

@@ -105,8 +105,9 @@ export class EngineMainService extends Disposable {
 
 	/**
 	 * Registers what runs on every engine started after the first, before
-	 * commands from windows are admitted again: the engine begins empty, so
-	 * the defaults and settings main applied at launch are applied again.
+	 * windows are told it is available again: the engine begins empty, so the
+	 * defaults, settings and permissions main applied at launch are applied
+	 * again. `available` already reads true while it runs.
 	 */
 	public setRestartHandler(handler: () => Promise<void>): void {
 		this.restartHandler = handler;
@@ -229,6 +230,8 @@ export class EngineMainService extends Disposable {
 		}
 		try {
 			await this.launch();
+			// Main's services see the new engine as available while they configure it; windows hear of it after.
+			this.ready = true;
 			await this.restartHandler?.();
 			this.markAvailable();
 		} catch (error) {
