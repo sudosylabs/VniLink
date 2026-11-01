@@ -2886,7 +2886,7 @@
     {
       "path": "src/base/common/process.ts",
       "upstreamPath": "src/vs/base/common/process.ts",
-      "sha256": "990c7d5b2699e1e1321f1b59f5a7b6ab269dc1fbf221db7dba51c9ba4e0a3897",
+      "sha256": "1857cd2a4117542f23c6118e141f285c9ecd271d49ef043155893b5ae8d4b2c2",
       "adapted": true,
       "upstreamStyle": true
     },

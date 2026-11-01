@@ -8,6 +8,7 @@
 import { app, BrowserWindow, nativeTheme, net, protocol, session } from 'electron';
 import type { BrowserWindow as BrowserWindowType, WebContents } from 'electron';
 import { release } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
@@ -42,6 +43,7 @@ import { LogService } from '../../platform/log/common/logService.js';
 import { LoggerChannel } from '../../platform/log/electron-main/logIpc.js';
 import { LOGGER_CHANNEL_NAME } from '../../platform/log/common/loggerChannel.js';
 import { WindowLoggerChannel } from '../../platform/log/electron-main/windowLoggerChannel.js';
+import { runSelfCheck } from './selfCheck.js';
 import { ILoggerMainService, LoggerMainService } from '../../platform/log/electron-main/loggerService.js';
 import { logsFolderName, pruneLogs } from '../../platform/log/electron-main/logsFolder.js';
 import { installApplicationMenu, registerEditingShortcuts } from '../../platform/menubar/electron-main/menubar.js';
@@ -72,6 +74,10 @@ interface ApplicationOptions {
 	/** Where that engine keeps the desktop portal's grant to share the screen. */
 	readonly temporaryEngineScreenGrant?: string;
 	readonly onReady?: (window: BrowserWindowType) => Promise<void>;
+	/** Exposes the automation driver to the window; only development smoke launches ask for it. */
+	readonly automationDriver?: boolean;
+	/** Runs `--self-check` once the window is ready, then removes `profile` and exits. */
+	readonly selfCheck?: { readonly output: string; readonly profile: string };
 }
 
 /** Files the `vnilink://app/` protocol serves: the workbench and the restart notice. Everything else is not found. */
@@ -211,6 +217,10 @@ export class VniLinkApplication extends Disposable {
 			const window = await this.openWindow();
 			this.restored = true;
 			mark('vnilink/windowReady');
+			if (this.options.selfCheck) {
+				await this.runSelfCheck(window, this.options.selfCheck);
+				return;
+			}
 			await this.options.onReady?.(window);
 		} catch (error) {
 			const lifecycle = this.instantiationService.invokeFunction(accessor => accessor.get(ILifecycleMainService));
@@ -222,6 +232,17 @@ export class VniLinkApplication extends Disposable {
 			this.dispose();
 			app.exit(1);
 		}
+	}
+
+	private async runSelfCheck(window: BrowserWindowType, { output, profile }: { readonly output: string; readonly profile: string }): Promise<void> {
+		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
+		const lifecycle = this.instantiationService.invokeFunction(accessor => accessor.get(ILifecycleMainService));
+		const result = await runSelfCheck(window, engine, output);
+		process.stdout.write(`${JSON.stringify(result)}\n`);
+		await lifecycle.runShutdown();
+		this.dispose();
+		await rm(profile, { recursive: true, force: true }).catch(() => undefined);
+		app.exit(result.passed ? 0 : 1);
 	}
 
 	private checkRunning(): void {
@@ -400,7 +421,7 @@ export class VniLinkApplication extends Disposable {
 			platform,
 			version: app.getVersion(),
 			engineAvailable,
-			enableSmokeTestDriver: this.options.temporaryEngine === true,
+			enableSmokeTestDriver: this.options.automationDriver === true,
 			logsPath: this.logsHome.fsPath,
 			logLevel: this.loggerService.getLogLevel(),
 		};

@@ -56,7 +56,8 @@ export function packageConfiguration(root: string, stage: string, output: string
 		nodeGypRebuild: false,
 		publish: null,
 		// Electron's own switches, set in the binary so no environment variable or argument can undo them:
-		// the app is never a Node interpreter, loads only its sealed archive and is not inspectable.
+		// the app is never a Node interpreter, loads only its sealed archive and takes no Node inspector.
+		// Chromium's remote debugging is not a fuse; a built app refuses it itself (`src/code/electron-main/main.ts`).
 		electronFuses: {
 			runAsNode: false,
 			enableCookieEncryption: true,

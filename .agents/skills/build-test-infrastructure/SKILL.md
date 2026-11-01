@@ -20,7 +20,7 @@ The build is TypeScript run directly by Node (type stripping): `node build/run.t
 | `build/lib/package.{darwin,win32,linux}.ts` | Per-platform installer options and artifact extensions |
 | `build/lib/verify.ts` | Inventories and checks for every artifact |
 | `build/lib/test.ts` | UI suite, Rust tests, Linux container validation |
-| `build/lib/processes.ts`, `watch.ts`, `development.ts`, `devtools.ts` | The only classes: owners of processes, watchers, the dev session and a socket |
+| `build/lib/processes.ts`, `watch.ts`, `development.ts` | The only classes: owners of processes, watchers and the dev session |
 
 Read VS Code's `build/lib/gulp/task.ts` and its gulpfiles before changing composition; read `test/automation/src` before changing drivers.
 

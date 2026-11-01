@@ -77,7 +77,7 @@ export default [
 			'@typescript-eslint/explicit-member-accessibility': ['error', { accessibility: 'explicit', overrides: { constructors: 'no-public' } }],
 			'@typescript-eslint/no-floating-promises': 'error',
 			'@typescript-eslint/switch-exhaustiveness-check': 'error',
-			'vnilink/build-classes': ['error', { allow: ['build/lib/processes.ts', 'build/lib/watch.ts', 'build/lib/development.ts', 'build/lib/devtools.ts'] }],
+			'vnilink/build-classes': ['error', { allow: ['build/lib/processes.ts', 'build/lib/watch.ts', 'build/lib/development.ts'] }],
 		},
 	},
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },

@@ -83,6 +83,7 @@ export class TestApplication {
 		await new VniLinkApplication({
 			showWindow: this.options.showWindow ?? false,
 			temporaryEngine: true,
+			automationDriver: true,
 			temporaryEngineCaptures: this.options.nativeVideo ?? false,
 			temporaryEngineScreenGrant: this.options.screenGrant,
 			onReady: async window => {
