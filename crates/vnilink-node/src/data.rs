@@ -1711,7 +1711,6 @@ impl FileTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
     fn pair(from: &VnilinkCore, to: &VnilinkCore) {
         let file = from.export_pairing_file(60, true).unwrap();
         let preview = to.open_pairing_file(file.bytes).unwrap();
@@ -1744,14 +1743,7 @@ mod tests {
         let pending = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
-        while controller.controller_session(pending.id).unwrap().phase
-            != vnilink_app::FfiSessionPhase::Active
-        {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let session = controller.controller_session(pending.id).unwrap();
+        let session = crate::wait::session_active(&controller, pending.id);
         let desktops = Arc::new(DesktopChannels::default());
         let mut open = OpenChannelTask {
             core: controller.clone(),
@@ -1834,22 +1826,13 @@ mod tests {
             .unwrap();
         host.publish_desktop_video(remote.id, remote.generation, true, 10, vec![0, 255, 7])
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(packet) = video.read().unwrap() {
-                assert_eq!(packet.data.unwrap().as_ref(), &[0, 255, 7]);
-                break;
-            }
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let packet = crate::wait::wait_for("the host's picture", || video.read().unwrap());
+        assert_eq!(packet.data.unwrap().as_ref(), &[0, 255, 7]);
         let key = serde_json::json!({"type":"submitKey", "sessionId":session.id.to_string(), "generation":session.generation.to_string(), "usage":4, "down":true}).to_string();
         input.input(key.clone()).unwrap();
-        let end = Instant::now() + Duration::from_secs(5);
-        while applied.load(Ordering::Relaxed) < 1 {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the host to apply the key", || {
+            applied.load(Ordering::Relaxed) >= 1
+        });
         input.take_cleanup().compute().unwrap();
         assert!(input.input(key.clone()).is_err());
         assert!(input.desktop_audio(r#"{"type":"status"}"#.into()).is_err());
@@ -1858,11 +1841,9 @@ mod tests {
             vnilink_app::FfiServicePhase::Active
         );
         // Closing input releases pressed keys, while video retains the Desktop owner.
-        let end = Instant::now() + Duration::from_secs(5);
-        while applied.load(Ordering::Relaxed) < 2 {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the host to apply the key release", || {
+            applied.load(Ordering::Relaxed) >= 2
+        });
         let replacement = open.compute().unwrap();
         video.take_cleanup().compute().unwrap();
         replacement.input(key).unwrap();
@@ -1960,22 +1941,7 @@ mod tests {
         let pending = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(15);
-        loop {
-            if matches!(
-                controller.controller_session(pending.id).unwrap().phase,
-                vnilink_app::FfiSessionPhase::Active
-            ) {
-                break;
-            }
-            assert!(
-                Instant::now() < end,
-                "neutral connection did not become active: {:?}",
-                controller.controller_session(pending.id).unwrap().phase
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let active = controller.controller_session(pending.id).unwrap();
+        let active = crate::wait::session_active(&controller, pending.id);
         let mut task = OpenChannelTask {
             core: controller.clone(),
             desktops: Arc::new(DesktopChannels::default()),
@@ -1995,35 +1961,23 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
         let mut output: Vec<u8> = Vec::new();
-        loop {
-            if let Some(packet) = channel.read().unwrap() {
-                if let Some(bytes) = packet.data {
-                    output.extend(bytes.as_ref());
-                }
-                if output
-                    .windows(b"native-binary-channel".len())
-                    .any(|part| part == b"native-binary-channel")
-                {
-                    break;
-                }
+        crate::wait::wait_until("the terminal's output", || {
+            if let Some(bytes) = channel.read().unwrap().and_then(|packet| packet.data) {
+                output.extend(bytes.as_ref());
             }
-            assert!(Instant::now() < end, "terminal output did not arrive");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+            output
+                .windows(b"native-binary-channel".len())
+                .any(|part| part == b"native-binary-channel")
+        });
         channel.write(b"exit 7\n".to_vec().into()).unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(packet) = channel.read().unwrap() {
-                if packet.kind == "exited" {
-                    assert!(packet.metadata.contains('7'));
-                    break;
-                }
-            }
-            assert!(Instant::now() < end, "terminal exit did not arrive");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let exited = crate::wait::wait_for("the terminal's exit", || {
+            channel
+                .read()
+                .unwrap()
+                .filter(|packet| packet.kind == "exited")
+        });
+        assert!(exited.metadata.contains('7'));
         let mut file_open = OpenChannelTask {
             core: controller.clone(),
             desktops: Arc::new(DesktopChannels::default()),
@@ -2135,23 +2089,17 @@ mod tests {
             }),
         };
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
-        std::thread::sleep(Duration::from_millis(500));
-        std::fs::write(destination.join("outside.txt"), b"outside").unwrap();
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            if files
+        // The watch arms in the background and says nothing when it has, so a
+        // new file is made each time until one of them is pushed.
+        let mut made = 0;
+        crate::wait::wait_until("a change on the other computer to be pushed", || {
+            made += 1;
+            std::fs::write(destination.join(format!("outside-{made}.txt")), b"outside").unwrap();
+            files
                 .read()
                 .unwrap()
                 .is_some_and(|event| event.kind == "folderChanged")
-            {
-                break;
-            }
-            assert!(
-                Instant::now() < end,
-                "a change on the other computer was never pushed"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        });
         file_task.operation = FileOperation::Watch { folder: None };
         assert_eq!(answer(&mut file_task)["ok"], serde_json::Value::Null);
         // Both cores' drivers finish the transfer; the channel reports it
@@ -2167,9 +2115,8 @@ mod tests {
             dst_path: format!("{destination_path}/completed.bin"),
         };
         let submitted = answer(&mut file_task)["ok"].clone();
-        let end = Instant::now() + Duration::from_secs(15);
         let mut states = Vec::new();
-        loop {
+        crate::wait::wait_until("the transfer's completion to be pushed", || {
             if let Some(event) = files.read().unwrap() {
                 assert_eq!(event.kind, "jobs");
                 let update: serde_json::Value = serde_json::from_str(&event.metadata).unwrap();
@@ -2178,16 +2125,9 @@ mod tests {
                         states.push(job["state"].as_str().unwrap().to_owned());
                     }
                 }
-                if states.last().is_some_and(|state| state == "Complete") {
-                    break;
-                }
             }
-            assert!(
-                Instant::now() < end,
-                "the transfer's completion was never pushed: {states:?}"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+            states.last().is_some_and(|state| state == "Complete")
+        });
         assert_eq!(
             std::fs::read(destination.join("completed.bin/test.bin")).unwrap(),
             [0, 255, 17, 42]

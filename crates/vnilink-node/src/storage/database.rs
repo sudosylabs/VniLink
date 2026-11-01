@@ -699,6 +699,7 @@ fn wait_for_barrier(dir: &Path) {
         if started.elapsed() > Duration::from_secs(10) {
             break;
         }
+        // The barrier is a file another thread or process makes; it has no event source.
         std::thread::sleep(Duration::from_millis(5));
     }
 }

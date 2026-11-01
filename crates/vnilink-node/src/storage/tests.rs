@@ -800,12 +800,8 @@ fn the_rollback_journal_is_owner_readable_only_while_a_write_is_open() {
     store.arm_failure(Failure::Barrier(barrier.clone()));
     let journal = fixture.engine.join("installation.sqlite3-journal");
     let watch = std::thread::spawn(move || {
-        let started = Instant::now();
         let marker = barrier.join("after-write");
-        while !marker.exists() {
-            assert!(started.elapsed() < Duration::from_secs(8), "write barrier");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::wait::wait_until("the write barrier", || marker.exists());
         let bits = mode_bits(&journal);
         fs::write(barrier.join("continue"), b"1").unwrap();
         bits
@@ -1082,11 +1078,7 @@ fn a_second_process_cannot_take_a_held_lease() {
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
     let mut child = child.spawn().unwrap();
-    let started = Instant::now();
-    while !signal.exists() {
-        assert!(started.elapsed() < Duration::from_secs(8), "lease signal");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::wait::wait_until("the lease signal", || signal.exists());
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_file(&vault));
     assert_eq!(err.unwrap_err(), FfiError::StoreUnavailable);
     let lock = fixture.engine.join("installation.lock");
@@ -1124,6 +1116,7 @@ fn child_hold() {
     let store = open(&engine, as_file(&vault));
     fs::write(&signal, b"held").unwrap();
     let started = Instant::now();
+    // The child process has no channel back from its parent but this file.
     while !continue_at.exists() {
         if started.elapsed() > Duration::from_secs(10) {
             eprintln!("lease child timed out");

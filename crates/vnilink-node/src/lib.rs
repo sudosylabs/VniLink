@@ -14,6 +14,8 @@
 mod native;
 mod storage;
 mod system;
+#[cfg(test)]
+mod wait;
 
 use native::{
     TransferCapability, TransferNativeBackend, TransferNativeDevice, TransferPowerPolicy,
