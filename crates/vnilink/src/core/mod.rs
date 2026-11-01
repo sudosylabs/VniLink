@@ -653,7 +653,11 @@ impl Core {
     }
 
     fn alive_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Error> {
-        let state = lock(&self.shared.state);
+        let mut state = lock(&self.shared.state);
+        if LOCK_POISONED.load(Ordering::SeqCst) {
+            fence_unrecoverable(&self.shared, &mut state);
+            return Err(Error::ShutDown);
+        }
         if state.shut_down {
             Err(Error::ShutDown)
         } else {
@@ -1056,8 +1060,29 @@ fn wait_for_endpoint_close(shared: &Shared) {
     }
 }
 
+/// Set when a thread panicked holding one of the core's locks. What that
+/// lock guards may be half updated, so nothing is served from it again:
+/// [`Core::alive_state`] refuses and closes the engine, and the thread that
+/// finds the poison stops with it. Teardown, which must still reach the
+/// state to close it, locks after the first finder.
+static LOCK_POISONED: AtomicBool = AtomicBool::new(false);
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+    lock_fenced(mutex, &LOCK_POISONED)
+}
+
+fn lock_fenced<'a, T>(mutex: &'a Mutex<T>, fence: &AtomicBool) -> std::sync::MutexGuard<'a, T> {
+    mutex.lock().unwrap_or_else(|poison| {
+        let first = !fence.swap(true, Ordering::SeqCst);
+        if first && !std::thread::panicking() {
+            tracing::error!(
+                target: crate::trace::SESSION,
+                "a thread panicked while holding a lock: the engine is closing"
+            );
+            panic!("a lock of the engine is poisoned");
+        }
+        poison.into_inner()
+    })
 }
 
 /// The live session on one side. Lookup, active phase, and id match live here
@@ -1081,5 +1106,30 @@ impl Shared {
         lock(&self.hostname)
             .clone()
             .or_else(crate::hostname::local_hostname)
+    }
+}
+
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+
+    /// The first thread to find a poisoned lock stops with it and fences;
+    /// teardown, which comes after, can still reach the data to close it.
+    #[test]
+    fn a_poisoned_lock_fences_once_and_teardown_can_still_lock() {
+        let mutex = Arc::new(Mutex::new(5));
+        let poisoned = Arc::clone(&mutex);
+        let _ = std::thread::spawn(move || {
+            let _held = poisoned.lock().unwrap();
+            panic!("a thread dies holding the lock");
+        })
+        .join();
+        let fence = AtomicBool::new(false);
+        let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            *lock_fenced(&mutex, &fence)
+        }));
+        assert!(found.is_err(), "the finder stops instead of continuing");
+        assert!(fence.load(Ordering::SeqCst));
+        assert_eq!(*lock_fenced(&mutex, &fence), 5, "teardown still reads it");
     }
 }

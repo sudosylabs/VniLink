@@ -177,11 +177,19 @@ impl EventHub {
         }
     }
 
+    /// The subscriber list is a set of channels, valid whatever a panicking
+    /// thread was doing to it, so a poisoned lock is still usable.
+    fn subscribers(&self) -> std::sync::MutexGuard<'_, Vec<Subscriber>> {
+        self.subscribers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     pub(crate) fn subscribe(&self) -> Result<EventSubscription, crate::error::Error> {
         let (tx, rx) = std::sync::mpsc::sync_channel(self.capacity);
         let lagged = Arc::new(AtomicU64::new(0));
         let alive = Arc::new(());
-        let mut subscribers = self.subscribers.lock().expect("event subscribers");
+        let mut subscribers = self.subscribers();
         subscribers.retain(|subscriber| subscriber.alive.upgrade().is_some());
         if subscribers.len() >= MAX_SUBSCRIBERS {
             return Err(crate::error::Error::Busy);
@@ -199,7 +207,7 @@ impl EventHub {
     }
 
     pub(crate) fn publish(&self, event: CoreEvent) {
-        let mut subscribers = self.subscribers.lock().expect("event subscribers");
+        let mut subscribers = self.subscribers();
         subscribers.retain(|subscriber| match subscriber.tx.try_send(event.clone()) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
@@ -214,6 +222,21 @@ impl EventHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panic_in_a_subscriber_list_user_does_not_stop_events() {
+        let hub = EventHub::new(4);
+        let subscription = hub.subscribe().unwrap();
+        let poisoner = hub.subscribers.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = poisoner.lock().unwrap();
+            panic!("a thread dies holding the list");
+        })
+        .join();
+        hub.publish(CoreEvent::HostingChanged { hosting: true });
+        assert!(hub.subscribe().is_ok());
+        drop(subscription);
+    }
 
     #[test]
     fn a_slow_subscriber_does_not_block_the_publisher() {
