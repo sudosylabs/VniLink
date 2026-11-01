@@ -80,5 +80,9 @@ name = "audio"
 harness = false
 
 [[bench]]
+name = "idle"
+harness = false
+
+[[bench]]
 name = "relay"
 harness = false
