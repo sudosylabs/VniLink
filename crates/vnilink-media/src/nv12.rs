@@ -74,7 +74,7 @@ pub fn nv12_to_bgra(
     uv: &[u8],
     signal: VideoSignal,
 ) -> Result<RawFrame, Error> {
-    if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+    if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(Error::InvalidFrame("NV12 width and height must be even"));
     }
     let (width_usize, height_usize) = (usize::from(width), usize::from(height));
@@ -178,7 +178,7 @@ where
 ///
 /// Width and height must be even. Chroma is the average of each 2 by 2 block.
 pub fn bgra_to_nv12(frame: &RawFrame, matrix: YuvMatrix) -> Result<Nv12, Error> {
-    if frame.width() % 2 != 0 || frame.height() % 2 != 0 {
+    if !frame.width().is_multiple_of(2) || !frame.height().is_multiple_of(2) {
         return Err(Error::InvalidFrame("NV12 width and height must be even"));
     }
     let width = usize::from(frame.width());
@@ -195,15 +195,15 @@ pub fn bgra_to_nv12(frame: &RawFrame, matrix: YuvMatrix) -> Result<Nv12, Error> 
     })
 }
 
+/// Y, Cb and Cr planes of one frame.
+pub(crate) type I420 = (Vec<u8>, Vec<u8>, Vec<u8>);
+
 /// Convert BGRA to limited-range planar I420 (Y, Cb, Cr) in `signal`'s
 /// matrix, as the software encoders take it.
 ///
 /// Width and height must be even. Chroma is the average of each 2 by 2 block.
-pub(crate) fn bgra_to_i420(
-    frame: &RawFrame,
-    signal: VideoSignal,
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
-    if frame.width() % 2 != 0 || frame.height() % 2 != 0 {
+pub(crate) fn bgra_to_i420(frame: &RawFrame, signal: VideoSignal) -> Result<I420, Error> {
+    if !frame.width().is_multiple_of(2) || !frame.height().is_multiple_of(2) {
         return Err(Error::InvalidFrame("software YUV dimensions must be even"));
     }
     let half = usize::from(frame.width()) / 2;

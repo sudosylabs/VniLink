@@ -371,4 +371,7 @@ fn classify_prime(error: RecordingError) -> RecordingFailure {
 }
 
 #[cfg(test)]
-thread_local! { pub(crate) static V14_AFTER_CREATE: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = const { std::cell::RefCell::new(None) }; }
+pub(crate) type AfterCreate = Box<dyn FnOnce(&Path)>;
+
+#[cfg(test)]
+thread_local! { pub(crate) static V14_AFTER_CREATE: std::cell::RefCell<Option<AfterCreate>> = const { std::cell::RefCell::new(None) }; }

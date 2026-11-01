@@ -90,7 +90,7 @@ impl Traced {
             .filter(|event| {
                 fields.iter().all(|(field, value)| match &event[*field] {
                     serde_json::Value::String(text) => text == value,
-                    other => other.to_string() == *value,
+                    other => format!("{other}") == *value,
                 })
             })
             .collect()

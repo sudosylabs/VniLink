@@ -385,7 +385,7 @@ pub fn fstat_dev_ino(fd: BorrowedFd) -> io::Result<(u64, u64)> {
     if r != 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok((st.st_dev as u64, st.st_ino as u64))
+    Ok((st.st_dev, st.st_ino))
 }
 
 /// [`fstat_dev_ino`] with the creation time where the platform reports one
@@ -398,8 +398,8 @@ pub fn fstat_identity(fd: BorrowedFd) -> io::Result<Identity> {
         return Err(io::Error::last_os_error());
     }
     Ok(Identity {
-        dev: st.st_dev as u64,
-        ino: st.st_ino as u64,
+        dev: st.st_dev,
+        ino: st.st_ino,
         born: born(&st),
     })
 }
@@ -467,10 +467,10 @@ pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
         is_file: (mode & libc::S_IFMT) == libc::S_IFREG,
         size: st.st_size as u64,
         mtime_ms: mtime_ms(&st),
-        dev: st.st_dev as u64,
-        ino: st.st_ino as u64,
+        dev: st.st_dev,
+        ino: st.st_ino,
         born: born(&st),
-        attributes: u32::from(mode) & 0o7777,
+        attributes: mode & 0o7777,
     })
 }
 
@@ -520,7 +520,7 @@ fn statx_at(parent: BorrowedFd, name: &CString) -> Option<io::Result<EntryStat>>
         } else {
             None
         },
-        attributes: u32::from(mode) & 0o7777,
+        attributes: mode & 0o7777,
     }))
 }
 
@@ -953,7 +953,7 @@ pub fn open_file_verified(
     if r != 0 {
         return Err(io::Error::last_os_error());
     }
-    if st.st_dev as u64 != expected_dev || st.st_ino as u64 != expected_ino {
+    if st.st_dev != expected_dev || st.st_ino != expected_ino {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "file changed between stat and open",

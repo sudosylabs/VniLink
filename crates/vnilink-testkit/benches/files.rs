@@ -68,7 +68,11 @@ fn prose(len: usize, seed: u64) -> Vec<u8> {
         state ^= state >> 7;
         state ^= state << 17;
         text.extend_from_slice(words[(state >> 20) as usize % words.len()].as_bytes());
-        text.push(if state % 11 == 0 { b'\n' } else { b' ' });
+        text.push(if state.is_multiple_of(11) {
+            b'\n'
+        } else {
+            b' '
+        });
     }
     text.truncate(len);
     text

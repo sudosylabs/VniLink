@@ -15,11 +15,13 @@ use crate::host::HostSession;
 use crate::pump::{EncodeParams, EncodedSample, FrameSink, PumpOutput, VideoEncoder};
 use crate::{parse_annex_b, Quality};
 
+type Retunes = Arc<Mutex<Vec<(u32, u8)>>>;
+
 struct Fake {
     width: u16,
     height: u16,
     /// Whether this encoder takes a new rate while running; what it took.
-    retunes: Option<Arc<Mutex<Vec<(u32, u8)>>>>,
+    retunes: Option<Retunes>,
 }
 
 impl Fake {
@@ -31,7 +33,7 @@ impl Fake {
         bitrate_bps: u32,
     ) -> Result<Self, Error> {
         *opens.lock().unwrap() += 1;
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame(
                 "frame width and height must be non-zero",
             ));

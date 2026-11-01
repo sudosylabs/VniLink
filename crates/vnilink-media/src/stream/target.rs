@@ -100,19 +100,30 @@ fn fail_target(
     );
 }
 
+/// The capture a consumer encodes from: its display, the revision the capture
+/// bumps when the source changes, and its size.
+struct Capture {
+    display: u64,
+    revision: Arc<AtomicU64>,
+    size: (u16, u16),
+}
+
 fn consume<E, F>(
     core: &Core,
     slot: &PictureSlot,
     target: VideoTarget,
-    capture_display: u64,
-    capture_revision: Arc<AtomicU64>,
-    capture_size: (u16, u16),
+    capture: Capture,
     control: &Control,
     open_encoder: Arc<F>,
 ) where
     E: VideoEncoder,
     F: Fn(&VideoTarget, u16, u16, u8, u32) -> Result<E, Error> + Send + Sync + 'static,
 {
+    let Capture {
+        display: capture_display,
+        revision: capture_revision,
+        size: capture_size,
+    } = capture;
     let target_for_open = target;
     let reopen = Arc::clone(&open_encoder);
     let opened = HostSession::open(
@@ -503,9 +514,11 @@ where
                         worker_core,
                         worker_slot,
                         worker_target,
-                        capture_display,
-                        worker_revision,
-                        capture_size,
+                        Capture {
+                            display: capture_display,
+                            revision: worker_revision,
+                            size: capture_size,
+                        },
                         &worker_control,
                         worker_open,
                     );

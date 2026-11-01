@@ -35,8 +35,8 @@ impl SoftwareEncoder {
             || height == 0
             || width > 4096
             || height > 4096
-            || width % 2 != 0
-            || height % 2 != 0
+            || !width.is_multiple_of(2)
+            || !height.is_multiple_of(2)
             || fps == 0
             || fps > 60
             || bitrate == 0
@@ -251,9 +251,11 @@ impl VideoDecoder for SoftwareDecoder {
                 from_i420(
                     picture.width,
                     picture.height,
-                    &picture.i420[..y],
-                    &picture.i420[y..y + uv],
-                    &picture.i420[y + uv..],
+                    [
+                        &picture.i420[..y],
+                        &picture.i420[y..y + uv],
+                        &picture.i420[y + uv..],
+                    ],
                     [picture.width, picture.width / 2, picture.width / 2],
                     frame.timestamp_us,
                     declared_signal(Some(picture.matrix), picture.full_range),
@@ -273,9 +275,7 @@ impl VideoDecoder for SoftwareDecoder {
                 let result = from_i420(
                     picture.width(),
                     picture.height(),
-                    picture.y_plane(),
-                    picture.u_plane(),
-                    picture.v_plane(),
+                    [picture.y_plane(), picture.u_plane(), picture.v_plane()],
                     [picture.y_stride(), picture.u_stride(), picture.v_stride()],
                     frame.timestamp_us,
                     declared_signal(
@@ -314,9 +314,11 @@ impl VideoDecoder for SoftwareDecoder {
                 let result = from_i420(
                     picture.width(),
                     picture.height(),
-                    picture.y_plane().map_err(invalid)?,
-                    picture.u_plane().map_err(invalid)?,
-                    picture.v_plane().map_err(invalid)?,
+                    [
+                        picture.y_plane().map_err(invalid)?,
+                        picture.u_plane().map_err(invalid)?,
+                        picture.v_plane().map_err(invalid)?,
+                    ],
                     [
                         picture.y_stride().map_err(invalid)?,
                         picture.u_stride().map_err(invalid)?,
@@ -339,20 +341,18 @@ impl VideoDecoder for SoftwareDecoder {
 fn from_i420(
     w: usize,
     h: usize,
-    y: &[u8],
-    u: &[u8],
-    v: &[u8],
+    planes: [&[u8]; 3],
     strides: [usize; 3],
     time: u64,
     signal: crate::VideoSignal,
 ) -> Result<RawFrame, Error> {
-    if w == 0 || h == 0 || w > 4096 || h > 4096 || w % 2 != 0 || h % 2 != 0 {
+    if w == 0 || h == 0 || w > 4096 || h > 4096 || !w.is_multiple_of(2) || !h.is_multiple_of(2) {
         return Err(Error::DecodeRejected("decoded dimensions"));
     }
     for (plane, stride, width, height) in [
-        (y, strides[0], w, h),
-        (u, strides[1], w / 2, h / 2),
-        (v, strides[2], w / 2, h / 2),
+        (planes[0], strides[0], w, h),
+        (planes[1], strides[1], w / 2, h / 2),
+        (planes[2], strides[2], w / 2, h / 2),
     ] {
         if stride < width
             || stride
@@ -363,7 +363,7 @@ fn from_i420(
             return Err(Error::DecodeRejected("decoded plane bounds"));
         }
     }
-    i420_to_bgra(w as u16, h as u16, time, [y, u, v], strides, signal)
+    i420_to_bgra(w as u16, h as u16, time, planes, strides, signal)
 }
 /// Only a successful synthetic roundtrip makes a codec available.
 pub fn probe_software_codecs() -> Vec<CodecSupport> {
@@ -696,7 +696,7 @@ mod tests {
 /// negotiated interface.
 pub enum CodecEncoder<N> {
     Native(N),
-    Software(SoftwareEncoder),
+    Software(Box<SoftwareEncoder>),
 }
 impl<N: VideoEncoder> CodecEncoder<N> {
     /// The platform's encoder for the negotiated codec when it opens one,
@@ -732,9 +732,9 @@ impl<N: VideoEncoder> CodecEncoder<N> {
                     reason = vnilink::trace::Failure::failure_reason(&error),
                     "this computer's encoder did not open: the software encoder serves instead"
                 );
-                Ok(Self::Software(SoftwareEncoder::open(
+                Ok(Self::Software(Box::new(SoftwareEncoder::open(
                     codec, matrix, w, h, fps, bps,
-                )?))
+                )?)))
             }
         }
     }

@@ -345,7 +345,10 @@ pub(crate) fn rename(
 }
 
 #[cfg(all(test, unix))]
-thread_local! { static TEST_AFTER_MOVE: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> = const { std::cell::RefCell::new(None) }; }
+type AfterMove = Box<dyn FnOnce(&Path)>;
+
+#[cfg(all(test, unix))]
+thread_local! { static TEST_AFTER_MOVE: std::cell::RefCell<Option<AfterMove>> = const { std::cell::RefCell::new(None) }; }
 
 fn single_link(meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]

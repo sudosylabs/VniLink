@@ -138,7 +138,7 @@ pub fn colour_text_page(width: u16, height: u16, index: u64) -> RawFrame {
         let rng = if line == 3 { &mut typing } else { &mut page };
         let mut colour = palette[line % palette.len()];
         while x + 6 < end {
-            if xorshift(rng) % 5 == 0 {
+            if xorshift(rng).is_multiple_of(5) {
                 colour = palette[(xorshift(rng) as usize) % palette.len()];
             }
             let glyph = alphabet[(xorshift(rng) % 40) as usize];
@@ -150,7 +150,11 @@ pub fn colour_text_page(width: u16, height: u16, index: u64) -> RawFrame {
                     }
                 }
             }
-            x += if xorshift(rng) % 6 == 0 { 12 } else { 7 };
+            x += if xorshift(rng).is_multiple_of(6) {
+                12
+            } else {
+                7
+            };
         }
         y += 14;
         line += 1;

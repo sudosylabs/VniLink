@@ -178,7 +178,7 @@ fn an_oversized_sample_is_rejected() {
 
     let nal_len = (MAX_VIDEO_FRAME - 8) as u32;
     let mut packed = nal_len.to_be_bytes().to_vec();
-    packed.extend(std::iter::repeat(0x41).take(nal_len as usize));
+    packed.extend(std::iter::repeat_n(0x41, nal_len as usize));
     let sets = [vec![0x67, 0x42], vec![0x68, 0xCE]];
     assert!(matches!(
         to_annex_b(&unit(4, &packed, &sets, true)),
