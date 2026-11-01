@@ -1708,12 +1708,7 @@ fn admitted_system_owner(host: &Core, controller: &Core) -> (Admission, RemoteSy
     let parent = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-    while controller.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let parent = controller.controller_session(parent.id).unwrap();
+    let parent = crate::test_support::wait_active(controller, parent.id);
     let owner = controller
         .attach_controller_service(parent.id, parent.generation, ServiceKind::System)
         .unwrap();
@@ -1813,12 +1808,7 @@ mod worker_start_gate_tests {
         let parent = controller
             .begin_connect_services(&host.endpoint_id())
             .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(8);
-        while controller.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let parent = controller.controller_session(parent.id).unwrap();
+        let parent = crate::test_support::wait_active(&controller, parent.id);
         let owner = controller
             .attach_controller_service(parent.id, parent.generation, ServiceKind::System)
             .unwrap();

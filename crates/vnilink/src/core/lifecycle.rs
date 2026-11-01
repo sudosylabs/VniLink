@@ -740,18 +740,18 @@ mod tests {
             host.set_desktop_sharing(all_grants()),
             Err(Error::StoreRecoveryRequired)
         ));
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while host.teardown_phase() == 1 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::test_support::wait_until(
+            "the blocked teardown to leave its first phase",
+            Duration::from_secs(2),
+            || host.teardown_phase() != 1,
+        );
         assert_eq!(host.teardown_phase(), 0);
         assert!(!host.endpoint_is_closed());
         assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
         host.shutdown();
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !host.endpoint_is_closed() && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::test_support::wait_until("the endpoint to close", Duration::from_secs(2), || {
+            host.endpoint_is_closed()
+        });
         assert!(host.endpoint_is_closed());
         assert_eq!(host.teardown_phase(), 2);
         assert_eq!(host.endpoint_close_count(), 2);

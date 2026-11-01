@@ -173,17 +173,64 @@ pub(crate) fn connect_link(
     let pending = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    wait_active(controller, pending.id)
+}
+
+/// Waits, on the engine's own session events, until the controller session
+/// `id` is active, and fails at once if it ends or fails instead.
+pub(crate) fn wait_active(controller: &crate::core::Core, id: u64) -> crate::SessionInfo {
+    wait_for_event(
+        controller,
+        "the link to become active",
+        ACTIVE_WITHIN,
+        || {
+            let session = controller.controller_session(id).unwrap();
+            match session.phase {
+                crate::SessionPhase::Active => Some(session),
+                crate::SessionPhase::Closed | crate::SessionPhase::Failed(_) => {
+                    panic!("the link ended before it was active: {session:?}")
+                }
+                _ => None,
+            }
+        },
+    )
+}
+
+const ACTIVE_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Returns what `ready` finds once it holds, re-evaluating it after each
+/// event the engine publishes. The subscription opens before the first
+/// check, so no change slips between the check and the wait.
+pub(crate) fn wait_for_event<T>(
+    core: &crate::core::Core,
+    what: &str,
+    within: std::time::Duration,
+    mut ready: impl FnMut() -> Option<T>,
+) -> T {
+    let events = core.subscribe().expect("an event subscription");
+    let deadline = std::time::Instant::now() + within;
     loop {
-        let session = controller.controller_session(pending.id).unwrap();
-        if session.phase == crate::SessionPhase::Active {
-            return session;
+        if let Some(found) = ready() {
+            return found;
         }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(!left.is_zero(), "timed out waiting for {what}");
+        let _ = events.recv_timeout(left);
+    }
+}
+
+/// Polls `ready` until it holds, and panics naming `what` if it does not
+/// within `within`. For a state the engine publishes no event for; wait on
+/// an event, a join handle or a channel wherever one exists.
+pub(crate) fn wait_until(what: &str, within: std::time::Duration, mut ready: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + within;
+    while !ready() {
         assert!(
             std::time::Instant::now() < deadline,
-            "the link did not become active: {session:?}"
+            "timed out waiting for {what}"
         );
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        // The interval between looks; there is no event to block on.
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
 

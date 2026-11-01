@@ -802,9 +802,11 @@ mod listing_tests {
         if STALE_PARKED.swap(true, Ordering::SeqCst) {
             return;
         }
-        while !STALE_RELEASED.load(Ordering::Acquire) && !cancelled.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        crate::test_support::wait_until(
+            "the parked listing to be released or cancelled",
+            Duration::from_secs(30),
+            || STALE_RELEASED.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire),
+        );
     }
 
     /// Forges a live incoming transfer session plus its paired grant, so
@@ -901,14 +903,11 @@ mod listing_tests {
                 });
             });
             // Wait for the park: the worker reached the pre-access probe.
-            let deadline = std::time::Instant::now() + Duration::from_secs(8);
-            while !STALE_PARKED.load(Ordering::SeqCst) {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "list worker never parked"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            crate::test_support::wait_until(
+                "the list worker to park",
+                Duration::from_secs(8),
+                || STALE_PARKED.load(Ordering::SeqCst),
+            );
             // Sibling progress while parked: the async path is free and no
             // shared lock is held, so a full second listing completes.
             let (sibling, sibling_body) = sibling_rt.block_on(serve_list_page(

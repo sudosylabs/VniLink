@@ -1251,25 +1251,18 @@ pub(super) async fn serve(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use crate::error::Error;
     use crate::test_support::{loopback_core, pair_for_control, transfer_pair, FilesystemLocation};
-    use crate::{Core, ServiceKind, SessionInfo, SessionPhase};
+    use crate::{Core, ServiceKind, SessionInfo};
 
-    fn wait(name: &str, mut condition: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(8);
-        while !condition() {
-            assert!(Instant::now() < deadline, "{name} timed out");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+    fn wait(name: &str, condition: impl FnMut() -> bool) {
+        crate::test_support::wait_until(name, Duration::from_secs(8), condition);
     }
 
     fn active(core: &Core, id: u64) -> SessionInfo {
-        wait("service condition", || {
-            core.controller_session(id).unwrap().phase == SessionPhase::Active
-        });
-        core.controller_session(id).unwrap()
+        crate::test_support::wait_active(core, id)
     }
 
     fn owned_files(core: &Core, host: &Core) -> (crate::ServiceInfo, crate::RemoteFilesService) {

@@ -791,12 +791,8 @@ mod tests {
         rows: 24,
         columns: 80,
     };
-    fn wait(mut ready: impl FnMut() -> bool) {
-        let end = Instant::now() + Duration::from_secs(8);
-        while !ready() {
-            assert!(Instant::now() < end, "terminal condition timed out");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+    fn wait(what: &str, ready: impl FnMut() -> bool) {
+        crate::test_support::wait_until(what, Duration::from_secs(8), ready);
     }
     fn native() -> Arc<NativeTerminalFactory> {
         Arc::new(NativeTerminalFactory::new("/bin/sh".into(), std::env::temp_dir()).unwrap())
@@ -822,7 +818,7 @@ mod tests {
             .unwrap();
         let mut bytes = Vec::new();
         let mut pid = None;
-        wait(|| {
+        wait("the shell to print its pid", || {
             while let Ok(event) = backend.output.try_recv() {
                 if let TerminalEvent::Output(data) = event {
                     bytes.extend(data);
@@ -837,7 +833,9 @@ mod tests {
             pid.is_some()
         });
         drop(backend);
-        wait(|| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid.unwrap()), None).is_err());
+        wait("the closed shell to be reaped", || {
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid.unwrap()), None).is_err()
+        });
     }
 
     /// A tty writes each line of `seq` on its own, so a worker that read once per

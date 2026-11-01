@@ -465,7 +465,7 @@ mod tests {
             send.write_all(&[STATUS_SENDING]).await.unwrap();
             script(send).await;
             // Keep the connection until the receiver is done with it.
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            std::future::pending::<()>().await;
         });
         let request = FileRequest {
             job: 1,
@@ -499,6 +499,7 @@ mod tests {
                 send.write_all(&[MODE_RAW]).await.unwrap();
                 send.write_all(&sent).await.unwrap();
                 send.write_all(&value[..7]).await.unwrap();
+                // A real timer: the gap that splits the value across two reads.
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 send.write_all(&value[7..]).await.unwrap();
                 send.finish().unwrap();
@@ -568,7 +569,8 @@ mod tests {
         let (received, partial, took) = receive_timed(&scratch, 8, |mut send| async move {
             send.write_all(&[MODE_RAW]).await.unwrap();
             send.write_all(b"abcd").await.unwrap();
-            tokio::time::sleep(Duration::from_secs(4)).await;
+            // The sender goes silent and keeps its stream open.
+            std::future::pending::<()>().await;
         })
         .await;
         assert_eq!(received.unwrap(), Received::Stalled);

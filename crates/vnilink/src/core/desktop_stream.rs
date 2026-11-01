@@ -1729,12 +1729,7 @@ mod tests {
         .unwrap();
         pair_for_control(&host, &peer);
         let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let parent = peer.controller_session(parent.id).unwrap();
+        let parent = crate::test_support::wait_active(&peer, parent.id);
         let owner = peer
             .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
             .unwrap();
@@ -1965,12 +1960,7 @@ mod v8_native_input_lock_probe {
         .unwrap();
         pair_for_control(&host, &peer);
         let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let parent = peer.controller_session(parent.id).unwrap();
+        let parent = crate::test_support::wait_active(&peer, parent.id);
         let owner = peer
             .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
             .unwrap();
@@ -2001,10 +1991,11 @@ mod v8_native_input_lock_probe {
         );
         let shared = host.shared.clone();
         let worker = if stream {
-            while _handle.control_state().unwrap() != DesktopControlState::Controlling {
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::yield_now();
-            }
+            crate::test_support::wait_until(
+                "the desktop owner to control",
+                Duration::from_secs(5),
+                || _handle.control_state().unwrap() == DesktopControlState::Controlling,
+            );
             _handle
                 .submit_input(crate::InputEvent::key_down(crate::input::usage::A))
                 .unwrap();
@@ -2090,12 +2081,7 @@ mod v9_pointer_wait_probe {
         host.set_topology(1, &[display]).unwrap();
         pair_for_control(&host, &peer);
         let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let parent = peer.controller_session(parent.id).unwrap();
+        let parent = crate::test_support::wait_active(&peer, parent.id);
         let owner = peer
             .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
             .unwrap();
@@ -2209,12 +2195,7 @@ mod v10_cleanup_churn_probe {
         .unwrap();
         pair_for_control(&host, &peer);
         let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let parent = peer.controller_session(parent.id).unwrap();
+        let parent = crate::test_support::wait_active(&peer, parent.id);
         // Models a native operation parked while holding its existing adapter
         // mutex. Every churned owner is empty: no input is sent by the peer.
         let adapter = lock(&host.shared.desktop);
@@ -2230,27 +2211,22 @@ mod v10_cleanup_churn_probe {
                 .unwrap();
             drop(handle);
             peer.forget_controller_service(owner.id).unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while !host
-                .hosted_services()
-                .unwrap()
-                .iter()
-                .all(|service| service.kind != ServiceKind::Desktop)
-            {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "cleanup did not retire owner {index}"
-                );
-                std::thread::sleep(Duration::from_millis(2));
-            }
+            crate::test_support::wait_until(
+                &format!("cleanup to retire owner {index}"),
+                Duration::from_secs(5),
+                || {
+                    host.hosted_services()
+                        .unwrap()
+                        .iter()
+                        .all(|service| service.kind != ServiceKind::Desktop)
+                },
+            );
             peak = peak.max(host.shared.input_cleanup.load(Ordering::Acquire));
         }
         drop(adapter);
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while host.shared.input_cleanup.load(Ordering::Acquire) != 0 {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        crate::test_support::wait_until("input_cleanup to drain", Duration::from_secs(5), || {
+            host.shared.input_cleanup.load(Ordering::Acquire) == 0
+        });
         host.shutdown();
         peer.shutdown();
         assert_eq!(peak, 0, "empty owners must not queue native cleanup");
@@ -2266,12 +2242,7 @@ mod v10_cleanup_churn_probe {
             .unwrap();
         pair_for_control(&host, &peer);
         let parent = peer.begin_connect_services(&host.endpoint_id()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while peer.controller_session(parent.id).unwrap().phase != SessionPhase::Active {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let parent = peer.controller_session(parent.id).unwrap();
+        let parent = crate::test_support::wait_active(&peer, parent.id);
         // Models a native operation parked while holding its existing adapter
         // mutex. Seed the applied held-set to isolate retirement accounting.
         let adapter = lock(&host.shared.desktop);
@@ -2304,19 +2275,16 @@ mod v10_cleanup_churn_probe {
                 .unwrap();
             drop(handle);
             peer.forget_controller_service(owner.id).unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while !host
-                .hosted_services()
-                .unwrap()
-                .iter()
-                .all(|service| service.kind != ServiceKind::Desktop)
-            {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "cleanup did not retire owner {index}"
-                );
-                std::thread::sleep(Duration::from_millis(2));
-            }
+            crate::test_support::wait_until(
+                &format!("cleanup to retire owner {index}"),
+                Duration::from_secs(5),
+                || {
+                    host.hosted_services()
+                        .unwrap()
+                        .iter()
+                        .all(|service| service.kind != ServiceKind::Desktop)
+                },
+            );
             peak = peak.max(host.shared.input_cleanup.load(Ordering::Acquire));
         }
         assert_eq!(peak, 16);
@@ -2328,16 +2296,12 @@ mod v10_cleanup_churn_probe {
             .open_desktop_service(rejected.id, rejected.generation)
             .is_err());
         drop(adapter);
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while host.shared.input_cleanup.load(Ordering::Acquire) != 0 {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while host.shared.desktop_owners.load(Ordering::Acquire) != 0 {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        crate::test_support::wait_until("input_cleanup to drain", Duration::from_secs(5), || {
+            host.shared.input_cleanup.load(Ordering::Acquire) == 0
+        });
+        crate::test_support::wait_until("desktop_owners to drain", Duration::from_secs(5), || {
+            host.shared.desktop_owners.load(Ordering::Acquire) == 0
+        });
         let calls = lock(&calls);
         assert_eq!(calls.len(), 16);
         assert!(calls.iter().all(|(worker, event)| *worker == calls[0].0

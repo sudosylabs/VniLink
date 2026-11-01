@@ -1584,13 +1584,11 @@ mod arrival_tests {
         let (progress, arriving) = std::sync::mpsc::channel();
         let watcher = follow_arrival(shared.jobs.clone(), shared.clone(), 7, arriving);
         progress.send(400).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut seen = before;
         while lock(&shared.jobs)[&7].snapshot().done_bytes != 400 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "arriving bytes never showed"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            let now = wait_for_job_change(&shared, seen, std::time::Duration::from_secs(2));
+            assert_ne!(now, seen, "arriving bytes never showed");
+            seen = now;
         }
         assert!(core.job_revision() > before);
         drop(progress);
