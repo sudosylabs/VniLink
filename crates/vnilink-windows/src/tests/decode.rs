@@ -96,7 +96,7 @@ fn every_picture_decodes_on_its_own_input() {
     let (width, height) = (1280u16, 720u16);
     let grey = |index: u64| 16 + (index * 37 % 200) as u8;
     let params = |index: u64| EncodeParams {
-        force_keyframe: index % 30 == 0,
+        force_keyframe: index.is_multiple_of(30),
         recovery: false,
         bitrate_bps: 8_000_000,
         frame_rate: 30,

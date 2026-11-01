@@ -577,7 +577,7 @@ pub(crate) fn location_is_remote(path: &Path) -> Result<bool, StoreFailure> {
     }
     #[cfg(windows)]
     {
-        return windows_support::is_remote(path);
+        windows_support::is_remote(path)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
@@ -882,14 +882,14 @@ mod windows_support {
         use windows::Win32::Storage::FileSystem::CreateDirectoryW;
         let wide = wide_path(path)?;
         let descriptor = security_descriptor()?;
-        let mut attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
+        let attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor.0 .0,
             bInheritHandle: false.into(),
         };
         // Safety: `wide` and `attributes` live for the call. The descriptor is
         // freed when `descriptor` drops.
-        unsafe { CreateDirectoryW(windows::core::PCWSTR(wide.as_ptr()), Some(&mut attributes)) }
+        unsafe { CreateDirectoryW(windows::core::PCWSTR(wide.as_ptr()), Some(&attributes)) }
             .map_err(|_| StoreFailure::Unavailable)?;
         Ok(())
     }
@@ -1156,7 +1156,7 @@ mod windows_support {
         };
         let wide = wide_path(path)?;
         let descriptor = security_descriptor()?;
-        let mut attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
+        let attributes = windows::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor.0 .0,
             bInheritHandle: false.into(),
@@ -1169,7 +1169,7 @@ mod windows_support {
                 windows::core::PCWSTR(wide.as_ptr()),
                 FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                Some(&mut attributes),
+                Some(&attributes),
                 disposition,
                 FILE_ATTRIBUTE_NORMAL,
                 None,

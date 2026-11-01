@@ -278,6 +278,7 @@ impl Pointer {
             image: Some(image),
         })
     }
+    #[cfg(test)]
     pub(crate) fn composite(&self, frame: RawFrame) -> Result<RawFrame, Error> {
         match self.shape.as_ref().filter(|_| self.visible) {
             Some(shape) => shape.composite(&frame, self.position),

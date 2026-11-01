@@ -80,6 +80,19 @@ use crate::transform_events::{TransformEvents, Waited};
 #[cfg(windows)]
 const EVENT_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// What one Media Foundation transform is opened with.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct Settings {
+    width: u16,
+    height: u16,
+    frame_rate: u8,
+    bitrate_bps: u32,
+    codec: vnilink::VideoCodec,
+    high: bool,
+    matrix: YuvMatrix,
+}
+
 pub struct WindowsEncoder {
     #[cfg(windows)]
     transform: CreatedTransform,
@@ -171,19 +184,21 @@ impl WindowsEncoder {
         {
             // SAFETY: `open_first` starts COM and Media Foundation on this thread before it
             // lists any candidate, and keeps them for the life of the encoder it returns.
-            return unsafe {
+            unsafe {
                 Self::open_first(
                     || h264_encoders(),
-                    width,
-                    height,
-                    frame_rate,
-                    bitrate_bps,
-                    vnilink::VideoCodec::H264,
-                    high,
-                    matrix,
+                    &Settings {
+                        width,
+                        height,
+                        frame_rate,
+                        bitrate_bps,
+                        codec: vnilink::VideoCodec::H264,
+                        high,
+                        matrix,
+                    },
                 )
             }
-            .map_err(|_| Error::Unsupported("Media Foundation H.264"));
+            .map_err(|_| Error::Unsupported("Media Foundation H.264"))
         }
         #[cfg(not(windows))]
         {
@@ -198,13 +213,7 @@ impl WindowsEncoder {
     #[cfg(windows)]
     unsafe fn open_first<I: IntoIterator<Item = H264Transform>>(
         candidates: impl FnOnce() -> I,
-        width: u16,
-        height: u16,
-        frame_rate: u8,
-        bitrate_bps: u32,
-        codec: vnilink::VideoCodec,
-        high: bool,
-        matrix: YuvMatrix,
+        settings: &Settings,
     ) -> windows::core::Result<Self> {
         ignored_hr!(
             vnilink::trace::ENCODE,
@@ -214,18 +223,7 @@ impl WindowsEncoder {
         let foundation = crate::foundation::MediaFoundation::start()?;
         let mut failure = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
         for candidate in candidates() {
-            match Self::create_transform(
-                &candidate,
-                width,
-                height,
-                frame_rate,
-                bitrate_bps,
-                false,
-                codec,
-                high,
-                None,
-                matrix,
-            ) {
+            match Self::create_transform(&candidate, settings, false, None) {
                 Ok(mut encoder) => {
                     encoder.foundation = Some(foundation);
                     tracing::info!(
@@ -276,15 +274,17 @@ impl WindowsEncoder {
             let foundation = crate::foundation::MediaFoundation::start()?;
             Self::create_transform(
                 candidate,
-                width,
-                height,
-                frame_rate,
-                bitrate_bps,
-                false,
-                vnilink::VideoCodec::H264,
+                &Settings {
+                    width,
+                    height,
+                    frame_rate,
+                    bitrate_bps,
+                    codec: vnilink::VideoCodec::H264,
+                    high: false,
+                    matrix,
+                },
                 false,
                 None,
-                matrix,
             )
             .map(|mut encoder| {
                 encoder.foundation = Some(foundation);
@@ -326,20 +326,22 @@ impl WindowsEncoder {
         frame_rate: u8,
         bitrate_bps: u32,
     ) -> Result<Self, Error> {
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
         Self::create_transform(
             &H264Transform::software(),
-            width,
-            height,
-            frame_rate,
-            bitrate_bps,
+            &Settings {
+                width,
+                height,
+                frame_rate,
+                bitrate_bps,
+                codec: vnilink::VideoCodec::H264,
+                high: false,
+                matrix: YuvMatrix::Bt709,
+            },
             true,
-            vnilink::VideoCodec::H264,
-            false,
             None,
-            YuvMatrix::Bt709,
         )
         .map_err(|_| Error::Unsupported("Media Foundation camera H.264"))
     }
@@ -347,16 +349,19 @@ impl WindowsEncoder {
     #[cfg(windows)]
     unsafe fn create_transform(
         candidate: &H264Transform,
-        width: u16,
-        height: u16,
-        frame_rate: u8,
-        bitrate_bps: u32,
+        settings: &Settings,
         camera: bool,
-        codec: vnilink::VideoCodec,
-        high: bool,
         manager: Option<&IMFDXGIDeviceManager>,
-        matrix: YuvMatrix,
     ) -> windows::core::Result<Self> {
+        let Settings {
+            width,
+            height,
+            frame_rate,
+            bitrate_bps,
+            codec,
+            high,
+            matrix,
+        } = *settings;
         let transform = candidate.create()?;
         if let Some(manager) = manager {
             // Before any media type: the transform then reads textures on the
@@ -631,13 +636,13 @@ impl VideoEncoder for WindowsEncoder {
             } else if params.force_keyframe {
                 self.recovery_qp.observe_full(sample.bytes.len(), params);
             }
-            return match self.codec {
+            match self.codec {
                 vnilink::VideoCodec::H265 => {
                     crate::bitstream::hevc_access_unit(&sample.bytes, &sample.header)
                 }
                 vnilink::VideoCodec::Av1 => crate::bitstream::av1_access_unit(&sample.bytes),
                 _ => h264_access_unit(&sample.bytes, &sample.header, self.matrix),
-            };
+            }
         }
         #[cfg(not(windows))]
         {
@@ -961,7 +966,6 @@ unsafe fn set_codec_u32(
 }
 
 #[cfg(windows)]
-#[cfg(windows)]
 pub(crate) unsafe fn sample_bytes(sample: &IMFSample) -> windows::core::Result<Vec<u8>> {
     let buffer = sample.GetBufferByIndex(0)?;
     let mut data = std::ptr::null_mut();
@@ -1105,7 +1109,7 @@ impl WindowsEncoder {
         matrix: YuvMatrix,
         device: Option<&crate::gpu::GpuDevice>,
     ) -> Result<Self, Error> {
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
         ignored_hr!(
@@ -1127,15 +1131,17 @@ impl WindowsEncoder {
             match unsafe {
                 Self::create_transform(
                     &candidate,
-                    width,
-                    height,
-                    frame_rate,
-                    bitrate_bps,
-                    false,
-                    codec,
+                    &Settings {
+                        width,
+                        height,
+                        frame_rate,
+                        bitrate_bps,
+                        codec,
+                        high: false,
+                        matrix,
+                    },
                     false,
                     None,
-                    matrix,
                 )
             } {
                 Ok(mut encoder) => {
@@ -1179,7 +1185,7 @@ impl WindowsEncoder {
         matrix: YuvMatrix,
         device: &crate::gpu::GpuDevice,
     ) -> Result<Self, Error> {
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
         // SAFETY: `open_reading_textures` starts COM itself; `device` is a live device whose
@@ -1203,13 +1209,15 @@ impl WindowsEncoder {
             let candidates = || h264_encoders_for(device.adapter().ok());
             Self::open_first(
                 candidates,
-                width,
-                height,
-                frame_rate,
-                bitrate_bps,
-                vnilink::VideoCodec::H264,
-                high,
-                matrix,
+                &Settings {
+                    width,
+                    height,
+                    frame_rate,
+                    bitrate_bps,
+                    codec: vnilink::VideoCodec::H264,
+                    high,
+                    matrix,
+                },
             )
         }
         .map_err(|_| Error::Unsupported("Media Foundation H.264"))
@@ -1252,15 +1260,17 @@ impl WindowsEncoder {
             .find_map(|candidate| {
                 Self::create_transform(
                     candidate,
-                    width,
-                    height,
-                    frame_rate,
-                    bitrate_bps,
+                    &Settings {
+                        width,
+                        height,
+                        frame_rate,
+                        bitrate_bps,
+                        codec: vnilink::VideoCodec::H264,
+                        high,
+                        matrix,
+                    },
                     false,
-                    vnilink::VideoCodec::H264,
-                    high,
                     Some(&manager),
-                    matrix,
                 )
                 .map_err(|error| {
                     tracing::debug!(
