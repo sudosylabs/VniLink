@@ -1703,7 +1703,7 @@ impl Core {
         if !Self::receiver_granted(&self.shared, &peer_bytes) {
             return self.mark_interrupted(id, PERMISSION_OFF);
         }
-        use crate::transfer::{self, Received};
+        use crate::transfer::Received;
         let downloaded = match fetch {
             Ok(Received::Done { downloaded }) => downloaded,
             // A sender stops serving only when its job stopped or its

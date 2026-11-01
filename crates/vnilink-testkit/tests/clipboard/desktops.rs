@@ -392,8 +392,8 @@ fn a_stuck_clipboard_holds_up_neither_the_engine_nor_closing_the_desktop() -> Te
     assert!(
         snapshot_result
             .expect("the host's snapshot answers within a second while its clipboard is stuck")
-            .is_ok(),
-        "the host's snapshot succeeds while its clipboard is stuck"
+            .is_ok_and(|snapshot| snapshot.capabilities.clipboard),
+        "the host's snapshot still reports its clipboard while that clipboard is stuck"
     );
     assert!(
         request_result
