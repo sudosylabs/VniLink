@@ -159,10 +159,10 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		const layout = packagedLayout(directory, process.platform, product);
 		if (process.platform === 'darwin') {
 			// Its own executable UUID, so local network privacy decides for VniLink
-			// alone; the changed executable and its bundle are sealed again.
+			// alone. The fuses changed the Electron framework and the UUID the executable,
+			// so the whole bundle is sealed again, nested code first.
 			await assignExecutableUuids(layout.executable, product.appId);
-			await processes.run('codesign', ['--force', '--sign', '-', layout.executable]);
-			await processes.run('codesign', ['--force', '--sign', '-', join(directory, `${product.nameLong}.app`)]);
+			await processes.run('codesign', ['--force', '--deep', '--sign', '-', join(directory, `${product.nameLong}.app`)]);
 		}
 		const nativeSha256 = manifest.files.find(file => file.path === 'app/native/vnilink.node')?.sha256;
 		if (!nativeSha256 || createHash('sha256').update(await readFile(layout.native)).digest('hex') !== nativeSha256) {
