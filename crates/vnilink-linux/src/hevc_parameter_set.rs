@@ -152,7 +152,7 @@ pub(crate) fn parameter_sets(
     height: u16,
     matrix: YuvMatrix,
 ) -> Result<Vec<u8>, Error> {
-    if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+    if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(Error::InvalidFrame("H.265 width and height must be even"));
     }
     let (coded_width, coded_height) = coded_size(width, height);

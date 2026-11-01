@@ -128,6 +128,6 @@ fn the_sps_declares_the_matrix_in_its_vui() {
         assert_eq!((primaries, transfer, matrix_coefficients), (1, 1, code));
         // video_signal_type_present, format 5, limited range, description.
         let head = &bits[bits.len() - 24 - 6..bits.len() - 24];
-        assert_eq!(value(head), 0b1_101_0_1);
+        assert_eq!(value(head), 0b11_0101);
     }
 }

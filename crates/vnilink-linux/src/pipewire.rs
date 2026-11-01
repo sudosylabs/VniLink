@@ -45,9 +45,6 @@ use crate::gpu_picture::{
 };
 use crate::pixels::{raw_frame_from_bgra, raw_frame_from_bgrx, raw_frame_from_order, ByteOrder};
 
-// drm_fourcc.h: sentinel retained for delivery metadata. No GBM calls in this path.
-const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
-
 const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 const FRAME_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -361,6 +358,10 @@ impl Drop for PortalCapture {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the capture thread is handed everything it owns once, at spawn"
+)]
 fn capture_thread(
     remote: OwnedFd,
     node_id: u32,
@@ -383,7 +384,10 @@ fn capture_thread(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the capture thread is handed everything it owns once, at spawn"
+)]
 fn run(
     remote: OwnedFd,
     node_id: u32,
@@ -496,7 +500,7 @@ fn serve(
                 }
             }
         })
-        .process(|stream, state| copy_buffer(stream, state))
+        .process(copy_buffer)
         .register()
         .map_err(|_| Error::CaptureRejected("the screen cast portal did not start"))?;
     stream
@@ -591,7 +595,7 @@ fn dispatch_commands(
                 vnilink::ignored!(
                     vnilink::trace::CAPTURE,
                     "the caller stopped waiting for its picture",
-                    reply.send(wait_frame(&mainloop, shared, timestamp_us))
+                    reply.send(wait_frame(mainloop, shared, timestamp_us))
                 );
             }
         }
@@ -1044,7 +1048,7 @@ impl<'a> CaptureBuffer<'a> {
             .iter()
             .find(|meta| meta.type_ == pw::spa::sys::SPA_META_VideoDamage)?;
         let region = std::mem::size_of::<pw::spa::sys::spa_meta_region>();
-        if meta.data.is_null() || meta.size as usize % region != 0 {
+        if meta.data.is_null() || !(meta.size as usize).is_multiple_of(region) {
             return None;
         }
         // SAFETY: SPA owns `size` readable bytes, a whole number of regions.

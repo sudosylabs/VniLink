@@ -19,7 +19,7 @@ pub fn probe_video_codecs() -> vnilink::VideoCodecCaps {
     {
         // Keeps the import used where the probe does not run.
         let _probe = &WindowsEncoder::open;
-        return vnilink::VideoCodecCaps::default();
+        vnilink::VideoCodecCaps::default()
     }
     #[cfg(windows)]
     {

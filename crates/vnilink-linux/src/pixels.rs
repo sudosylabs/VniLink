@@ -57,6 +57,7 @@ pub fn raw_frame_from_bgrx(
 
 /// A 32-bit pixel's bytes in memory, for formats the screen cast portal may
 /// offer besides BGRA and BGRx.
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteOrder {
     /// R, G, B, A.
@@ -69,6 +70,7 @@ pub enum ByteOrder {
 
 /// Rows of `order` pixels as tightly packed BGRA. The unused byte becomes
 /// opaque alpha; RGBA keeps its own.
+#[cfg(any(target_os = "linux", test))]
 pub fn raw_frame_from_order(
     order: ByteOrder,
     width: u16,

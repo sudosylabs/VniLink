@@ -36,9 +36,9 @@ use videotoolbox::session::Codec;
 use vnilink::YuvMatrix;
 #[cfg(target_os = "macos")]
 use vnilink_media::RecoveryQp;
-use vnilink_media::{
-    to_annex_b, AvccAccessUnit, EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder,
-};
+#[cfg(target_os = "macos")]
+use vnilink_media::{to_annex_b, AvccAccessUnit};
+use vnilink_media::{EncodeParams, EncodedSample, Error, RawFrame, VideoEncoder};
 
 #[cfg(target_os = "macos")]
 const BGRA: u32 = 0x4247_5241;
@@ -58,6 +58,7 @@ enum Scaler {
 }
 
 pub struct MacEncoder {
+    #[cfg(target_os = "macos")]
     codec: vnilink::VideoCodec,
     /// The matrix the session converts and declares.
     #[cfg(target_os = "macos")]
@@ -521,12 +522,14 @@ const PRESENTATION_TIMESCALE: i32 = 1_000_000;
 /// display showed it, so rate control and the stream's durations follow the
 /// real spacing of the pictures instead of a constant cadence. Times only ever
 /// rise, as VideoToolbox requires.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Default)]
 pub(crate) struct Presentation {
     origin: Option<std::time::Instant>,
     last: Option<i64>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl Presentation {
     /// Microseconds for a picture captured at `captured_at`; a source that
     /// cannot say stands in with the time the picture was read, `read_us`.
@@ -601,7 +604,7 @@ fn read_len(data: &[u8], size: usize) -> usize {
 /// One negotiated encoder per Desktop owner; software is never shared across peers.
 pub enum MacVideoEncoder {
     Native(MacEncoder),
-    Software(vnilink_media::SoftwareEncoder),
+    Software(Box<vnilink_media::SoftwareEncoder>),
 }
 impl MacVideoEncoder {
     pub fn open(
@@ -632,9 +635,11 @@ impl MacVideoEncoder {
                         reason = vnilink::trace::Failure::failure_reason(&error),
                         "VideoToolbox HEVC did not open: the software encoder serves instead"
                     );
-                    Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
-                        kind, matrix, width, height, fps, bitrate,
-                    )?))
+                    Ok(Self::Software(Box::new(
+                        vnilink_media::SoftwareEncoder::open(
+                            kind, matrix, width, height, fps, bitrate,
+                        )?,
+                    )))
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -648,9 +653,9 @@ impl MacVideoEncoder {
                 }
             }
         } else {
-            Ok(Self::Software(vnilink_media::SoftwareEncoder::open(
-                kind, matrix, width, height, fps, bitrate,
-            )?))
+            Ok(Self::Software(Box::new(
+                vnilink_media::SoftwareEncoder::open(kind, matrix, width, height, fps, bitrate)?,
+            )))
         }
     }
 }

@@ -137,7 +137,6 @@ pub struct VnilinkCore {
 impl VnilinkCore {
     /// Opens a process-local core. `custom_relays` replaces the public
     /// default; an empty list with `public_relay` false is rejected.
-
     pub fn create(public_relay: bool, custom_relays: Vec<String>) -> Result<Self, FfiError> {
         let relay = if public_relay {
             RelaySettings::public_n0()
@@ -205,7 +204,6 @@ impl VnilinkCore {
     }
 
     /// Opens the persistent installation through a [`CredentialStore`].
-
     pub fn open_persistent(store: Box<dyn CredentialStore>) -> Result<Self, FfiError> {
         let core = Core::open(
             std::sync::Arc::new(storage::NativeStore(store.into())),

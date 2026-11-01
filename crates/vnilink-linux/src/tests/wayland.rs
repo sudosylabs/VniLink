@@ -129,6 +129,9 @@ use ashpd::zbus::{
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
+/// A SelectDevices call's persist mode and the restore token it offered.
+type PersistedSelection = (u32, Option<String>);
+
 struct FakePortal(
     Arc<Mutex<Vec<Notify>>>,
     Arc<AtomicBool>,
@@ -136,7 +139,7 @@ struct FakePortal(
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     /// Each SelectDevices' persist mode and the restore token it offered.
-    Arc<Mutex<Vec<(u32, Option<String>)>>>,
+    Arc<Mutex<Vec<PersistedSelection>>>,
 );
 #[zbus::interface(name = "org.freedesktop.portal.RemoteDesktop")]
 impl FakePortal {

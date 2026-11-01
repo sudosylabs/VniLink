@@ -480,12 +480,7 @@ impl HostCameraFactory for LinuxCameraFactory {
                         source.close();
                     })
                     .map_err(|_| Error::Unsupported("camera worker"))?;
-                match startup.receive(&result) {
-                    Ok(inner) => inner,
-                    // The caller cancelled: not a capture loss, so consent
-                    // is untouched and the cancellation propagates as-is.
-                    Err(cancelled) => return Err(cancelled),
-                }
+                startup.receive(&result)?
             }
             #[cfg(not(target_os = "linux"))]
             {

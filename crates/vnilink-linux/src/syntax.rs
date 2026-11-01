@@ -149,6 +149,13 @@ pub(crate) fn rbsp(nal: &[u8]) -> Vec<u8> {
 
 /// Parsed sequence parameter set: geometry plus everything the VA-API
 /// picture parameters need.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "the Linux VA-API decoder reads these fields; tests elsewhere only parse"
+    )
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct Sps {
     pub id: u32,
@@ -160,7 +167,6 @@ pub(crate) struct Sps {
     pub poc_type: u32,
     pub log2_max_poc_lsb_minus4: u32,
     pub num_ref_frames: u32,
-    pub gaps_flag: bool,
     pub pic_width_mbs_minus1: u32,
     pub pic_height_map_minus1: u32,
     pub direct_8x8: bool,
@@ -339,7 +345,7 @@ impl Sps {
         if num_ref_frames > 16 {
             return Err(Error::InvalidFrame("H.264 reference count is out of range"));
         }
-        let gaps_flag = bits.bit().ok_or_else(truncated)? != 0;
+        bits.bit().ok_or_else(truncated)?;
         let pic_width_mbs_minus1 = bits.ue().ok_or_else(truncated)?;
         let pic_height_map_minus1 = bits.ue().ok_or_else(truncated)?;
         let frame_mbs_only = bits.bit().ok_or_else(truncated)?;
@@ -397,7 +403,6 @@ impl Sps {
             poc_type,
             log2_max_poc_lsb_minus4,
             num_ref_frames,
-            gaps_flag,
             pic_width_mbs_minus1,
             pic_height_map_minus1,
             direct_8x8: direct_8x8 != 0,
@@ -412,14 +417,19 @@ impl Sps {
 
 /// Parsed picture parameter set: everything the VA-API picture parameters
 /// and the slice header reader need.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "the Linux VA-API decoder reads these fields; tests elsewhere only parse"
+    )
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct Pps {
     pub id: u32,
-    pub sps_id: u32,
     pub entropy_cabac: bool,
     pub bottom_field_order_present: bool,
     pub num_ref_idx_l0_default: u32,
-    pub num_ref_idx_l1_default: u32,
     pub weighted_pred: bool,
     pub weighted_bipred: u8,
     pub pic_init_qp: i32,
@@ -539,11 +549,9 @@ impl Pps {
         }
         Ok(Self {
             id,
-            sps_id,
             entropy_cabac,
             bottom_field_order_present,
             num_ref_idx_l0_default,
-            num_ref_idx_l1_default,
             weighted_pred,
             weighted_bipred,
             pic_init_qp,
@@ -586,6 +594,13 @@ pub(crate) struct WeightEntry {
 }
 
 /// Parsed prediction weight table.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "the Linux VA-API decoder reads these fields; tests elsewhere only parse"
+    )
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct WeightTable {
     pub luma_denom: u8,
@@ -594,18 +609,22 @@ pub(crate) struct WeightTable {
 }
 
 /// Parsed slice header: the fields the VA-API slice parameters need.
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "the Linux VA-API decoder reads these fields; tests elsewhere only parse"
+    )
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct Slice {
     pub first_mb: u16,
     pub kind: SliceKind,
-    pub pps_id: u32,
     pub frame_num: u32,
-    pub idr_pic_id: u32,
     pub poc_lsb: u32,
     pub num_ref_l0: u32,
     pub weights: Option<WeightTable>,
     pub marking: Marking,
-    pub no_output_prior: bool,
     pub cabac_init: u8,
     pub qp_delta: i32,
     pub deblocking_idc: u8,
@@ -648,15 +667,9 @@ impl Slice {
         let frame_num = bits
             .bits(sps.log2_max_frame_num_minus4 + 4)
             .ok_or_else(truncated)?;
-        let idr_pic_id = if is_idr {
-            let id = bits.ue().ok_or_else(truncated)?;
-            if id > 65535 {
-                return Err(Error::InvalidFrame("H.264 IDR id is out of range"));
-            }
-            id
-        } else {
-            0
-        };
+        if is_idr && bits.ue().ok_or_else(truncated)? > 65535 {
+            return Err(Error::InvalidFrame("H.264 IDR id is out of range"));
+        }
         let poc_lsb = bits
             .bits(sps.log2_max_poc_lsb_minus4 + 4)
             .ok_or_else(truncated)?;
@@ -711,18 +724,18 @@ impl Slice {
         } else {
             None
         };
-        let (marking, no_output_prior) = if nal_ref_idc == 0 {
-            (Marking::Sliding, false)
+        let marking = if nal_ref_idc == 0 {
+            Marking::Sliding
         } else if is_idr {
-            let no_output_prior = bits.bit().ok_or_else(truncated)? != 0;
+            bits.bit().ok_or_else(truncated)?;
             if bits.bit().ok_or_else(truncated)? != 0 {
                 return Err(Error::Unsupported(
                     "H.264 long-term references are not supported",
                 ));
             }
-            (Marking::Sliding, no_output_prior)
+            Marking::Sliding
         } else if bits.bit().ok_or_else(truncated)? == 0 {
-            (Marking::Sliding, false)
+            Marking::Sliding
         } else {
             let mut diffs = Vec::new();
             let mut flush = false;
@@ -755,14 +768,11 @@ impl Slice {
                     "H.264 long-term references are not supported",
                 ));
             }
-            (
-                if flush {
-                    Marking::FlushAll
-                } else {
-                    Marking::MarkNonRef { diffs }
-                },
-                false,
-            )
+            if flush {
+                Marking::FlushAll
+            } else {
+                Marking::MarkNonRef { diffs }
+            }
         };
         let cabac_init = if pps.entropy_cabac && kind != SliceKind::I {
             let idc = bits.ue().ok_or_else(truncated)?;
@@ -806,14 +816,11 @@ impl Slice {
             first_mb: u16::try_from(first_mb)
                 .map_err(|_| Error::InvalidFrame("H.264 slice start is out of range"))?,
             kind,
-            pps_id,
             frame_num,
-            idr_pic_id,
             poc_lsb,
             num_ref_l0,
             weights,
             marking,
-            no_output_prior,
             cabac_init,
             qp_delta,
             deblocking_idc,

@@ -17,12 +17,8 @@ use vnilink_media::{CapturePlan, Error};
 pub const SECURE_DESKTOP_SUPPORTED: bool = false;
 
 /// Screenshot display. Windows capture reads the primary display only.
+#[cfg(any(windows, test))]
 pub const SNAPSHOT_DISPLAY_ID: &str = "0";
-
-/// Windows has no screen-capture consent call. Allow retries the primary display.
-pub fn snapshot_prompts_for_consent(_prompt: bool) -> bool {
-    false
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowsPlan {
@@ -75,6 +71,7 @@ impl WindowsPlan {
 }
 
 /// One captured desktop must fit the frame type the session already uses.
+#[cfg(any(windows, test))]
 pub(crate) fn frame_size(width: u32, height: u32) -> Result<(u16, u16), Error> {
     let width = u16::try_from(width)
         .map_err(|_| Error::Unsupported("the desktop is larger than one frame"))?;

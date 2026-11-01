@@ -65,6 +65,7 @@ impl vnilink_media::NativePicture for MacPicture {
 /// picture is only certain on a display that has no scale (`scale_factor`
 /// 1.0); on any other they are not trusted and the pixels say. `None` when
 /// there are no rects.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn reported_changes(
     rects: &[[f64; 4]],
     scale_factor: Option<f64>,

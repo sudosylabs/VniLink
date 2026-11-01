@@ -157,6 +157,7 @@ impl Shape {
     /// The part of a `width` x `height` picture the shape covers with its
     /// corner at `position`: left, top, width and height; `None` when it is
     /// outside.
+    #[cfg(windows)]
     pub(crate) fn area(
         &self,
         position: (i32, i32),

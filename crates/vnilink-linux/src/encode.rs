@@ -65,7 +65,7 @@ impl LinuxEncoder {
                 "frame width and height must be non-zero",
             ));
         }
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame("width and height must be even"));
         }
         if frame_rate == 0 {
@@ -145,7 +145,7 @@ impl LinuxEncoder {
                     Err(error) => failure = error,
                 }
             }
-            return Err(failure);
+            Err(failure)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -208,10 +208,10 @@ impl VideoEncoder for LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            return match &mut self.backend {
+            match &mut self.backend {
                 Backend::Nvenc(encoder) => encoder.retune(bitrate_bps, frame_rate),
                 Backend::Vaapi(session) => session.retune(bitrate_bps, frame_rate).map(|()| true),
-            };
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -243,7 +243,7 @@ impl VideoEncoder for LinuxEncoder {
         }
         #[cfg(target_os = "linux")]
         {
-            return match &mut self.backend {
+            match &mut self.backend {
                 Backend::Nvenc(encoder) => encoder.encode(frame, params.force_keyframe),
                 Backend::Vaapi(session) => {
                     let input = if session.converts() {
@@ -254,7 +254,7 @@ impl VideoEncoder for LinuxEncoder {
                     };
                     session.encode(input, params.force_keyframe)
                 }
-            };
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {

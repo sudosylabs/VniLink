@@ -9,8 +9,11 @@
 //! sit on the output media type. The pump publishes Annex-B, and a keyframe
 //! has to carry both parameter sets and an IDR.
 
+#[cfg(any(windows, test))]
 use vnilink::YuvMatrix;
-use vnilink_media::{parse_annex_b, to_annex_b, AvccAccessUnit, EncodedSample, Error};
+#[cfg(any(windows, test))]
+use vnilink_media::{parse_annex_b, to_annex_b, AvccAccessUnit};
+use vnilink_media::{EncodedSample, Error};
 
 /// An HEVC access unit from a hardware encoder. A keyframe that carries no
 /// VPS, SPS and PPS of its own gets the encoder's `sequence_header` (Annex-B)
@@ -77,6 +80,7 @@ pub(crate) fn av1_has_sequence_header(unit: &[u8]) -> Result<bool, Error> {
 /// `sequence_header` is `MF_MT_MPEG_SEQUENCE_HEADER`: Annex-B, or an AVC
 /// decoder configuration record. An empty header is allowed for a predicted
 /// frame.
+#[cfg(any(windows, test))]
 pub(crate) fn h264_access_unit(
     sample: &[u8],
     sequence_header: &[u8],
@@ -96,6 +100,7 @@ pub(crate) fn h264_access_unit(
     EncodedSample::annex_b(keyframe, annex_b, matrix)
 }
 
+#[cfg(any(windows, test))]
 fn avcc_to_annex_b(sample: &[u8], sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
     let idr = avcc_has_type(sample, 5)?;
     let in_band = avcc_has_type(sample, 7)? && avcc_has_type(sample, 8)?;
@@ -113,6 +118,7 @@ fn avcc_to_annex_b(sample: &[u8], sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
     })
 }
 
+#[cfg(any(windows, test))]
 fn with_parameter_sets(sample: &[u8], sets: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
     let parsed = parse_annex_b(sample)?;
     if !parsed.has_idr() || (parsed.has_sps() && parsed.has_pps()) {
@@ -132,6 +138,7 @@ fn with_parameter_sets(sample: &[u8], sets: &[Vec<u8>]) -> Result<Vec<u8>, Error
     Ok(out)
 }
 
+#[cfg(any(windows, test))]
 fn parameter_sets(header: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
     if header.is_empty() {
         return Ok(Vec::new());
@@ -151,6 +158,7 @@ fn parameter_sets(header: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
     Err(Error::InvalidFrame("H.264 sequence header is not Annex-B"))
 }
 
+#[cfg(any(windows, test))]
 fn avc_decoder_config(header: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
     if header.len() < 7 || header[0] != 1 {
         return Err(Error::InvalidFrame("H.264 sequence header is not Annex-B"));
@@ -179,6 +187,7 @@ fn avc_decoder_config(header: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
     Ok(sets)
 }
 
+#[cfg(any(windows, test))]
 fn read_counted_nal(header: &[u8], index: &mut usize) -> Result<Vec<u8>, Error> {
     if header.len() < index.saturating_add(2) {
         return Err(Error::InvalidFrame("H.264 sequence header is truncated"));
@@ -193,6 +202,7 @@ fn read_counted_nal(header: &[u8], index: &mut usize) -> Result<Vec<u8>, Error> 
     Ok(nal)
 }
 
+#[cfg(any(windows, test))]
 fn avcc_has_type(sample: &[u8], nal_type: u8) -> Result<bool, Error> {
     let mut rest = sample;
     let mut found = false;
@@ -213,6 +223,7 @@ fn avcc_has_type(sample: &[u8], nal_type: u8) -> Result<bool, Error> {
     Ok(found)
 }
 
+#[cfg(any(windows, test))]
 fn is_annex_b(sample: &[u8]) -> bool {
     sample.starts_with(&[0, 0, 0, 1]) || sample.starts_with(&[0, 0, 1])
 }
@@ -221,6 +232,7 @@ pub(crate) use vnilink_media::h264_picture_size as picture_size;
 
 /// Camera transport requires a self-contained constrained-baseline IDR.
 /// Validate the actual emitted SPS rather than trusting encoder attributes.
+#[cfg(any(windows, test))]
 pub(crate) fn camera_access_unit(bytes: &[u8]) -> Result<(), Error> {
     let parsed = parse_annex_b(bytes)?;
     if !parsed.has_idr() || !parsed.has_pps() || !parsed.has_sps() {

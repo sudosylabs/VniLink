@@ -79,6 +79,7 @@ pub(crate) fn session_active(controller: &VnilinkCore, id: u64) -> FfiSessionInf
 
 /// Returns what `pick` makes of the first event on `events` it accepts, woken
 /// by the events themselves.
+#[cfg(target_os = "macos")]
 pub(crate) fn event<T>(
     events: &vnilink::EventSubscription,
     what: &str,

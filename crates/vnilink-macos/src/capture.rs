@@ -18,7 +18,9 @@
 //! FileVault preboot is not a logged-in display and is not captured.
 // trace: records every ignored failure
 
-use vnilink_media::{CapturePlan, ChannelSlot, CursorPolicy, Error, FrameChannel};
+use vnilink_media::{CapturePlan, CursorPolicy, Error};
+#[cfg(target_os = "macos")]
+use vnilink_media::{ChannelSlot, FrameChannel};
 
 #[cfg(target_os = "macos")]
 use std::sync::Arc;

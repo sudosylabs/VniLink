@@ -21,7 +21,12 @@ fn the_host_encoder_is_unavailable() {
     let quality = Quality::new(500, 30, 64, 64).unwrap();
     assert!(matches!(
         HostSession::open(64, 64, quality, |w, h, fps, bps| MacEncoder::open(
-            w, h, fps, bps, false
+            w,
+            h,
+            fps,
+            bps,
+            false,
+            vnilink::YuvMatrix::Bt709
         )),
         Err(Error::Unsupported("VideoToolbox session"))
     ));

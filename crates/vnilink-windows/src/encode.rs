@@ -164,7 +164,7 @@ impl WindowsEncoder {
         high: bool,
         matrix: YuvMatrix,
     ) -> Result<Self, Error> {
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
         #[cfg(windows)]

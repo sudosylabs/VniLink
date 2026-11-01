@@ -18,7 +18,9 @@ use vnilink_media::Error;
 
 pub(crate) const LOG2_MAX_FRAME_NUM_MINUS4: u32 = 4;
 pub(crate) const LOG2_MAX_POC_LSB_MINUS4: u32 = 4;
+#[cfg(target_os = "linux")]
 pub(crate) const MAX_FRAME_NUM: u32 = 1 << (LOG2_MAX_FRAME_NUM_MINUS4 + 4);
+#[cfg(target_os = "linux")]
 pub(crate) const MAX_POC_LSB: i32 = 1 << (LOG2_MAX_POC_LSB_MINUS4 + 4);
 
 /// Encoder profile selected by session negotiation.
@@ -46,7 +48,7 @@ pub(crate) fn parameter_sets(
     height: u16,
     frame_rate: u8,
 ) -> Result<Vec<u8>, Error> {
-    if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+    if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(Error::InvalidFrame("H.264 width and height must be even"));
     }
     if frame_rate == 0 {

@@ -52,7 +52,6 @@ pub struct FfiRecordingRecovery {
 }
 /// Explicit locally selected recovery; call on a background thread. Interrupted
 /// output has no cue index and is reported separately from normal finalization.
-
 pub fn recover_desktop_recording(destination: String) -> Result<FfiRecordingRecovery, FfiError> {
     let recovered = vnilink_media::recover_desktop_recording(Path::new(&destination))
         .map_err(recording_error)?;
