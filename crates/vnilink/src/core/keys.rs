@@ -195,6 +195,7 @@ pub(super) async fn host_command_loop(
     let mut reported = Vec::new();
     let mut availability_tick = tokio::time::interval(AVAILABILITY_INTERVAL);
     availability_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut announcements = crate::address::AnnouncementBudget::new(std::time::Instant::now());
     loop {
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             break true;
@@ -249,15 +250,17 @@ pub(super) async fn host_command_loop(
                 };
                 match message {
                     ControlMessage::Addresses { relays, direct } => {
-                        crate::ignored!(
-                            crate::trace::RELAY,
-                            "a peer's addresses are a hint; the next announcement retries",
-                            remember_peer_addresses(
-                                shared,
-                                peer.as_bytes(),
-                                Announcement { relays, direct },
-                            )
-                        );
+                        if announcements.admit(std::time::Instant::now()) {
+                            crate::ignored!(
+                                crate::trace::RELAY,
+                                "a peer's addresses are a hint; the next announcement retries",
+                                remember_peer_addresses(
+                                    shared,
+                                    peer.as_bytes(),
+                                    Announcement { relays, direct },
+                                )
+                            );
+                        }
                     }
                     ControlMessage::Close => break false,
                     _ => {

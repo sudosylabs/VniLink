@@ -598,6 +598,7 @@ pub(super) async fn command_loop(
     });
     let _reader = ControllerTasks(vec![reader.abort_handle()]);
     let mut remote_close = false;
+    let mut announcements = crate::address::AnnouncementBudget::new(std::time::Instant::now());
     loop {
         if *stop_rx.borrow() {
             break;
@@ -611,15 +612,17 @@ pub(super) async fn command_loop(
             frame = frames_rx.recv() => {
                 match frame {
                     Some(Ok(ControlMessage::Addresses { relays, direct })) => {
-                        crate::ignored!(
-                            crate::trace::SESSION,
-                            "a peer's name and addresses are refreshed at the next connection",
-                            remember_peer_addresses(
-                                shared,
-                                &peer_key,
-                                Announcement { relays, direct },
-                            )
-                        );
+                        if announcements.admit(std::time::Instant::now()) {
+                            crate::ignored!(
+                                crate::trace::SESSION,
+                                "a peer's name and addresses are refreshed at the next connection",
+                                remember_peer_addresses(
+                                    shared,
+                                    &peer_key,
+                                    Announcement { relays, direct },
+                                )
+                            );
+                        }
                     }
                     Some(Ok(ControlMessage::Close)) => {
                         remote_close = true;

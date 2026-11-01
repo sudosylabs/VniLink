@@ -128,10 +128,64 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Announcement, Error> {
     canonical(&relays, &direct)
 }
 
+/// How many announcements a link may have saved in a burst, and how long
+/// each one then takes to come back. Each saved announcement rewrites the
+/// installation record, so a peer cannot choose the write rate.
+const ANNOUNCEMENT_BURST: u32 = 4;
+const ANNOUNCEMENT_REFILL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Admits the address announcements of one link. A refused announcement is
+/// dropped: the peer sends its addresses again whenever they change, and on
+/// its next connection.
+pub(crate) struct AnnouncementBudget {
+    left: u32,
+    since: std::time::Instant,
+}
+
+impl AnnouncementBudget {
+    pub(crate) fn new(now: std::time::Instant) -> Self {
+        Self {
+            left: ANNOUNCEMENT_BURST,
+            since: now,
+        }
+    }
+
+    pub(crate) fn admit(&mut self, now: std::time::Instant) -> bool {
+        let earned = (now.saturating_duration_since(self.since).as_millis()
+            / ANNOUNCEMENT_REFILL.as_millis()) as u32;
+        if earned > 0 {
+            self.left = (self.left + earned).min(ANNOUNCEMENT_BURST);
+            self.since += ANNOUNCEMENT_REFILL * earned;
+        }
+        if self.left == 0 {
+            return false;
+        }
+        self.left -= 1;
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::ControlMessage;
+
+    #[test]
+    fn a_link_saves_a_burst_of_announcements_and_then_one_per_refill() {
+        let start = std::time::Instant::now();
+        let mut budget = AnnouncementBudget::new(start);
+        let admitted = (0..10).filter(|_| budget.admit(start)).count();
+        assert_eq!(admitted as u32, ANNOUNCEMENT_BURST);
+        assert!(!budget.admit(start + ANNOUNCEMENT_REFILL / 2));
+        assert!(budget.admit(start + ANNOUNCEMENT_REFILL));
+        assert!(!budget.admit(start + ANNOUNCEMENT_REFILL));
+        let later = start + ANNOUNCEMENT_REFILL * 100;
+        let admitted = (0..10).filter(|_| budget.admit(later)).count();
+        assert_eq!(
+            admitted as u32, ANNOUNCEMENT_BURST,
+            "idle time does not bank more than a burst"
+        );
+    }
 
     #[test]
     fn an_announcement_round_trips_and_keeps_grants() {
