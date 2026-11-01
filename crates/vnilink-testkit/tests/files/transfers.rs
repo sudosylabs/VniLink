@@ -295,11 +295,7 @@ fn conflicts_follow_each_choice_and_leave_other_files_alone() -> TestResult {
         || {
             trace
                 .tell(&["files"])
-                .only(&[
-                    "job state",
-                    "file served",
-                    "received files flushed",
-                ])
+                .only(&["job state", "file served", "received files flushed"])
                 .to_string()
         },
     );
