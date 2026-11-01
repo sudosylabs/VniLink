@@ -10,7 +10,7 @@ use crate::*;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Applied {
     Input(vnilink::InputEvent),
     Text(String),
@@ -1310,7 +1310,6 @@ fn ffi_pointer_policy_preserves_fractional_motion_and_swapped_button_cleanup() {
             vnilink::PointerButton::Right,
         )),
         Applied::Input(vnilink::InputEvent::motion(1, 0)),
-        Applied::Input(vnilink::InputEvent::precise_wheel(-15, 30)),
         Applied::Input(vnilink::InputEvent::button_down(
             vnilink::PointerButton::Forward,
         )),
@@ -1321,12 +1320,23 @@ fn ffi_pointer_policy_preserves_fractional_motion_and_swapped_button_cleanup() {
             vnilink::PointerButton::Right,
         )),
     ];
+    // The wheel rides a datagram, so it lands anywhere among the reliable
+    // events, which keep their order.
+    let wheel = Applied::Input(vnilink::InputEvent::precise_wheel(-15, 30));
     let deadline = Instant::now() + Duration::from_secs(5);
-    while *seen.lock().unwrap() != expected {
+    loop {
+        let seen = seen.lock().unwrap().clone();
+        let ordered: Vec<_> = seen
+            .iter()
+            .filter(|event| **event != wheel)
+            .cloned()
+            .collect();
+        if ordered == expected && seen.len() == expected.len() + 1 {
+            break;
+        }
         assert!(
             Instant::now() < deadline,
-            "FFI pointer sequence did not settle: {:?}",
-            seen.lock().unwrap()
+            "FFI pointer sequence did not settle: {seen:?}"
         );
         std::thread::sleep(Duration::from_millis(10));
     }

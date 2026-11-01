@@ -187,15 +187,26 @@ fn pointer_settings_belong_to_one_desktop_and_a_swapped_drag_releases_the_button
     desktop.submit_input(InputEvent::motion(1, 0))?;
     desktop.submit_input(InputEvent::precise_wheel(15, -30))?;
     desktop.submit_input(InputEvent::button_down(PointerButton::Back))?;
+    // The wheel rides a datagram, so it lands anywhere among the reliable
+    // events, which keep their order.
+    let mut got = applied.wait_for(4);
+    let wheel = got
+        .iter()
+        .position(|event| matches!(event, InputEvent::PreciseWheel { .. }))
+        .map(|at| got.remove(at));
     assert_eq!(
-        applied.wait_for(4),
+        wheel,
+        Some(InputEvent::precise_wheel(-15, 30)),
+        "the wheel is reversed"
+    );
+    assert_eq!(
+        got,
         vec![
             InputEvent::button_down(PointerButton::Right),
             InputEvent::motion(1, 0),
-            InputEvent::precise_wheel(-15, 30),
             InputEvent::button_down(PointerButton::Back),
         ],
-        "the buttons are swapped, motion is halved and the wheel reversed"
+        "the buttons are swapped and motion is halved"
     );
     desktop.release_input()?;
     assert_eq!(

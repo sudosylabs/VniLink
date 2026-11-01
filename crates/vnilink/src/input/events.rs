@@ -101,6 +101,16 @@ impl InputEvent {
         }
     }
 
+    /// Whether the controller sends this as a sample the network may lose or
+    /// reorder: where the pointer is now, or a scroll step. Keys, buttons
+    /// and relative motion change state, and are sent reliably and in order.
+    pub(crate) fn sampled(self) -> bool {
+        matches!(
+            self,
+            Self::Pointer { .. } | Self::Wheel { .. } | Self::PreciseWheel { .. }
+        )
+    }
+
     /// Whether the wire would accept this event: what [`Self::decode`]
     /// checks of the fields, without building the bytes.
     pub(crate) fn validate(self) -> Result<(), Error> {

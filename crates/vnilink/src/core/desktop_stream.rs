@@ -28,7 +28,7 @@ pub(super) const MAX_DESKTOP_OWNERS_PER_CONNECTION: usize = 4;
 const VERSION: u8 = 1;
 const VIDEO: u8 = 1;
 const CURSOR: u8 = 2;
-const COMMAND: u8 = 3;
+pub(super) const COMMAND: u8 = 3;
 const RELEASE: u8 = 4;
 const TOPOLOGY: u8 = 5;
 const ACQUIRE_CONTROL: u8 = 6;
@@ -117,7 +117,7 @@ pub(super) struct DesktopRuntime {
     recording_gate: Mutex<()>,
     pub(super) activity: Mutex<super::activity::Activity>,
     pub(super) info: DesktopInfo,
-    stamp: SessionStamp,
+    pub(super) stamp: SessionStamp,
     quality: Mutex<Quality>,
     /// Viewer: the most bandwidth its user allows, whatever `info.quality`
     /// started the stream at.
@@ -171,7 +171,9 @@ pub(super) struct DesktopRuntime {
     /// Host: the input it applied under this desktop's leases and has not
     /// released, apart from the viewer's own plan.
     pub(super) host_input: HostInputSession,
-    retired: std::sync::atomic::AtomicBool,
+    /// Host: the newest pointer position applied, from either transport.
+    pub(super) pointer_order: super::desktop_input::PointerOrder,
+    pub(super) retired: std::sync::atomic::AtomicBool,
     /// The one display this owner shows. Empty means none, never a substitute.
     pub(super) selected: Mutex<Vec<u64>>,
     pub(super) display_fault: Mutex<Option<&'static str>>,
@@ -265,6 +267,7 @@ impl DesktopRuntime {
             control_commands: Mutex::new(std::collections::VecDeque::new()),
             control_notify: tokio::sync::Notify::new(),
             host_input: HostInputSession::new(),
+            pointer_order: Default::default(),
             retired: std::sync::atomic::AtomicBool::new(false),
             selected: Mutex::new(Vec::new()),
             display_fault: Mutex::new(None),
@@ -1566,6 +1569,13 @@ async fn client_send(
     let mut last_path = None;
     let mut received = desktop.stream_received.subscribe();
     let mut acknowledged = None;
+    // Samples go as datagrams, numbered; the newest pointer sent that way
+    // and not yet repeated on the stream is repeated before the next button.
+    let mut sample_seq = 0u32;
+    let mut unrepeated: Option<(crate::InputEvent, std::time::Instant)> = None;
+    // A display selection is on the stream, so the pointer that follows it
+    // goes there too, behind it: on a display not yet selected it is refused.
+    let mut after_selection = false;
     loop {
         // The newest stream picture received is said once, as it changes.
         let newest = *received.borrow_and_update();
@@ -1595,6 +1605,16 @@ async fn client_send(
             let mut bytes = vec![RELEASE];
             bytes.extend_from_slice(&lease_epoch.to_be_bytes());
             write(send, &bytes).await?;
+        }
+        // Where the pointer came to rest is said reliably: the datagram that
+        // said it may have been lost, and nothing follows it to correct that.
+        if let Some((event, _)) = unrepeated.filter(|(_, at)| at.elapsed() >= POINTER_SETTLE) {
+            let message = ControlMessage::Input {
+                stamp: desktop.stamp,
+                event,
+            };
+            write(send, &command_bytes(lease_epoch, &message)).await?;
+            unrepeated = None;
         }
         let path_rtt = link
             .paths()
@@ -1655,6 +1675,49 @@ async fn client_send(
                 input_dropped(desktop.info.service.id, kind, DropPoint::Outbox);
                 continue;
             }
+            if let Outbound::Event(event) = &command {
+                let pointer = matches!(event, crate::InputEvent::Pointer { .. });
+                let message = ControlMessage::Input {
+                    stamp: desktop.stamp,
+                    event: *event,
+                };
+                if event.sampled() && !(after_selection && pointer) {
+                    let mut body = vec![COMMAND];
+                    body.extend_from_slice(&lease_epoch.to_be_bytes());
+                    body.extend_from_slice(&message.encode());
+                    let datagram = super::desktop_input::encode(sample_seq, &body);
+                    if link
+                        .max_datagram_size()
+                        .is_some_and(|max| datagram.len() <= max)
+                        && link.send_datagram(datagram).is_ok()
+                    {
+                        if pointer {
+                            unrepeated = Some((*event, std::time::Instant::now()));
+                        }
+                        sample_seq = sample_seq.wrapping_add(1);
+                        continue;
+                    }
+                } else if pointer {
+                    write(send, &command_bytes(lease_epoch, &message)).await?;
+                    sample_seq = sample_seq.wrapping_add(1);
+                    unrepeated = None;
+                    after_selection = false;
+                    continue;
+                } else if matches!(event, crate::InputEvent::Button { .. }) {
+                    if let Some((pointer, _)) = unrepeated.take() {
+                        let message = ControlMessage::Input {
+                            stamp: desktop.stamp,
+                            event: pointer,
+                        };
+                        write(send, &command_bytes(lease_epoch, &message)).await?;
+                    }
+                }
+            }
+            after_selection = match &command {
+                Outbound::Displays(_) => true,
+                Outbound::Event(crate::InputEvent::Pointer { .. }) => false,
+                _ => after_selection,
+            };
             let message = match command {
                 Outbound::Event(event) => ControlMessage::Input {
                     stamp: desktop.stamp,
@@ -1686,6 +1749,12 @@ async fn client_send(
             _ = &mut notified => {}, _ = received.changed() => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
             // The report itself goes at the top of the loop, when it is due.
             _ = reports.tick() => {},
+            _ = async {
+                match unrepeated {
+                    Some((_, at)) => tokio::time::sleep_until((at + POINTER_SETTLE).into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {},
             // An unanswered keyframe request is asked again when its patience runs out,
             // and a frame gone quiet is given up when its silence does.
             _ = async {
@@ -2091,6 +2160,13 @@ pub(super) async fn serve(
         generation: parent.generation,
         desktop: desktop.clone(),
     };
+    let link = lock(&shared.state)
+        .incoming
+        .get(&connection_id)
+        .and_then(|session| session.link.clone());
+    if let Some(link) = link {
+        super::desktop_input::ensure_router(&shared, link, connection_id, parent.generation);
+    }
     let control = *desktop.control_state.borrow();
     let mut response = vec![VERSION, 0, control.0.encode()];
     response.extend_from_slice(&control.1.to_be_bytes());
@@ -2198,19 +2274,31 @@ fn host_end(
     }
 }
 
+/// A `COMMAND` message for `message`, sent under lease `epoch`.
+fn command_bytes(epoch: u64, message: &ControlMessage) -> Vec<u8> {
+    let mut bytes = vec![COMMAND];
+    bytes.extend_from_slice(&epoch.to_be_bytes());
+    bytes.extend_from_slice(&message.encode());
+    bytes
+}
+
+/// How long a pointer stays where it is before the viewer repeats that
+/// position on the stream.
+const POINTER_SETTLE: Duration = Duration::from_millis(50);
+
 /// Commands the host reads ahead of the one it applies. A burst of pointer
 /// moves is applied as its newest.
 const HOST_COMMAND_BATCH: usize = 64;
 
 /// One message from the viewer's control stream, decoded once.
-struct HostCommand {
-    body: Vec<u8>,
+pub(super) struct HostCommand {
+    pub(super) body: Vec<u8>,
     /// The command a `COMMAND` message holds; `None` for the lease actions.
-    command: Option<Result<ControlMessage, Error>>,
+    pub(super) command: Option<Result<ControlMessage, Error>>,
 }
 
 impl HostCommand {
-    fn new(body: Vec<u8>) -> Self {
+    pub(super) fn new(body: Vec<u8>) -> Self {
         let command = (body.first() == Some(&COMMAND) && body.len() >= 9)
             .then(|| ControlMessage::decode(&body[9..]));
         Self { body, command }
@@ -2297,7 +2385,7 @@ async fn host_receive(
     tokio::try_join!(reader, applier).map(|_| ())
 }
 
-fn apply_host_batch(
+pub(super) fn apply_host_batch(
     shared: &Shared,
     desktop: &DesktopRuntime,
     batch: Vec<HostCommand>,

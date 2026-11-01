@@ -341,6 +341,7 @@ impl Core {
             secure_desktop: std::sync::atomic::AtomicBool::new(false),
             last_desktop_end: Mutex::new(None),
             desktop_routers: Mutex::new(std::collections::HashSet::new()),
+            input_routers: Mutex::new(std::collections::HashSet::new()),
             topology: Mutex::new(super::topology::TopologySnapshot {
                 revision: 0,
                 displays: Vec::new(),

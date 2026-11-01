@@ -92,41 +92,55 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
         InputEvent::pointer(1, 1, 1, 1),
         InputEvent::pointer(4, 5, 1, 1),
     ];
-    let tail = [
-        InputEvent::pointer(9, 8, 1, 1),
-        InputEvent::button_down(PointerButton::Left),
-        InputEvent::wheel(0, -1),
-    ];
-    for event in [key].iter().chain(&moves).chain(&tail) {
+    let rest = InputEvent::pointer(9, 8, 1, 1);
+    let button = InputEvent::button_down(PointerButton::Left);
+    let wheel = InputEvent::wheel(0, -1);
+    for event in [key].iter().chain(&moves).chain(&[rest, button, wheel]) {
         desktop.submit_input(*event)?;
     }
-    // Coalescing drops moves still queued together; a running sender may
-    // already have sent either earlier move.
-    let valid: Vec<Vec<InputEvent>> = (0..4)
-        .map(|mask| {
-            let mut events = vec![key];
-            events.extend(
-                moves
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| mask & (1 << index) != 0)
-                    .map(|(_, event)| *event),
-            );
-            events.extend(tail);
-            events
-        })
-        .collect();
+    // Pointer positions and the wheel ride datagrams: a position still
+    // queued with a newer one is dropped, one the network reorders is
+    // dropped as stale, and the wheel lands where it lands. The key and the
+    // button are reliable and in order, and the newest position is
+    // repeated on the stream before the button, so the click lands there.
+    let got = wait_for(
+        "the host to apply the button and the wheel",
+        DEFAULT_WAIT,
+        || {
+            let events = applied.events();
+            (events.contains(&button) && events.contains(&wheel)).then_some(events)
+        },
+    );
+    let at = |event: InputEvent| got.iter().rposition(|seen| *seen == event);
+    assert_eq!(
+        got.iter()
+            .filter(|event| matches!(event, InputEvent::Key { .. } | InputEvent::Button { .. }))
+            .copied()
+            .collect::<Vec<_>>(),
+        [key, button],
+        "the key and the button apply once, in order"
+    );
+    assert_eq!(
+        got.iter().filter(|event| **event == wheel).count(),
+        1,
+        "the wheel step applies once"
+    );
+    assert!(
+        at(rest) < at(button) && got[..at(button).unwrap_or(0)].contains(&rest),
+        "the pointer is at its newest position when the button goes down: {got:?}"
+    );
+    assert!(
+        got.iter()
+            .filter(|event| matches!(event, InputEvent::Pointer { .. }))
+            .all(|event| moves.contains(event) || *event == rest),
+        "only positions the viewer sent are applied: {got:?}"
+    );
     let ends_with = |last: InputEvent| {
         wait_for(&format!("the host to apply {last:?}"), DEFAULT_WAIT, || {
             let events = applied.events();
             (events.last() == Some(&last)).then_some(events)
         })
     };
-    let got = ends_with(InputEvent::wheel(0, -1));
-    assert!(
-        valid.contains(&got),
-        "every event applies in order, only moves coalescing: {got:?}"
-    );
     host.stop_hosted_session()?;
     let mut expected = got;
     expected.extend([
@@ -140,6 +154,63 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
     );
     records_nothing_typed(&trace, &[]);
     vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
+    Ok(())
+}
+
+/// A pointer dragged across the screen is sent as samples the network may
+/// lose or reorder: the host applies far fewer than were sent, and the last
+/// position lands. A click mid-drag goes down where the pointer was pressed, or past it, and never short of it.
+#[test]
+fn a_dragged_pointer_lands_on_its_last_position_and_a_click_not_short_of_where_it_was_pressed(
+) -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_desktop();
+    let applied = InputLog::install(&pair.host, SCREEN)?;
+    publish_display(&pair)?;
+    let (_, desktop) = open_desktop(&pair)?;
+    desktop.select_displays(&[DISPLAY])?;
+    let last = 400;
+    let pressed = last / 2;
+    for x in 1..=last {
+        desktop.submit_input(InputEvent::pointer(x, 0, 1, 1))?;
+        if x == pressed {
+            desktop.submit_input(InputEvent::button_down(PointerButton::Left))?;
+        }
+    }
+    let events = wait_for(
+        "the host to settle on the last position",
+        DEFAULT_WAIT,
+        || {
+            let events = applied.events();
+            (events.last() == Some(&InputEvent::pointer(last, 0, 1, 1))
+                && events
+                    .iter()
+                    .any(|event| matches!(event, InputEvent::Button { .. })))
+            .then_some(events)
+        },
+    );
+    let pointers = events
+        .iter()
+        .filter(|event| matches!(event, InputEvent::Pointer { .. }))
+        .count();
+    assert!(
+        pointers < last as usize / 4,
+        "samples are dropped, not all applied: {pointers} of {last}"
+    );
+    let down = events
+        .iter()
+        .position(|event| matches!(event, InputEvent::Button { .. }))
+        .ok_or("the button applies")?;
+    let at = events[..down].iter().rev().find_map(|event| match event {
+        InputEvent::Pointer { x, .. } => Some(*x),
+        _ => None,
+    });
+    assert!(
+        at >= Some(pressed),
+        "the pointer is where it was pressed, or past it, when the button goes down: {at:?}"
+    );
+    pair.host.core.stop_hosted_session()?;
+    records_nothing_typed(&trace, &[]);
     Ok(())
 }
 
@@ -158,21 +229,20 @@ fn key_up_and_each_button_are_applied_and_not_released_again() -> TestResult {
         InputEvent::button_up(PointerButton::Right),
         InputEvent::button_down(PointerButton::Middle),
         InputEvent::button_up(PointerButton::Middle),
-        InputEvent::wheel(2, -3),
     ];
     for event in expected {
         desktop.submit_input(event)?;
     }
-    assert_eq!(
-        applied.exactly(expected.len()),
-        expected,
-        "each press and release applies as sent"
-    );
+    // The wheel is a datagram, so it is not ordered with the rest.
+    desktop.submit_input(InputEvent::wheel(2, -3))?;
+    let mut all = applied.exactly(expected.len() + 1);
+    all.retain(|event| *event != InputEvent::wheel(2, -3));
+    assert_eq!(all, expected, "each press and release applies as sent");
     pair.host.core.stop_hosted_session()?;
     pair.host.wait_released(Some(ServiceKind::Desktop));
     assert_eq!(
-        applied.events(),
-        expected,
+        applied.events().len(),
+        expected.len() + 1,
         "ending the connection releases nothing already released"
     );
     records_nothing_typed(&trace, &[]);

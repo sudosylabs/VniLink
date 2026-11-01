@@ -52,6 +52,7 @@ mod camera_stream;
 mod clipboard;
 mod connect;
 mod desktop_clipboard;
+mod desktop_input;
 mod desktop_service;
 mod desktop_stream;
 mod drops;
@@ -532,6 +533,9 @@ struct Shared {
     /// keyed `(connection id, generation)`. One router per key owns
     /// `read_datagram`, so sibling owners never split each other's fragments.
     desktop_routers: Mutex<HashSet<(u64, u64)>>,
+    /// Host-only. Connections with a live input-datagram reader, keyed the
+    /// same way ([`desktop_input`]).
+    input_routers: Mutex<HashSet<(u64, u64)>>,
     topology: Mutex<topology::TopologySnapshot>,
     topology_watch: tokio::sync::watch::Sender<u64>,
     /// Controller-only. Exchanges Control and Command before an event is queued.
