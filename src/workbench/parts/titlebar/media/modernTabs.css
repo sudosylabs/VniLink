@@ -1,8 +1,8 @@
 /* ---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted from VS Code 1.141.0 workbench/contrib/modernUI/browser/media/tabs.css.
- *  Modern tab presentation: selectors target VniLink's titlebar; theme tokens use its chrome palette.
+ *  Adapted for VniLink: modern tab presentation with selectors for VniLink's titlebar and theme tokens
+ *  from its chrome palette; the active tab's cap restates upstream's connectedEditorTabs.css.
  *-------------------------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------------------------

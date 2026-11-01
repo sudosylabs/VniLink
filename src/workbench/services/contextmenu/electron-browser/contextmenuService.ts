@@ -1,9 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink from vs/workbench/services/contextmenu/electron-browser/contextmenuService.ts:
- *  native menus on macOS and VniLink's themed menus elsewhere, as its dialogs are, rather than
- *  a `window.menuStyle` setting; no telemetry, notification or keybinding service.
+ *  Adapted for VniLink: native menus on macOS and VniLink's themed menus elsewhere, as its dialogs
+ *  are, rather than a `window.menuStyle` setting; no telemetry, notification or keybinding service.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.

@@ -3699,8 +3699,8 @@
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
-      "sha256": "7807447b1cb48ac22a743dd9cfabf6528cb6a94dbd89febc5979b795f9d0ff2b",
-      "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders."
+      "sha256": "6fb30ea73787a16c853ac4764d35cabed3ff468b25625987e3e8860c935f49a9",
+      "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders. The active cap and reverse outline also restate src/vs/workbench/contrib/modernUI/browser/media/connectedEditorTabs.css."
     },
     {
       "path": "src/workbench/parts/titlebar/media/titlebarpart.css",
@@ -3723,7 +3723,7 @@
     {
       "path": "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
       "upstreamPath": "src/vs/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
-      "sha256": "b4333647cc3b5c15e110a253f09ea0ffbad2a8f850c20980e9fb53c8a0d0d3b1",
+      "sha256": "b9d3e575c0d5768842c835cf9996c5a2e0a8b8f76069a46215c89603bfda0e74",
       "adapted": true,
       "upstreamStyle": true
     },
