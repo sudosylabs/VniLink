@@ -17,6 +17,7 @@ async function project(files) {
 	const all = {
 		'tsconfig.json': JSON.stringify({ compilerOptions: { strict: true, target: 'ES2024', module: 'NodeNext', moduleResolution: 'NodeNext', noEmit: true, skipLibCheck: true, lib: ['ES2024'], types: [] }, include: ['src/**/*.ts', 'test/**/*.ts'] }),
 		'build/lint/unused-allowlist.json': '[]',
+		'build/vscode-source.json': JSON.stringify({ files: [{ path: 'src/copied.ts', upstreamPath: 'src/vs/copied.ts', sha256: '' }], tooling: [] }),
 		...files,
 	};
 	for (const [path, content] of Object.entries(all)) {
@@ -37,10 +38,11 @@ test('reports declarations nothing reaches, including code only unused code uses
 			'function helper(): void { }',
 			'function recursive(): void { recursive(); }',
 			'export class Service { run(): void { } stop(): void { } }',
+			'class Recursive { make(): Recursive { return new Recursive().helper(); } helper(): Recursive { return this; } }',
 		].join('\n'),
 	});
 	try {
-		assert.deepEqual(names(findUnused(root)), ['Service.stop', 'helper', 'recursive', 'unused']);
+		assert.deepEqual(names(findUnused(root)), ['Recursive', 'Service.stop', 'helper', 'recursive', 'unused'], 'a class constructing itself is not used by that');
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -107,6 +109,19 @@ test('a declaration only tests reach is reported as such, and allowlisted names 
 			assert.doesNotMatch(error.message, /byString is unused/);
 			return true;
 		});
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test('a copied interface\'s unread properties are unused; an application interface\'s are its contract', async () => {
+	const root = await project({
+		'src/main.ts': `import type { Copied } from './copied.js';\nimport type { Contract } from './contract.js';\ndeclare const a: Copied; declare const b: Contract;\nconsole.log(a.read, b.read);\n`,
+		'src/copied.ts': 'export interface Copied { read: number; unread: number; }\n',
+		'src/contract.ts': 'export interface Contract { read: number; checkedByAGuard: number; }\n',
+	});
+	try {
+		assert.deepEqual(names(findUnused(root)), ['Copied.unread']);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

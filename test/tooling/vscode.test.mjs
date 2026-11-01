@@ -89,3 +89,65 @@ test('pruning the last member of a block leaves no blank line against its brace'
 test('pruning refuses a name it cannot find', () => {
 	assert.throws(() => pruneSource('a.ts', upstream, ['missing', 'MenuId.Gone']), /no declaration named missing, MenuId\.Gone/);
 });
+
+test('pruning keeps the file notice when the first import goes, and widened neighbours are removed once', () => {
+	const notice = `/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *--------------------------------------------------------------------------------------------*/
+`;
+	const source = `${notice}import { gone } from './gone.js';
+import { kept } from './kept.js';
+
+export class Queue {
+	peek(): number {
+		return kept;
+	}
+
+	removeLast(): number {
+		return gone;
+	}
+
+	takeCount(): number {
+		return gone;
+	}
+}
+`;
+	assert.equal(pruneSource('a.ts', source, ['Queue.removeLast', 'Queue.takeCount']), `${notice}import { kept } from './kept.js';
+
+export class Queue {
+	peek(): number {
+		return kept;
+	}
+}
+`);
+});
+
+test('pruning the last imported names keeps upstream\'s trailing comma', () => {
+	const source = `import { a, b, c, } from './x.js';\n\nexport const kept = a;\nexport const gone = b + c;\n`;
+	assert.equal(pruneSource('a.ts', source, ['gone']), `import { a, } from './x.js';\n\nexport const kept = a;\n`);
+});
+
+test('pruning reaches into namespaces, and a removed owner takes the names declared inside it', () => {
+	const source = `export namespace Event {
+	export function map(): void { }
+
+	export class Chain {
+		reduce(): void { }
+
+		latch(): void { }
+	}
+}
+
+export class Reader {
+	peek(): void { }
+}
+`;
+	assert.equal(pruneSource('a.ts', source, ['Event.Chain.reduce', 'Reader', 'Reader.peek']), `export namespace Event {
+	export function map(): void { }
+
+	export class Chain {
+		latch(): void { }
+	}
+}
+`);
+});

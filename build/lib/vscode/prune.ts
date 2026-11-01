@@ -9,9 +9,9 @@
  * Deletes whole declarations from copied source and changes nothing else, so a
  * pruned copy can be re-derived from upstream and compared byte for byte.
  *
- * A name is a top-level declaration (`delta`), a member of a top-level class,
- * interface or namespace (`MenuId.CommandPalette`), or an `export { name }`
- * specifier. A declaration goes with the comments attached to it (no blank line
+ * A name is a declaration (`delta`), one inside a namespace (`Event.map`), a
+ * member of a class or interface (`MenuId.CommandPalette`,
+ * `Event.ChainableSynthesis.reduce`), or an `export { name }` specifier. A declaration goes with the comments attached to it (no blank line
  * between) and one of the blank lines around it. Import specifiers that only
  * the deleted code used go too; imports upstream already left unused stay.
  */
@@ -47,27 +47,25 @@ function memberName(member: ts.Node): string | undefined {
 }
 
 function membersOf(node: ts.Node): readonly ts.Node[] | undefined {
-	if (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) {
-		return node.members;
-	}
-	if (ts.isModuleDeclaration(node) && node.body && ts.isModuleBlock(node.body)) {
-		return node.body.statements;
-	}
-	return undefined;
+	return ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) ? node.members : undefined;
 }
 
-/** The lines `node` occupies, with its attached comments and the rest of its last line. */
+/** The lines `node` occupies, with the comments attached to it and the rest of its last line. */
 function lineRange(text: string, node: ts.Node): Range {
-	const trivia = text.slice(node.getFullStart(), node.getStart());
-	let start: number;
-	const gap = trivia.search(/\n[ \t]*\n(?![\s\S]*\n[ \t]*\n)/);
-	if (gap >= 0) {
-		start = node.getFullStart() + trivia.indexOf('\n', gap + 1) + 1;
-	} else if (trivia.includes('\n')) {
-		start = node.getFullStart() + trivia.indexOf('\n') + 1;
-	} else {
-		start = node.getStart();
+	// Comments directly above, with no blank line between, belong to the node; a file's notice never does.
+	let first = node.getStart();
+	const comments = ts.getLeadingCommentRanges(text, node.getFullStart()) ?? [];
+	for (let index = comments.length - 1; index >= 0; index--) {
+		const comment = comments[index];
+		const between = text.slice(comment.end, first);
+		const notice = comment.pos === 0 && /^(\/\*-{3}|\/\/ -{3})/.test(text);
+		if (notice || /\n[ \t]*\n/.test(between)) {
+			break;
+		}
+		first = comment.pos;
 	}
+	const lineStart = text.lastIndexOf('\n', first - 1) + 1;
+	const start = /^[ \t]*$/.test(text.slice(lineStart, first)) ? lineStart : first;
 	let end = node.getEnd();
 	const rest = /^[ \t]*(\/\/[^\n]*)?(\r?\n|$)/.exec(text.slice(end));
 	if (rest) {
@@ -104,28 +102,55 @@ function removeRanges(text: string, ranges: readonly Range[]): string {
 	return result;
 }
 
-/** Identifiers outside import declarations. */
-function referencedNames(source: ts.SourceFile): Set<string> {
-	const names = new Set<string>();
+/**
+ * Import bindings that nothing in `source` refers to. Names are resolved by
+ * scope, so a parameter or a member that shares an import's name does not keep
+ * it; a JSDoc `{@link name}` does, as in upstream's own text.
+ */
+function unreferencedImports(source: ts.SourceFile): Set<string> {
+	const host = ts.createCompilerHost({});
+	const program = ts.createProgram({
+		rootNames: [source.fileName],
+		options: { noResolve: true, noLib: true, allowJs: true, types: [] },
+		host: {
+			...host,
+			getSourceFile: name => name === source.fileName ? source : undefined,
+			fileExists: name => name === source.fileName,
+			readFile: () => undefined,
+		},
+	});
+	const checker = program.getTypeChecker();
+	const bindings = new Map<ts.Symbol, string>();
+	for (const binding of importBindings(source)) {
+		const symbol = checker.getSymbolAtLocation(binding.identifier);
+		if (symbol) {
+			bindings.set(symbol, binding.name);
+		}
+	}
+	const used = new Set<string>();
 	const visit = (node: ts.Node): void => {
-		if (ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)) {
+		if (ts.isImportDeclaration(node)) {
 			return;
 		}
 		if (ts.isIdentifier(node)) {
-			names.add(node.text);
+			const symbol = checker.getSymbolAtLocation(node);
+			const name = symbol && bindings.get(symbol);
+			if (name !== undefined) {
+				used.add(name);
+			}
 		}
 		ts.forEachChild(node, visit);
 	};
 	ts.forEachChild(source, visit);
-	// JSDoc `{@link name}` references keep an import alive in upstream's own text.
 	for (const match of source.text.matchAll(/@link\s+([A-Za-z_$][\w$]*)/g)) {
-		names.add(match[1]);
+		used.add(match[1]);
 	}
-	return names;
+	return new Set([...bindings.values()].filter(name => !used.has(name)));
 }
 
 interface ImportBinding {
 	readonly name: string;
+	readonly identifier: ts.Identifier;
 	readonly declaration: ts.ImportDeclaration;
 	readonly specifier?: ts.ImportSpecifier;
 }
@@ -138,24 +163,20 @@ function importBindings(source: ts.SourceFile): ImportBinding[] {
 		}
 		const clause = statement.importClause;
 		if (clause.name) {
-			bindings.push({ name: clause.name.text, declaration: statement });
+			bindings.push({ name: clause.name.text, identifier: clause.name, declaration: statement });
 		}
 		const named = clause.namedBindings;
 		if (named && ts.isNamespaceImport(named)) {
-			bindings.push({ name: named.name.text, declaration: statement });
+			bindings.push({ name: named.name.text, identifier: named.name, declaration: statement });
 		} else if (named) {
 			for (const specifier of named.elements) {
-				bindings.push({ name: specifier.name.text, declaration: statement, specifier });
+				bindings.push({ name: specifier.name.text, identifier: specifier.name, declaration: statement, specifier });
 			}
 		}
 	}
 	return bindings;
 }
 
-function unusedImports(source: ts.SourceFile): Set<string> {
-	const referenced = referencedNames(source);
-	return new Set(importBindings(source).map(binding => binding.name).filter(name => !referenced.has(name)));
-}
 
 /** Removes the import bindings named in `names`, whole declarations when none is left. */
 function removeImports(text: string, names: ReadonlySet<string>): string {
@@ -186,16 +207,25 @@ function removeImports(text: string, names: ReadonlySet<string>): string {
 			ranges.push(lineRange(text, declaration));
 			continue;
 		}
-		for (const specifier of removed.map(binding => binding.specifier).filter(specifier => specifier !== undefined)) {
-			const index = elements.indexOf(specifier);
-			if (index < elements.length - 1) {
-				ranges.push({ start: elements[index].getStart(), end: elements[index + 1].getStart() });
-			} else {
-				ranges.push({ start: elements[index - 1].getEnd(), end: elements[index].getEnd() });
-			}
-		}
+		ranges.push(...listElementRanges(elements, removed.map(binding => binding.specifier).filter(specifier => specifier !== undefined)));
 	}
 	return removeRanges(text, mergeRanges(ranges));
+}
+
+/**
+ * The text that removes `removed` from a comma-separated list with at least one
+ * element left: before the last kept element an element goes with the separator
+ * after it, past it with the one before. A trailing comma stays.
+ */
+function listElementRanges(elements: readonly ts.Node[], removed: readonly ts.Node[]): Range[] {
+	const kept = elements.filter(element => !removed.includes(element));
+	const lastKept = elements.indexOf(kept[kept.length - 1]);
+	return removed.map(element => {
+		const index = elements.indexOf(element);
+		return index < lastKept
+			? { start: elements[index].getStart(), end: elements[index + 1].getStart() }
+			: { start: elements[index - 1].getEnd(), end: elements[index].getEnd() };
+	});
 }
 
 /** Joins overlapping ranges, which adjacent specifiers removed together produce. */
@@ -213,18 +243,6 @@ function mergeRanges(ranges: readonly Range[]): Range[] {
 	return merged;
 }
 
-function exportSpecifierRange(specifier: ts.ExportSpecifier, text: string): Range {
-	const declaration = specifier.parent.parent;
-	const elements = specifier.parent.elements;
-	if (elements.length === 1) {
-		return lineRange(text, declaration);
-	}
-	const index = elements.indexOf(specifier);
-	return index < elements.length - 1
-		? { start: specifier.getStart(), end: elements[index + 1].getStart() }
-		: { start: elements[index - 1].getEnd(), end: specifier.getEnd() };
-}
-
 /** `content` without the declarations in `names`; throws for a name it cannot find. */
 export function pruneSource(path: string, content: string, names: readonly string[]): string {
 	const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
@@ -233,45 +251,75 @@ export function pruneSource(path: string, content: string, names: readonly strin
 	const ranges: Range[] = [];
 	const remove = (node: ts.Node, name: string): void => {
 		ranges.push(lineRange(content, node));
-		found.add(name);
-	};
-	for (const statement of source.statements) {
-		const name = declarationName(statement);
-		if (name !== undefined && wanted.has(name)) {
-			remove(statement, name);
-			continue;
+		// Whatever was declared inside goes with it.
+		for (const other of wanted) {
+			if (other === name || other.startsWith(`${name}.`)) {
+				found.add(other);
+			}
 		}
-		if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-			const removedHere = statement.exportClause.elements.filter(element => wanted.has(element.name.text));
-			if (removedHere.length === statement.exportClause.elements.length) {
-				remove(statement, removedHere[0].name.text);
-				removedHere.forEach(element => found.add(element.name.text));
-			} else {
-				for (const element of removedHere) {
-					ranges.push(exportSpecifierRange(element, content));
-					found.add(element.name.text);
+	};
+	const visit = (statements: readonly ts.Statement[], prefix: string): void => {
+		for (const statement of statements) {
+			const local = declarationName(statement);
+			const name = local === undefined ? undefined : prefix + local;
+			if (name !== undefined && wanted.has(name)) {
+				remove(statement, name);
+				continue;
+			}
+			if (ts.isVariableStatement(statement) && statement.declarationList.declarations.length > 1) {
+				const declarations = statement.declarationList.declarations;
+				const removedHere = declarations.filter(declaration => ts.isIdentifier(declaration.name) && wanted.has(prefix + declaration.name.text));
+				removedHere.forEach(declaration => found.add(prefix + (declaration.name as ts.Identifier).text));
+				if (removedHere.length === declarations.length) {
+					ranges.push(lineRange(content, statement));
+				} else {
+					ranges.push(...listElementRanges(declarations, removedHere));
+				}
+				continue;
+			}
+			if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+				const elements = statement.exportClause.elements;
+				const removedHere = elements.filter(element => wanted.has(prefix + element.name.text));
+				if (removedHere.length && removedHere.length === elements.length) {
+					ranges.push(lineRange(content, statement));
+				} else {
+					ranges.push(...listElementRanges(elements, removedHere));
+				}
+				removedHere.forEach(element => found.add(prefix + element.name.text));
+				continue;
+			}
+			if (name === undefined) {
+				continue;
+			}
+			if (ts.isModuleDeclaration(statement) && statement.body && ts.isModuleBlock(statement.body)) {
+				visit(statement.body.statements, `${name}.`);
+				continue;
+			}
+			for (const member of membersOf(statement) ?? []) {
+				const qualified = `${name}.${memberName(member) ?? ''}`;
+				if (wanted.has(qualified)) {
+					remove(member, qualified);
 				}
 			}
-			continue;
 		}
-		if (name === undefined) {
-			continue;
-		}
-		for (const member of membersOf(statement) ?? []) {
-			const qualified = `${name}.${memberName(member) ?? ''}`;
-			if (wanted.has(qualified)) {
-				remove(member, qualified);
-			}
-		}
-	}
+	};
+	visit(source.statements, '');
 	const missing = names.filter(name => !found.has(name));
 	if (missing.length) {
 		throw new Error(`${path}: no declaration named ${missing.join(', ')}`);
 	}
-	const before = unusedImports(source);
+	const before = unreferencedImports(source);
 	// Neighbouring declarations go as one block, so the blank lines around it are judged once.
-	const pruned = removeRanges(content, mergeRanges(ranges).map(range => withBlankLine(content, range)));
-	const after = unusedImports(ts.createSourceFile(path, pruned, ts.ScriptTarget.Latest, true));
+	// Widening can join neighbours separated by a blank line; widen the joined block again until it settles.
+	let blocks = mergeRanges(ranges);
+	let joined: boolean;
+	do {
+		const widened = mergeRanges(blocks.map(range => withBlankLine(content, range)));
+		joined = widened.length < blocks.length;
+		blocks = widened;
+	} while (joined);
+	const pruned = removeRanges(content, blocks);
+	const after = unreferencedImports(ts.createSourceFile(path, pruned, ts.ScriptTarget.Latest, true));
 	const orphaned = new Set([...after].filter(name => !before.has(name)));
 	return orphaned.size ? removeImports(pruned, orphaned) : pruned;
 }

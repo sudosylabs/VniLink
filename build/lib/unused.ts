@@ -22,6 +22,7 @@
  * names those, each with its reason; an entry that is no longer needed fails.
  */
 import ts from 'typescript';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 
@@ -55,6 +56,15 @@ interface Use {
 	readonly within: Candidate | undefined;
 	readonly test: boolean;
 	readonly file: string;
+}
+
+/** A union's members, a promise's value and the type itself: where an object literal's properties may land. */
+function constituents(type: ts.Type): ts.Type[] {
+	const all = type.isUnion() ? type.types : [type];
+	return all.flatMap(member => {
+		const awaited = member.getProperty('then') && (member as ts.TypeReference).typeArguments?.[0];
+		return awaited ? [member, awaited] : [member];
+	});
 }
 
 function literalNames(type: ts.Type): string[] {
@@ -113,8 +123,10 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 	const test = join(root, 'test') + sep;
 	const files = program.getSourceFiles().filter(file => file.fileName.startsWith(src) || file.fileName.startsWith(test));
 
-	// Files that start with VS Code's notice: verbatim, pruned or adapted copies.
-	const copied = (file: ts.SourceFile): boolean => file.text.startsWith('/*---') && file.text.slice(0, 200).includes('Microsoft Corporation');
+	// Verbatim and pruned copies; adapted and derived files are application code.
+	const manifest = JSON.parse(readFileSync(join(root, 'build/vscode-source.json'), 'utf8')) as { files: { path: string; adapted?: boolean }[] };
+	const verbatim = new Set(manifest.files.filter(file => !file.adapted).map(file => join(root, file.path)));
+	const copied = (file: ts.SourceFile): boolean => verbatim.has(file.fileName);
 	const candidates: Candidate[] = [];
 	const byDeclaration = new Map<ts.Node, Candidate>();
 	const position = (node: ts.Node): { path: string; line: number } => {
@@ -159,6 +171,13 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 		for (const statement of statements) {
 			const exported = isExported(statement) || (owner?.exported ?? false);
 			const prefix = owner ? `${owner.name}.` : '';
+			// A re-export is a declaration of its own: a facade's name goes when nothing imports it.
+			if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+				for (const specifier of statement.exportClause.elements) {
+					addCandidate(specifier.name.text, [specifier], true, owner);
+				}
+				continue;
+			}
 			if (ts.isVariableStatement(statement)) {
 				for (const declaration of statement.declarationList.declarations) {
 					if (ts.isIdentifier(declaration.name)) {
@@ -281,8 +300,11 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 				// Writing a property of a contextual type passes it to whoever reads that type, often outside `src/`.
 				const name = nameText(node.name);
 				const contextual = checker.getContextualType(node.parent);
-				const property = name !== undefined && contextual ? checker.getPropertyOfType(contextual, name) : undefined;
-				record(property, node, isTest, file.fileName);
+				if (name !== undefined && contextual) {
+					for (const constituent of constituents(contextual)) {
+						record(checker.getPropertyOfType(constituent, name), node, isTest, file.fileName);
+					}
+				}
 			} else if (ts.isElementAccessExpression(node)) {
 				// `value[key]` with `key` a union of names reads each of them.
 				const objectType = checker.getTypeAtLocation(node.expression);
@@ -299,7 +321,7 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 				for (const property of checker.getTypeAtLocation(node.type).getProperties()) {
 					record(property, node, isTest, file.fileName);
 				}
-			} else if (ts.isTypeReferenceNode(node) && node.typeArguments && node.typeArguments.length >= 2) {
+			} else if ((ts.isTypeReferenceNode(node) || ts.isExpressionWithTypeArguments(node)) && node.typeArguments && node.typeArguments.length >= 2) {
 				// `Pick<T, 'a' | 'b'>` and `Omit<T, 'a'>` name properties of `T` by string.
 				const objectType = checker.getTypeAtLocation(node.typeArguments[0]);
 				for (const name of literalNames(checker.getTypeAtLocation(node.typeArguments[1]))) {
@@ -354,10 +376,45 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 			}
 		}
 	}
+	// Members the type system reads although no code does: a property typed by its owner's type
+	// parameter carries it for inference (`ServiceIdentifier<T>.type`), and a literal-typed one
+	// discriminates a union (`lazy: true`). They live as long as their owner.
+	const typeLevel = new Map<Candidate, Candidate[]>();
+	for (const candidate of candidates) {
+		const declaration = candidate.declarations[0];
+		const owner = declaration.parent;
+		if (!candidate.owner || !(ts.isPropertySignature(declaration) || ts.isPropertyDeclaration(declaration)) || !declaration.type) {
+			continue;
+		}
+		const ownParameters = ts.isInterfaceDeclaration(owner) || ts.isClassLike(owner) ? owner.typeParameters ?? [] : [];
+		const parameters = new Set(ownParameters.map(parameter => parameter.name.text));
+		let typeLevelMember = ts.isLiteralTypeNode(declaration.type);
+		const visit = (node: ts.Node): void => {
+			if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && parameters.has(node.typeName.text)) {
+				typeLevelMember = true;
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(declaration.type);
+		if (typeLevelMember) {
+			typeLevel.set(candidate.owner, [...(typeLevel.get(candidate.owner) ?? []), candidate]);
+		}
+	}
 	const allowedCandidate = (candidate: Candidate): boolean => allowed.has(`${candidate.path}#${candidate.name}`);
 	const ignoredMember = (candidate: Candidate): boolean => {
 		const name = candidate.name.slice(candidate.name.lastIndexOf('.') + 1);
-		return candidate.owner !== undefined && (name === 'toJSON' || name === 'toString' || candidate.declarations.some(declaration => external.has(declaration)));
+		// `_serviceBrand` types a service identifier; dependency injection and its lint rule need it unread.
+		const implicit = name === 'toJSON' || name === 'toString' || name === '_serviceBrand';
+		return candidate.owner !== undefined && (implicit || candidate.declarations.some(declaration => external.has(declaration)));
+	};
+	// A declaration that names itself from inside, as a class constructing itself, is not used by that.
+	const encloses = (candidate: Candidate, within: Candidate | undefined): boolean => {
+		for (let current = within; current; current = current.owner) {
+			if (current === candidate) {
+				return true;
+			}
+		}
+		return false;
 	};
 	const mark = (includeTests: boolean): Set<Candidate> => {
 		const live = new Set<Candidate>();
@@ -367,6 +424,7 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 				if (!live.has(member)) {
 					live.add(member);
 					pending.push(member);
+					(typeLevel.get(member) ?? []).forEach(activate);
 				}
 			}
 		};
@@ -379,10 +437,10 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 		const apply = (use: Use): void => {
 			for (const target of use.targets) {
 				const candidate = byDeclaration.get(target);
-				if (candidate && candidate !== use.within) {
+				if (candidate && !encloses(candidate, use.within)) {
 					activate(candidate);
-					// A live member keeps its owner: the class or namespace holding it.
-					for (let owner = candidate.owner; owner; owner = owner.owner) {
+					// A member used from outside keeps its owner, the class or namespace holding it.
+					for (let owner = candidate.owner; owner && !encloses(owner, use.within); owner = owner.owner) {
 						activate(owner);
 					}
 				}
