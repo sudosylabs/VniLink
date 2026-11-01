@@ -23,6 +23,7 @@ import type { Mutable } from '../../../base/common/types.js';
 import { isNumber, isString } from '../../../base/common/types.js';
 import { URI } from '../../../base/common/uri.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
+import { LogLevel } from './logLevel.js';
 
 export const ILogService = createDecorator<ILogService>('logService');
 
@@ -36,14 +37,7 @@ export function isLogLevel(thing: unknown): thing is LogLevel {
 	return isNumber(thing);
 }
 
-export enum LogLevel {
-	Off,
-	Trace,
-	Debug,
-	Info,
-	Warning,
-	Error
-}
+export { LogLevel };
 
 export const DEFAULT_LOG_LEVEL: LogLevel = LogLevel.Info;
 

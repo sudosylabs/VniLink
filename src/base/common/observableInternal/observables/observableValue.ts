@@ -50,10 +50,6 @@ export class ObservableValue<T, TChange = void>
 			value: this._value,
 		};
 	}
-
-	public debugSetValue(value: unknown) {
-		this._value = value as T;
-	}
 }
 /**
  * A disposable observable. When disposed, its value is also disposed.

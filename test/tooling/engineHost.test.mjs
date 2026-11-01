@@ -143,7 +143,8 @@ test('commands are shape-checked, shutdown stops new work and data channels resp
 	const port = name => ({ close: () => closed.push(name), postMessage() { }, on() { }, start() { } });
 	assert.equal(host.handledClientConnection({ data: { type: 'attachDataChannel', owner: 'window', request: { requestId: 'bad' } }, ports: [port('invalid')] }), true);
 	assert.deepEqual(closed, ['invalid']);
-	assert.equal(host.handledClientConnection({ data: 'vscode:engineHost', ports: [port('client')] }), false, 'IPC client connections must reach the server');
+	assert.equal(host.handledClientConnection({ data: 'vnilink:engineHost', ports: [port('client')] }), false, 'IPC client connections must reach the server');
+	assert.equal(host.handledClientConnection({ data: 'something else', ports: [port('stray')] }), true, 'Only the connection message opens a connection');
 	await host.execute({ type: 'shutdown' });
 	await assert.rejects(host.execute({ type: 'snapshot' }), /shutting down/);
 	host.handledClientConnection({ data: { type: 'attachDataChannel', owner: 'window', request: { requestId: 'late', kind: 'video', sessionId: '1', generation: '1' } }, ports: [port('late')] });

@@ -14,10 +14,13 @@ import type { EngineCommand, EngineEvent, EngineReply } from './engine.js';
 export const ENGINE_CHANNEL_NAME = 'engine';
 
 /** Response channel on which main transfers a data-channel `MessagePort` to the requesting window. */
-export const DATA_CHANNEL_PORT_RESPONSE = 'vscode:dataChannelPort';
+export const DATA_CHANNEL_PORT_RESPONSE = 'vnilink:dataChannelPort';
 
 /** Channel between the main process and the engine utility process. */
 export const ENGINE_HOST_CHANNEL_NAME = 'engineHost';
+
+/** The message with which main hands the engine utility process the port of its IPC connection. */
+export const ENGINE_HOST_CONNECTION = 'vnilink:engineHost';
 
 /**
  * Engine events since the previous batch. `resync` means events may have

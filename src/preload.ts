@@ -11,9 +11,8 @@
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Sandboxed preload, shaped like VS Code's `base/parts/sandbox/electron-browser/preload.ts`.
- * It exposes the same `vscode` globals that the copied IPC and platform modules
- * read, with VniLink's stricter `MessagePort` handling and no environment.
+ * Sandboxed preload. It exposes the `vnilink` global that the copied IPC and
+ * platform modules read, with stricter `MessagePort` handling and no environment.
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
@@ -30,7 +29,7 @@ const maxPendingPorts = 8;
 const portTimeout = 20_000;
 
 function validateIPC(channel: string): true | never {
-	if (!channel.startsWith('vscode:')) {
+	if (!channel.startsWith('vnilink:')) {
 		throw new Error(`Unsupported event IPC channel '${channel}'`);
 	}
 	return true;
@@ -157,7 +156,7 @@ const globals = {
 		},
 	},
 
-	/** As VS Code's: the path of a file dropped from the system's file manager. */
+	/** The path of a file dropped from the system's file manager. */
 	webUtils: {
 		getPathForFile(file: File): string {
 			return webUtils.getPathForFile(file);
@@ -174,4 +173,4 @@ const globals = {
 	},
 };
 
-contextBridge.exposeInMainWorld('vscode', globals);
+contextBridge.exposeInMainWorld('vnilink', globals);

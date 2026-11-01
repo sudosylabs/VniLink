@@ -8,10 +8,6 @@ export type DebugLocation = DebugLocationImpl | undefined;
 export namespace DebugLocation {
 	let enabled = false;
 
-	export function enable(): void {
-		enabled = true;
-	}
-
 	export function ofCaller(): DebugLocation {
 		if (!enabled) {
 			return undefined;

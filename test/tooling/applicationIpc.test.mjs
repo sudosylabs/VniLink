@@ -102,10 +102,10 @@ function appWindow(id = 4) {
 test('privileged channels accept only the workbench main frame of an application window', async () => {
 	const window = appWindow();
 	let calls = 0;
-	validatedIpcMain.handle('vscode:probe', () => {
+	validatedIpcMain.handle('vnilink:probe', () => {
 		calls++;
 	});
-	const handler = handlers.get('vscode:probe');
+	const handler = handlers.get('vnilink:probe');
 	const contents = window.webContents;
 	await handler({ sender: contents, senderFrame: contents.mainFrame });
 	assert.equal(calls, 1);

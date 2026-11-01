@@ -1,7 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: the sandboxed process comes from the `vnilink` global; no locale is read from VS Code's environment.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import * as nls from '../../nls.js';
 
@@ -21,7 +28,6 @@ let _isMobile = false;
 let _locale: string | undefined = undefined;
 let _language: string = LANGUAGE_DEFAULT;
 let _platformLocale: string = LANGUAGE_DEFAULT;
-let _translationsConfigFile: string | undefined = undefined;
 let _userAgent: string | undefined = undefined;
 
 export interface IProcessEnvironment {
@@ -53,9 +59,9 @@ declare const process: INodeProcess;
 const $globalThis: any = globalThis;
 
 let nodeProcess: INodeProcess | undefined = undefined;
-if (typeof $globalThis.vscode !== 'undefined' && typeof $globalThis.vscode.process !== 'undefined') {
+if (typeof $globalThis.vnilink !== 'undefined' && typeof $globalThis.vnilink.process !== 'undefined') {
 	// Native environment (sandboxed)
-	nodeProcess = $globalThis.vscode.process;
+	nodeProcess = $globalThis.vnilink.process;
 } else if (typeof process !== 'undefined' && typeof process?.versions?.node === 'string') {
 	// Native environment (non-sandboxed)
 	nodeProcess = process;
@@ -81,17 +87,6 @@ if (typeof nodeProcess === 'object') {
 	_isCI = !!nodeProcess.env['CI'] || !!nodeProcess.env['BUILD_ARTIFACTSTAGINGDIRECTORY'] || !!nodeProcess.env['GITHUB_WORKSPACE'];
 	_locale = LANGUAGE_DEFAULT;
 	_language = LANGUAGE_DEFAULT;
-	const rawNlsConfig = nodeProcess.env['VSCODE_NLS_CONFIG'];
-	if (rawNlsConfig) {
-		try {
-			const nlsConfig: nls.INLSConfiguration = JSON.parse(rawNlsConfig);
-			_locale = nlsConfig.userLocale;
-			_platformLocale = nlsConfig.osLocale;
-			_language = nlsConfig.resolvedLanguage || LANGUAGE_DEFAULT;
-			_translationsConfigFile = nlsConfig.languagePack?.translationsConfigFile;
-		} catch (e) {
-		}
-	}
 	_isNative = true;
 }
 

@@ -55,7 +55,7 @@ export class Server extends IPCServer {
 	private static readonly Clients = new Map<number, IDisposable>();
 
 	private static getOnDidClientConnect(): Event<ClientConnectionEvent> {
-		const onHello = Event.fromNodeEventEmitter<WebContents>(validatedIpcMain, 'vscode:hello', ({ sender }) => sender);
+		const onHello = Event.fromNodeEventEmitter<WebContents>(validatedIpcMain, 'vnilink:hello', ({ sender }) => sender);
 
 		const onHelloFromWindow = Event.filter(onHello, webContents => BrowserWindow.fromWebContents(webContents) !== null);
 
@@ -72,8 +72,8 @@ export class Server extends IPCServer {
 			});
 			Server.Clients.set(id, reconnectDisposable);
 
-			const onMessage = withTrustedContext(createScopedOnMessageEvent(id, 'vscode:message') as Event<VSBuffer>, `window:${windowId}`);
-			const onDidClientDisconnect = Event.any(Event.signal(createScopedOnMessageEvent(id, 'vscode:disconnect')), onDidClientReconnect.event);
+			const onMessage = withTrustedContext(createScopedOnMessageEvent(id, 'vnilink:message') as Event<VSBuffer>, `window:${windowId}`);
+			const onDidClientDisconnect = Event.any(Event.signal(createScopedOnMessageEvent(id, 'vnilink:disconnect')), onDidClientReconnect.event);
 			Event.once(onDidClientDisconnect)(() => {
 				if (Server.Clients.get(id) === reconnectDisposable) {
 					Server.Clients.delete(id);

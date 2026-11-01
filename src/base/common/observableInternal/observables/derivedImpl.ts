@@ -375,22 +375,4 @@ export class Derived<T, TChangeSummary = any, TChange = void> extends BaseObserv
 			value: this._value,
 		};
 	}
-
-	public debugSetValue(newValue: unknown) {
-		// eslint-disable-next-line local/code-no-any-casts
-		this._value = newValue as any;
-	}
-
-	public debugRecompute(): void {
-		this.beginUpdate(this);
-		try {
-			if (!this._isComputing) {
-				this._recompute();
-			} else {
-				this._state = DerivedState.stale;
-			}
-		} finally {
-			this.endUpdate(this);
-		}
-	}
 }

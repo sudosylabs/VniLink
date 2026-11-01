@@ -35,29 +35,29 @@ async function loadPreload() {
 
 test('the preload exposes only prefixed IPC, a bounded port relay and no environment', async () => {
 	const { exposed, ipcRenderer, posted } = await loadPreload();
-	const globals = exposed.vscode;
+	const globals = exposed.vnilink;
 	assert.deepEqual(Object.keys(globals).sort(), ['context', 'ipcMessagePort', 'ipcRenderer', 'process', 'webUtils']);
 	assert.deepEqual(Object.keys(globals.webUtils), ['getPathForFile'], 'only the path of a dropped file');
 	assert.deepEqual(globals.process.env, {});
 	assert.equal((await globals.context.resolveConfiguration()).windowId, 1);
 	assert.throws(() => globals.ipcRenderer.invoke('engine:command'), /Unsupported/);
 	assert.throws(() => globals.ipcMessagePort.acquire('dataChannelPort', 'one'), /Unsupported/);
-	assert.throws(() => globals.ipcMessagePort.acquire('vscode:dataChannelPort', 'not a nonce!'), /refused/);
+	assert.throws(() => globals.ipcMessagePort.acquire('vnilink:dataChannelPort', 'not a nonce!'), /refused/);
 	const closed = [];
 	const port = name => ({ close: () => closed.push(name) });
-	ipcRenderer.emit('vscode:dataChannelPort', { ports: [port('early')] }, 'unknown');
-	globals.ipcMessagePort.acquire('vscode:dataChannelPort', 'one');
-	assert.throws(() => globals.ipcMessagePort.acquire('vscode:dataChannelPort', 'one'), /refused/);
-	ipcRenderer.emit('vscode:dataChannelPort', { ports: [port('unsolicited')] }, 'other');
-	ipcRenderer.emit('vscode:dataChannelPort', { ports: [port('answer')] }, 'one');
+	ipcRenderer.emit('vnilink:dataChannelPort', { ports: [port('early')] }, 'unknown');
+	globals.ipcMessagePort.acquire('vnilink:dataChannelPort', 'one');
+	assert.throws(() => globals.ipcMessagePort.acquire('vnilink:dataChannelPort', 'one'), /refused/);
+	ipcRenderer.emit('vnilink:dataChannelPort', { ports: [port('unsolicited')] }, 'other');
+	ipcRenderer.emit('vnilink:dataChannelPort', { ports: [port('answer')] }, 'one');
 	assert.deepEqual(closed, ['unsolicited']);
 	assert.equal(posted.length, 1);
 	assert.equal(posted[0].data, 'one');
 	assert.equal(posted[0].origin, 'vnilink://app');
-	ipcRenderer.emit('vscode:dataChannelPort', { ports: [port('replay')] }, 'one');
+	ipcRenderer.emit('vnilink:dataChannelPort', { ports: [port('replay')] }, 'one');
 	assert.deepEqual(closed, ['unsolicited', 'replay']);
 	for (let index = 0; index < 8; index++) {
-		globals.ipcMessagePort.acquire('vscode:dataChannelPort', `pending-${String(index)}`);
+		globals.ipcMessagePort.acquire('vnilink:dataChannelPort', `pending-${String(index)}`);
 	}
-	assert.throws(() => globals.ipcMessagePort.acquire('vscode:dataChannelPort', 'overflow'), /refused/);
+	assert.throws(() => globals.ipcMessagePort.acquire('vnilink:dataChannelPort', 'overflow'), /refused/);
 });

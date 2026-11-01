@@ -2052,38 +2052,9 @@
     {
       "path": "src/base/common/event.ts",
       "upstreamPath": "src/vs/base/common/event.ts",
-      "sha256": "65690d1cffa09aeecc920ceb455fb629a02b114c50a8ae1a868e567d0d77fc76",
-      "pruned": [
-        "AsyncEmitter",
-        "ConstValueWithChangeEvent",
-        "DynamicListEventMultiplexer",
-        "Event.ChainableSynthesis.latch",
-        "Event.ChainableSynthesis.reduce",
-        "Event.EmitterObserver",
-        "Event.IChainableSythensis.latch",
-        "Event.IChainableSythensis.reduce",
-        "Event.accumulate",
-        "Event.defer",
-        "Event.forEach",
-        "Event.forward",
-        "Event.fromObservable",
-        "Event.fromObservableLight",
-        "Event.latch",
-        "Event.onceIf",
-        "Event.split",
-        "Event.throttle",
-        "EventMultiplexer",
-        "IDynamicListEventMultiplexer",
-        "IWaitUntil",
-        "IWaitUntilData",
-        "ListenerLeakError.is",
-        "PauseableEmitter.isPaused",
-        "ValueWithChangeEvent",
-        "ValueWithChangeEvent.const",
-        "createEventDeliveryQueue",
-        "setGlobalLeakWarningThreshold",
-        "trackSetChanges"
-      ]
+      "sha256": "cee6659b07599cbc9821f19d52b01bf06966b9b8ed03f5b7968e3ba9ed4302d0",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/common/extpath.ts",
@@ -2695,7 +2666,10 @@
     {
       "path": "src/base/common/observableInternal/debugLocation.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/debugLocation.ts",
-      "sha256": "1615a04d8dd1ee8ee06651da2ad353b6e4f1f1e162fcd9172502918f87976e4b"
+      "sha256": "eeae8861086e433d37929ffda90110816a5bdf2e1a7f3370758594a1b3fe6552",
+      "pruned": [
+        "DebugLocation.enable"
+      ]
     },
     {
       "path": "src/base/common/observableInternal/debugName.ts",
@@ -2705,80 +2679,9 @@
     {
       "path": "src/base/common/observableInternal/index.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/index.ts",
-      "sha256": "e1c7322050c4bf19a7c2cc858df0658e768bb531bc8fe6e16fb19c5a2af7a9fe",
-      "pruned": [
-        "DebugLocation",
-        "DebugOwner",
-        "IChangeContext",
-        "IChangeTracker",
-        "IDerivedReader",
-        "IObservableSignal",
-        "IObservableWithChange",
-        "IObserver",
-        "IReader",
-        "IReaderWithStore",
-        "ISettable",
-        "ISettableObservable",
-        "ITransaction",
-        "ObservableLazy",
-        "ObservableLazyPromise",
-        "ObservableMap",
-        "ObservablePromise",
-        "ObservableResolvedPromise",
-        "ObservableSet",
-        "PromiseResult",
-        "RemoveUndefined",
-        "TransactionImpl",
-        "ValueWithChangeEventFromObservable",
-        "asyncTransaction",
-        "autorunDelta",
-        "autorunHandleChanges",
-        "autorunIterableDelta",
-        "autorunOpts",
-        "autorunPerKeyedItem",
-        "autorunSelfDisposable",
-        "autorunWithStore",
-        "autorunWithStoreHandleChanges",
-        "debouncedObservable",
-        "debouncedObservable2",
-        "derived",
-        "derivedConstOnceDefined",
-        "derivedDisposable",
-        "derivedHandleChanges",
-        "derivedObservableWithCache",
-        "derivedObservableWithWritableCache",
-        "derivedOpts",
-        "derivedWithCancellationToken",
-        "derivedWithSetter",
-        "derivedWithStore",
-        "disposableObservableValue",
-        "globalTransaction",
-        "isObservable",
-        "keepObserved",
-        "latestChangedValue",
-        "mapObservableArrayCached",
-        "observableFromEvent",
-        "observableFromEventOpts",
-        "observableFromPromise",
-        "observableFromValueWithChangeEvent",
-        "observableSignal",
-        "observableSignalFromEvent",
-        "observableValue",
-        "observableValueOpts",
-        "recomputeInitiallyAndOnChange",
-        "recordChanges",
-        "recordChangesLazy",
-        "registerAutorunSelfDisposable",
-        "runOnChange",
-        "runOnChangeWithCancellationToken",
-        "runOnChangeWithStore",
-        "signalFromObservable",
-        "subtransaction",
-        "throttledObservable",
-        "transaction",
-        "waitForState",
-        "wasEventTriggeredRecently"
-      ]
+      "sha256": "0adef5f5aaa459d8cd3b8a36ed2535a97e7b0b9581af9002d56b58f203aeaa2a",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
@@ -2786,38 +2689,6 @@
       "sha256": "d1979379b2bc06844578ad6920d883a192a45e226ba3cb4ba0246c6865307d8d",
       "pruned": [
         "ConsoleObservableLogger.handleFromEventObservableTriggered"
-      ]
-    },
-    {
-      "path": "src/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
-      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
-      "sha256": "07c95c039fbd6af1d644f7f886b5a24b37237f51292320cc4e397d437b092c97"
-    },
-    {
-      "path": "src/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
-      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
-      "sha256": "dccaf8eaea7cd6582d250324c946be9f0c709ca71667118feda30557cd37197e"
-    },
-    {
-      "path": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "sha256": "8eac9eb97550ec00c64486c67957882b33db482c7e232b298689d3cd1d9b3325"
-    },
-    {
-      "path": "src/base/common/observableInternal/logging/debugger/rpc.ts",
-      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/rpc.ts",
-      "sha256": "c80245405f5bbea906f1dc8826d092e4ee4664f4e7f01ae432c252434a17e66d",
-      "pruned": [
-        "SimpleTypedRpcConnection.createHost"
-      ]
-    },
-    {
-      "path": "src/base/common/observableInternal/logging/debugger/utils.ts",
-      "upstreamPath": "src/vs/base/common/observableInternal/logging/debugger/utils.ts",
-      "sha256": "38ab37f9ea7135111e006f5a92746ce84468d8b94b4a1cc2c496ffbe0cd4e1ef",
-      "pruned": [
-        "Debouncer",
-        "Debouncer.debounce"
       ]
     },
     {
@@ -2873,8 +2744,10 @@
     {
       "path": "src/base/common/observableInternal/observables/derivedImpl.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/derivedImpl.ts",
-      "sha256": "4fda83859fef4cbfc15b2c94708d645f5e18be1ad947d8673ce4a1c0fe9e8722",
+      "sha256": "76d0a8371b40f63c8e6798788495000baa835f2782c23e0f1f99ea9acc8b1d72",
       "pruned": [
+        "Derived.debugRecompute",
+        "Derived.debugSetValue",
         "Derived.delayedStore",
         "Derived.reportChange",
         "Derived.setValue",
@@ -2886,8 +2759,9 @@
     {
       "path": "src/base/common/observableInternal/observables/observableFromEvent.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/observableFromEvent.ts",
-      "sha256": "0653309321257f3ee94db005ead50f667a5c54a5e03c6f88908aaf599a1e4d67",
+      "sha256": "4794efd4f29730cf3b2727b4a0b69ab9e518988599a0c3be8d03bbbb9643d510",
       "pruned": [
+        "FromEventObservable.debugSetValue",
         "FromEventObservable.globalTransaction",
         "observableFromEvent",
         "observableFromEventOpts"
@@ -2896,10 +2770,11 @@
     {
       "path": "src/base/common/observableInternal/observables/observableValue.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/observables/observableValue.ts",
-      "sha256": "aaffc959cbd8f6c3b2cebe9ba282c428e78105d2cb9697c83ba512a452e75f3f",
+      "sha256": "9f959b2c451bfe6b788cbafff6839058319dd8d82507ff2f6687f8052f4ae8f0",
       "pruned": [
         "DisposableObservableValue",
         "ObservableValue._setValue",
+        "ObservableValue.debugSetValue",
         "ObservableValue.set",
         "disposableObservableValue",
         "observableValue"
@@ -2925,8 +2800,9 @@
     {
       "path": "src/base/common/observableInternal/reactions/autorunImpl.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/reactions/autorunImpl.ts",
-      "sha256": "bff309dc0794cbedc54f1b3681fa5da5470f9c0f3fe7ef3b5e8d547800781e3b",
+      "sha256": "1e251b8f0c86977033d964650eff89a4fb0c7fc33531bb48e047a2a2af0b73b0",
       "pruned": [
+        "AutorunObserver.debugRerun",
         "AutorunObserver.delayedStore",
         "AutorunObserver.store"
       ]
@@ -2934,8 +2810,9 @@
     {
       "path": "src/base/common/observableInternal/transaction.ts",
       "upstreamPath": "src/vs/base/common/observableInternal/transaction.ts",
-      "sha256": "a1923c9b697204471a87537ec3ded5b95c94ffc73b07d4bf9e9ef2ffe958b6fd",
+      "sha256": "823bc6edad7f7ffc80d71ecb2d8e9804f54988d85cd6a79d1378e519f48f601c",
       "pruned": [
+        "TransactionImpl.debugGetUpdatingObservers",
         "_globalTransaction",
         "asyncTransaction",
         "globalTransaction"
@@ -2981,26 +2858,9 @@
     {
       "path": "src/base/common/platform.ts",
       "upstreamPath": "src/vs/base/common/platform.ts",
-      "sha256": "7f6e0465fa71a6f4fd92929444c5212a8ce17c5fe84aa65156cb924a87eb9b46",
-      "pruned": [
-        "Language",
-        "PlatformName",
-        "PlatformToString",
-        "_isLittleEndian",
-        "_isLittleEndianComputed",
-        "hasElectronUserAgent",
-        "isAndroid",
-        "isCI",
-        "isElectron",
-        "isLinuxSnap",
-        "isLittleEndian",
-        "isMobile",
-        "language",
-        "locale",
-        "platform",
-        "platformLocale",
-        "translationsConfigFile"
-      ]
+      "sha256": "720bb450c7f79789cf25cf4da3fc4d11627cdebe30a67275956340a01d7895c3",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/common/policy.ts",
@@ -3026,10 +2886,9 @@
     {
       "path": "src/base/common/process.ts",
       "upstreamPath": "src/vs/base/common/process.ts",
-      "sha256": "7075714d41b34e7b5afb8a198cda11e86f839d1004f431207b420f9f618de10e",
-      "pruned": [
-        "arch"
-      ]
+      "sha256": "990c7d5b2699e1e1321f1b59f5a7b6ab269dc1fbf221db7dba51c9ba4e0a3897",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/common/range.ts",
@@ -3309,18 +3168,16 @@
     {
       "path": "src/base/parts/contextmenu/common/contextmenu.ts",
       "upstreamPath": "src/vs/base/parts/contextmenu/common/contextmenu.ts",
-      "sha256": "fd72ea863c04a30583ee14e98a8cb82238078e589dac356e3a8ce281a42e0994",
-      "pruned": [
-        "IContextMenuEvent.altKey",
-        "IContextMenuEvent.ctrlKey",
-        "IContextMenuEvent.metaKey",
-        "IContextMenuEvent.shiftKey"
-      ]
+      "sha256": "e2c6ad69326ffd33410197e710b7d108933b96525a12c6dff510254b4fcf63b6",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/parts/contextmenu/electron-browser/contextmenu.ts",
       "upstreamPath": "src/vs/base/parts/contextmenu/electron-browser/contextmenu.ts",
-      "sha256": "8d4db74bb95aa4d595fab33bd712d1ec97831bb1bff9424d71e0f90c21183b3b"
+      "sha256": "61ad51590f5e02ed8f37b8b66e0f9dc998f3074934d0da258f4606cc59352588",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/parts/contextmenu/electron-main/contextmenu.ts",
@@ -3330,7 +3187,9 @@
     {
       "path": "src/base/parts/ipc/common/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/common/ipc.electron.ts",
-      "sha256": "2b25e501c21520d02bd59034d43c2359e02dbbbc40a8d136d783cc6f9cbf5fe1"
+      "sha256": "50a2ca6d1319f2ac2b3f7b9daf0396723a62f3444bfe360be46a5b19a43a69b0",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/parts/ipc/common/ipc.mp.ts",
@@ -3360,12 +3219,14 @@
     {
       "path": "src/base/parts/ipc/electron-browser/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-browser/ipc.electron.ts",
-      "sha256": "ae6f2f69341816e6afb55848f5b3472fbcdccf0f778a222deae205f02c49bdbd"
+      "sha256": "f1a44efcb06746dbe0b987d73098f976541ac2ebf0dec4b98d226aabfb1b5714",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/parts/ipc/electron-main/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipc.electron.ts",
-      "sha256": "d0d7147f74b506c33149fc5c79af6737ef9e87d3b3579fb2503b0b4818e67691",
+      "sha256": "59063b7f500277f7ab31764f72e786248c8248603b5bcd1d89352012f0f01774",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -3380,7 +3241,7 @@
     {
       "path": "src/base/parts/ipc/electron-main/ipcMain.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipcMain.ts",
-      "sha256": "b86e4237cece4a4e35ea2d9a3a26f694f8c2c810bdf9428c7d545c8862a313c8",
+      "sha256": "932eaf9873d730d1935303c77583271cf811136c10a742d4c0def54ac1339df7",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -3442,18 +3303,9 @@
     {
       "path": "src/base/parts/sandbox/electron-browser/globals.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/electron-browser/globals.ts",
-      "sha256": "d138cf636c69a8c6aa7b614cc3e386c570dfe88e08851b854a8190464119c7fd",
-      "pruned": [
-        "IMainWindowSandboxGlobals",
-        "ISandboxContext.configuration",
-        "ISandboxGlobals",
-        "ISandboxNodeProcess.execPath",
-        "ISandboxNodeProcess.getProcessMemoryInfo",
-        "ISandboxNodeProcess.on",
-        "ISandboxNodeProcess.shellEnv",
-        "process",
-        "webFrame"
-      ]
+      "sha256": "2f9086db7d6754c77656f93378a3dea09e5a29809c80fb0d1525bee1019b8cd0",
+      "adapted": true,
+      "upstreamStyle": true
     },
     {
       "path": "src/base/parts/sandbox/node/electronTypes.ts",
@@ -3463,10 +3315,11 @@
     {
       "path": "src/nls.ts",
       "upstreamPath": "src/vs/nls.ts",
-      "sha256": "88dceeb359bb731f9ac27219d6a1c6add840cd1e2aef9dfa91af0af19b90d0a4",
+      "sha256": "e99be676360eff64c1f761422af91ed158c34fcdfae6524985d3c6fbd9a58b0d",
       "pruned": [
         "ILanguagePack",
         "ILanguagePacks",
+        "INLSConfiguration",
         "INLSConfiguration._cacheRoot",
         "INLSConfiguration._corruptedFile",
         "INLSConfiguration._languagePackId",
@@ -3476,6 +3329,7 @@
         "INLSConfiguration.availableLanguages",
         "INLSConfiguration.defaultMessagesFile",
         "INLSConfiguration.locale",
+        "INLSLanguagePackConfiguration",
         "INLSLanguagePackConfiguration.corruptMarkerFile",
         "INLSLanguagePackConfiguration.messagesFile"
       ]
@@ -5418,11 +5272,6 @@
     },
     {
       "from": "src/base/browser/dom.ts",
-      "to": "src/base/browser/browser.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/dom.ts",
       "to": "src/base/browser/keyboardEvent.ts",
       "kind": "import"
     },
@@ -5533,17 +5382,7 @@
     },
     {
       "from": "src/base/browser/canIUse.ts",
-      "to": "src/base/browser/browser.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/canIUse.ts",
       "to": "src/base/browser/window.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/browser/canIUse.ts",
-      "to": "src/base/common/platform.ts",
       "kind": "import"
     },
     {
@@ -7778,16 +7617,6 @@
     },
     {
       "from": "src/base/common/observableInternal/index.ts",
-      "to": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/index.ts",
-      "to": "src/base/common/process.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/index.ts",
       "to": "src/base/common/observableInternal/observables/baseObservable.ts",
       "kind": "import"
     },
@@ -8134,91 +7963,6 @@
     {
       "from": "src/base/common/observableInternal/observables/observableFromEvent.ts",
       "to": "src/base/common/observableInternal/debugLocation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/reactions/autorunImpl.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/transaction.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/logging/logging.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/logging/consoleObservableLogger.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/logging/debugger/debuggerApi.d.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/logging/debugger/utils.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/observables/observableFromEvent.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/errors.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/base.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/observables/baseObservable.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/observables/derivedImpl.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/observables/observableValue.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/devToolsLogger.ts",
-      "to": "src/base/common/observableInternal/debugLocation.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/utils.ts",
-      "to": "src/base/common/lifecycle.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/observableInternal/logging/debugger/debuggerRpc.ts",
-      "to": "src/base/common/observableInternal/logging/debugger/rpc.ts",
       "kind": "import"
     },
     {

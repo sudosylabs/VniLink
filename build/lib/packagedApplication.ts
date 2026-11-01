@@ -87,7 +87,7 @@ export async function runPackagedApplication(root: string, directory: string, si
 		}, () => exited);
 		await devtools.connect(target.webSocketDebuggerUrl);
 		await until(() => devtools.evaluate<boolean>(`document.documentElement?.dataset.workbenchReady === 'true'`), () => exited);
-		const state = await devtools.evaluate<ApplicationState>(`(async () => ({ info: await window.vscode.context.resolveConfiguration(), snapshot: await window.driver.engine.execute({type:'snapshot'}), heading: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined', material: document.documentElement.dataset.windowMaterial }))()`);
+		const state = await devtools.evaluate<ApplicationState>(`(async () => ({ info: await window.vnilink.context.resolveConfiguration(), snapshot: await window.driver.engine.execute({type:'snapshot'}), heading: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined', material: document.documentElement.dataset.windowMaterial }))()`);
 		assert.equal(state.info.engineAvailable, true);
 		assert.equal(state.info.version, manifest.version);
 		assert.equal(state.info.platform, process.platform);

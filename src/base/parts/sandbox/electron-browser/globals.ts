@@ -1,7 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: the preload exposes its API as the `vnilink` global.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import { INodeProcess, IProcessEnvironment } from '../../../common/platform.js';
 import { ISandboxConfiguration } from '../common/sandboxTypes.js';
@@ -68,7 +75,7 @@ export interface ISandboxContext {
 }
 
 interface ISandboxGlobal {
-	vscode: {
+	vnilink: {
 		readonly ipcRenderer: IpcRenderer;
 		readonly ipcMessagePort: IpcMessagePort;
 		readonly webFrame: WebFrame;
@@ -78,8 +85,8 @@ interface ISandboxGlobal {
 	};
 }
 
-const vscodeGlobal = (globalThis as unknown as ISandboxGlobal).vscode;
-export const ipcRenderer: IpcRenderer = vscodeGlobal.ipcRenderer;
-export const ipcMessagePort: IpcMessagePort = vscodeGlobal.ipcMessagePort;
-export const context: ISandboxContext = vscodeGlobal.context;
-export const webUtils: WebUtils = vscodeGlobal.webUtils;
+const vnilinkGlobal = (globalThis as unknown as ISandboxGlobal).vnilink;
+export const ipcRenderer: IpcRenderer = vnilinkGlobal.ipcRenderer;
+export const ipcMessagePort: IpcMessagePort = vnilinkGlobal.ipcMessagePort;
+export const context: ISandboxContext = vnilinkGlobal.context;
+export const webUtils: WebUtils = vnilinkGlobal.webUtils;

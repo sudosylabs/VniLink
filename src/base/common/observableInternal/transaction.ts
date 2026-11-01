@@ -80,9 +80,5 @@ export function subtransaction(tx: ITransaction | undefined, fn: (tx: ITransacti
 		this._updatingObservers = null;
 		getLogger()?.handleEndTransaction(this);
 	}
-
-	public debugGetUpdatingObservers() {
-		return this._updatingObservers;
-	}
 }
 

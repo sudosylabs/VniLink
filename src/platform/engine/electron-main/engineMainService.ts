@@ -18,7 +18,7 @@ import { ILogService } from '../../log/common/log.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import type { EngineCommand, EngineReply } from '../common/engine.js';
 import { isEngineEvent, isEngineReply, record } from '../common/engine.js';
-import { ENGINE_HOST_CHANNEL_NAME, type EngineEventBatch } from '../common/engineService.js';
+import { ENGINE_HOST_CHANNEL_NAME, ENGINE_HOST_CONNECTION, type EngineEventBatch } from '../common/engineService.js';
 
 export const IEngineMainService = createDecorator<EngineMainService>('engineMainService');
 
@@ -283,7 +283,7 @@ export class EngineMainService extends Disposable {
 	/** Opens the IPC connection to the host over a fresh `MessagePort`. */
 	private connect(child: UtilityProcess): void {
 		const { port1, port2 } = new MessageChannelMain();
-		child.postMessage('vscode:engineHost', [port2]);
+		child.postMessage(ENGINE_HOST_CONNECTION, [port2]);
 		this.client = new MessagePortClient(port1, 'main');
 		this.channel = this.client.getChannel(ENGINE_HOST_CHANNEL_NAME);
 		this.events.input = Event.map(this.channel.listen<unknown>('onDidReceiveEvents'), batch => validEventBatch(batch));

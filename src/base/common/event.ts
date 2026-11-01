@@ -1,7 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: leak warnings follow VniLink's development flag.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import { CancelablePromise } from './async.js';
 import { onUnexpectedError } from './errors.js';
@@ -33,7 +40,7 @@ const _bufferLeakWarnCountThreshold = 100;
 const _bufferLeakWarnTimeThreshold = 60_000; // 1 minute
 
 function _isBufferLeakWarningEnabled(): boolean {
-	return !!env['VSCODE_DEV'];
+	return !!env['VNILINK_DEV'];
 }
 
 /**

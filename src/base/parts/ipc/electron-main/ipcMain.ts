@@ -99,7 +99,7 @@ class ValidatedIpcMain implements Event.NodeEventEmitter {
 	}
 
 	private validateEvent(channel: string, event: electron.IpcMainEvent | electron.IpcMainInvokeEvent): boolean {
-		if (!channel?.startsWith('vscode:')) {
+		if (!channel?.startsWith('vnilink:')) {
 			onUnexpectedError(`Refused to handle ipcMain event for channel '${channel}' because the channel is unknown.`);
 			return false; // unexpected channel
 		}

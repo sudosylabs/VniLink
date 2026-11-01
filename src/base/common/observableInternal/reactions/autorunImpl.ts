@@ -242,14 +242,6 @@ export class AutorunObserver<TChangeSummary = any> implements IObserver, IReader
 		};
 	}
 
-	public debugRerun(): void {
-		if (!this._isRunning) {
-			this._run();
-		} else {
-			this._state = AutorunState.stale;
-		}
-	}
-
 	private _checkIterations(): boolean {
 		if (this._iteration > 100) {
 			onBugIndicatingError(new BugIndicatingError(`Autorun '${this.debugName}' is stuck in an infinite update loop.`));

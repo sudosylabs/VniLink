@@ -384,11 +384,11 @@ class SmokeSuite {
 	private async verify(window: BrowserWindow, driver: WindowDriver): Promise<void> {
 		await driver.ready();
 		const result: unknown = await window.webContents.executeJavaScript(`(async () => {
-    const info = await window.vscode.context.resolveConfiguration();
+    const info = await window.vnilink.context.resolveConfiguration();
     let unprefixedRejected = false;
-    try { await window.vscode.ipcRenderer.invoke('engine:command', { type: 'snapshot' }); } catch { unprefixedRejected = true; }
-    return { info, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined', vnilinkExposed: 'vnilink' in window, unprefixedRejected,
-      title: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, api: Object.keys(window.vscode).sort() };
+    try { await window.vnilink.ipcRenderer.invoke('engine:command', { type: 'snapshot' }); } catch { unprefixedRejected = true; }
+    return { info, nodeExposed: typeof require !== 'undefined' || typeof process !== 'undefined', vscodeExposed: 'vscode' in window, unprefixedRejected,
+      title: document.querySelector('h1')?.textContent, noticeHidden: document.querySelector('.workbench-notice')?.hidden, api: Object.keys(window.vnilink).sort() };
   })()`);
 		if (
 			typeof result !== 'object' ||
@@ -397,7 +397,7 @@ class SmokeSuite {
 			result.nodeExposed !== false ||
 			!('info' in result) ||
 			!isNativeWindowConfiguration(result.info) ||
-			!('vnilinkExposed' in result) || result.vnilinkExposed !== false ||
+			!('vscodeExposed' in result) || result.vscodeExposed !== false ||
 			!('unprefixedRejected' in result) || result.unprefixedRejected !== true ||
 			result.info.version !== app.getVersion() ||
 			!('title' in result) ||
