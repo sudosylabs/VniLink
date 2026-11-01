@@ -377,6 +377,11 @@ fn list_names_inner(dir: BorrowedFd, limit: usize) -> io::Result<(Vec<OsString>,
 }
 
 /// `fstat` device+inode for pinning a root to its directory object.
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn fstat_dev_ino(fd: BorrowedFd) -> io::Result<(u64, u64)> {
     // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
@@ -385,11 +390,16 @@ pub fn fstat_dev_ino(fd: BorrowedFd) -> io::Result<(u64, u64)> {
     if r != 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok((st.st_dev, st.st_ino))
+    Ok((st.st_dev as u64, st.st_ino as u64))
 }
 
 /// [`fstat_dev_ino`] with the creation time where the platform reports one
 /// through `fstat` (macOS), which tells a recycled inode apart.
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn fstat_identity(fd: BorrowedFd) -> io::Result<Identity> {
     // SAFETY: `libc::stat` is a plain C struct of integers, for which all-zero bytes are a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
@@ -398,8 +408,8 @@ pub fn fstat_identity(fd: BorrowedFd) -> io::Result<Identity> {
         return Err(io::Error::last_os_error());
     }
     Ok(Identity {
-        dev: st.st_dev,
-        ino: st.st_ino,
+        dev: st.st_dev as u64,
+        ino: st.st_ino as u64,
         born: born(&st),
     })
 }
@@ -440,6 +450,11 @@ impl EntryStat {
     }
 }
 
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
     let c = cstr_name(name)?;
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -467,10 +482,10 @@ pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
         is_file: (mode & libc::S_IFMT) == libc::S_IFREG,
         size: st.st_size as u64,
         mtime_ms: mtime_ms(&st),
-        dev: st.st_dev,
-        ino: st.st_ino,
+        dev: st.st_dev as u64,
+        ino: st.st_ino as u64,
         born: born(&st),
-        attributes: mode & 0o7777,
+        attributes: u32::from(mode) & 0o7777,
     })
 }
 
@@ -938,6 +953,11 @@ impl Drop for SiblingStage<'_> {
 /// Opens a regular file under `parent` and verifies it is the same object
 /// previously stated (`stat_at`): device+inode equality proves the pathname
 /// was not swapped between stat and open. Refuses symlinks and non-files.
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "the width of st_dev, st_ino and st_mode differs between macOS and Linux"
+)]
 pub fn open_file_verified(
     parent: BorrowedFd,
     name: &str,
@@ -953,7 +973,7 @@ pub fn open_file_verified(
     if r != 0 {
         return Err(io::Error::last_os_error());
     }
-    if st.st_dev != expected_dev || st.st_ino != expected_ino {
+    if st.st_dev as u64 != expected_dev || st.st_ino as u64 != expected_ino {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "file changed between stat and open",
