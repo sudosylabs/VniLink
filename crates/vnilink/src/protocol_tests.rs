@@ -524,6 +524,17 @@ fn topology_and_one_display_selection_round_trip() {
         Err(Error::Malformed)
     ));
 
+    let received = ControlMessage::Received {
+        stamp: SessionStamp::new(9, 2),
+        picture: u32::MAX,
+    };
+    let encoded = received.encode();
+    assert_eq!(ControlMessage::decode(&encoded).unwrap(), received);
+    assert!(matches!(
+        ControlMessage::decode(&encoded[..encoded.len() - 1]),
+        Err(Error::Malformed)
+    ));
+
     let selection = ControlMessage::SelectDisplays {
         stamp: SessionStamp::new(9, 2),
         displays: vec![2],

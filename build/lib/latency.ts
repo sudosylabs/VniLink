@@ -173,7 +173,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { assertBundleFresh } from './bundles.ts';
 import { electronExecutable } from './electron.ts';
-import { assertNativeFresh, defaultNativeOptions } from './native.ts';
+import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
 import { isLinux, isMacintosh, isWindows, osName } from './platform.ts';
 import { type LaunchedProcess, ProcessRunner } from './processes.ts';
 import { agentPeer, openAgentSession, type AgentPeer, type AgentSession } from './remote.ts';
@@ -631,10 +631,29 @@ async function arrival(directory: string, name: string, timeoutMs: number, exite
 	}
 }
 
+/**
+ * The cargo command and environment that build the `glass_latency` example of
+ * `crate` for `target`, the target and tools the addon build uses, so the
+ * reader finds the same native libraries and lands where `reader` expects it.
+ */
+export function readerBuild(
+	crate: string,
+	target: string | undefined,
+	environment: NodeJS.ProcessEnv = process.env,
+	exists?: (path: string) => boolean,
+): { readonly args: string[]; readonly env: NodeJS.ProcessEnv } {
+	return {
+		args: ['build', '--release', '--locked', ...(target ? ['--target', target] : []), '-p', crate, '--example', 'glass_latency'],
+		env: nativeEnvironment({ profile: 'dev', target }, environment, exists),
+	};
+}
+
 /** How one platform runs the two sides and the reader. */
 interface LatencyPlatform {
 	/** The crate whose `glass_latency` example reads this platform's display. */
 	readonly readerCrate: string;
+	/** The cargo target the reader is built for, when it is not the host's default. */
+	readonly readerTarget?: string;
 	readonly reader: string;
 	/** How long someone at this computer may take to answer a consent dialog, for the host and for the reader. */
 	readonly consentMs: number;
@@ -682,6 +701,7 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 		const { target } = defaultNativeOptions();
 		return {
 			readerCrate: 'vnilink-windows',
+			readerTarget: target,
 			reader: join(root, 'target', ...(target ? [target] : []), 'release/examples/glass_latency.exe'),
 			consentMs: 0,
 			launch: direct(() => []),
@@ -960,7 +980,8 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 		const platform = await latencyPlatform(root, options.app, processes, signal);
 		// The reader is built before the sides start, so its compile does not
 		// count against their timeouts.
-		await processes.run('cargo', ['build', '--release', '--locked', '-p', platform.readerCrate, '--example', 'glass_latency'], { cwd: root });
+		const build = readerBuild(platform.readerCrate, platform.readerTarget);
+		await processes.run('cargo', build.args, { cwd: root, env: build.env });
 		const rendezvous = join(work, 'rendezvous');
 		await mkdir(rendezvous);
 		// Where the desktop portal's grants are kept between runs, for the

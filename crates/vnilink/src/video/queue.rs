@@ -23,9 +23,12 @@ use super::frame::{EncodedFrame, FrameRole};
 pub(crate) const VIDEO_QUEUE: usize = 8;
 
 /// The viewer's frames may wait this long for the window. Past it, the
-/// queue is a standing delay rather than jitter: it drops predicted frames
-/// and starts again from a keyframe, whatever its depth.
-pub(crate) const INBOX_MAX_AGE: Duration = Duration::from_millis(150);
+/// reader has stopped rather than lagged: the queue drops predicted frames
+/// and starts again from a keyframe, whatever its depth. A reader that
+/// merely lags decodes what waits and draws the newest (the desktop session
+/// skips drawing pictures that waited over 150 ms with others behind them),
+/// and so sheds the delay without the largest frame the host can send.
+pub(crate) const INBOX_MAX_AGE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VideoPush {
@@ -706,14 +709,14 @@ mod tests {
         let mut queue = VideoQueue::new().with_max_age(crate::video::INBOX_MAX_AGE);
         assert_eq!(queue.push_at(frame(true), start), VideoPush::Queued);
         assert_eq!(
-            queue.push_at(frame(false), start + Duration::from_millis(100)),
+            queue.push_at(frame(false), start + Duration::from_millis(300)),
             VideoPush::Queued,
-            "two frames within the budget are jitter, not delay"
+            "a reader that lags 300 ms catches up by decoding: no keyframe"
         );
         // The window has not taken the first frame for longer than the budget:
         // the predicted frames go, and a keyframe is wanted.
         assert_eq!(
-            queue.push_at(frame(false), start + Duration::from_millis(151)),
+            queue.push_at(frame(false), start + Duration::from_millis(1001)),
             VideoPush::KeyframeNeeded
         );
         assert_eq!(queue.len(), 1, "the buffered keyframe stays");

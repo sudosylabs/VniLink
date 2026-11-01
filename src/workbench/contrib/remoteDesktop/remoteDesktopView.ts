@@ -379,7 +379,10 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		this.canvas.setAttribute('aria-label', control
 			? nls.localize('desktop.screenControl', 'The screen of {0}. While it has focus, keys and the pointer go to {0}.', device.name)
 			: nls.localize('desktop.screenView', 'The screen of {0}, to view only.', device.name));
-		this.context = this.canvas.getContext('2d');
+		// Decoded pictures are opaque, so the canvas needs no alpha; a
+		// desynchronized one hands each picture to the compositor without
+		// waiting for the next frame of the page.
+		this.context = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
 		this.pointerMark = append(this.stage, $('.desktop-pointer', { 'aria-hidden': 'true' }));
 		this.pointerMark.hidden = true;
 		const resize = this._register(new DisposableResizeObserver('remoteDesktopStage', () => {

@@ -101,10 +101,34 @@ impl InputEvent {
         }
     }
 
+    /// Whether the wire would accept this event: what [`Self::decode`]
+    /// checks of the fields, without building the bytes.
     pub(crate) fn validate(self) -> Result<(), Error> {
-        let mut wire = Vec::with_capacity(25);
-        self.encode(&mut wire);
-        Self::decode(&wire).map(|_| ())
+        let acceptable = match self {
+            Self::Key { .. } | Self::Button { .. } | Self::Wheel { .. } => true,
+            Self::Pointer {
+                x,
+                y,
+                display,
+                revision,
+            } => {
+                let bound = u32::try_from(super::MAX_DESKTOP_ORIGIN).unwrap_or(u32::MAX);
+                display != 0
+                    && revision != 0
+                    && x.unsigned_abs() <= bound
+                    && y.unsigned_abs() <= bound
+            }
+            Self::PreciseWheel { dx, dy } => {
+                let bound = super::MAX_PRECISE_WHEEL as u32;
+                (dx != 0 || dy != 0) && dx.unsigned_abs() <= bound && dy.unsigned_abs() <= bound
+            }
+            Self::Motion { dx, dy } => dx != 0 || dy != 0,
+        };
+        if acceptable {
+            Ok(())
+        } else {
+            Err(Error::Malformed)
+        }
     }
 
     pub fn key_down(usage: u16) -> Self {
@@ -312,6 +336,42 @@ pub(crate) fn swap_command_key(event: InputEvent) -> InputEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `validate` is the wire's own check without the wire: the same events
+    /// pass and fail, at the edges of every field.
+    #[test]
+    fn validate_agrees_with_the_wire_at_the_edges() {
+        let origin = super::super::MAX_DESKTOP_ORIGIN;
+        let wheel = super::super::MAX_PRECISE_WHEEL;
+        let events = [
+            InputEvent::key_down(0),
+            InputEvent::button_up(PointerButton::Forward),
+            InputEvent::pointer(0, 0, 1, 1),
+            InputEvent::pointer(origin, -origin, u64::MAX, u64::MAX),
+            InputEvent::pointer(origin + 1, 0, 1, 1),
+            InputEvent::pointer(0, -origin - 1, 1, 1),
+            InputEvent::pointer(0, 0, 0, 1),
+            InputEvent::pointer(0, 0, 1, 0),
+            InputEvent::wheel(0, 0),
+            InputEvent::wheel(i16::MIN, i16::MAX),
+            InputEvent::precise_wheel(wheel, -wheel),
+            InputEvent::precise_wheel(wheel + 1, 0),
+            InputEvent::precise_wheel(0, -wheel - 1),
+            InputEvent::precise_wheel(0, 0),
+            InputEvent::motion(1, 0),
+            InputEvent::motion(0, 0),
+            InputEvent::motion(i16::MIN, i16::MIN),
+        ];
+        for event in events {
+            let mut wire = Vec::new();
+            event.encode(&mut wire);
+            assert_eq!(
+                event.validate().is_ok(),
+                InputEvent::decode(&wire).is_ok(),
+                "{event:?}"
+            );
+        }
+    }
 
     #[test]
     fn command_swap_exchanges_only_control_and_meta() {

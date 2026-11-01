@@ -156,6 +156,12 @@ pub(super) struct DesktopRuntime {
     report: crate::video::ReportTally,
     /// Host: what its viewer reports losing, smoothed.
     viewer_loss: Mutex<crate::video::ViewerLoss>,
+    /// Host: the stream pictures its viewer has not yet acknowledged, which
+    /// pace what the stream is given; datagram pictures are never in it.
+    stream_flight: Mutex<crate::video::InFlight>,
+    /// Viewer: the newest stream picture received, for the send loop to
+    /// acknowledge.
+    stream_received: tokio::sync::watch::Sender<Option<u32>>,
     /// Viewer: its datagrams' reassembly and its outstanding keyframe
     /// request, so losses while one is coming do not ask again.
     pictures: Mutex<crate::video::ViewerPictures>,
@@ -252,6 +258,8 @@ impl DesktopRuntime {
             counters: crate::video::VideoCounters::default(),
             report: Default::default(),
             viewer_loss: Mutex::new(Default::default()),
+            stream_flight: Mutex::new(Default::default()),
+            stream_received: tokio::sync::watch::channel(None).0,
             pictures: Mutex::new(crate::video::ViewerPictures::new()),
             control_state: tokio::sync::watch::channel((DesktopControlState::Viewing, 0)).0,
             control_commands: Mutex::new(std::collections::VecDeque::new()),
@@ -617,9 +625,6 @@ fn ensure_datagram_router(
         lock(&shared.desktop_routers).remove(&(connection_id, generation));
     });
 }
-
-/// How often a viewer tells its host what it lost.
-const REPORT_EVERY: Duration = Duration::from_millis(250);
 
 /// How often the router checks its connection is still the live one; between
 /// checks a closed owner is noticed by its own retired flag.
@@ -1194,7 +1199,7 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
         return Err(Error::InvalidSetting("this is not a Desktop service"));
     }
     if !lock(&core.shared.video_caps).can_decode() {
-        return Err(Error::Unsupported("H.264 decoder"));
+        return Err(Error::Unsupported("video decoder"));
     }
     let (link, stamp, stop) = {
         let state = core.alive_state()?;
@@ -1554,11 +1559,29 @@ async fn client_send(
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut reports = tokio::time::interval(REPORT_EVERY);
+    let mut reports = tokio::time::interval(crate::video::REPORT_EVERY);
+    let mut pacing = crate::video::ReportPacing::default();
     reports.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sampled_at = std::time::Instant::now();
     let mut last_path = None;
+    let mut received = desktop.stream_received.subscribe();
+    let mut acknowledged = None;
     loop {
+        // The newest stream picture received is said once, as it changes.
+        let newest = *received.borrow_and_update();
+        if let Some(picture) = newest.filter(|picture| acknowledged != Some(*picture)) {
+            acknowledged = Some(picture);
+            let mut bytes = vec![COMMAND];
+            bytes.extend_from_slice(&desktop.control_state.borrow().1.to_be_bytes());
+            bytes.extend_from_slice(
+                &ControlMessage::Received {
+                    stamp: desktop.stamp,
+                    picture,
+                }
+                .encode(),
+            );
+            write(send, &bytes).await?;
+        }
         // Lease requests precede input batches. Admission takes a free lease;
         // subsequent acquire/yield operations are explicit and bounded.
         let controls: Vec<_> = lock(&desktop.control_commands).drain(..).collect();
@@ -1581,14 +1604,33 @@ async fn client_send(
         let frame_period = frame_period(desktop);
         let (ask, retry) = {
             let mut pictures = lock(&desktop.pictures);
-            let ask = pictures.should_ask(
-                &desktop.keyframe,
-                std::time::Instant::now(),
-                path_rtt,
-                frame_period,
-            );
-            (ask, pictures.retry_at(path_rtt, frame_period))
+            let now = std::time::Instant::now();
+            pictures.give_up_quiet(now, path_rtt, frame_period);
+            let ask = pictures.should_ask(&desktop.keyframe, now, path_rtt, frame_period);
+            let wake = [
+                pictures.retry_at(path_rtt, frame_period),
+                pictures.quiet_at(path_rtt, frame_period),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            (ask, wake)
         };
+        if pacing.due(desktop.report.urgent(), std::time::Instant::now()) {
+            let report = desktop.report.take();
+            if !report.is_empty() {
+                let mut bytes = vec![COMMAND];
+                bytes.extend_from_slice(&lease_epoch.to_be_bytes());
+                bytes.extend_from_slice(
+                    &ControlMessage::VideoReport {
+                        stamp: desktop.stamp,
+                        report,
+                    }
+                    .encode(),
+                );
+                write(send, &bytes).await?;
+            }
+        }
         if ask {
             desktop.counters.keyframe_requested();
             let mut bytes = vec![COMMAND];
@@ -1641,19 +1683,11 @@ async fn client_send(
             write(send, &bytes).await?;
         }
         tokio::select! {
-            _ = &mut notified => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
-            _ = reports.tick() => {
-                let report = desktop.report.take();
-                if !report.is_empty() {
-                    let mut bytes = vec![COMMAND];
-                    bytes.extend_from_slice(&lease_epoch.to_be_bytes());
-                    bytes.extend_from_slice(
-                        &ControlMessage::VideoReport { stamp: desktop.stamp, report }.encode(),
-                    );
-                    write(send, &bytes).await?;
-                }
-            },
-            // An unanswered keyframe request is asked again when its patience runs out.
+            _ = &mut notified => {}, _ = received.changed() => {}, _ = desktop.keyframe.notified() => {}, _ = desktop.release.notified() => {}, _ = desktop.control_notify.notified() => {},
+            // The report itself goes at the top of the loop, when it is due.
+            _ = reports.tick() => {},
+            // An unanswered keyframe request is asked again when its patience runs out,
+            // and a frame gone quiet is given up when its silence does.
             _ = async {
                 match retry {
                     Some(at) => tokio::time::sleep_until(at.into()).await,
@@ -1781,6 +1815,9 @@ async fn client_receive(
                         .belongs_to(desktop.info.codec, desktop.info.stills)
                     {
                         return Err(Error::Malformed);
+                    }
+                    if body.frame.role != crate::FrameRole::Still {
+                        desktop.stream_received.send_replace(Some(body.sequence));
                     }
                     desktop.receive_video(shared, body);
                 }
@@ -2161,33 +2198,114 @@ fn host_end(
     }
 }
 
+/// Commands the host reads ahead of the one it applies. A burst of pointer
+/// moves is applied as its newest.
+const HOST_COMMAND_BATCH: usize = 64;
+
+/// One message from the viewer's control stream, decoded once.
+struct HostCommand {
+    body: Vec<u8>,
+    /// The command a `COMMAND` message holds; `None` for the lease actions.
+    command: Option<Result<ControlMessage, Error>>,
+}
+
+impl HostCommand {
+    fn new(body: Vec<u8>) -> Self {
+        let command = (body.first() == Some(&COMMAND) && body.len() >= 9)
+            .then(|| ControlMessage::decode(&body[9..]));
+        Self { body, command }
+    }
+
+    /// Whether applying it calls into the platform: lease actions, input
+    /// and typed text.
+    fn native(&self) -> bool {
+        match self.body.first() {
+            Some(&RELEASE) | Some(&ACQUIRE_CONTROL) | Some(&YIELD_CONTROL) => true,
+            _ => matches!(
+                self.command,
+                Some(Ok(ControlMessage::Input { .. }
+                    | ControlMessage::Text { .. }
+                    | ControlMessage::Chord { .. }))
+            ),
+        }
+    }
+
+    /// The pointer position it moves to, with the lease epoch it was sent
+    /// under, if it is only that.
+    fn pointer_move(&self) -> Option<(u64, u64)> {
+        match &self.command {
+            Some(Ok(ControlMessage::Input {
+                stamp,
+                event: crate::InputEvent::Pointer { .. },
+            })) => Some((
+                u64::from_be_bytes(self.body.get(1..9)?.try_into().ok()?),
+                stamp.id,
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Drops each pointer position another follows in the same batch, under the
+/// same lease and for the same desktop: the host applies where the pointer
+/// is now, not where it passed. Keys, buttons and wheel turns stay, in order.
+fn coalesce_pointer_moves(batch: &mut Vec<HostCommand>) {
+    let moves: Vec<_> = batch.iter().map(HostCommand::pointer_move).collect();
+    let mut index = 0;
+    batch.retain(|_| {
+        let superseded = moves[index].is_some() && moves.get(index + 1) == Some(&moves[index]);
+        index += 1;
+        !superseded
+    });
+}
+
 async fn host_receive(
     shared: &Arc<Shared>,
     desktop: &Arc<DesktopRuntime>,
     recv: &mut RecvStream,
 ) -> Result<(), Error> {
-    loop {
-        let body = read(recv).await?;
-        let native = match body.first() {
-            Some(&RELEASE) | Some(&ACQUIRE_CONTROL) | Some(&YIELD_CONTROL) => true,
-            Some(&COMMAND) if body.len() >= 9 => matches!(
-                ControlMessage::decode(&body[9..]),
-                Ok(ControlMessage::Input { .. }
-                    | ControlMessage::Text { .. }
-                    | ControlMessage::Chord { .. })
-            ),
-            _ => false,
-        };
-        if native {
-            let shared = shared.clone();
-            let desktop = desktop.clone();
-            tokio::task::spawn_blocking(move || process_host_command(&shared, &desktop, &body))
-                .await
-                .map_err(|_| Error::NoSession)??;
-        } else {
-            process_host_command(shared, desktop, &body)?;
+    let (queued, mut arrived) = tokio::sync::mpsc::channel(HOST_COMMAND_BATCH);
+    let reader = async {
+        loop {
+            if queued.send(read(recv).await?).await.is_err() {
+                return Ok(());
+            }
         }
+    };
+    let applier = async {
+        while let Some(first) = arrived.recv().await {
+            let mut batch = vec![HostCommand::new(first)];
+            while batch.len() < HOST_COMMAND_BATCH {
+                let Ok(body) = arrived.try_recv() else { break };
+                batch.push(HostCommand::new(body));
+            }
+            coalesce_pointer_moves(&mut batch);
+            if batch.iter().any(HostCommand::native) {
+                // The platform is called from a blocking thread, once for
+                // the burst.
+                let shared = shared.clone();
+                let desktop = desktop.clone();
+                tokio::task::spawn_blocking(move || apply_host_batch(&shared, &desktop, batch))
+                    .await
+                    .map_err(|_| Error::NoSession)??;
+            } else {
+                apply_host_batch(shared, desktop, batch)?;
+            }
+        }
+        Ok(())
+    };
+    tokio::try_join!(reader, applier).map(|_| ())
+}
+
+fn apply_host_batch(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    batch: Vec<HostCommand>,
+) -> Result<(), Error> {
+    for HostCommand { body, command } in batch {
+        process_host_message(shared, desktop, &body, command)?;
     }
+    Ok(())
 }
 
 fn wait_input_cleanup(shared: &Shared) {
@@ -2347,7 +2465,7 @@ fn admit_host_input(
     }
     Ok(match input {
         HostInput::Event(event) => {
-            let selected = lock(&desktop.selected).clone();
+            let selected = lock(&desktop.selected);
             match super::topology::accept_pointer(shared, *event, &selected) {
                 Ok(()) => Ok(Some(*event)),
                 Err(error) => Err(pointer_refusal(&error)),
@@ -2427,10 +2545,22 @@ fn apply_host_input(
 /// Validate under Core state, take the adapter without waiting, then release
 /// Core state before native work. Late input is released under the same adapter
 /// guard when retirement or a lease transition overtakes the native call.
+#[cfg(test)]
 fn process_host_command(
     shared: &Shared,
     desktop: &DesktopRuntime,
     body: &[u8],
+) -> Result<(), Error> {
+    let HostCommand { command, .. } = HostCommand::new(body.to_vec());
+    process_host_message(shared, desktop, body, command)
+}
+
+/// [`process_host_command`] for a message whose command is already decoded.
+fn process_host_message(
+    shared: &Shared,
+    desktop: &DesktopRuntime,
+    body: &[u8],
+    command: Option<Result<ControlMessage, Error>>,
 ) -> Result<(), Error> {
     let mut state = lock(&shared.state);
     runtime(
@@ -2471,7 +2601,7 @@ fn process_host_command(
         {
             drop(state);
             wait_input_cleanup(shared);
-            return process_host_command(shared, desktop, body);
+            return process_host_message(shared, desktop, body, command);
         }
         if !input_allowed {
             tracing::info!(
@@ -2539,7 +2669,7 @@ fn process_host_command(
     if body[0] != COMMAND {
         return Err(Error::Malformed);
     }
-    let command = ControlMessage::decode(&body[9..])?;
+    let command = command.ok_or(Error::Malformed)??;
     runtime(
         &state,
         desktop.info.service.id,
@@ -2615,6 +2745,9 @@ fn process_host_command(
             }
         }
         ControlMessage::Keyframe { stamp } if stamp == desktop.stamp => desktop.keyframe.request(),
+        ControlMessage::Received { stamp, picture } if stamp == desktop.stamp => {
+            lock(&desktop.stream_flight).acknowledged(picture, std::time::Instant::now());
+        }
         ControlMessage::VideoReport { stamp, report } if stamp == desktop.stamp => {
             lock(&desktop.viewer_loss).observe(&report, std::time::Instant::now());
         }
@@ -2801,6 +2934,8 @@ async fn host_send(
     // still repeats the one before, and a picture dropped here takes none.
     let mut picture = 0u32;
     let mut gate = SendGate::default();
+    // Whether the last picture went on the stream rather than as datagrams.
+    let mut streaming = false;
     let mut congestion = crate::video::Congestion::default();
     let mut path = None;
     // The least backlog the gate saw since the last feedback.
@@ -2875,6 +3010,7 @@ async fn host_send(
                 max
             };
             if let Some(max) = max.filter(|max| *max > PREFIX + crate::video::FRAG_HEADER + 64) {
+                streaming = false;
                 desktop
                     .datagram
                     .store(max - PREFIX, std::sync::atomic::Ordering::Relaxed);
@@ -2949,9 +3085,20 @@ async fn host_send(
                 desktop.counters.still_sent(frame.payload.len());
                 pictured = true;
             } else {
+                streaming = true;
+                // The stream holds whatever is written to it: while the
+                // viewer has not acknowledged the pictures already written,
+                // this one is dropped whole and a keyframe follows once it
+                // has.
+                if !lock(&desktop.stream_flight).may_send(std::time::Instant::now()) {
+                    desktop.counters.send_dropped();
+                    gate.dropped(frame.keyframe, body.len());
+                    continue;
+                }
                 let mut bytes = vec![VIDEO];
                 bytes.extend_from_slice(&body);
                 write(send, &bytes).await?;
+                lock(&desktop.stream_flight).sent(picture, std::time::Instant::now());
                 picture = picture.wrapping_add(1);
                 gate.sent(frame.keyframe, bytes.len());
                 pictured = true;
@@ -2963,7 +3110,13 @@ async fn host_send(
         if pictured && control_rx.borrow().0 == DesktopControlState::Controlling {
             super::power::note_control_used(shared);
         }
-        if gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop)) {
+        // A keyframe is asked for once the stream's unacknowledged pictures
+        // let it go, or the datagram backlog has room for it.
+        let stream_blocked =
+            streaming && !lock(&desktop.stream_flight).may_send(std::time::Instant::now());
+        if !stream_blocked
+            && gate.should_ask(link.datagram_send_buffer_space(), send_budget(desktop))
+        {
             desktop.keyframe.request();
         }
         // While a keyframe is owed, look at the backlog again each frame
@@ -3078,6 +3231,79 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn command(epoch: u64, event: crate::InputEvent) -> HostCommand {
+        let mut bytes = vec![COMMAND];
+        bytes.extend_from_slice(&epoch.to_be_bytes());
+        bytes.extend_from_slice(
+            &ControlMessage::Input {
+                stamp: SessionStamp {
+                    id: 7,
+                    generation: 3,
+                },
+                event,
+            }
+            .encode(),
+        );
+        HostCommand::new(bytes)
+    }
+
+    fn kinds(batch: &[HostCommand]) -> Vec<(u64, &'static str)> {
+        batch
+            .iter()
+            .map(|item| match &item.command {
+                Some(Ok(ControlMessage::Input { event, .. })) => (
+                    u64::from_be_bytes(item.body[1..9].try_into().unwrap()),
+                    event.kind(),
+                ),
+                other => panic!("not an input: {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A burst of pointer positions is applied as the newest one; the keys,
+    /// buttons and wheel between them keep their place.
+    #[test]
+    fn a_burst_of_pointer_moves_is_applied_as_the_newest() {
+        use crate::InputEvent;
+        let at = |x| InputEvent::pointer(x, 0, 1, 1);
+        let mut batch = vec![
+            command(1, at(1)),
+            command(1, at(2)),
+            command(1, InputEvent::button_down(crate::PointerButton::Left)),
+            command(1, at(3)),
+            command(1, at(4)),
+            command(1, at(5)),
+            command(1, InputEvent::wheel(0, 1)),
+            command(1, at(6)),
+            command(2, at(7)),
+        ];
+        assert!(batch.iter().all(HostCommand::native));
+        coalesce_pointer_moves(&mut batch);
+        assert_eq!(
+            kinds(&batch),
+            vec![
+                (1, "pointer"),
+                (1, "button down"),
+                (1, "pointer"),
+                (1, "wheel"),
+                (1, "pointer"),
+                (2, "pointer"),
+            ],
+            "the last move of each run stays; a move under another lease is its own"
+        );
+        let moved: Vec<_> = batch
+            .iter()
+            .filter_map(|item| match &item.command {
+                Some(Ok(ControlMessage::Input {
+                    event: InputEvent::Pointer { x, .. },
+                    ..
+                })) => Some(*x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moved, vec![2, 5, 6, 7]);
+    }
 
     #[test]
     fn a_frame_waits_behind_at_most_three_frames_of_video() {

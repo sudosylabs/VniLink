@@ -7,9 +7,10 @@
 
 //! Encoded video for one monitor.
 //!
-//! The platform captures, encodes, and draws. This module carries H.264 bytes,
-//! drops predicted frames until the next keyframe, and does not look inside the
-//! payload. Those bytes are screen content: do not log them.
+//! The platform captures, encodes, and draws. This module carries encoded
+//! frames of the stream's codec, drops predicted frames until the next
+//! keyframe, and does not look inside the payload. Those bytes are screen
+//! content: do not log them.
 
 mod codec;
 pub use codec::{CodecSupport, VideoCodec, YuvMatrix};
@@ -43,7 +44,12 @@ pub use queue::{RecordingVideoTap, VideoSubscription};
 #[cfg(test)]
 pub(crate) use queue::{VideoQueue, INBOX_MAX_AGE, VIDEO_QUEUE};
 pub(crate) use recovery::KeyframeRequests;
-pub(crate) use report::{Congestion, ReportTally, VideoReport, ViewerLoss, REPORT_LEN};
+#[cfg(test)]
+pub(crate) use report::BASE_PROTECTION;
+pub(crate) use report::{
+    Congestion, ReportPacing, ReportTally, RttFloor, VideoReport, ViewerLoss, REPORT_EVERY,
+    REPORT_LEN,
+};
 pub(crate) use viewer::{Order, ViewerPictures};
 
 /// Largest encoded payload, not counting the video header before it.
