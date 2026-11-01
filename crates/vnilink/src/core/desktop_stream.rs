@@ -2976,7 +2976,6 @@ impl SendGate {
     }
 }
 
-/// The video send backlog allowed at the agreed quality.
 /// What the host says of itself in its feedback: its encoder, and whether
 /// its screen is on a desktop it cannot capture.
 fn host_flags(shared: &Shared, desktop: &DesktopRuntime) -> u8 {
@@ -2996,6 +2995,8 @@ fn host_flags(shared: &Shared, desktop: &DesktopRuntime) -> u8 {
     };
     encoder | secure
 }
+
+/// The video send backlog allowed at the agreed quality.
 fn send_budget(desktop: &DesktopRuntime) -> usize {
     let quality = *lock(&desktop.quality);
     backlog_budget(quality.max_bitrate_kbps, quality.max_frame_rate)

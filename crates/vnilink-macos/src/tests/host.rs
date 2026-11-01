@@ -23,7 +23,7 @@ fn the_host_encoder_is_unavailable() {
         HostSession::open(64, 64, quality, |w, h, fps, bps| MacEncoder::open(
             w, h, fps, bps, false
         )),
-        Err(Error::Unsupported("VideoToolbox H.264"))
+        Err(Error::Unsupported("VideoToolbox session"))
     ));
 }
 

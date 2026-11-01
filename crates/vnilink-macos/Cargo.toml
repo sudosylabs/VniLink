@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "VideoToolbox H.264 and ScreenCaptureKit for VniLink"
+description = "VideoToolbox H.264/HEVC and ScreenCaptureKit for VniLink"
 publish = false
 
 [dependencies]

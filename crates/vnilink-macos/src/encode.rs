@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! VideoToolbox H.264 encode of BGRA pictures.
+//! VideoToolbox H.264 and HEVC encode of BGRA pictures.
 //!
 //! A ScreenCaptureKit picture is encoded in its own IOSurface, or scaled on
 //! the GPU into the encoder's (`VTPixelTransferSession`); any other picture
@@ -14,7 +14,7 @@
 //! The session emits length-prefixed NALs. SPS and PPS stay in the format
 //! description, so a keyframe is rewritten as Annex-B with those sets in front.
 //! This encoder does not capture the screen. Callers supply the picture.
-//! Without VideoToolbox H.264 this returns unsupported.
+//! Without VideoToolbox this returns unsupported.
 //!
 //! A recovery keyframe is encoded under a quantiser floor that
 //! [`RecoveryQp`] moves until it fits a few pictures' bytes. VideoToolbox
@@ -202,11 +202,11 @@ impl MacEncoder {
                     open(videotoolbox::HardwareAcceleration::Preferred)
                         .map(|session| (session, false))
                 })
-                .map_err(|_| Error::Unsupported("VideoToolbox H.264"))?;
+                .map_err(|_| Error::Unsupported("VideoToolbox session"))?;
             low_latency(&session, matrix);
             set_rate(&session, bitrate, frame_rate);
             let surface = IOSurface::create(usize::from(width), usize::from(height), BGRA, 4)
-                .ok_or(Error::Unsupported("VideoToolbox H.264"))?;
+                .ok_or(Error::Unsupported("VideoToolbox session"))?;
             Ok(Self {
                 codec,
                 matrix,
@@ -223,7 +223,7 @@ impl MacEncoder {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (bitrate, high, matrix);
-            Err(Error::Unsupported("VideoToolbox H.264"))
+            Err(Error::Unsupported("VideoToolbox session"))
         }
     }
 }
@@ -507,7 +507,7 @@ impl VideoEncoder for MacEncoder {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = params;
-            Err(Error::Unsupported("VideoToolbox H.264"))
+            Err(Error::Unsupported("VideoToolbox session"))
         }
     }
 }
