@@ -291,7 +291,18 @@ fn unpairing_ends_the_link_for_good() -> TestResult {
         host:
           relay: endpoint bound listen=Loopback relay=false
     "#]],
-        || trace.story(&["relay"]),
+        // Whether the link task reaches its own "no longer paired" record or
+        // is aborted by the unpairing first is not part of the story.
+        || {
+            trace
+                .tell(&["relay"])
+                .only(&[
+                    "endpoint bound",
+                    "presence",
+                    "a link to a paired computer is up",
+                ])
+                .to_string()
+        },
     );
     Ok(())
 }
