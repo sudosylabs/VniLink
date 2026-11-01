@@ -10,7 +10,7 @@ import test from 'node:test';
 import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
-import { agentLatencyEnvironment, latencyOptions, renderHoldSummary, summariseHolds } from '../../build/lib/latency.ts';
+import { agentLatencyEnvironment, latencyOptions, readerBuild, renderHoldSummary, summariseHolds } from '../../build/lib/latency.ts';
 
 async function load(entry) {
 	const output = await build({ entryPoints: [entry], bundle: true, write: false, platform: 'node', format: 'esm', tsconfig: 'tsconfig.json', external: ['electron'] });
@@ -199,4 +199,13 @@ test('a two-computer run is summarised from each side\'s own samples', async () 
 	assert.match(text, /\| Round trip \(ms\) \| 4\.0 \| 6\.0 \| 2 \|/);
 	assert.match(text, /\| Decoding \| 2\.0 \| 3\.0 \| 2 \|/);
 	assert.match(text, /Conditions the viewer held: encoder\.slow/);
+});
+
+test('the reader is built for the addon\'s target with its tools, and for the host\'s default elsewhere', () => {
+	const windows = readerBuild('vnilink-windows', 'x86_64-pc-windows-gnu', { PATH: 'C:\\mingw\\bin' }, () => true);
+	assert.deepEqual(windows.args, ['build', '--release', '--locked', '--target', 'x86_64-pc-windows-gnu', '-p', 'vnilink-windows', '--example', 'glass_latency']);
+	assert.equal(windows.env.CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER, 'gcc', 'the MinGW tools the addon build uses');
+	const mac = readerBuild('vnilink-macos', undefined, { PATH: '/bin' });
+	assert.deepEqual(mac.args, ['build', '--release', '--locked', '-p', 'vnilink-macos', '--example', 'glass_latency']);
+	assert.deepEqual(mac.env, { PATH: '/bin' });
 });
