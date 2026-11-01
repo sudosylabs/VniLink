@@ -15,8 +15,7 @@ import type { ILayoutService } from '../platform/layout/browser/layoutService.js
 import type { Part } from './part.js';
 
 /**
- * Arranges the workbench's parts in the window, in the role of VS Code's
- * `Layout`: the titlebar above a workspace that holds the notice line and the
+ * Arranges the workbench's parts in the window: the titlebar above a workspace that holds the notice line and the
  * views part. The workbench decides what the parts are. It is the window's
  * `ILayoutService`, whose container hosts context views and menus.
  */

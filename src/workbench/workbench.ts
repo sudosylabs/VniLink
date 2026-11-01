@@ -26,8 +26,7 @@ import { registerWindowDriver } from './services/driver/driver.js';
 import { ILifecycleService, LifecyclePhase } from './services/lifecycle/lifecycle.js';
 
 /**
- * The window's workbench, in the shape of VS Code's `Workbench`: it creates
- * the instantiation service, starts contributions, renders the parts and
+ * The window's workbench: it creates the instantiation service, starts contributions, renders the parts and
  * moves the lifecycle through Ready, Restored and Eventually.
  */
 export class Workbench extends Layout {

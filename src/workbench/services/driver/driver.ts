@@ -15,8 +15,7 @@ import { INativeHostService } from '../../../platform/native/common/native.js';
 import { IPermissionService } from '../permissions/permissionService.js';
 
 /**
- * Automation access to the window's real services, in the role of VS Code's
- * `BrowserWindowDriver`. Only registered for isolated smoke-test launches.
+ * Automation access to the window's real services. Only registered for isolated smoke-test launches.
  */
 export class BrowserWindowDriver {
 

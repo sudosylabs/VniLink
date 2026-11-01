@@ -9,7 +9,7 @@ import { createDecorator } from '../../../platform/instantiation/common/instanti
 
 export const IDialogService = createDecorator<IDialogService>('dialogService');
 
-/** A question with a few answers, in the role of VS Code's `IDialogService`. */
+/** A question with a few answers. */
 export interface IDialogOptions {
 	readonly type: 'warning' | 'info' | 'error';
 	readonly message: string;
@@ -33,7 +33,7 @@ export interface IDialogResult {
 
 /**
  * Asks the person at this computer. macOS shows its native box, which
- * follows the system's appearance; elsewhere VniLink draws VS Code's dialog
+ * follows the system's appearance; elsewhere VniLink draws the copied dialog
  * in the app's theme, since a native Windows box is always light.
  */
 export interface IDialogService {

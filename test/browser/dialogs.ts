@@ -77,7 +77,7 @@ export async function verifyDialogs(): Promise<void> {
 	assert(nativeConflict.button === 1 && nativeConflict.checked, 'The native checkbox answer was lost');
 	shown.length = 1;
 
-	// Elsewhere VS Code's dialog is drawn in the app's theme.
+	// Elsewhere the copied dialog is drawn in the app's theme.
 	const themed = dialogService(false, 0, shown);
 	const escaped = themed.show(restart);
 	await frame();

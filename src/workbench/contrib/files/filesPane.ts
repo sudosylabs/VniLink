@@ -434,7 +434,7 @@ export class FilesPaneView extends Disposable {
 		append(this.nameButton, renderIcon(os === 'windows' ? Icons.windows : os === 'linux' ? Icons.linux : os === 'macos' ? Icons.apple : Icons.computers), $('span', undefined, computer), chevron);
 		this.nameButton.title = nls.localize('files.places', 'Go to a place on {0}', computer);
 		this.crumbs = $('nav.files-crumbs', { 'aria-label': nls.localize('files.path', 'Location') });
-		// As VS Code's breadcrumbs: a long path scrolls sideways, with the wheel too, and never squeezes its names.
+		// A long path scrolls sideways, with the wheel too, and never squeezes its names.
 		this.crumbScroll = this._register(new DomScrollableElement(this.crumbs, {
 			vertical: ScrollbarVisibility.Hidden,
 			horizontal: ScrollbarVisibility.Auto,

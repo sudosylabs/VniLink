@@ -42,7 +42,7 @@ export const Extensions = {
 	HomePages: 'workbench.registry.homePages',
 };
 
-/** Pages contributed to Home, in the shape of VS Code's views registry. */
+/** Pages contributed to Home. */
 export interface IHomePagesRegistry {
 	readonly onDidChangePages: Event<void>;
 	registerPage(page: IHomePageDescriptor): IDisposable;

@@ -12,8 +12,7 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import { ILifecycleService, LifecyclePhase, StartupKind, type BeforeShutdownErrorEvent, type BeforeShutdownEvent, type WillShutdownEvent } from './lifecycle.js';
 
 /**
- * Tracks the workbench's startup phases, in the role of VS Code's
- * `AbstractLifecycleService`. The window closes without vetoes, so the
+ * Tracks the workbench's startup phases. The window closes without vetoes, so the
  * shutdown events that support them never fire; `onDidShutdown` fires once
  * when the workbench goes away.
  */

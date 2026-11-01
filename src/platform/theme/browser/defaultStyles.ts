@@ -19,7 +19,7 @@ import type { IMenuStyles } from '../../../base/browser/ui/menu/menu.js';
 import type { ICheckboxStyles } from '../../../base/browser/ui/toggle/toggle.js';
 
 /**
- * Styles for VS Code's widgets, in the role of VS Code's `defaultStyles.ts`.
+ * Styles for the copied widgets.
  * VniLink's palette is the CSS custom properties in `colors.css`, so each
  * style names a variable from there instead of a color registry id.
  */
@@ -58,7 +58,7 @@ export const defaultInputBoxStyles: IInputBoxStyles = {
 	inputValidationErrorForeground: undefined,
 };
 
-/** VS Code's dialog, in the colours of the surface it floats over. */
+/** The dialog, in the colours of the surface it floats over. */
 export const defaultDialogStyles: IDialogStyles = {
 	dialogForeground: 'var(--text)',
 	dialogBackground: 'var(--surface-raised)',

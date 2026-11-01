@@ -4331,7 +4331,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "ee980792e74f652345a63a4a7f9fe1843f39caeed74812c06726844531381585",
+      "sha256": "0d5eafebda97177009237ae60724e2cdcb77d97f94a6171597781d6abfa0d372",
       "adapted": true
     },
     {
@@ -4344,7 +4344,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "7b9a32cdff1ab57e912eb3a49123e0609b9750ba59b32401556b53d9de7f825d"
+      "sha256": "fe12e4abf0a09f923e2ffe016e976a369eb1019a327f63e891ebe40ba60da456"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -4499,7 +4499,7 @@
       "path": "src/workbench/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "ece52d7b86f2ff19cb73a422d1f52134defb267e5d2f869dfdbcb11ccbd49173"
+      "sha256": "6fac256921f2a5404827ae3848b9735a560f8da0f2a6a209c008c490c14a7272"
     },
     {
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",

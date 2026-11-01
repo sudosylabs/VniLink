@@ -174,7 +174,7 @@ export class NativeHostMainService extends Disposable {
 		return result.canceled ? null : result.filePaths[0] ?? null;
 	}
 
-	/** A native message box over the window, as VS Code's dialog service shows one. */
+	/** A native message box over the window. */
 	public async showMessageBox(windowId: number, options: MessageBoxOptions): Promise<MessageBoxReturnValue> {
 		const { response, checkboxChecked } = await dialog.showMessageBox(this.window(windowId), {
 			message: options.message,

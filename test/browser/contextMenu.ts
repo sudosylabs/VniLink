@@ -92,7 +92,7 @@ export class ContextMenuFixture extends Disposable {
 }
 
 /**
- * VS Code's context menu service, as the workbench registers it, opens a
+ * The context menu service, as the workbench registers it, opens a
  * themed menu with product icons, runs the chosen action, closes on Escape
  * without running anything, and breaks no CSP rule on the way.
  */

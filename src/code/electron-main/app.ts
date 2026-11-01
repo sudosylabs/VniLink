@@ -81,7 +81,7 @@ const workbenchFiles = new Set(['/index.html', '/renderer.js', '/renderer.css', 
  */
 export class VniLinkApplication extends Disposable {
 	private readonly logService: LogService;
-	/** This run's logs folder, `<userData>/logs/<started at>`, as VS Code's `logsHome`. */
+	/** This run's logs folder, `<userData>/logs/<started at>`. */
 	private readonly logsHome: URI;
 	private readonly loggerService: LoggerMainService;
 	private readonly stateService: StateService;
@@ -95,7 +95,7 @@ export class VniLinkApplication extends Disposable {
 		const logLevel = process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info;
 		this.logsHome = URI.file(join(app.getPath('userData'), 'logs', logsFolderName(new Date())));
 		this.loggerService = this._register(new LoggerMainService(logLevel, this.logsHome));
-		// Main logs to the console at once and to main.log from here on, as VS Code's main does.
+		// Main logs to the console at once, and to main.log as soon as its logger exists.
 		const bufferLogger = new BufferLogger(logLevel);
 		this.logService = this._register(new LogService(bufferLogger, [new ConsoleMainLogger(logLevel)]));
 		bufferLogger.logger = this.loggerService.createLogger('main', { name: 'Main' });
@@ -345,7 +345,7 @@ export class VniLinkApplication extends Disposable {
 			createDestination: () => recording.createDestination(),
 			savePicture: (name: unknown, png: unknown) => recording.savePicture(name, png),
 		}, disposables, { disableMarshalling: true }));
-		// The preload resolves this before any IPC client exists, as VS Code's window configuration does.
+		// The preload resolves this before any IPC client exists.
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		validatedIpcMain.handle(WINDOW_CONFIGURATION_CHANNEL, event => Promise.resolve(this.windowConfiguration(event.sender, engine.available)));
 		disposables.add({

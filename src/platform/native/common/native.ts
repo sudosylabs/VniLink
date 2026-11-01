@@ -58,7 +58,7 @@ export interface INativeHostService {
 	setRemoteKeyboard(owned: boolean): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
 	pickFolder(defaultPath: string): Promise<string | null>;
-	/** A native message box over the window, as VS Code's desktop dialogs are. */
+	/** A native message box over the window. */
 	showMessageBox(options: MessageBoxOptions & ITargetWindowOptions): Promise<MessageBoxReturnValue>;
 	getCaptureDisplays(): Promise<NativeScreenSource[]>;
 	openExternal(url: string): Promise<void>;

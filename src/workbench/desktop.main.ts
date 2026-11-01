@@ -45,7 +45,7 @@ export class DesktopMain extends Disposable {
 		const serviceCollection = new ServiceCollection();
 		const mainProcessService = this._register(new ElectronIPCMainProcessService(this.configuration.windowId));
 		serviceCollection.set(IMainProcessService, mainProcessService);
-		// As VS Code's window: its log goes through main to window<id>/renderer.log, and to the console.
+		// The window's log goes through main to window<id>/renderer.log, and to the console.
 		const { windowId, logLevel, logsPath } = this.configuration;
 		const windowLogsPath = joinPath(URI.file(logsPath), `window${String(windowId)}`);
 		const loggerService = this._register(new LoggerChannelClient(windowId, logLevel, windowLogsPath, [], mainProcessService.getChannel('logger')));
