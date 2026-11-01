@@ -17,6 +17,7 @@ import '../../src/workbench/contrib/settings/settings.contribution.js';
 import '../../src/workbench/actions/applicationActions.js';
 import { IMenuService } from '../../src/platform/actions/common/actions.js';
 import { MenuService } from '../../src/platform/actions/common/menuService.js';
+import { IClipboardService } from '../../src/platform/clipboard/common/clipboardService.js';
 import { ICommandService } from '../../src/platform/commands/common/commands.js';
 import { IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
 import { ContextKeyService } from '../../src/platform/contextkey/browser/contextKeyService.js';
@@ -114,7 +115,8 @@ export async function verifyHomeLifecycle(): Promise<void> {
 		[IMenuService, new SyncDescriptor(MenuService)], [IDevicePairingPopover, popover],
 		[ISystemActionService, {
 			_serviceBrand: undefined, onDidChange: Event.None, progress: () => undefined, run: () => Promise.resolve(), cancel: () => Promise.resolve(),
-		}]), true);
+		}],
+		[IClipboardService, { _serviceBrand: undefined, writeText: () => Promise.resolve(), readText: () => Promise.resolve('') }]), true);
 	const home = services.createInstance(HomeView);
 	try {
 		assert(!home.element.querySelector('[data-section-id="files"]'), 'Files settings still appear in the sidebar');

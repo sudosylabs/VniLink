@@ -16,6 +16,7 @@ import { Icons, type IconId } from '../../../base/common/icons.js';
 import { KeyCode } from '../../../base/common/keyCodes.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import type { RemoteCapability, RemoteCapabilityStatus, RemoteStatus } from '../../../platform/engine/common/engine.js';
+import { IClipboardService } from '../../../platform/clipboard/common/clipboardService.js';
 import { ICommandService } from '../../../platform/commands/common/commands.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { defaultButtonStyles, defaultInputBoxStyles } from '../../../platform/theme/browser/defaultStyles.js';
@@ -114,6 +115,7 @@ export class DeviceDetails extends Disposable {
 		@IInstantiationService instantiationService: IInstantiationService,
 		@ICommandService private readonly commandService: ICommandService,
 		@ISystemActionService private readonly systemActions: ISystemActionService,
+		@IClipboardService private readonly clipboard: IClipboardService,
 	) {
 		super();
 		const closeLabel = nls.localize('devices.close', 'Close device details');
@@ -373,7 +375,8 @@ export class DeviceDetails extends Disposable {
 			return;
 		}
 		try {
-			await navigator.clipboard.writeText(id);
+			// Through main: the window's session refuses the web clipboard.
+			await this.clipboard.writeText(id);
 			if (!this.isDisposed() && this.device?.id === id) {
 				this.status.textContent = nls.localize('devices.idCopied', 'Device ID copied.');
 			}

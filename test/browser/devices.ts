@@ -13,6 +13,7 @@ import type { ScreenAccess, ScreenSnapshotResult } from '../../src/workbench/ser
 import type { IScreenSnapshotService } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { DevicesPage } from '../../src/workbench/contrib/devices/devicesPage.js';
 import { DevicePairingPopover, IDevicePairingPopover, type PairingPopoverKind } from '../../src/workbench/contrib/devices/devicePairingPopover.js';
+import { IClipboardService } from '../../src/platform/clipboard/common/clipboardService.js';
 import { ICommandService, type ICommandEvent } from '../../src/platform/commands/common/commands.js';
 import { ContextKeyService } from '../../src/platform/contextkey/browser/contextKeyService.js';
 import { IContextKeyService, type IContextKey } from '../../src/platform/contextkey/common/contextkey.js';
@@ -79,7 +80,23 @@ class FixtureSystemActions implements ISystemActionService {
 }
 
 /** Explicit test data; the production page always receives the real service. */
+class FakeClipboard implements IClipboardService {
+	declare public readonly _serviceBrand: undefined;
+	public readonly copied: string[] = [];
+
+	public writeText(text: string): Promise<void> {
+		this.copied.push(text);
+		return Promise.resolve();
+	}
+
+	public readText(): Promise<string> {
+		return Promise.resolve(this.copied.at(-1) ?? '');
+	}
+}
+
 export class DevicePageFixture extends Disposable implements IDeviceService {
+	/** Main's clipboard, which the page writes through. */
+	public readonly clipboard = new FakeClipboard();
 	declare public readonly _serviceBrand: undefined;
 	public readonly available = true;
 	public state: 'loading' | 'ready' | 'unavailable' = 'ready';
@@ -137,6 +154,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 		const collection = new ServiceCollection([IDeviceServiceId, this], [IScreenSnapshotServiceId, this.snapshots], [ICommandService, commands],
 			[IContextKeyService, contextKeys],
 			[ISystemActionService, this.systemActions],
+			[IClipboardService, this.clipboard],
 			[IDevicePairingService, new SyncDescriptor(DevicePairingService)], [IDevicePairingPopover, new SyncDescriptor(DevicePairingPopover)]);
 		const services = this._register(new InstantiationService(collection, true));
 		this.page = this._register(services.createInstance(DevicesPage));
@@ -464,6 +482,9 @@ async function verifyInspector(fixture: DevicePageFixture, rows: () => HTMLEleme
 	const facts = Object.fromEntries([...page.querySelectorAll('.device-facts > div')].map(row => [row.querySelector('dt')?.textContent ?? '', row.querySelector('dd')?.textContent ?? '']));
 	assert(facts['Device ID'] === 'aaaaaaaa…aaaaaa' && facts.Computer === 'studio.local' && facts.System === 'macOS' && facts.Addresses === '2 direct, 1 relay', `Details are wrong: ${JSON.stringify(facts)}`);
 	assert(page.querySelector('.device-id')?.getAttribute('title') === STUDIO && page.querySelector('.device-copy')?.getAttribute('aria-label') === 'Copy device ID', 'The full device ID is not reachable');
+	page.querySelector<HTMLButtonElement>('.device-copy')?.click();
+	await settle();
+	assert(fixture.clipboard.copied.at(-1) === STUDIO, 'Copy device ID did not reach the clipboard');
 	assert(page.querySelector('.device-panel-state')?.textContent === 'Connected · macOS', 'The identity line is wrong');
 	fixture.update(fixture.devices.map(device => device.id === 'b'.repeat(64) ? { ...device, presence: 'disconnected' as const } : device));
 	rows()[1].click();
