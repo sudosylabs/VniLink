@@ -218,8 +218,6 @@ impl IMFSourceReaderCallback_Impl for Callback_Impl {
         if self.source.is_cancelled() {
             return Ok(());
         }
-        // SAFETY: `sample` is the live sample the source reader passed to this callback, and
-        // `copy_sample` copies its pixels before the callback returns.
         let result = if status.is_err()
             || flags
                 & (MF_SOURCE_READERF_ERROR.0
@@ -230,6 +228,8 @@ impl IMFSourceReaderCallback_Impl for Callback_Impl {
         {
             Err(Error::Unsupported("camera device ended or changed format"))
         } else if let Some(sample) = sample.as_ref() {
+            // SAFETY: `sample` is the live sample the source reader passed to this callback, and
+            // `copy_sample` copies its pixels before the callback returns.
             unsafe {
                 copy_sample(
                     sample,

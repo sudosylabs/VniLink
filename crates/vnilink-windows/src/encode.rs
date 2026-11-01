@@ -563,10 +563,10 @@ impl VideoEncoder for WindowsEncoder {
             }
             .is_ok();
             if taken {
-                // SAFETY: as above.
                 ignored_hr!(
                     vnilink::trace::ENCODE,
                     "an encoder refusing the buffer size keeps its own",
+                    // SAFETY: as above.
                     unsafe {
                         set_codec_u32(
                             &self.transform,
@@ -618,10 +618,10 @@ impl VideoEncoder for WindowsEncoder {
                 .is_ok();
             let sample = self.encode_picture(frame, captured, params);
             if floored {
-                // SAFETY: as above.
                 ignored_hr!(
                     vnilink::trace::ENCODE,
                     "a quality floor that cannot be lifted is lifted with the next one",
+                    // SAFETY: as above.
                     unsafe { set_codec_u32(&self.transform, &CODECAPI_AVEncVideoMinQP, 0) }
                 );
             }
@@ -1108,10 +1108,10 @@ impl WindowsEncoder {
         if width % 2 != 0 || height % 2 != 0 {
             return Err(Error::InvalidFrame("NV12 width and height must be even"));
         }
-        // SAFETY: `CoInitializeEx` takes only a null reserved pointer and a flag.
         ignored_hr!(
             vnilink::trace::ENCODE,
             "a thread with COM already set up keeps it",
+            // SAFETY: `CoInitializeEx` takes only a null reserved pointer and a flag.
             unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok() }
         );
         let foundation = crate::foundation::MediaFoundation::start()

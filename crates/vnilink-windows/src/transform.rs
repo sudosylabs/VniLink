@@ -180,10 +180,10 @@ impl std::ops::Deref for CreatedTransform {
 impl Drop for CreatedTransform {
     fn drop(&mut self) {
         if let Some(activate) = &self.activate {
-            // SAFETY: the activation object created this transform.
             ignored_hr!(
                 vnilink::trace::ENCODE,
                 "a transform that cannot shut down is released anyway",
+                // SAFETY: the activation object created this transform.
                 unsafe { activate.ShutdownObject() }
             );
         }

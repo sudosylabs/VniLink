@@ -31,6 +31,7 @@ use crate::hook_thread::HookThread;
 unsafe extern "system" fn keyboard(code: i32, message: WPARAM, event: LPARAM) -> LRESULT {
     // SAFETY: for HC_ACTION, `event` points at the hook's KBDLLHOOKSTRUCT.
     if code == HC_ACTION as i32
+        // SAFETY: for HC_ACTION, `event` points at the hook's KBDLLHOOKSTRUCT.
         && unsafe { &*(event.0 as *const KBDLLHOOKSTRUCT) }.flags.0 & LLKHF_INJECTED.0 == 0
     {
         return LRESULT(1);
@@ -42,6 +43,7 @@ unsafe extern "system" fn keyboard(code: i32, message: WPARAM, event: LPARAM) ->
 unsafe extern "system" fn mouse(code: i32, message: WPARAM, event: LPARAM) -> LRESULT {
     // SAFETY: for HC_ACTION, `event` points at the hook's MSLLHOOKSTRUCT.
     if code == HC_ACTION as i32
+        // SAFETY: for HC_ACTION, `event` points at the hook's MSLLHOOKSTRUCT.
         && unsafe { &*(event.0 as *const MSLLHOOKSTRUCT) }.flags & LLMHF_INJECTED == 0
     {
         return LRESULT(1);

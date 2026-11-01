@@ -927,7 +927,10 @@ mod windows_support {
             )
         }
         .map_err(|_| StoreFailure::Unavailable)?;
+        // Safety: `CreateFileW` succeeded, so `handle` is a valid handle that
+        // nothing else owns; `File` takes it over and closes it.
         let file = unsafe { File::from_raw_handle(handle.0) };
+        // Safety: the handle is the one `file` owns and stays open for the call.
         let flushed = unsafe {
             FlushFileBuffers(windows::Win32::Foundation::HANDLE(
                 file.as_raw_handle_copy(),
@@ -969,6 +972,8 @@ mod windows_support {
             return Err(StoreFailure::Unavailable);
         }
         let mut info = ACL_SIZE_INFORMATION::default();
+        // Safety: `dacl` is non-null and live, and `info` is an
+        // ACL_SIZE_INFORMATION of exactly the size passed.
         let info_ok = unsafe {
             GetAclInformation(
                 dacl,
@@ -985,6 +990,8 @@ mod windows_support {
         let mut broader = false;
         for index in 0..info.AceCount {
             let mut ace = std::ptr::null_mut();
+            // Safety: `dacl` is the non-null DACL read above, `index` is below
+            // its AceCount and `ace` is a local out value.
             let ace_ok = unsafe { GetAce(dacl, index, &mut ace) };
             if ace_ok.is_err() || ace.is_null() {
                 broader = true;
@@ -1001,6 +1008,8 @@ mod windows_support {
                 broader = true;
                 break;
             }
+            // Safety: the type check above makes this an ACCESS_ALLOWED_ACE inside
+            // the DACL, which `descriptor` keeps alive.
             let allowed = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
             let sid = windows::Win32::Security::PSID(
                 (&allowed.SidStart as *const u32).cast_mut() as *mut _
@@ -1030,6 +1039,8 @@ mod windows_support {
 
     fn free_descriptor(descriptor: windows::Win32::Security::PSECURITY_DESCRIPTOR) {
         if !descriptor.0.is_null() {
+            // Safety: the non-null descriptor is a LocalAlloc block from the
+            // security APIs and every caller frees it once.
             unsafe {
                 windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
                     descriptor.0,
@@ -1064,12 +1075,17 @@ mod windows_support {
         // Safety: the process handle is a pseudo-handle and is not closed.
         // The token handle is closed at the end of this function.
         let mut token = windows::Win32::Foundation::HANDLE::default();
+        // Safety: the pseudo-handle is always valid and `token` is a local out value.
         unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
             .map_err(|_| StoreFailure::Unavailable)?;
         let mut length = 0u32;
         // Asks only for the size: it fails with ERROR_INSUFFICIENT_BUFFER by design.
+        // Safety: `token` is the open query token; no buffer is passed and
+        // `length` is a local out value.
         let _sized = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut length) };
         let mut buffer = vec![0u8; length as usize];
+        // Safety: `buffer` is writable for `length` bytes, the size the first
+        // call reported, and outlives the call.
         unsafe {
             GetTokenInformation(
                 token,
@@ -1083,15 +1099,20 @@ mod windows_support {
             vnilink::ignored!(
                 vnilink::trace::STORAGE,
                 "a token handle that cannot close ends with the process",
+                // Safety: `token` was opened above and this error path is its
+                // only close.
                 unsafe { windows::Win32::Foundation::CloseHandle(token) }
             );
             StoreFailure::Unavailable
         })?;
+        // Safety: the second call filled `buffer` with a TOKEN_USER whose SID
+        // lives in the same buffer, which stays alive until this function returns.
         let user = unsafe { &*(buffer.as_ptr() as *const TOKEN_USER) };
         let text = sid_string(user.User.Sid);
         vnilink::ignored!(
             vnilink::trace::STORAGE,
             "a token handle that cannot close ends with the process",
+            // Safety: `token` was opened above and is closed once, here.
             unsafe { windows::Win32::Foundation::CloseHandle(token) }
         );
         text
@@ -1107,12 +1128,18 @@ mod windows_support {
             return Err(StoreFailure::Unavailable);
         }
         let mut len = 0usize;
+        // Safety: `raw` is non-null and nul-terminated on success, so reading
+        // up to the terminator stays inside the allocation.
         unsafe {
             while *raw.0.add(len) != 0 {
                 len += 1;
             }
         }
+        // Safety: the `len` units before the terminator are initialized and the
+        // allocation is not freed until after this copy.
         let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(raw.0, len) });
+        // Safety: `raw` was allocated by `ConvertSidToStringSidW` for LocalFree
+        // and nothing reads it afterwards.
         unsafe {
             windows::Win32::Foundation::LocalFree(Some(windows::Win32::Foundation::HLOCAL(
                 raw.0 as *mut _,
@@ -1149,6 +1176,8 @@ mod windows_support {
             )
         }
         .map_err(|_| StoreFailure::Unavailable)?;
+        // Safety: `CreateFileW` succeeded, so `handle` is a valid file handle
+        // that nothing else owns; `File` takes it over and closes it.
         Ok(unsafe { File::from_raw_handle(handle.0) })
     }
 

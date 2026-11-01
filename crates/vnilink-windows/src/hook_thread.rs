@@ -68,6 +68,7 @@ impl Drop for HookThread {
         vnilink::ignored!(
             vnilink::trace::INPUT,
             "the hook thread ended on its own",
+            // SAFETY: the thread made its message queue before reporting its id.
             unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }
         );
         if let Some(thread) = self.thread.take() {
@@ -86,6 +87,7 @@ fn unhook(installed: Vec<HHOOK>) {
         vnilink::ignored!(
             vnilink::trace::INPUT,
             "a hook Windows already removed needs no removing",
+            // SAFETY: each handle came from SetWindowsHookExW on this thread.
             unsafe { UnhookWindowsHookEx(hook) }
         );
     }
@@ -133,6 +135,7 @@ fn run(
     vnilink::ignored!(
         vnilink::trace::INPUT,
         "the caller stopped waiting for the hook thread",
+        // SAFETY: `GetCurrentThreadId` takes no arguments and cannot fail.
         ready.send(Ok(unsafe { GetCurrentThreadId() }))
     );
     // SAFETY: the loop ends on WM_QUIT or an error; the hooks run inside it.

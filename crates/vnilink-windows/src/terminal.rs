@@ -615,9 +615,9 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                             }
                         }
                         Ok(TerminalCommand::Resize(size)) => {
-                            // SAFETY: `console` stays open until the writer, which is the only
-                            // caller of this, has been joined by `Session::close`.
                             if size.validate().is_err()
+                                // SAFETY: `console` stays open until the writer, which is the only
+                                // caller of this, has been joined by `Session::close`.
                                 || unsafe { ResizePseudoConsole(console, coord(size)) }.is_err()
                             {
                                 break;
@@ -628,11 +628,12 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                                 rows: if size.rows == 1 { 2 } else { size.rows - 1 },
                                 columns: size.columns,
                             };
-                            // SAFETY: as above: both resizes happen on the writer thread while
-                            // the console is open.
                             if size.validate().is_err()
+                                // SAFETY: as above: both resizes happen on the writer thread while
+                                // the console is open.
                                 || unsafe { ResizePseudoConsole(console, coord(temporary)) }
                                     .is_err()
+                                // SAFETY: as above.
                                 || unsafe { ResizePseudoConsole(console, coord(size)) }.is_err()
                             {
                                 break;
@@ -796,8 +797,8 @@ mod tests {
         let process = open_process(&backend);
         output_until(&mut backend, "VNI_CONPTY_READY_α", Duration::from_secs(5));
         drop(backend);
-        // SAFETY: `process` is an open handle owned by this test.
         assert_eq!(
+            // SAFETY: `process` is an open handle owned by this test.
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
         );
@@ -889,8 +890,8 @@ mod tests {
         // SAFETY: the handle is owned by this test.
         let child = unsafe { OwnedHandle::from_raw_handle(child.0) };
         drop(backend);
-        // SAFETY: `child` is an open handle owned by this test.
         assert_eq!(
+            // SAFETY: `child` is an open handle owned by this test.
             unsafe { WaitForSingleObject(handle(&child), 5000) },
             WAIT_OBJECT_0,
             "the shell's child outlived its terminal"
@@ -914,15 +915,15 @@ mod tests {
         let process = open_process(&backend);
         output_until(&mut backend, "VNI_FLOOD_1", Duration::from_secs(5));
         // Nothing reads further: the queue fills behind the shell.
-        // SAFETY: `process` is an open handle owned by this test.
         assert_eq!(
+            // SAFETY: `process` is an open handle owned by this test.
             unsafe { WaitForSingleObject(handle(&process), 500) },
             WAIT_TIMEOUT
         );
         let closed = Instant::now();
         drop(backend);
-        // SAFETY: `process` is an open handle owned by this test.
         assert_eq!(
+            // SAFETY: `process` is an open handle owned by this test.
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
         );

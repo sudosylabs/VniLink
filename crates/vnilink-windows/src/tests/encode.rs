@@ -801,8 +801,6 @@ fn capture_to_encode_cost() {
             let tick = Instant::now();
             let timestamp = started.elapsed().as_micros() as u64;
             if let Some(frame) = capture.poll_frame(timestamp).unwrap() {
-                // SAFETY: `shared` was built from the capture's own device, and `frame` is a
-                // captured picture from that capture.
                 let frame = match mode {
                     "cpu" => vnilink_media::RawFrame::with_stride(
                         frame.width(),
@@ -812,6 +810,8 @@ fn capture_to_encode_cost() {
                         frame.pixels().to_vec(),
                     )
                     .unwrap(),
+                    // SAFETY: `shared` was built from the capture's own device, and `frame` is a
+                    // captured picture from that capture.
                     "shared" => unsafe { shared.as_ref().unwrap().carry(&frame).unwrap() },
                     _ => frame,
                 };
