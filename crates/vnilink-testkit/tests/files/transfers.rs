@@ -403,12 +403,8 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
-          files: file received outcome=received resumed_at=0 size=1024 took=1024
-          files: file received outcome=received resumed_at=0 size=1024 took=1024
-          files: file received outcome=received resumed_at=0 size=1024 took=1024
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
-          files: file received outcome=received resumed_at=1024 size=1024 took=0
           files: received files flushed job=1
           files: job state done_bytes=3072 files_done=3 from=transferring job=1 sender=false to=complete
         host:
@@ -421,7 +417,22 @@ fn a_receiver_restarted_mid_download_resumes_the_files_left() -> TestResult {
           files: file served ended=sent from=1024 sent=0 size=1024
           files: job state done_bytes=3072 files_done=3 from=serving job=1 sender=true to=complete
     "#]],
-        || trace.story(&["files"]),
+        // The third file's bytes land on a stream task of their own as the
+        // engine quits, so the receiver records it as received or as
+        // cancelled: only the file that resumed is told apart below.
+        || {
+            trace
+                .tell(&["files"])
+                .only(&["job state", "file served", "received files flushed"])
+                .to_string()
+        },
+    );
+    assert_eq!(
+        trace
+            .named_with("file received", &[("resumed_at", "1024"), ("took", "0")])
+            .len(),
+        1,
+        "the resumed receiver fetches nothing more of the file it had"
     );
     Ok(())
 }
