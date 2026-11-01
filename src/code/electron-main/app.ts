@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import { app, BrowserWindow, nativeTheme, net, protocol, session } from 'electron';
-import type { BrowserWindow as BrowserWindowType } from 'electron';
+import type { BrowserWindow as BrowserWindowType, WebContents } from 'electron';
 import { release } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -62,6 +62,7 @@ import { CONFIGURATION_CHANNEL_NAME } from '../../platform/configuration/common/
 import { WINDOW_CONFIGURATION_CHANNEL, type INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration.js';
 import { IWindowsMainService, WindowsMainService } from '../../platform/windows/electron-main/windowsMainService.js';
 import { registerDevelopmentWindow } from './development.js';
+import { contentSecurityPolicy, secureWebContents } from './webContentsSecurity.js';
 
 export interface ApplicationOptions {
 	readonly showWindow?: boolean;
@@ -222,6 +223,7 @@ export class VniLinkApplication extends Disposable {
 			event.join('configuration', configuration.flush());
 			event.join('state', state.close());
 		}));
+		this._register(Event.fromNodeEventEmitter<WebContents>(app, 'web-contents-created', (_event: unknown, contents: WebContents) => contents)(secureWebContents));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
 			this.dispose();
 		}));
@@ -308,7 +310,11 @@ export class VniLinkApplication extends Disposable {
 			if (request.method !== 'GET' || url.hostname !== 'app' || url.port || url.username || url.password || !workbenchFiles.has(url.pathname)) {
 				return new Response('Not found', { status: 404 });
 			}
-			return net.fetch(pathToFileURL(join(__dirname, 'renderer', url.pathname.slice(1))).href);
+			return net.fetch(pathToFileURL(join(__dirname, 'renderer', url.pathname.slice(1))).href).then(response => {
+				const headers = new Headers(response.headers);
+				headers.set('Content-Security-Policy', contentSecurityPolicy);
+				return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+			});
 		});
 		session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
 			callback(false);

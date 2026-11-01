@@ -88,10 +88,6 @@ export const windowPrompt: NoticePrompt = (content: NoticeContent, signal: Abort
 	window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 	window.removeMenu();
 	const contents = window.webContents;
-	contents.setWindowOpenHandler(() => ({ action: 'deny' }));
-	contents.on('will-navigate', event => {
-		event.preventDefault();
-	});
 	contents.ipc.on(NOTICE_RESPOND_CHANNEL, (event, answer: unknown) => {
 		// Only this window's own page answers.
 		if (event.senderFrame !== contents.mainFrame || event.senderFrame.url !== NOTICE_URL || !isNoticeAnswer(answer)) {

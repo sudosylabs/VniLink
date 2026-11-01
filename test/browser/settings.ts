@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { assert, current, edit, settle, settleEdit, SettingsFixture, toggle } from './settingsFixture.js';
+import { assert, current, edit, settle, SettingsFixture, toggle } from './settingsFixture.js';
 
 const pageIds = ['general', 'connection', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power'];
 
@@ -62,15 +62,15 @@ async function verifyNumbers(): Promise<void> {
 		edit(idle, '15');
 		await settle();
 		assert(fixture.configuration.updateCount() === 0, 'A typed number applied before the user paused');
-		await settleEdit();
+		await fixture.settleEdit();
 		assert(fixture.configuration.updateCount() === 1 && fixture.configuration.updates[0].value === 15, 'Typed number was not applied once after the pause');
 		edit(idle, '2000');
-		await settleEdit();
+		await fixture.settleEdit();
 		assert(fixture.configuration.updateCount() === 1, 'An out-of-range number was applied');
 		assert(page.element.querySelector('.settings-status')?.textContent.includes('0 to 1440'), 'Out-of-range number was not explained');
 		fixture.configuration.failure = new Error('Disk unavailable');
 		edit(idle, '30');
-		await settleEdit();
+		await fixture.settleEdit();
 		assert(idle.value === '30' && page.element.querySelector('.settings-status')?.textContent === 'Disk unavailable', 'Refused number was discarded or not explained');
 		fixture.configuration.set('power.incoming.idleTimeout', 45);
 		assert(current(idle).value === '30', 'A refreshed value replaced the edit awaiting correction');
@@ -127,7 +127,7 @@ async function verifyCustomControls(): Promise<void> {
 		assert(sensitivity, 'Pointer sensitivity missing');
 		edit(sensitivity, '150');
 		assert(input.element.querySelector('.setting-slider + output')?.textContent === '150%', 'Sensitivity did not show its value');
-		await settleEdit();
+		await fixture.settleEdit();
 		assert(fixture.configuration.getValue<unknown>('input.pointerSensitivity') === 150, 'Sensitivity did not apply');
 		const recording = fixture.open('recording');
 		await settle();
@@ -198,7 +198,7 @@ async function verifyDisposal(): Promise<void> {
 		assert(idle, 'Idle timeout missing');
 		edit(idle, '5');
 		page.dispose();
-		await settleEdit();
+		await fixture.settleEdit();
 		assert(fixture.configuration.updateCount() === 0, 'Disposed page applied a pending edit');
 		assert(!page.element.isConnected, 'Disposed page stayed in the document');
 	} finally {

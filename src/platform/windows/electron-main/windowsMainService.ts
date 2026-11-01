@@ -77,13 +77,6 @@ export class WindowsMainService extends Disposable {
 		if (!isMacintosh) {
 			window.removeMenu();
 		}
-		window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-		window.webContents.on('will-navigate', event => {
-			event.preventDefault();
-		});
-		window.webContents.on('will-redirect', event => {
-			event.preventDefault();
-		});
 		return window;
 	}
 }

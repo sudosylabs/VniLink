@@ -27,6 +27,7 @@ import { ServiceCollection } from '../../src/platform/instantiation/common/servi
 import { IDeviceService as IDeviceServiceId } from '../../src/workbench/services/devices/deviceService.js';
 import { IScreenSnapshotService as IScreenSnapshotServiceId } from '../../src/workbench/services/screenSnapshot/screenSnapshotService.js';
 import { ISystemActionService, type SystemActionProgress, type SystemPrivacyResult } from '../../src/workbench/services/systemActions/systemActionService.js';
+import { macrotask } from './waits.js';
 
 function assert(value: unknown, message: string): asserts value {
 	if (!value) {
@@ -35,9 +36,7 @@ function assert(value: unknown, message: string): asserts value {
 }
 
 async function settle(): Promise<void> {
-	await new Promise<void>(resolve => {
-		setTimeout(resolve, 0);
-	});
+	await macrotask();
 }
 
 export type DeviceFixtureState = 'empty' | 'populated' | 'selected' | 'unavailable';

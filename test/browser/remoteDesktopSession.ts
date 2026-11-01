@@ -16,26 +16,18 @@ import { InstantiationService } from '../../src/platform/instantiation/common/in
 import { ServiceCollection } from '../../src/platform/instantiation/common/serviceCollection.js';
 import '../../src/workbench/contrib/remoteDesktop/remoteDesktop.contribution.js';
 import { OpenRemoteDesktopAction, ViewScreenAction } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopActions.js';
-import { RemoteDesktopView, shownSize } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
+import { RemoteDesktopView } from '../../src/workbench/contrib/remoteDesktop/remoteDesktopView.js';
+import { shownSize } from '../../src/workbench/contrib/remoteDesktop/pictureSize.js';
 import { IDeviceService, type DeviceSummary } from '../../src/workbench/services/devices/deviceService.js';
 import { IRemoteDesktopService, type DesktopEnd, type DesktopFailure, type DesktopInput, type DesktopPicture, type DesktopPictureRole, type DesktopPointer, type DesktopRegion, type DesktopStats, type IDesktopSession } from '../../src/workbench/services/remoteDesktop/remoteDesktopService.js';
 import { ITabService } from '../../src/workbench/services/tabs/tabService.js';
 import { TabService } from '../../src/workbench/services/tabs/tabServiceImpl.js';
 import { DesktopViewFakes } from './remoteDesktopServices.js';
+import { until } from './waits.js';
 
 function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
 		throw new Error(message);
-	}
-}
-
-async function until(condition: () => boolean, message: string, timeout = 5000): Promise<void> {
-	const deadline = performance.now() + timeout;
-	while (!condition()) {
-		if (performance.now() > deadline) {
-			throw new Error(message);
-		}
-		await new Promise(resolve => setTimeout(resolve, 10));
 	}
 }
 
