@@ -387,13 +387,19 @@ export class VniLinkApplication extends Disposable {
 	private async startEngine(): Promise<void> {
 		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
 		const temporary = this.options.temporaryEngine ?? false;
+		engine.setRestartHandler(() => this.initializeEngine(temporary));
 		try {
-			engine.setRestartHandler(() => this.initializeEngine(temporary));
 			await engine.start(temporary, temporary && this.options.temporaryEngineCaptures === true, this.options.temporaryEngineScreenGrant);
+		} catch (error) {
+			// The engine tries again by itself; its restart handler configures it then.
+			this.logService.error('The engine could not be started; it will be tried again.', error);
+			return;
+		}
+		try {
 			await this.initializeEngine(temporary);
 			mark('vnilink/engineReady');
 		} catch (error) {
-			this.logService.error('VniLink engine unavailable; secure installation could not be opened.', error);
+			this.logService.error('The engine started, but main could not configure it.', error);
 		}
 	}
 

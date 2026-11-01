@@ -124,7 +124,13 @@ export class EngineMainService extends Disposable {
 		}
 		this.started = true;
 		this.launchArguments = temporary ? ['--temporary', ...(capture ? ['--capture', ...(screenGrant === undefined ? [] : ['--screen-grant', screenGrant])] : [])] : [];
-		await this.launch();
+		try {
+			await this.launch();
+		} catch (error) {
+			// A first start that fails is retried like a crash; the restart handler configures the engine that comes up.
+			this.scheduleRestart();
+			throw error;
+		}
 		this.markAvailable();
 	}
 
@@ -141,11 +147,18 @@ export class EngineMainService extends Disposable {
 		});
 		this.child = child;
 		let supervised = false;
-		await new Promise<void>((resolve, reject) => {
+		let abandon: ((error: Error) => void) | undefined;
+		const started = new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				this.fail(new Error('Engine startup timed out'));
 				reject(new Error('Engine startup timed out'));
 			}, 60_000);
+			// `stop` fails everything waiting, this start included, at once.
+			abandon = (error: Error): void => {
+				clearTimeout(timeout);
+				reject(error);
+			};
+			this.waiting.add(abandon);
 			child.on('message', (message: unknown) => {
 				if (this.child !== child) {
 					return;
@@ -183,6 +196,13 @@ export class EngineMainService extends Disposable {
 				reject(error);
 			});
 		});
+		try {
+			await started;
+		} finally {
+			if (abandon) {
+				this.waiting.delete(abandon);
+			}
+		}
 	}
 
 	private markAvailable(): void {

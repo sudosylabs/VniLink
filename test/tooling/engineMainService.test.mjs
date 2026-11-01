@@ -156,3 +156,41 @@ test('a command that does not answer in time fails alone and says its outcome is
 	assert.equal(service.available, true, 'A timeout restarted the engine');
 	await service.stop();
 });
+
+test('an engine that fails its first start is tried again, and the restart applies its defaults', async context => {
+	context.mock.timers.enable({ apis: ['setTimeout'] });
+	forks.length = 0;
+	const service = new EngineMainService({ error() { }, warn() { } });
+	const story = [];
+	service.setRestartHandler(async () => {
+		story.push('defaults applied');
+	});
+	const started = service.start();
+	forks[0].emit('message', { ready: false, error: 'StoreLocked' });
+	await assert.rejects(started, /StoreLocked/);
+	assert.equal(service.isRestarting, true, 'A first start that failed was never tried again');
+	context.mock.timers.tick(1000);
+	assert.equal(forks.length, 2);
+	forks[1].emit('message', { ready: true });
+	await settle();
+	assert.deepEqual(story, ['defaults applied']);
+	assert.equal(service.available, true);
+	await service.stop();
+});
+
+test('stopping while the engine starts settles the start at once, not at its timeout', async context => {
+	context.mock.timers.enable({ apis: ['setTimeout'] });
+	forks.length = 0;
+	const service = new EngineMainService({ error() { }, warn() { } });
+	let outcome = 'pending';
+	service.start().then(() => {
+		outcome = 'started';
+	}, () => {
+		outcome = 'failed';
+	});
+	await settle();
+	await service.stop();
+	await settle();
+	assert.equal(outcome, 'failed', 'The start waited for its 60 second timeout');
+	assert.equal(forks[0].killed, true);
+});
