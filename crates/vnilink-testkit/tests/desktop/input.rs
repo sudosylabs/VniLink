@@ -153,7 +153,16 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
         "ending the connection lifts the held button, then the held key"
     );
     records_nothing_typed(&trace, &[]);
-    vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["input"]));
+    // A position travels as a datagram and may reach the host before the
+    // reliable message that selects the display, so it may be refused for
+    // that; nothing else is refused.
+    let refused = trace.named("input refused");
+    assert!(
+        refused.iter().all(|event| {
+            event["kind"] == "pointer" && event["reason"] == "no display is selected"
+        }),
+        "only a position sent ahead of the display selection is refused: {refused:?}"
+    );
     Ok(())
 }
 

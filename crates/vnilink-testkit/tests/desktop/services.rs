@@ -107,6 +107,7 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() -> TestRes
 /// and the host keeps writing.
 #[test]
 fn neutral_desktop_stream_fallback_keeps_flowing_past_the_unacknowledged_limit() -> TestResult {
+    let _trace = traced();
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     host.set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
