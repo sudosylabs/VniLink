@@ -14,9 +14,10 @@
 //! connection already names the sender. A later reconnect dials this stored
 //! list instead of the addresses from the original invitation.
 //!
-//! The relay list is what [`crate::RelaySettings::relay_urls`] reports: empty
-//! while the installation uses the public relays, the configured home relay
-//! URLs otherwise. Direct sockets are the endpoint's current ones. A frame
+//! The relay list is the configured home relay URLs, or with the public
+//! relays the home relay the endpoint has reached (none before it has
+//! reached one). Direct sockets are the endpoint's bound and discovered
+//! ones. A frame
 //! with more relays or sockets than the invitation allows, a repeated relay
 //! or an unparsable URL is [`Error::Malformed`]. A failed save in the
 //! receiver keeps the previous stored list.

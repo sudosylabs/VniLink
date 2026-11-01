@@ -167,7 +167,7 @@ pub(super) async fn write_addresses(
     shared: &Shared,
     send: &mut iroh::endpoint::SendStream,
 ) -> Result<(), Error> {
-    let relays = shared.relay.relay_urls()?;
+    let relays = dialable_relays(&shared.relay, &shared.endpoint.addr())?;
     let direct = canonicalize_addrs(&direct_addresses(&shared.endpoint))?;
     let announcement = crate::address::canonical(&relays, &direct)?;
     write_frame(

@@ -68,7 +68,7 @@ impl Core {
     pub fn create_invitation(&self, ttl: Duration) -> Result<String, Error> {
         let _engine = self.engine();
         self.ensure_alive()?;
-        let relays = self.shared.relay.relay_urls()?;
+        let relays = dialable_relays(&self.shared.relay, &self.shared.endpoint.addr())?;
         let direct = direct_addresses(&self.shared.endpoint);
         let (token, _) = invitation::issue(
             &self.shared.secret,
@@ -113,7 +113,7 @@ impl Core {
         now: SystemTime,
     ) -> Result<PairingFile, Error> {
         self.ensure_alive()?;
-        let relays = self.shared.relay.relay_urls()?;
+        let relays = dialable_relays(&self.shared.relay, &self.shared.endpoint.addr())?;
         let direct = direct_addresses(&self.shared.endpoint);
         let (token, invitation) = invitation::issue(
             &self.shared.secret,

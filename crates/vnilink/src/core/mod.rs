@@ -699,12 +699,34 @@ fn device_addr(device: &Device) -> Result<EndpointAddr, Error> {
     Ok(addr)
 }
 
+/// The sockets a peer can try: the ones this endpoint is bound to, and the
+/// ones it has found for itself (its interfaces, and how the network sees it).
 fn direct_addresses(endpoint: &Endpoint) -> Vec<SocketAddr> {
-    endpoint
+    let mut direct: Vec<SocketAddr> = endpoint
         .bound_sockets()
         .into_iter()
+        .chain(endpoint.addr().ip_addrs().copied())
         .filter(|addr| !addr.ip().is_unspecified() && addr.port() != 0)
-        .collect()
+        .collect();
+    direct.sort_unstable();
+    direct.dedup();
+    direct
+}
+
+/// The relays a peer dials to reach this computer: the configured ones, or
+/// in public mode the home relay the endpoint is connected to. Empty until
+/// the endpoint has reached one; the peer then falls back to discovery.
+fn dialable_relays(relay: &RelaySettings, own: &iroh::EndpointAddr) -> Result<Vec<String>, Error> {
+    let configured = relay.relay_urls()?;
+    if !configured.is_empty() {
+        return Ok(configured);
+    }
+    Ok(own
+        .relay_urls()
+        .filter_map(|url| crate::relay::parse_relay_url(url.as_str()).ok())
+        .map(|url| url.to_string())
+        .take(crate::relay::MAX_CUSTOM_RELAYS)
+        .collect())
 }
 
 fn session_info(session: &LiveSession) -> SessionInfo {
@@ -1106,6 +1128,49 @@ impl Shared {
         lock(&self.hostname)
             .clone()
             .or_else(crate::hostname::local_hostname)
+    }
+}
+
+#[cfg(test)]
+mod dialable_tests {
+    use super::*;
+    use iroh::TransportAddr;
+
+    fn own(relay: &str) -> iroh::EndpointAddr {
+        iroh::EndpointAddr::from_parts(
+            SecretKey::generate().public(),
+            [TransportAddr::Relay(relay.parse().unwrap())],
+        )
+    }
+
+    #[test]
+    fn public_mode_announces_the_home_relay_and_custom_mode_its_own() {
+        let home = own("https://home.relay.example.com");
+        assert_eq!(
+            dialable_relays(&RelaySettings::public_n0(), &home).unwrap(),
+            vec![
+                crate::relay::parse_relay_url("https://home.relay.example.com")
+                    .unwrap()
+                    .to_string()
+            ]
+        );
+        let custom =
+            RelaySettings::custom(vec![
+                crate::CustomRelay::new("https://mine.example.com").unwrap()
+            ])
+            .unwrap();
+        assert_eq!(
+            dialable_relays(&custom, &home).unwrap(),
+            custom.relay_urls().unwrap()
+        );
+    }
+
+    #[test]
+    fn public_mode_before_a_relay_is_reached_announces_none() {
+        let nothing = iroh::EndpointAddr::new(SecretKey::generate().public());
+        assert!(dialable_relays(&RelaySettings::public_n0(), &nothing)
+            .unwrap()
+            .is_empty());
     }
 }
 
