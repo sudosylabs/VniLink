@@ -10,7 +10,12 @@
 //! them crosses it, as between two computers that cannot reach each other
 //! directly.
 
+use std::net::SocketAddr;
+use std::time::Duration;
+
 use iroh_relay::server::{RelayConfig, Server, ServerConfig};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{tcp::OwnedReadHalf, tcp::OwnedWriteHalf, TcpListener, TcpStream};
 
 /// A relay serving plain HTTP on loopback, stopped when dropped.
 pub struct LocalRelay {
@@ -47,12 +52,99 @@ impl LocalRelay {
         &self.url
     }
 
+    /// A proxy in front of this relay that holds every byte `one_way`
+    /// before passing it on, in each direction. A transfer between two
+    /// engines crosses it twice each way, so their round trip time is
+    /// four times `one_way`.
+    pub fn delayed(&self, one_way: Duration) -> Delayed {
+        self.limited(one_way, None)
+    }
+
+    /// [`Self::delayed`], also passing at most `rate` bytes a second in
+    /// each direction when given, as a slow link does.
+    pub fn limited(&self, one_way: Duration, rate: Option<u64>) -> Delayed {
+        let target = self
+            .url
+            .strip_prefix("http://")
+            .and_then(|address| address.parse::<SocketAddr>().ok())
+            .expect("the relay's address");
+        let listener = self
+            .runtime
+            .block_on(TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))))
+            .expect("a port for the proxy");
+        let url = format!("http://{}", listener.local_addr().expect("its address"));
+        let accepting = self.runtime.spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(relay) = TcpStream::connect(target).await else {
+                    continue;
+                };
+                let (client_read, client_write) = client.into_split();
+                let (relay_read, relay_write) = relay.into_split();
+                tokio::spawn(pass(client_read, relay_write, one_way, rate));
+                tokio::spawn(pass(relay_read, client_write, one_way, rate));
+            }
+        });
+        Delayed { url, accepting }
+    }
+
     /// Bytes the relay has carried between its clients so far.
     pub fn carried(&self) -> u64 {
         self.server
             .as_ref()
             .map_or(0, |server| server.metrics().server.bytes_sent.get())
     }
+}
+
+/// A relay's address as engines reach it through a delaying proxy
+/// ([`LocalRelay::delayed`]), stopped when dropped.
+pub struct Delayed {
+    url: String,
+    accepting: tokio::task::JoinHandle<()>,
+}
+
+impl Delayed {
+    /// The URL engines use to reach the relay through the proxy.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl Drop for Delayed {
+    fn drop(&mut self) {
+        self.accepting.abort();
+    }
+}
+
+/// Copies `from` to `to`, each read written `delay` after it was read, in
+/// order, and at no more than `rate` bytes a second when given.
+async fn pass(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, delay: Duration, rate: Option<u64>) {
+    let (held, mut due) = tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+    let writing = tokio::spawn(async move {
+        // When the link is free to carry the next bytes.
+        let mut free = tokio::time::Instant::now();
+        while let Some((at, bytes)) = due.recv().await {
+            let start = at.max(free);
+            if let Some(rate) = rate {
+                free = start + Duration::from_secs_f64(bytes.len() as f64 / rate as f64);
+            }
+            tokio::time::sleep_until(start).await;
+            if to.write_all(&bytes).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut buffer = vec![0u8; 64 * 1024];
+    while let Ok(read) = from.read(&mut buffer).await {
+        if read == 0
+            || held
+                .send((tokio::time::Instant::now() + delay, buffer[..read].to_vec()))
+                .is_err()
+        {
+            break;
+        }
+    }
+    drop(held);
+    let _ = writing.await;
 }
 
 impl Drop for LocalRelay {

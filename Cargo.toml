@@ -49,6 +49,7 @@ napi-build = { path = "vendor/napi-build" }
 iroh = { path = "vendor/iroh" }
 enigo = { path = "vendor/enigo" }
 libva = { path = "vendor/libva" }
+zstd-sys = { path = "vendor/zstd-sys" }
 cpal = { path = "vendor/cpal" }
 portable-pty = { path = "vendor/portable-pty" }
 

@@ -21,6 +21,8 @@ struct Input {
     segment_shift: u8,
     edits: Vec<Edit>,
     chunks: Vec<u16>,
+    /// Whether the honest stream sends compressed blocks.
+    squeezed: bool,
 }
 
 #[derive(Debug, Arbitrary)]
@@ -33,7 +35,7 @@ enum Edit {
 
 libfuzzer_sys::fuzz_target!(|input: Input| {
     let segment = 1024u64 << (input.segment_shift % 4);
-    let mut stream = vnilink::fuzzing::honest_stream(&input.file, segment);
+    let mut stream = vnilink::fuzzing::honest_stream(&input.file, segment, input.squeezed);
     for edit in input.edits {
         let at = |at: u16| usize::from(at) % (stream.len() + 1);
         match edit {

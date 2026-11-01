@@ -78,12 +78,10 @@ pub(super) fn reserve(
     available: u64,
 ) -> Result<Option<Reservation>, Error> {
     let policy = lock(&shared.state).file_resource_policy;
-    // Cache, export staging, destination sibling may coexist on one volume.
-    // Reserve the full worst case even when verified cache ranges already exist.
-    let bytes = size
-        .checked_mul(3)
-        .ok_or(Error::InvalidSetting("file resource accounting overflow"))?;
-    if !lock(&shared.file_resources).admit(id, bytes, available, policy)? {
+    // A file occupies its size once per volume: the partial on the transfer
+    // volume, and a destination sibling only when that is another volume, since
+    // on one volume publishing renames the partial.
+    if !lock(&shared.file_resources).admit(id, size, available, policy)? {
         return Ok(None);
     }
     Ok(Some(Reservation {

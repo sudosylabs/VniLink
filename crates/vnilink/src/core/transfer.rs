@@ -195,6 +195,7 @@ async fn serve_stream(
         })
         .await
     };
+    let mut told = 0u64;
     match opened {
         Ok(Ok(source)) => {
             // Cancelling or revoking stops a file mid-way, not only the
@@ -208,14 +209,18 @@ async fn serve_stream(
                 counters,
                 || super::jobs::still_serving(&shared, &peer, request.job),
                 |position, finished| {
-                    super::jobs::sending_at(
-                        &shared,
-                        &peer,
-                        request.job,
-                        request.file,
-                        position,
-                        finished,
-                    )
+                    // The jobs lock is taken once a megabyte, not per chunk.
+                    if finished || position.saturating_sub(told) >= super::jobs::SENT_EVERY {
+                        told = position;
+                        super::jobs::sending_at(
+                            &shared,
+                            &peer,
+                            request.job,
+                            request.file,
+                            position,
+                            finished,
+                        );
+                    }
                 },
             )
             .await;

@@ -11,9 +11,10 @@ publish = false
 # The agent's protocol carries file contents as base64 in JSON.
 base64 = "=0.22.1"
 blake3 = "=1.8.7"
-# A relay on this computer for the relay suite (`relay.rs`).
+# A relay on this computer for the relay suite (`relay.rs`), and the proxy
+# that gives its clients a round trip time (`relay::Delayed`).
 iroh-relay = { version = "=1.3.0", features = ["server"] }
-tokio = { version = "1.44", features = ["rt-multi-thread"] }
+tokio = { version = "1.44", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 # Scratch folders made exclusively, private to this user (`Scratch`).

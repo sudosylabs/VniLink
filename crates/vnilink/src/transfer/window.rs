@@ -49,6 +49,14 @@ pub(crate) const MIN_WINDOW: u64 = 32 * 1024;
 /// The window a files connection is dialed with and starts from.
 pub(crate) const INITIAL_WINDOW: u64 = 1024 * 1024;
 
+/// Bytes per second a path is assumed to carry when its first round trip
+/// seeds the window: a path of that length starts from what it holds in one
+/// round trip at this rate, when that is more than [`INITIAL_WINDOW`].
+const SEED_RATE: f64 = 16.0 * 1024.0 * 1024.0;
+
+/// Queueing at which the window stops doubling each round trip.
+const SLOW_START_ENDS: Duration = Duration::from_millis(25);
+
 /// The base delay is the least round trip over [`BASE_WINDOW`], kept as one
 /// least per [`BUCKET`]: old enough to have seen an empty queue, young
 /// enough to follow a path that got longer.
@@ -96,6 +104,10 @@ pub(crate) struct Window {
     /// The last window change, so the window moves at most once a round
     /// trip.
     changed: Option<Instant>,
+    /// The path's first round trip has seeded the window.
+    seeded: bool,
+    /// The window doubles each round trip until a queue shows.
+    slow_start: bool,
 }
 
 impl Window {
@@ -107,6 +119,8 @@ impl Window {
             base: BaseDelay::default(),
             received: 0.0,
             changed: None,
+            seeded: false,
+            slow_start: true,
         }
     }
 
@@ -121,6 +135,8 @@ impl Window {
     pub(crate) fn observe(&mut self, rtt: Duration, changed: bool, received: f64, now: Instant) {
         if changed {
             self.base = BaseDelay::default();
+            self.seeded = false;
+            self.slow_start = true;
         }
         self.received = if self.received == 0.0 {
             received
@@ -131,6 +147,11 @@ impl Window {
             return;
         }
         self.base.observe(rtt, now);
+        if !self.seeded {
+            self.seeded = true;
+            let seed = (SEED_RATE * rtt.as_secs_f64()) as u64;
+            self.window = self.window.max(seed.min(self.full));
+        }
         let Some(base) = self.base.least() else {
             return;
         };
@@ -142,8 +163,13 @@ impl Window {
         }
         let queue = rtt.saturating_sub(base);
         let target = TARGET_QUEUE.as_secs_f64();
+        if queue >= SLOW_START_ENDS {
+            self.slow_start = false;
+        }
         let next = if queue >= TARGET_QUEUE * HALVE_AT {
             self.window / 2
+        } else if self.slow_start {
+            self.window.saturating_mul(2)
         } else {
             // Up to an eighth more a round trip with no queue, as much less
             // at twice the target.
@@ -225,6 +251,80 @@ mod tests {
         let mut slow = Window::new(FULL);
         run(&mut slow, now, &[40; 400], 1e6);
         assert_eq!(slow.window(), INITIAL_WINDOW);
+    }
+
+    /// Until a queue shows, the window doubles each round trip: a distant
+    /// path reaches what it carries in a few of them, not in dozens.
+    #[test]
+    fn a_path_without_a_queue_doubles_the_window_each_round_trip() {
+        let now = Instant::now();
+        let mut window = Window::new(FULL);
+        let mut at = now;
+        let mut sizes = Vec::new();
+        for _ in 0..7 {
+            at += MS * 100;
+            window.observe(MS * 100, false, 1e9, at);
+            sizes.push(window.window());
+        }
+        let first = sizes[0];
+        assert!(
+            first >= INITIAL_WINDOW,
+            "the window starts no lower than it was dialed with"
+        );
+        assert_eq!(
+            sizes[1..],
+            [first * 2, first * 4, first * 8, first * 16, FULL, FULL][..6],
+            "doubled at each round trip until the full window"
+        );
+    }
+
+    /// A queue ends the doubling: from then on the window grows by an
+    /// eighth at most.
+    #[test]
+    fn a_queue_ends_the_doubling() {
+        let now = Instant::now();
+        let mut window = Window::new(FULL);
+        let mut at = now;
+        for _ in 0..2 {
+            at += MS * 100;
+            window.observe(MS * 40, false, 1e9, at);
+        }
+        let grown = window.window();
+        // 30 ms of queue: less than the target, more than a seed would see.
+        at += MS * 100;
+        window.observe(MS * 70, false, 1e9, at);
+        let queued = window.window();
+        assert!(
+            queued <= grown + grown / 8 + 1,
+            "a queue of 30 ms grows it by an eighth at most: {grown} -> {queued}"
+        );
+        for _ in 0..3 {
+            at += MS * 100;
+            window.observe(MS * 40, false, 1e9, at);
+        }
+        assert!(
+            window.window() <= queued * 3 / 2,
+            "the doubling does not come back: {queued} -> {}",
+            window.window()
+        );
+    }
+
+    /// The first round trip seeds the window with what a path of that
+    /// length carries at a modest rate: a long path does not crawl up from
+    /// a megabyte, a short one starts where it was.
+    #[test]
+    fn a_long_path_starts_from_what_it_carries() {
+        let now = Instant::now();
+        let mut near = Window::new(FULL);
+        near.observe(MS * 10, false, 0.0, now);
+        assert_eq!(near.window(), INITIAL_WINDOW);
+        let mut far = Window::new(FULL);
+        far.observe(MS * 300, false, 0.0, now);
+        assert_eq!(far.window(), (SEED_RATE * 0.3) as u64);
+        assert!(far.window() > 2 * INITIAL_WINDOW);
+        // A new path is seeded again.
+        far.observe(MS * 10, true, 0.0, now + MS * 500);
+        assert!(far.window() >= INITIAL_WINDOW);
     }
 
     #[test]

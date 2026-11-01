@@ -39,6 +39,9 @@ trash = { version = "=5.2.9", default-features = false, features = ["coinit_mult
 notify = { version = "=8.2.0", default-features = false, features = ["macos_kqueue"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "time"] }
 reed-solomon-simd = "=3.1.0"
+# File segments compress in transit; see `transfer/codec.rs`. The C library is
+# vendored in `vendor/zstd-sys`.
+zstd = { version = "=0.13.3", default-features = false }
 
 [dev-dependencies]
 jpeg-decoder = "=0.3.2"

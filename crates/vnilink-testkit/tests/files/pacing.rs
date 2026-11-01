@@ -160,6 +160,7 @@ fn a_new_files_owner_resumes_what_a_lost_one_left() -> TestResult {
           files: job state from=transferring job=1 sender=false to=interrupted
           files: job state from=interrupted job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=524288 took=524288
+          files: received files flushed job=1
           files: job state done_bytes=524288 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -355,6 +356,7 @@ fn a_waiting_transfer_does_not_wake_itself() -> TestResult {
           files: job state from=transferring job=1 sender=false to=waiting-decision
           files: job state from=waiting-decision job=1 sender=false to=transferring
           files: file received outcome=received resumed_at=0 size=6 took=6
+          files: received files flushed job=1
           files: job state done_bytes=6 files_done=1 from=transferring job=1 sender=false to=complete
     "#]],
         || trace.story(&["files"]),
@@ -504,11 +506,13 @@ fn a_selection_is_one_transfer_both_ways() -> TestResult {
           files: file received outcome=received resumed_at=0 size=1100 took=1100
           files: file received outcome=received resumed_at=0 size=700 took=700
           files: file received outcome=received resumed_at=0 size=900 took=900
+          files: received files flushed job=2
           files: job state done_bytes=2700 files_done=3 from=transferring job=2 sender=false to=complete
         host:
           files: file received outcome=received resumed_at=0 size=1100 took=1100
           files: file received outcome=received resumed_at=0 size=700 took=700
           files: file received outcome=received resumed_at=0 size=900 took=900
+          files: received files flushed job=1
           files: job state done_bytes=2700 files_done=3 from=transferring job=1 sender=false to=complete
           files: job state from=preparing job=2 sender=true to=serving
           files: file served ended=sent from=0 sent=1100 size=1100
