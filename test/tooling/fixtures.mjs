@@ -19,8 +19,10 @@ export function fakeEngine(api, available = true) {
 	const engine = {
 		_serviceBrand: undefined,
 		available,
+		restarting: false,
 		restartRequired: false,
 		onDidChangeAvailability: availability.event,
+		onDidChangeRestarting: none,
 		onDidChangeRestartRequired: none,
 		onDidReceiveEvents: events.event,
 		execute: command => api.engineCommand(command),

@@ -372,38 +372,45 @@ export class VniLinkApplication extends Disposable {
 
 	private async startEngine(): Promise<void> {
 		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
-		const permissions = this.instantiationService.invokeFunction(accessor => accessor.get(IPermissionsMainService));
-		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
 		const temporary = this.options.temporaryEngine ?? false;
 		try {
+			engine.setRestartHandler(() => this.initializeEngine(temporary));
 			await engine.start(temporary, temporary && this.options.temporaryEngineCaptures === true, this.options.temporaryEngineScreenGrant);
-			// Transfers stage here; the engine creates it the first time one does.
-			await engine.execute({ type: 'setTransferDirectory', path: join(app.getPath('userData'), 'Transfers') }).catch((error: unknown) => {
-				this.logService.error('The transfer folder could not be set; Files transfers will fail.', error);
-			});
-			if (!temporary) {
-				await permissions.synchronize().catch(() => {
-					this.logService.error('Native input backend could not be initialized.');
-				});
-			} else if (this.options.temporaryEngineCaptures === true && isMacintosh) {
-				// Screen only: a measuring host is viewed, never controlled.
-				// Elsewhere the system asks no permission to capture, and the
-				// engine is told nothing, as `synchronizeNativePermissions` does.
-				await engine.execute({ type: 'reportNativePermissions', screen: permissions.isGranted('screen'), input: false, camera: false, microphone: false });
-			}
-			await configuration.restoreEngineDefaults(temporary);
-			await engine.refreshRestartRequired();
-			const runtime = await engine.execute({ type: 'nativeRuntime' });
-			if (runtime.type === 'nativeRuntime') {
-				for (const backend of runtime.backends) {
-					if (!backend.ready) {
-						this.logService.error(backend.error ?? 'Native backend unavailable.');
-					}
-				}
-			}
+			await this.initializeEngine(temporary);
 			mark('vnilink/engineReady');
 		} catch (error) {
 			this.logService.error('VniLink engine unavailable; secure installation could not be opened.', error);
+		}
+	}
+
+	/** Applies what main configures in a new engine; it runs after the first start and after each restart. */
+	private async initializeEngine(temporary: boolean): Promise<void> {
+		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
+		const permissions = this.instantiationService.invokeFunction(accessor => accessor.get(IPermissionsMainService));
+		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
+		// Transfers stage here; the engine creates it the first time one does.
+		await engine.execute({ type: 'setTransferDirectory', path: join(app.getPath('userData'), 'Transfers') }).catch((error: unknown) => {
+			this.logService.error('The transfer folder could not be set; Files transfers will fail.', error);
+		});
+		if (!temporary) {
+			await permissions.synchronize().catch(() => {
+				this.logService.error('Native input backend could not be initialized.');
+			});
+		} else if (this.options.temporaryEngineCaptures === true && isMacintosh) {
+			// Screen only: a measuring host is viewed, never controlled.
+			// Elsewhere the system asks no permission to capture, and the
+			// engine is told nothing, as `synchronizeNativePermissions` does.
+			await engine.execute({ type: 'reportNativePermissions', screen: permissions.isGranted('screen'), input: false, camera: false, microphone: false });
+		}
+		await configuration.restoreEngineDefaults(temporary);
+		await engine.refreshRestartRequired();
+		const runtime = await engine.execute({ type: 'nativeRuntime' });
+		if (runtime.type === 'nativeRuntime') {
+			for (const backend of runtime.backends) {
+				if (!backend.ready) {
+					this.logService.error(backend.error ?? 'Native backend unavailable.');
+				}
+			}
 		}
 	}
 
