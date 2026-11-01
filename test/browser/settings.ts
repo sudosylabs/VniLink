@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import { assert, current, edit, settle, SettingsFixture, toggle } from './settingsFixture.js';
+import { until } from './waits.js';
 
 const pageIds = ['general', 'connection', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power'];
 
@@ -93,8 +94,7 @@ async function verifyUnavailable(): Promise<void> {
 		assert(![...page.element.querySelectorAll('button')].some(button => button.textContent === 'Refresh'), 'A Refresh button is offered');
 		const reloads = fixture.configuration.reloads;
 		fixture.permissions.focused.fire();
-		await settle();
-		assert(fixture.configuration.reloads === reloads + 1, 'Gaining focus did not read the engine settings again');
+		await until(() => fixture.configuration.reloads === reloads + 1, 'Gaining focus did not read the engine settings again');
 		fixture.configuration.setError('terminal', undefined);
 		assert(!current(total).disabled && page.element.querySelector('.settings-status')?.textContent === '', 'Readable terminal limit stayed disabled');
 	} finally {

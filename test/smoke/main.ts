@@ -491,7 +491,7 @@ class SmokeSuite {
 			engine.privateRejected !== true ||
 			engine.hostingRejected !== true
 		) {
-			throw new Error('Native control bridge failed');
+			throw new Error(`Native control bridge failed: ${JSON.stringify(engine, (key, value: unknown) => (key === 'token' ? '…' : value))}`);
 		}
 		let rejected = false;
 		try {

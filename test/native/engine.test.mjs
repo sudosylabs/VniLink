@@ -248,7 +248,17 @@ test('the engine wakes its watcher when an event is waiting, and a closed watch 
 		assert.deepEqual((await execute(engine, { type: 'pollEvents', subscriptionId, maxEvents: 256 })).events, []);
 		assert.equal(woken.length, 0, 'The watcher was woken with nothing to read');
 		await execute(engine, { type: 'startHosting' });
-		await next;
+		// The watch keeps no process alive, as in the application, so a timer
+		// holds this one open while the wake comes from the engine's thread.
+		let giveUp;
+		const late = new Promise((_resolve, reject) => {
+			giveUp = setTimeout(() => reject(new Error('The watcher was not woken')), 10000);
+		});
+		try {
+			await Promise.race([next, late]);
+		} finally {
+			clearTimeout(giveUp);
+		}
 		const polled = await execute(engine, { type: 'pollEvents', subscriptionId, maxEvents: 256 });
 		assert(polled.events.some(event => event.type === 'hostingChanged'), 'The wake came without a hosting event to read');
 		next = rang();
