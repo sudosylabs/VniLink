@@ -29,5 +29,44 @@
     "name": "NullLogService",
     "reason": "the logger fake that browser scenarios give the services they build"
   },
-  { "path": "src/platform/log/common/log.ts", "name": "NullLogger", "reason": "NullLogService's base" }
+  {
+    "path": "src/platform/log/common/log.ts",
+    "name": "NullLogger",
+    "reason": "NullLogService's base"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.warning",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.info",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.close",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleDown",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleLeft",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleRight",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleUp",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  }
 ]

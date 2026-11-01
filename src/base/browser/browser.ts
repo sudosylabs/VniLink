@@ -60,9 +60,6 @@ if (typeof mainWindow.matchMedia === 'function') {
 		standalone = matches;
 	});
 }
-export function isStandalone(): boolean {
-	return standalone;
-}
 
 export interface IMonacoEnvironment {
 

@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as browser from './browser.js';
 import { IKeyboardEvent, StandardKeyboardEvent } from './keyboardEvent.js';
 import { IMouseEvent, StandardMouseEvent } from './mouseEvent.js';
 import { IntervalTimer, _runWhenIdle, IdleDeadline } from '../common/async.js';
@@ -809,50 +808,26 @@ export const EventType = {
 	POINTER_UP: 'pointerup',
 	POINTER_DOWN: 'pointerdown',
 	POINTER_MOVE: 'pointermove',
-	POINTER_LEAVE: 'pointerleave',
 	CONTEXT_MENU: 'contextmenu',
-	WHEEL: 'wheel',
 	// Keyboard
 	KEY_DOWN: 'keydown',
-	KEY_PRESS: 'keypress',
 	KEY_UP: 'keyup',
-	// HTML Document
-	LOAD: 'load',
 	BEFORE_UNLOAD: 'beforeunload',
-	UNLOAD: 'unload',
-	PAGE_SHOW: 'pageshow',
-	PAGE_HIDE: 'pagehide',
 	PASTE: 'paste',
-	ABORT: 'abort',
-	ERROR: 'error',
 	RESIZE: 'resize',
 	SCROLL: 'scroll',
-	FULLSCREEN_CHANGE: 'fullscreenchange',
-	WK_FULLSCREEN_CHANGE: 'webkitfullscreenchange',
-	// Form
-	SELECT: 'select',
 	CHANGE: 'change',
-	SUBMIT: 'submit',
-	RESET: 'reset',
 	FOCUS: 'focus',
 	FOCUS_IN: 'focusin',
 	FOCUS_OUT: 'focusout',
 	BLUR: 'blur',
 	INPUT: 'input',
-	// Local Storage
-	STORAGE: 'storage',
 	// Drag
 	DRAG_START: 'dragstart',
-	DRAG: 'drag',
-	DRAG_ENTER: 'dragenter',
 	DRAG_LEAVE: 'dragleave',
 	DRAG_OVER: 'dragover',
 	DROP: 'drop',
-	DRAG_END: 'dragend',
-	// Animation
-	ANIMATION_START: browser.isWebKit ? 'webkitAnimationStart' : 'animationstart',
-	ANIMATION_END: browser.isWebKit ? 'webkitAnimationEnd' : 'animationend',
-	ANIMATION_ITERATION: browser.isWebKit ? 'webkitAnimationIteration' : 'animationiteration'
+	DRAG_END: 'dragend'
 } as const;
 
 export interface EventLike {
