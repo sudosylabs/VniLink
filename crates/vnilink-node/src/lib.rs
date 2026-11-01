@@ -25,11 +25,16 @@ pub use storage::reset_installation_cli;
 mod data;
 mod files;
 
-use napi::{bindgen_prelude::AsyncTask, Env, Error, Result, Status, Task};
+use napi::threadsafe_function::ThreadsafeFunctionCallMode;
+use napi::{
+    bindgen_prelude::{AsyncTask, Function},
+    Env, Error, Result, Status, Task,
+};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use vnilink_app::{EventPoller, FfiError, VnilinkCore};
 
 /// Largest accepted command body. Clipboard text reaches 256 KiB and encoded
@@ -1143,12 +1148,15 @@ enum Reply {
 // cross the JSON bridge; callers poll and release them by id.
 struct State {
     core: Arc<VnilinkCore>,
-    closed: bool,
     native: native::NativeRuntimeState,
-    events: HashMap<u64, EventPoller>,
     /// The System service held on each connection this computer asked.
     systems: HashMap<(u64, u64), Arc<vnilink_app::SystemServiceHandle>>,
-    next_subscription: u64,
+}
+/// The event queues the window host reads. Apart from [`State`] so that a
+/// slow native command cannot hold a read of events.
+struct Subscriptions {
+    events: HashMap<u64, EventPoller>,
+    next: u64,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1162,6 +1170,8 @@ pub struct Engine {
     desktops: Arc<data::DesktopChannels>,
     cameras: Arc<data::CameraChannels>,
     state: Arc<Mutex<State>>,
+    subscriptions: Arc<Mutex<Subscriptions>>,
+    closed: Arc<AtomicBool>,
 }
 
 pub struct OpenedEngine {
@@ -1239,17 +1249,19 @@ impl Task for OpenTask {
             cameras: cameras.clone(),
             state: Arc::new(Mutex::new(State {
                 core,
-                closed: false,
                 native: native::NativeRuntimeState::new(
                     opened.backends,
                     desktops,
                     cameras,
                     opened.screen_grant,
                 ),
-                events: HashMap::new(),
                 systems: HashMap::new(),
-                next_subscription: 1,
             })),
+            subscriptions: Arc::new(Mutex::new(Subscriptions {
+                events: HashMap::new(),
+                next: 1,
+            })),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -1315,11 +1327,10 @@ pub fn open_temporary_engine(
 
 impl EngineBridge {
     /// Commands that describe displays and set desktop codec and quality defaults.
-    fn media(state: &mut State, command: &Command) -> Result<Reply> {
+    fn media(core: &VnilinkCore, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
             Command::Topology => Reply::Displays {
-                displays: state
-                    .core
+                displays: core
                     .topology()
                     .map_err(core_error)?
                     .iter()
@@ -1332,8 +1343,7 @@ impl EngineBridge {
             } => {
                 let (id, gen) = session_target(session_id, generation)?;
                 Reply::Displays {
-                    displays: state
-                        .core
+                    displays: core
                         .session_topology(id, gen)
                         .map_err(core_error)?
                         .iter()
@@ -1342,8 +1352,7 @@ impl EngineBridge {
                 }
             }
             Command::CaptureDisplays => Reply::DisplayIds {
-                displays: state
-                    .core
+                displays: core
                     .capture_displays()
                     .map_err(core_error)?
                     .into_iter()
@@ -1367,10 +1376,7 @@ impl EngineBridge {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                state
-                    .core
-                    .set_topology(revision, displays)
-                    .map_err(core_error)?;
+                core.set_topology(revision, displays).map_err(core_error)?;
                 Reply::Done
             }
             Command::SetWindowDecoders { decoders } => {
@@ -1398,10 +1404,7 @@ impl EngineBridge {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                state
-                    .core
-                    .set_window_decoders(decoders)
-                    .map_err(core_error)?;
+                core.set_window_decoders(decoders).map_err(core_error)?;
                 Reply::Done
             }
             Command::SetDesktopCodecDefault { codec } => {
@@ -1419,9 +1422,7 @@ impl EngineBridge {
                         }))
                     }
                 };
-                state
-                    .core
-                    .set_desktop_codec_default(preference)
+                core.set_desktop_codec_default(preference)
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1433,9 +1434,7 @@ impl EngineBridge {
                     quality.max_height,
                 )
                 .map_err(core_error)?;
-                state
-                    .core
-                    .set_desktop_quality_defaults(quality)
+                core.set_desktop_quality_defaults(quality)
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1857,18 +1856,18 @@ impl EngineBridge {
     }
 
     /// Commands that grant service permissions and inspect terminal and file jobs.
-    fn services(state: &mut State, command: &Command) -> Result<Reply> {
+    fn services(core: &VnilinkCore, command: &Command) -> Result<Reply> {
         let reply: Reply = match command {
             Command::SharingPolicy => Reply::SharingPolicy {
-                policy: state.core.sharing_policy().map_err(core_error)?,
+                policy: core.sharing_policy().map_err(core_error)?,
             },
             Command::SetSharingPolicy { policy } => {
-                state.core.set_sharing_policy(*policy).map_err(core_error)?;
+                core.set_sharing_policy(*policy).map_err(core_error)?;
                 Reply::Done
             }
             Command::SystemPolicy => {
-                let policy = state.core.system_policy().map_err(core_error)?;
-                let support = state.core.system_support().map_err(core_error)?.support;
+                let policy = core.system_policy().map_err(core_error)?;
+                let support = core.system_support().map_err(core_error)?.support;
                 Reply::SystemPolicy {
                     policy,
                     support: TransferSystemSupport {
@@ -1880,23 +1879,19 @@ impl EngineBridge {
                 }
             }
             Command::SetSystemPolicy { policy } => {
-                state.core.set_system_policy(*policy).map_err(core_error)?;
+                core.set_system_policy(*policy).map_err(core_error)?;
                 Reply::Done
             }
             Command::TerminalPolicy => Reply::TerminalPolicy {
-                policy: TransferTerminalPolicy::from(
-                    state.core.terminal_policy().map_err(core_error)?,
-                ),
+                policy: TransferTerminalPolicy::from(core.terminal_policy().map_err(core_error)?),
             },
             Command::SetTerminalPolicy { policy } => {
-                state
-                    .core
-                    .set_terminal_policy(policy.clone().into())
+                core.set_terminal_policy(policy.clone().into())
                     .map_err(core_error)?;
                 Reply::Done
             }
             Command::TerminalShells => {
-                let shells = state.core.terminal_shells().map_err(core_error)?;
+                let shells = core.terminal_shells().map_err(core_error)?;
                 Reply::TerminalShells {
                     shells: shells
                         .shells
@@ -1917,10 +1912,7 @@ impl EngineBridge {
                 {
                     return Err(Error::from_reason("Invalid shell"));
                 }
-                state
-                    .core
-                    .set_terminal_shell(shell.clone())
-                    .map_err(core_error)?;
+                core.set_terminal_shell(shell.clone()).map_err(core_error)?;
                 Reply::Done
             }
             Command::RemoteTerminalSessions {
@@ -1930,8 +1922,7 @@ impl EngineBridge {
                 let connection = parse_id(connection_id, "Invalid connection ID")?;
                 let generation = parse_id(generation, "Invalid generation")?;
                 Reply::TerminalSessions {
-                    sessions: state
-                        .core
+                    sessions: core
                         .remote_terminal_sessions(connection, generation)
                         .map_err(core_error)?
                         .into_iter()
@@ -1954,15 +1945,12 @@ impl EngineBridge {
             } => {
                 let connection = parse_id(connection_id, "Invalid connection ID")?;
                 let generation = parse_id(generation, "Invalid generation")?;
-                state
-                    .core
-                    .close_remote_terminal_session(connection, generation, id.clone())
+                core.close_remote_terminal_session(connection, generation, id.clone())
                     .map_err(core_error)?;
                 Reply::Done
             }
             Command::HostedTerminalSessions => Reply::TerminalSessions {
-                sessions: state
-                    .core
+                sessions: core
                     .hosted_terminal_sessions()
                     .map_err(core_error)?
                     .into_iter()
@@ -1978,9 +1966,7 @@ impl EngineBridge {
                     .collect(),
             },
             Command::CloseTerminalSession { id } => {
-                state
-                    .core
-                    .close_terminal_session(id.clone())
+                core.close_terminal_session(id.clone())
                     .map_err(core_error)?;
                 Reply::Done
             }
@@ -1990,13 +1976,17 @@ impl EngineBridge {
     }
 
     /// Commands that drain the core event queue into transfer records.
-    fn events(state: &mut State, command: &Command) -> Result<Reply> {
+    fn events(
+        core: &VnilinkCore,
+        subscriptions: &mut Subscriptions,
+        command: &Command,
+    ) -> Result<Reply> {
         let reply: Reply = match command {
             Command::SubscribeEvents => {
-                let poller = state.core.subscribe_events().map_err(core_error)?;
-                let subscription = state.next_subscription;
-                state.next_subscription = subscription.saturating_add(1);
-                state.events.insert(subscription, poller);
+                let poller = core.subscribe_events().map_err(core_error)?;
+                let subscription = subscriptions.next;
+                subscriptions.next = subscription.saturating_add(1);
+                subscriptions.events.insert(subscription, poller);
                 Reply::EventSubscription {
                     subscription_id: subscription.to_string(),
                 }
@@ -2006,7 +1996,7 @@ impl EngineBridge {
                 max_events,
             } => {
                 let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                let poller = state
+                let poller = subscriptions
                     .events
                     .get(&subscription)
                     .ok_or_else(|| Error::new(Status::InvalidArg, "Unknown event subscription"))?;
@@ -2022,7 +2012,7 @@ impl EngineBridge {
             }
             Command::ReleaseEvents { subscription_id } => {
                 let subscription = parse_id(subscription_id, "Invalid subscription ID")?;
-                state.events.remove(&subscription);
+                subscriptions.events.remove(&subscription);
                 Reply::Done
             }
             _ => return Err(Error::new(Status::InvalidArg, "Invalid engine command")),
@@ -2035,27 +2025,38 @@ impl EngineBridge {
 /// entry point; each command family lives in its own method so new
 /// functionality extends the bridge by adding a method, never by editing a
 /// shared procedure.
+///
+/// Only the families that touch native or System state take the `State`
+/// lock; the rest run on the core alone, so a slow pairing or session command
+/// does not hold the others, and event reads have a lock of their own.
 struct EngineBridge {
+    core: Arc<VnilinkCore>,
     state: Arc<Mutex<State>>,
+    subscriptions: Arc<Mutex<Subscriptions>>,
+    closed: Arc<AtomicBool>,
+}
+
+/// Takes a lock even after a command panicked while holding it. The panic is
+/// contained in [`CommandTask::compute`] and reported to its caller; the
+/// guarded maps stay valid because each command changes them in one step, so
+/// refusing every later command would turn one failure into a dead engine.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl EngineBridge {
     fn run(&self, command: &Command) -> Result<String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Error::from_reason("Engine unavailable"))?;
-        if state.closed {
+        if self.closed.load(Ordering::Acquire) {
             return Err(core_error(FfiError::ShutDown));
         }
-        let reply = Self::dispatch(&mut state, command)?;
+        let reply = self.dispatch(command)?;
         serde_json::to_string(&reply).map_err(|_| Error::from_reason("Cannot encode engine reply"))
     }
 
     /// Routes every command to its family. There is deliberately no fallback
     /// arm: adding a variant to `Command` fails to compile here until it is
     /// placed with its family.
-    fn dispatch(state: &mut State, command: &Command) -> Result<Reply> {
+    fn dispatch(&self, command: &Command) -> Result<Reply> {
         match command {
             Command::Snapshot
             | Command::DiagnosticSnapshot
@@ -2066,10 +2067,7 @@ impl EngineBridge {
             | Command::Endpoint
             | Command::Capabilities
             | Command::VideoCodecs
-            | Command::SetVideoCodecs { .. } => {
-                let core = &state.core;
-                Self::identity(core, command)
-            }
+            | Command::SetVideoCodecs { .. } => Self::identity(&self.core, command),
             Command::CreateInvitation { .. }
             | Command::AcceptInvitation { .. }
             | Command::ExportPairingFile { .. }
@@ -2079,16 +2077,10 @@ impl EngineBridge {
             | Command::Revoke { .. }
             | Command::Unpair { .. }
             | Command::SetPeerName { .. }
-            | Command::PeerHostname { .. } => {
-                let core = &state.core;
-                Self::pairing(core, command)
-            }
+            | Command::PeerHostname { .. } => Self::pairing(&self.core, command),
             Command::ControlRequest
             | Command::ConfirmControlRequest { .. }
-            | Command::RejectControlRequest => {
-                let core = &state.core;
-                Self::access(core, command)
-            }
+            | Command::RejectControlRequest => Self::access(&self.core, command),
             Command::BeginConnectServices { .. }
             | Command::Disconnect
             | Command::DisconnectSession { .. }
@@ -2099,10 +2091,7 @@ impl EngineBridge {
             | Command::ControllerSession { .. }
             | Command::ForgetControllerSession { .. }
             | Command::SessionPaths { .. }
-            | Command::ControllerSessionPaths { .. } => {
-                let core = &state.core;
-                Self::sessions(core, command)
-            }
+            | Command::ControllerSessionPaths { .. } => Self::sessions(&self.core, command),
             Command::SetInputDefaults { .. }
             | Command::EnableFilesystemAccess
             | Command::SetTransferDirectory { .. }
@@ -2117,10 +2106,7 @@ impl EngineBridge {
             | Command::KeyboardMode
             | Command::SetKeyboardMode { .. }
             | Command::SwapControlAndCommand
-            | Command::SetSwapControlAndCommand { .. } => {
-                let core = &state.core;
-                Self::input(core, command)
-            }
+            | Command::SetSwapControlAndCommand { .. } => Self::input(&self.core, command),
             // Desktop input goes on its desktop's data channel (`data.rs`),
             // which decodes these shapes; no command carries it.
             Command::SubmitKey { .. }
@@ -2147,10 +2133,7 @@ impl EngineBridge {
             | Command::SetRelayPublic
             | Command::SetRelayCustom { .. }
             | Command::SavedRelays
-            | Command::RelayRestartRequired => {
-                let core = &state.core;
-                Self::hosting(core, command)
-            }
+            | Command::RelayRestartRequired => Self::hosting(&self.core, command),
             Command::StartNativeScreenSharing { .. }
             | Command::StopNativeScreenSharing
             | Command::NativeSharingStatus
@@ -2170,17 +2153,19 @@ impl EngineBridge {
             | Command::PowerStatus
             | Command::NativeRuntime
             | Command::ReportNativePermissions { .. }
-            | Command::EnableNativeInput => native::dispatch(state, command),
+            | Command::EnableNativeInput => native::dispatch(&mut lock(&self.state), command),
             Command::Topology
             | Command::SessionTopology { .. }
             | Command::CaptureDisplays
             | Command::SetTopology { .. }
             | Command::SetDesktopCodecDefault { .. }
             | Command::SetWindowDecoders { .. }
-            | Command::SetDesktopQualityDefaults { .. } => Self::media(state, command),
+            | Command::SetDesktopQualityDefaults { .. } => Self::media(&self.core, command),
             Command::SubscribeEvents
             | Command::PollEvents { .. }
-            | Command::ReleaseEvents { .. } => Self::events(state, command),
+            | Command::ReleaseEvents { .. } => {
+                Self::events(&self.core, &mut lock(&self.subscriptions), command)
+            }
             Command::SharingPolicy
             | Command::SetSharingPolicy { .. }
             | Command::SystemPolicy
@@ -2192,7 +2177,7 @@ impl EngineBridge {
             | Command::RemoteTerminalSessions { .. }
             | Command::CloseRemoteTerminalSession { .. }
             | Command::HostedTerminalSessions
-            | Command::CloseTerminalSession { .. } => Self::services(state, command),
+            | Command::CloseTerminalSession { .. } => Self::services(&self.core, command),
             Command::SystemAction { .. }
             | Command::SystemOperation { .. }
             | Command::CancelSystemAction { .. }
@@ -2200,14 +2185,89 @@ impl EngineBridge {
             | Command::SystemPrivacy { .. }
             | Command::ScheduledSystemActions
             | Command::CancelHostedSystemAction { .. }
-            | Command::RunHostedSystemActionNow { .. } => system::dispatch(state, command),
+            | Command::RunHostedSystemActionNow { .. } => {
+                system::dispatch(&mut lock(&self.state), command)
+            }
             Command::Shutdown => {
-                state.closed = true;
-                native::shutdown(state)?;
+                self.closed.store(true, Ordering::Release);
+                native::shutdown(&mut lock(&self.state))?;
                 Ok(Reply::Done)
             }
         }
     }
+}
+
+/// How long the wake thread waits before it checks whether it was closed.
+const EVENT_WATCH_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Tells the window host that engine events are waiting, so it reads them
+/// instead of asking on a timer. It carries no events: the host reads them
+/// from its subscription, which keeps the lag and resync accounting in one
+/// place.
+#[napi]
+pub struct EventWatch {
+    closed: Arc<AtomicBool>,
+}
+#[napi]
+impl EventWatch {
+    /// Stops waking the host. The wake thread ends within a second.
+    #[napi]
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+}
+impl Drop for EventWatch {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+#[napi]
+impl Engine {
+    /// Calls `callback` when engine events are waiting to be read. Calls
+    /// that wait to run merge, and the callback keeps no process alive. The
+    /// watch has a subscription of its own, opened before this returns, so
+    /// an event after this call always wakes the host, even one a read
+    /// finishes just before.
+    #[napi]
+    pub fn watch_events(&self, callback: Function<(), ()>) -> Result<EventWatch> {
+        let wake = callback
+            .build_threadsafe_function::<()>()
+            .callee_handled::<false>()
+            .weak::<true>()
+            .max_queue_size::<1>()
+            .build()?;
+        let subscription = self.core.subscribe_events().map_err(core_error)?;
+        let closed = Arc::new(AtomicBool::new(false));
+        let stop = closed.clone();
+        let engine_closed = self.closed.clone();
+        std::thread::Builder::new()
+            .name("event-watch".into())
+            .spawn(move || {
+                while !stop.load(Ordering::Acquire) && !engine_closed.load(Ordering::Acquire) {
+                    // Queued events are dropped before the wake, so one that
+                    // arrives later wakes the host again.
+                    if subscription.wait(EVENT_WATCH_CHECK) {
+                        // Full means a wake is already waiting for this read.
+                        let _queued = wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                }
+            })
+            .map_err(|_| Error::from_reason("Cannot watch engine events"))?;
+        Ok(EventWatch { closed })
+    }
+}
+
+/// Runs one command so that a panic fails it alone. napi runs `compute` in an
+/// `extern "C"` callback, where an unwinding panic aborts the whole engine
+/// process, taking every session with it.
+fn contain(command: impl FnOnce() -> Result<String>) -> Result<String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(command)).unwrap_or_else(|_| {
+        tracing::error!(target: vnilink::trace::BRIDGE, "a command panicked");
+        Err(Error::from_reason(
+            "Internal: the engine command failed unexpectedly",
+        ))
+    })
 }
 
 pub struct CommandTask {
@@ -2240,7 +2300,10 @@ impl Engine {
         })?;
         Ok(AsyncTask::new(CommandTask {
             bridge: EngineBridge {
+                core: self.core.clone(),
                 state: self.state.clone(),
+                subscriptions: self.subscriptions.clone(),
+                closed: self.closed.clone(),
             },
             command: decoded,
             kind,
@@ -2257,7 +2320,7 @@ impl Task for CommandTask {
             tracing::info_span!(target: "vnilink::bridge", "command", name = self.kind.as_str());
         let _command = span.enter();
         let started = std::time::Instant::now();
-        let reply = self.bridge.run(&self.command);
+        let reply = contain(|| self.bridge.run(&self.command));
         if let Err(error) = &reply {
             tracing::info!(
                 target: vnilink::trace::BRIDGE,
@@ -2522,5 +2585,35 @@ mod ffi_store_error {
         );
         assert_eq!(ffi_error_name(&FfiError::StoreLocked), "StoreLocked");
         assert_eq!(ffi_error_name(&FfiError::CorruptRecord), "CorruptRecord");
+    }
+}
+
+#[cfg(test)]
+mod containment {
+    use super::{contain, lock};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_panicking_command_fails_alone_and_the_next_one_runs() {
+        let failed = contain(|| panic!("a bug in one command"));
+        assert_eq!(
+            failed.unwrap_err().reason,
+            "Internal: the engine command failed unexpectedly"
+        );
+        assert_eq!(contain(|| Ok("{}".into())).unwrap(), "{}");
+    }
+
+    #[test]
+    fn a_lock_poisoned_by_a_panic_is_taken_again() {
+        let shared = Arc::new(Mutex::new(1_u8));
+        let poisoner = shared.clone();
+        let panicked = std::thread::spawn(move || {
+            let _held = poisoner.lock().unwrap();
+            panic!("holding the lock");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(shared.is_poisoned());
+        assert_eq!(*lock(&shared), 1);
     }
 }
