@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: the connection context is assigned from the sender's window, never read from the renderer.
+ *  Adapted for VniLink: the connection context is assigned from the sender's window, never read from the renderer,
+ *  and a window's connection ends when its contents are destroyed.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -73,7 +74,9 @@ export class Server extends IPCServer {
 			Server.Clients.set(id, reconnectDisposable);
 
 			const onMessage = withTrustedContext(createScopedOnMessageEvent(id, 'vnilink:message') as Event<VSBuffer>, `window:${windowId}`);
-			const onDidClientDisconnect = Event.any(Event.signal(createScopedOnMessageEvent(id, 'vnilink:disconnect')), onDidClientReconnect.event);
+			// A window that closes never says goodbye; its contents' destruction ends the connection.
+			const onDestroyed = Event.fromNodeEventEmitter<void>(webContents, 'destroyed');
+			const onDidClientDisconnect = Event.any(Event.signal(createScopedOnMessageEvent(id, 'vnilink:disconnect')), onDidClientReconnect.event, onDestroyed);
 			Event.once(onDidClientDisconnect)(() => {
 				if (Server.Clients.get(id) === reconnectDisposable) {
 					Server.Clients.delete(id);

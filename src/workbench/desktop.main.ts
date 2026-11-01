@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only AND MIT
 // ---------------------------------------------------------------------------------------------
 
+import { addDisposableListener } from '../base/browser/dom.js';
 import { mainWindow } from '../base/browser/window.js';
 import { Disposable } from '../base/common/lifecycle.js';
 import { IEngineService } from '../platform/engine/common/engineService.js';
@@ -38,6 +39,10 @@ export class DesktopMain extends Disposable {
 	public async open(): Promise<void> {
 		const { serviceCollection, logService } = this.initServices();
 		const workbench = this._register(new Workbench(mainWindow.document.body, this.configuration, serviceCollection, logService));
+		// Leaving the page shuts the workbench down and tells main this window's IPC client is gone.
+		this._register(addDisposableListener(mainWindow, 'pagehide', () => {
+			this.dispose();
+		}, { once: true }));
 		await workbench.startup();
 	}
 

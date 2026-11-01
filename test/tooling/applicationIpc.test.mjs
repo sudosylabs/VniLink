@@ -14,10 +14,11 @@ import test from 'node:test';
 import { build } from 'esbuild';
 
 const electron = `
+import { EventEmitter } from 'node:events';
 export const handlers = new Map();
 export const opened = [];
 export const windows = new Map();
-export const ipcMain = { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name), on() { }, once() { }, removeListener() { } };
+export const ipcMain = Object.assign(new EventEmitter(), { handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name) });
 export const app = { isPackaged: false, getVersion: () => 'test', getPath: () => '/Pictures', getLoginItemSettings: () => ({ openAtLogin: false }) };
 export const shown = [];
 export const shell = { openExternal: async url => opened.push(url), showItemInFolder: path => shown.push(path) };
@@ -53,6 +54,8 @@ const output = await build({
 	stdin: {
 		contents: `
 			export { validatedIpcMain, WORKBENCH_URL } from './src/base/parts/ipc/electron-main/ipcMain.js';
+			export { Server as ElectronIPCServer } from './src/base/parts/ipc/electron-main/ipc.electron.js';
+			export { ipcMain } from 'electron';
 			export { NativeHostChannel } from './src/platform/native/electron-main/nativeHostChannel.js';
 			export { NativeHostMainService } from './src/platform/native/electron-main/nativeHostMainService.js';
 			export { EngineChannel } from './src/platform/engine/electron-main/engineChannel.js';
@@ -77,7 +80,8 @@ const output = await build({
 });
 
 const {
-	validatedIpcMain, WORKBENCH_URL, NativeHostChannel, NativeHostMainService, EngineChannel, ConfigurationMainService, RecordingMainService,
+	validatedIpcMain, WORKBENCH_URL, ElectronIPCServer, ipcMain,
+	NativeHostChannel, NativeHostMainService, EngineChannel, ConfigurationMainService, RecordingMainService,
 	UIStateChannel, SaveStrategy, StateService,
 	windowIdFromContext, setUnexpectedErrorHandler, Event, handlers, opened, shown, windows, disk, clipboard, VSBuffer,
 } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
@@ -458,5 +462,23 @@ test('windows remember only known UI state, in its own shape, in the state file'
 		reopened.dispose();
 	} finally {
 		await rm(folder, { recursive: true, force: true });
+	}
+});
+
+test('a window whose contents are destroyed leaves the IPC server, though it never said goodbye', async () => {
+	const window = appWindow(9);
+	const contents = window.webContents;
+	contents.id = 90;
+	contents.send = () => { };
+	const server = new ElectronIPCServer();
+	try {
+		ipcMain.emit('vnilink:hello', { sender: contents, senderFrame: contents.mainFrame });
+		ipcMain.emit('vnilink:message', { sender: contents, senderFrame: contents.mainFrame }, Buffer.from([0]));
+		await new Promise(resolve => setImmediate(resolve));
+		assert.equal(server.connections.length, 1, 'The window did not connect');
+		contents.emit('destroyed');
+		assert.equal(server.connections.length, 0, 'A closed window kept its connection and every event subscription with it');
+	} finally {
+		server.dispose();
 	}
 });

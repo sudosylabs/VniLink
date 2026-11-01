@@ -3226,7 +3226,7 @@
     {
       "path": "src/base/parts/ipc/electron-main/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipc.electron.ts",
-      "sha256": "59063b7f500277f7ab31764f72e786248c8248603b5bcd1d89352012f0f01774",
+      "sha256": "cdce429d4a202e37fad7fd6381b784aae54ed524f84c0d136311fbb4c60055d1",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -4351,7 +4351,7 @@
       "path": "src/workbench/desktop.main.ts",
       "upstreamPath": "src/vs/workbench/electron-browser/desktop.main.ts",
       "adapted": true,
-      "sha256": "a8dd753c3edf331e29b414394ebeef1bc9851dbc267a1865d69b9465f6977016"
+      "sha256": "de7d65b12b61fa5772d9ccb574eb2fad48534762d3e0cc7b98dd3c37bc46e114"
     },
     {
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",
@@ -6342,6 +6342,11 @@
     {
       "from": "src/platform/theme/common/themeService.ts",
       "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/workbench/desktop.main.ts",
+      "to": "src/base/browser/dom.ts",
       "kind": "import"
     },
     {
