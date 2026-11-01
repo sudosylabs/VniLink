@@ -479,6 +479,7 @@ pub fn stat_at(parent: BorrowedFd, name: &str) -> io::Result<EntryStat> {
 /// the caller falls back to `fstatat`.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn statx_at(parent: BorrowedFd, name: &CString) -> Option<io::Result<EntryStat>> {
+    // SAFETY: `statx` is plain integers and arrays, for which all-zero bytes are a valid value.
     let mut st: libc::statx = unsafe { std::mem::zeroed() };
     // SAFETY: `statx` takes a borrowed dir fd plus a borrowed name and
     // writes the struct it is given.
