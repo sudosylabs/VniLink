@@ -62,10 +62,6 @@ export class Graph<T> {
 		return node;
 	}
 
-	lookup(data: T): Node<T> | undefined {
-		return this._nodes.get(this._hashFn(data));
-	}
-
 	isEmpty(): boolean {
 		return this._nodes.size === 0;
 	}

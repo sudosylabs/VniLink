@@ -26,10 +26,6 @@ export interface IContextMenuItem extends ICommonContextMenuItem {
 }
 
 export interface IContextMenuEvent {
-	shiftKey?: boolean;
-	ctrlKey?: boolean;
-	altKey?: boolean;
-	metaKey?: boolean;
 }
 
 export interface IPopupOptions {

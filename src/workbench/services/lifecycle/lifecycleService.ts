@@ -17,7 +17,7 @@ import { ILifecycleService, LifecyclePhase, StartupKind, type BeforeShutdownErro
  * shutdown events that support them never fire; `onDidShutdown` fires once
  * when the workbench goes away.
  */
-export class LifecycleService extends Disposable implements ILifecycleService {
+class LifecycleService extends Disposable implements ILifecycleService {
 	declare public readonly _serviceBrand: undefined;
 	public readonly startupKind = StartupKind.NewWindow;
 	public readonly onBeforeShutdown = Event.None as Event<BeforeShutdownEvent>;

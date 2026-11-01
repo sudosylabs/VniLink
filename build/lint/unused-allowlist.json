@@ -1,1 +1,43 @@
-[]
+[
+  {
+    "path": "src/base/parts/sandbox/electron-browser/electronTypes.ts",
+    "name": "IpcRenderer.on",
+    "reason": "IpcRenderer is passed where a NodeEventEmitter is required"
+  },
+  {
+    "path": "src/base/parts/sandbox/node/electronTypes.ts",
+    "name": "ParentPort.postMessage",
+    "reason": "UtilityNodeJSProcess extends Electron's Process, whose parentPort has it"
+  },
+  {
+    "path": "src/base/parts/sandbox/node/electronTypes.ts",
+    "name": "MessagePortMain.close",
+    "reason": "these ports are passed where Electron's MessagePortMain is required"
+  },
+  {
+    "path": "src/platform/keybinding/common/keybindingsRegistry.ts",
+    "name": "IKeybindings.primary",
+    "reason": "IKeybindings is assigned to a type that shares only these properties"
+  },
+  {
+    "path": "src/platform/keybinding/common/keybindingsRegistry.ts",
+    "name": "IKeybindings.secondary",
+    "reason": "IKeybindings is assigned to a type that shares only these properties"
+  },
+  {
+    "path": "src/platform/native/common/native.ts",
+    "name": "INativeHostService.maximizeWindow",
+    "reason": "the smoke driver calls the native host channel by method name"
+  },
+  {
+    "path": "src/platform/native/common/native.ts",
+    "name": "INativeHostService.unmaximizeWindow",
+    "reason": "the smoke driver calls the native host channel by method name"
+  },
+  {
+    "path": "src/platform/log/common/log.ts",
+    "name": "NullLogService",
+    "reason": "the logger fake that browser scenarios give the services they build"
+  },
+  { "path": "src/platform/log/common/log.ts", "name": "NullLogger", "reason": "NullLogService's base" }
+]

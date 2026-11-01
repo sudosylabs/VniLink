@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IObservable, IObserver, IObservableWithChange } from '../base.js';
+import { IObservable, IObserver } from '../base.js';
 import { ConvenientObservable } from './baseObservable.js';
 
 /**
@@ -30,10 +30,6 @@ class ConstObservable<T> extends ConvenientObservable<T, void> {
 	}
 	public removeObserver(observer: IObserver): void {
 		// NO OP
-	}
-
-	override log(): IObservableWithChange<T, void> {
-		return this;
 	}
 
 	override toString(): string {

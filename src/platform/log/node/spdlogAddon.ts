@@ -24,8 +24,6 @@ export interface Logger {
 	info(message: string): void;
 	warn(message: string): void;
 	error(message: string): void;
-	critical(message: string): void;
-	getLevel(): number;
 	setLevel(level: number): void;
 	setPattern(pattern: string): void;
 	clearFormatters(): void;
@@ -42,7 +40,7 @@ interface Addon {
 export const SPDLOG_DIRECTORY = join('native', 'spdlog');
 
 /** The package entry's two functions spdlogLog.ts calls. */
-export interface Spdlog {
+interface Spdlog {
 	setFlushOn(level: number): void;
 	createAsyncRotatingLogger(name: string, filename: string, filesize: number, filecount: number): Promise<Logger>;
 }

@@ -196,10 +196,6 @@ export class StateService extends StateReadonlyService implements IStateService 
 		this.fileStorage.setItem(key, data);
 	}
 
-	setItems(items: readonly { key: string; data?: object | string | number | boolean | undefined | null }[]): void {
-		this.fileStorage.setItems(items);
-	}
-
 	removeItem(key: string): void {
 		this.fileStorage.removeItem(key);
 	}

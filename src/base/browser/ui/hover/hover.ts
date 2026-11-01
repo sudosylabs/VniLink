@@ -4,10 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IHoverDelegate } from './hoverDelegate.js';
-import type { HoverPosition } from './hoverWidget.js';
-import type { CancellationToken } from '../../../common/cancellation.js';
 import type { IMarkdownString } from '../../../common/htmlContent.js';
-import type { AnchorAlignment } from '../../../common/layout.js';
 import type { IDisposable } from '../../../common/lifecycle.js';
 
 /**
@@ -143,10 +140,6 @@ export interface IHoverDelegate2 {
 }
 
 export interface IHoverWidget extends IDisposable {
-	/**
-	 * Whether the hover widget has been disposed.
-	 */
-	readonly isDisposed: boolean;
 }
 
 export const enum HoverStyle {
@@ -174,24 +167,6 @@ export interface IHoverOptions {
 	 * dispose method is required.
 	 */
 	target: IHoverTarget | HTMLElement;
-
-	/*
-	 * The container to pass to {@link IContextViewProvider.showContextView} which renders the hover
-	 * in. This is particularly useful for more natural tab focusing behavior, where the hover is
-	 * created as the next tab index after the element being hovered and/or to workaround the
-	 * element's container hiding on `focusout`.
-	 */
-	container?: HTMLElement;
-
-	/**
-	 * An ID to associate with the hover to be used as an equality check. Normally when calling
-	 * {@link IHoverService.showHover} the options object itself is used to determine if the hover
-	 * is the same one that is already showing, when this is set, the ID will be used instead.
-	 *
-	 * When `undefined`, this will default to a serialized version of {@link content}. In this case
-	 * it will remain `undefined` if {@link content} is a `HTMLElement`.
-	 */
-	id?: string;
 
 	/**
 	 * A set of actions for the hover's "status bar".
@@ -228,11 +203,6 @@ export interface IHoverOptions {
 	position?: IHoverPositionOptions;
 
 	/**
-	 * Options that defines how long the hover is shown and when it hides.
-	 */
-	persistence?: IHoverPersistenceOptions;
-
-	/**
 	 * Options that define how the hover looks.
 	 */
 	appearance?: IHoverAppearanceOptions;
@@ -242,12 +212,6 @@ export interface IHoverOptions {
 	 * later for delayed hovers.
 	 */
 	onDidShow?(): void;
-
-	/**
-	 * An optional callback that is called when the hover is hidden (i.e. its underlying widget is disposed). This fires
-	 * once per shown hover and is only invoked if the hover was actually shown.
-	 */
-	onDidHide?(): void;
 }
 
 // `target` is ignored for delayed hover methods as it's included in the method and added
@@ -279,66 +243,9 @@ export interface IHoverLifecycleOptions {
 	 * ```
 	 */
 	groupId?: string;
-
-	/**
-	 * Whether to use a reduced delay before showing the hover. If true, the
-	 * `workbench.hover.reducedDelay` setting is used instead of `workbench.hover.delay`.
-	 */
-	reducedDelay?: boolean;
-
-	/**
-	 * Whether to set up space and enter keyboard events for the hover, when these are pressed when
-	 * the hover's target is focused it will show and focus the hover.
-	 *
-	 * Typically this should _not_ be used when the space or enter events are already handled by
-	 * something else.
-	 */
-	setupKeyboardEvents?: boolean;
 }
 
 export interface IHoverPositionOptions {
-	/**
-	 * Position of the hover. The default is to show above the target. This option will be ignored
-	 * if there is not enough room to layout the hover in the specified position, unless the
-	 * forcePosition option is set.
-	 */
-	hoverPosition?: HoverPosition | MouseEvent;
-
-	/**
-	 * Horizontal alignment of the hover relative to the target when positioned above or below it.
-	 */
-	anchorAlignment?: AnchorAlignment;
-
-	/**
-	 * Force the hover position, reducing the size of the hover instead of adjusting the hover
-	 * position.
-	 */
-	forcePosition?: boolean;
-}
-
-export interface IHoverPersistenceOptions {
-	/**
-	 * Whether to hide the hover when the mouse leaves the `target` and enters the actual hover.
-	 * This is false by default when text is an `IMarkdownString` and true when `text` is a
-	 * `string`. Note that this will be ignored if any `actions` are provided as hovering is
-	 * required to make them accessible.
-	 *
-	 * In general hiding on hover is desired for:
-	 * - Regular text where selection is not important
-	 * - Markdown that contains no links where selection is not important
-	 */
-	hideOnHover?: boolean;
-
-	/**
-	 * Whether to hide the hover when a key is pressed.
-	 */
-	hideOnKeyDown?: boolean;
-
-	/**
-	 * Whether to make the hover sticky, this means it will not be hidden when the mouse leaves the
-	 * hover.
-	 */
-	sticky?: boolean;
 }
 
 export interface IHoverAppearanceOptions {
@@ -351,106 +258,29 @@ export interface IHoverAppearanceOptions {
 	 * Whether to show a compact hover, reducing the font size and padding of the hover.
 	 */
 	compact?: boolean;
-
-	/**
-	 * When {@link hideOnHover} is explicitly true or undefined and its auto value is detected to
-	 * hide, show a hint at the bottom of the hover explaining how to mouse over the widget. This
-	 * should be used in the cases where despite the hover having no interactive content, it's
-	 * likely the user may want to interact with it somehow.
-	 */
-	showHoverHint?: boolean;
-
-	/**
-	 * Whether to skip the fade in animation, this should be used when hovering from one hover to
-	 * another in the same group so it looks like the hover is moving from one element to the other.
-	 */
-	skipFadeInAnimation?: boolean;
-
-	/**
-	 * The max height of the hover relative to the window height.
-	 * Accepted values: (0,1]
-	 * Default: 0.5
-	 */
-	maxHeightRatio?: number;
 }
 
 export interface IHoverAction {
-	/**
-	 * The label to use in the hover's status bar.
-	 */
-	label: string;
-
-	/**
-	 * The command ID of the action, this is used to resolve the keybinding to display after the
-	 * action label.
-	 */
-	commandId: string;
-
-	/**
-	 * An optional class of an icon that will be displayed before the label.
-	 */
-	iconClass?: string;
-
-	/**
-	 * The callback to run the action.
-	 * @param target The action element that was activated.
-	 */
-	run(target: HTMLElement): void;
 }
 
 /**
  * A target for a hover.
  */
 export interface IHoverTarget extends Partial<IDisposable> {
-	/**
-	 * A set of target elements used to position the hover. If multiple elements are used the hover
-	 * will try to not overlap any target element. An example use case for this is show a hover for
-	 * wrapped text.
-	 */
-	readonly targetElements: readonly HTMLElement[];
-
-	/**
-	 * An optional absolute x coordinate to position the hover with, for example to position the
-	 * hover using `MouseEvent.pageX`.
-	 */
-	readonly x?: number;
-
-	/**
-	 * An optional absolute y coordinate to position the hover with, for example to position the
-	 * hover using `MouseEvent.pageY`.
-	 */
-	readonly y?: number;
 }
 
 // #region Managed hover
 
 export interface IManagedHoverTooltipMarkdownString {
-	markdown: IMarkdownString | string | undefined | ((token: CancellationToken) => Promise<IMarkdownString | string | undefined>);
-	markdownNotSupportedFallback: string | undefined;
-}
-
-export function isManagedHoverTooltipMarkdownString(obj: unknown): obj is IManagedHoverTooltipMarkdownString {
-	const candidate = obj as IManagedHoverTooltipMarkdownString;
-	return typeof candidate === 'object' && 'markdown' in candidate && 'markdownNotSupportedFallback' in candidate;
 }
 
 export interface IManagedHoverTooltipHTMLElement {
-	element: (token: CancellationToken) => HTMLElement | Promise<HTMLElement>;
-	/** Whether the returned element owns spacing from the hover boundary. */
-	contentOwnsPadding?: boolean;
-}
-
-export function isManagedHoverTooltipHTMLElement(obj: unknown): obj is IManagedHoverTooltipHTMLElement {
-	const candidate = obj as IManagedHoverTooltipHTMLElement;
-	return typeof candidate === 'object' && 'element' in candidate;
 }
 
 export type IManagedHoverContent = string | IManagedHoverTooltipMarkdownString | IManagedHoverTooltipHTMLElement | HTMLElement | undefined;
 export type IManagedHoverContentOrFactory = IManagedHoverContent | (() => IManagedHoverContent);
 
 export interface IManagedHoverOptions extends Pick<IHoverOptions, 'actions' | 'additionalClasses' | 'linkHandler' | 'trapFocus' | 'onDidShow'> {
-	appearance?: Pick<IHoverAppearanceOptions, 'showHoverHint'>;
-	position?: Pick<IHoverPositionOptions, 'anchorAlignment'>;
 }
 
 export interface IManagedHover extends IDisposable {

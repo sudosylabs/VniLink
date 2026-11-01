@@ -40,16 +40,8 @@ export interface GestureEvent extends MouseEvent {
 
 interface Touch {
 	identifier: number;
-	screenX: number;
-	screenY: number;
-	clientX: number;
-	clientY: number;
 	pageX: number;
 	pageY: number;
-	radiusX: number;
-	radiusY: number;
-	rotationAngle: number;
-	force: number;
 	target: Element;
 }
 
@@ -57,11 +49,9 @@ interface TouchList {
 	[i: number]: Touch;
 	length: number;
 	item(index: number): Touch;
-	identifiedTouch(id: number): Touch;
 }
 
 interface TouchEvent extends Event {
-	touches: TouchList;
 	targetTouches: TouchList;
 	changedTouches: TouchList;
 }
@@ -130,14 +120,6 @@ export class Gesture extends Disposable {
 		// `'ontouchstart' in window` always evaluates to true with typescript's modern typings. This causes `window` to be
 		// `never` later in `window.navigator`. That's why we need the explicit `window as Window` cast
 		return 'ontouchstart' in mainWindow || navigator.maxTouchPoints > 0;
-	}
-
-	/**
-	 * Whether the device's primary input is able to hover.
-	 */
-	@memoize
-	static isHoverDevice(): boolean {
-		return mainWindow.matchMedia('(hover: hover)').matches;
 	}
 
 	public override dispose(): void {

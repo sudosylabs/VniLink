@@ -7,7 +7,7 @@
 
 import { Emitter } from '../../src/base/common/event.js';
 import { Disposable } from '../../src/base/common/lifecycle.js';
-import { ConfigurationTarget, type IConfigurationChangeEvent, type IConfigurationData, type IConfigurationValue } from '../../src/platform/configuration/common/configuration.js';
+import { ConfigurationTarget, type IConfigurationChangeEvent } from '../../src/platform/configuration/common/configuration.js';
 import { settingDefaults, settingKeys, settingSource, type ConfigurationSource } from '../../src/platform/configuration/common/configurationSchema.js';
 import type { NativeDevice, TerminalShells, VideoCodecCaps } from '../../src/platform/engine/common/engine.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
@@ -74,10 +74,6 @@ export class FakeConfigurationService extends Disposable implements IWorkbenchCo
 		return Promise.resolve();
 	}
 
-	public getConfigurationData(): IConfigurationData | null {
-		return null;
-	}
-
 	// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 	public getValue<T>(key?: unknown): T {
 		return (typeof key === 'string' ? this.values[key] : this.values) as T;
@@ -114,10 +110,6 @@ export class FakeConfigurationService extends Disposable implements IWorkbenchCo
 			this.restricted.delete(key);
 		}
 		this.fire([key]);
-	}
-
-	public inspect<T>(key: string): IConfigurationValue<Readonly<T>> {
-		return { value: this.values[key] as T };
 	}
 
 	public reloadConfiguration(): Promise<void> {

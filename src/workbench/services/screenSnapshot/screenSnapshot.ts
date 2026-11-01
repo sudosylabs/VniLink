@@ -14,7 +14,7 @@ const MAX_SNAPSHOT_WIDTH = 640;
 
 const MAX_SNAPSHOT_HEIGHT = 360;
 
-export type ScreenSnapshotFailure = 'needsPermission' | 'needsSourceSelection' | 'unavailable' | 'busy' | 'timedOut' | 'sharingDisabled' | 'disconnected' | 'replaced' | 'unpaired' | 'unsupported' | 'failed' | 'cancelled';
+type ScreenSnapshotFailure = 'needsPermission' | 'needsSourceSelection' | 'unavailable' | 'busy' | 'timedOut' | 'sharingDisabled' | 'disconnected' | 'replaced' | 'unpaired' | 'unsupported' | 'failed' | 'cancelled';
 
 export type ScreenSnapshotResult =
 	| {
@@ -130,7 +130,7 @@ function isJpeg(bytes: Uint8Array): boolean {
 }
 
 /** SOF dimensions. This does not decode the entropy. */
-export function jpegSize(jpeg: Uint8Array): { width: number; height: number } | undefined {
+function jpegSize(jpeg: Uint8Array): { width: number; height: number } | undefined {
 	if (!isJpeg(jpeg)) {
 		return undefined;
 	}

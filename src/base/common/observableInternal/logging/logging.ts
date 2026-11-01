@@ -30,12 +30,6 @@ export function setLogObservableFn(fn: (obs: IObservable<any>) => void): void {
 	globalObservableLoggerFn = fn;
 }
 
-export function logObservable(obs: IObservable<any>): void {
-	if (globalObservableLoggerFn) {
-		globalObservableLoggerFn(obs);
-	}
-}
-
 export interface IChangeInformation {
 	oldValue: unknown;
 	newValue: unknown;

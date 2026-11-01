@@ -85,26 +85,11 @@ export class StandardMouseEvent implements IMouseEvent {
 	}
 }
 
-export class DragMouseEvent extends StandardMouseEvent {
-
-	public readonly dataTransfer: DataTransfer;
-
-	constructor(targetWindow: Window, e: MouseEvent) {
-		super(targetWindow, e);
-		// eslint-disable-next-line local/code-no-any-casts
-		this.dataTransfer = (<any>e).dataTransfer;
-	}
-}
-
 export interface IMouseWheelEvent extends MouseEvent {
 	readonly wheelDelta: number;
-	readonly wheelDeltaX: number;
-	readonly wheelDeltaY: number;
 
 	readonly deltaX: number;
 	readonly deltaY: number;
-	readonly deltaZ: number;
-	readonly deltaMode: number;
 }
 
 interface IWebKitMouseWheelEvent {

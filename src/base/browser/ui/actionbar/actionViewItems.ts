@@ -8,11 +8,8 @@ import { DataTransfers } from '../../dnd.js';
 import { addDisposableListener, EventHelper, EventLike, EventType } from '../../dom.js';
 import { EventType as TouchEventType, Gesture } from '../../touch.js';
 import { IActionViewItem } from './actionbar.js';
-import { IContextViewProvider } from '../contextview/contextview.js';
 import { getDefaultHoverDelegate } from '../hover/hoverDelegateFactory.js';
 import { IHoverDelegate } from '../hover/hoverDelegate.js';
-import { ISelectBoxOptions, ISelectBoxStyles, ISelectOptionItem, SelectBox } from '../selectBox/selectBox.js';
-import { IToggleStyles } from '../toggle/toggle.js';
 import { Action, ActionRunner, IAction, IActionChangeEvent, IActionRunner, Separator } from '../../../common/actions.js';
 import { Disposable } from '../../../common/lifecycle.js';
 import * as platform from '../../../common/platform.js';
@@ -187,10 +184,6 @@ export class BaseActionViewItem extends Disposable implements IActionViewItem {
 		}
 	}
 
-	isFocused(): boolean {
-		return !!this.element?.classList.contains('focused');
-	}
-
 	blur(): void {
 		if (this.element) {
 			this.element.blur();
@@ -278,7 +271,6 @@ export interface IActionViewItemOptions extends IBaseActionViewItemOptions {
 	label?: boolean;
 	readonly keybinding?: string | null;
 	readonly keybindingNotRenderedWithLabel?: boolean;
-	readonly toggleStyles?: IToggleStyles;
 }
 
 export class ActionViewItem extends BaseActionViewItem {
@@ -346,10 +338,6 @@ export class ActionViewItem extends BaseActionViewItem {
 			this.label.tabIndex = 0;
 			this.label.focus();
 		}
-	}
-
-	override isFocused(): boolean {
-		return !!this.label && this.label?.tabIndex === 0;
 	}
 
 	override blur(): void {
@@ -449,55 +437,5 @@ export class ActionViewItem extends BaseActionViewItem {
 				this.label.setAttribute('role', this.getDefaultAriaRole());
 			}
 		}
-	}
-}
-
-export class SelectActionViewItem<T = string> extends BaseActionViewItem {
-	protected selectBox: SelectBox;
-
-	constructor(ctx: unknown, action: IAction, options: ISelectOptionItem[], selected: number, contextViewProvider: IContextViewProvider, styles: ISelectBoxStyles, selectBoxOptions?: ISelectBoxOptions) {
-		super(ctx, action);
-
-		this.selectBox = new SelectBox(options, selected, contextViewProvider, styles, selectBoxOptions);
-		this.selectBox.setFocusable(false);
-
-		this._register(this.selectBox);
-		this.registerListeners();
-	}
-
-	setOptions(options: ISelectOptionItem[], selected?: number): void {
-		this.selectBox.setOptions(options, selected);
-	}
-
-	select(index: number): void {
-		this.selectBox.select(index);
-	}
-
-	private registerListeners(): void {
-		this._register(this.selectBox.onDidSelect(e => this.runAction(e.selected, e.index)));
-	}
-
-	protected runAction(option: string, index: number): void {
-		this.actionRunner.run(this._action, this.getActionContext(option, index));
-	}
-
-	protected getActionContext(option: string, index: number): T | string {
-		return option;
-	}
-
-	override setFocusable(focusable: boolean): void {
-		this.selectBox.setFocusable(focusable);
-	}
-
-	override focus(): void {
-		this.selectBox?.focus();
-	}
-
-	override blur(): void {
-		this.selectBox?.blur();
-	}
-
-	override render(container: HTMLElement): void {
-		this.selectBox.render(container);
 	}
 }

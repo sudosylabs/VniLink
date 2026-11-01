@@ -20,7 +20,7 @@ function requestStopped(signal: AbortSignal, disposed: boolean): boolean {
 
 interface SnapshotMedia { readonly type: 'snapshot'; readonly prompt: boolean; readonly access: boolean }
 
-export class ScreenSnapshotService extends Disposable implements IScreenSnapshotService {
+class ScreenSnapshotService extends Disposable implements IScreenSnapshotService {
 	declare public readonly _serviceBrand: undefined;
 
 	constructor(@IEngineService private readonly engine: IEngineService) {

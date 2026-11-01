@@ -17,7 +17,7 @@ import { windowPrompt } from './noticeWindow.js';
 import { ILogService } from '../../log/common/log.js';
 
 /** The engine as the notice uses it. */
-export interface NoticeEngine {
+interface NoticeEngine {
 	readonly available: boolean;
 	readonly onDidChangeAvailability: Event<boolean>;
 	readonly onDidReceiveEvents: Event<EngineEventBatch>;

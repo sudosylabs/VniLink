@@ -24,7 +24,7 @@ import { IThemeService } from '../../../platform/theme/common/themeService.js';
  * Upstream `getXtermScaledDimensions` (contrib/terminal/browser/xterm/xtermTerminal.ts),
  * with VniLink's fixed letter spacing and line height.
  */
-export function getXtermScaledDimensions(
+function getXtermScaledDimensions(
 	w: Window,
 	charWidth: number,
 	charHeight: number,

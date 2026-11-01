@@ -278,10 +278,6 @@ export class Dialog extends Disposable {
 		return typeLabel;
 	}
 
-	updateMessage(message: string): void {
-		this.messageDetailElement.innerText = message;
-	}
-
 	async show(): Promise<IDialogResult> {
 		this.focusToReturn = this.container.ownerDocument.activeElement as HTMLElement;
 

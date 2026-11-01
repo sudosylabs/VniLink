@@ -56,6 +56,4 @@ export interface ITerminalChildProcess extends IDisposable {
 	/** Sends bytes given one per character, as xterm reports some mouse modes. */
 	processBinary(data: string): void;
 	resize(cols: number, rows: number): void;
-	/** Ends the shell. No events follow. */
-	shutdown(): void;
 }

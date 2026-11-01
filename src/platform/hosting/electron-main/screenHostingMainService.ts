@@ -21,10 +21,10 @@ import type { PermissionsMainService } from '../../permissions/electron-main/per
 export const IScreenHostingMainService = createDecorator<ScreenHostingMainService>('screenHostingMainService');
 
 /** The display a native host should serve, or none. */
-export type ScreenHostingTarget = NativeScreenSource | undefined;
+type ScreenHostingTarget = NativeScreenSource | undefined;
 
 /** The OS facts a screen host depends on, replaceable in tests. */
-export interface ScreenHostingEnvironment {
+interface ScreenHostingEnvironment {
 	readonly platform: 'darwin' | 'win32' | 'linux' | 'other';
 	primaryDisplay(): ScreenHostingTarget;
 	onDidChangeDisplays(listener: () => void): () => void;

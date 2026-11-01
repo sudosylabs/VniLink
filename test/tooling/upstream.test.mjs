@@ -62,10 +62,6 @@ export { SyncDescriptor } from './src/platform/instantiation/common/descriptors.
 	const consumer = container.createInstance(Consumer);
 	assert.equal(created, 1);
 	assert.equal(container.invokeFunction(accessor => accessor.get(id)), consumer.service);
-	const child = container.createChild(new ServiceCollection());
-	assert.equal(child.createInstance(Consumer).service, consumer.service);
-	child.dispose();
-	assert.equal(disposed, 0);
 	container.dispose();
 	assert.equal(disposed, 1);
 	assert.throws(() => container.createInstance(Consumer), /disposed/);

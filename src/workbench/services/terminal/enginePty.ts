@@ -17,7 +17,7 @@ import { activeControllerSession, type ControllerSession } from '../devices/cont
 import { IDeviceService } from '../devices/deviceService.js';
 
 /** The renderer end of a terminal data channel (`DataChannelClient`). */
-export interface TerminalChannel {
+interface TerminalChannel {
 	write(data: Uint8Array): Promise<void>;
 	resize(rows: number, columns: number): void;
 	close(): void;
@@ -188,10 +188,6 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 		this.cols = cols;
 		this.rows = rows;
 		this.channel?.resize(rows, cols);
-	}
-
-	public shutdown(): void {
-		this.end();
 	}
 
 	public override dispose(): void {

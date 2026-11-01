@@ -24,7 +24,7 @@ import { createWebCodecsDecoder } from './webCodecsDecoder.js';
  */
 const requestedPicture = { width: 1280, height: 720, fps: 30 } as const;
 
-export type CameraChannelOpener = (
+type CameraChannelOpener = (
 	request: Omit<DataChannelRequest, 'requestId'>,
 	consume: (packet: DataPacket) => Promise<void>,
 	onError: (error: Error) => void,
@@ -53,7 +53,7 @@ export function cameraOpenFailure(error: unknown): CameraFailure {
 	}
 }
 
-export class CameraService implements ICameraService {
+class CameraService implements ICameraService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly openChannel: CameraChannelOpener;
 

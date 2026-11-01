@@ -5,13 +5,6 @@
 
 import { Range } from './range.js';
 
-export interface IAnchor {
-	x: number;
-	y: number;
-	width?: number;
-	height?: number;
-}
-
 export const enum AnchorAlignment {
 	LEFT, RIGHT
 }

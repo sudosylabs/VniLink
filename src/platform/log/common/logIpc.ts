@@ -4,11 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../base/common/uri.js';
-import { Event } from '../../../base/common/event.js';
-import { IChannel, IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
-import { AbstractLoggerService, AbstractMessageLogger, AdapterLogger, DidChangeLoggersEvent, ILogger, ILoggerOptions, ILoggerResource, ILoggerService, isLogLevel, LogLevel } from './log.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
-import { IURITransformer } from '../../../base/common/uriIpc.js';
+import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
+import { AbstractLoggerService, AbstractMessageLogger, DidChangeLoggersEvent, ILogger, ILoggerOptions, ILoggerResource, ILoggerService, isLogLevel, LogLevel } from './log.js';
 
 export class LoggerChannelClient extends AbstractLoggerService implements ILoggerService {
 
@@ -30,14 +27,6 @@ export class LoggerChannelClient extends AbstractLoggerService implements ILogge
 				super.deregisterLogger(loggerResource.resource);
 			}
 		}));
-	}
-
-	createConsoleMainLogger(): ILogger {
-		return new AdapterLogger({
-			log: (level: LogLevel, args: any[]) => {
-				this.channel.call('consoleLog', [level, args]);
-			}
-		});
 	}
 
 	override registerLogger(logger: ILoggerResource): void {
@@ -107,70 +96,5 @@ class Logger extends AbstractMessageLogger {
 
 	private doLog(messages: [LogLevel, string][]) {
 		this.channel.call('log', [this.file, messages]);
-	}
-}
-
-export class LoggerChannel implements IServerChannel {
-
-	constructor(private readonly loggerService: ILoggerService, private getUriTransformer: (requestContext: any) => IURITransformer) { }
-
-	listen(context: any, event: string): Event<any> {
-		const uriTransformer = this.getUriTransformer(context);
-		switch (event) {
-			case 'onDidChangeLoggers': return Event.map<DidChangeLoggersEvent, DidChangeLoggersEvent>(this.loggerService.onDidChangeLoggers, (e) =>
-			({
-				added: [...e.added].map(logger => this.transformLogger(logger, uriTransformer)),
-				removed: [...e.removed].map(logger => this.transformLogger(logger, uriTransformer)),
-			}));
-			case 'onDidChangeVisibility': return Event.map<[URI, boolean], [URI, boolean]>(this.loggerService.onDidChangeVisibility, e => [uriTransformer.transformOutgoingURI(e[0]), e[1]]);
-			case 'onDidChangeLogLevel': return Event.map<LogLevel | [URI, LogLevel], LogLevel | [URI, LogLevel]>(this.loggerService.onDidChangeLogLevel, e => isLogLevel(e) ? e : [uriTransformer.transformOutgoingURI(e[0]), e[1]]);
-		}
-		throw new Error(`Event not found: ${event}`);
-	}
-
-	async call(context: any, command: string, arg?: any): Promise<any> {
-		const uriTransformer: IURITransformer | null = this.getUriTransformer(context);
-		switch (command) {
-			case 'setLogLevel': return isLogLevel(arg[0]) ? this.loggerService.setLogLevel(arg[0]) : this.loggerService.setLogLevel(URI.revive(uriTransformer.transformIncoming(arg[0][0])), arg[0][1]);
-			case 'getRegisteredLoggers': return Promise.resolve([...this.loggerService.getRegisteredLoggers()].map(logger => this.transformLogger(logger, uriTransformer)));
-		}
-
-		throw new Error(`Call not found: ${command}`);
-	}
-
-	private transformLogger(logger: ILoggerResource, transformer: IURITransformer): ILoggerResource {
-		return {
-			...logger,
-			resource: transformer.transformOutgoingURI(logger.resource)
-		};
-	}
-
-}
-
-export class RemoteLoggerChannelClient extends Disposable {
-
-	constructor(loggerService: ILoggerService, channel: IChannel) {
-		super();
-
-		channel.call('setLogLevel', [loggerService.getLogLevel()]);
-		this._register(loggerService.onDidChangeLogLevel(arg => channel.call('setLogLevel', [arg])));
-
-		channel.call<ILoggerResource[]>('getRegisteredLoggers').then(loggers => {
-			for (const loggerResource of loggers) {
-				loggerService.registerLogger({ ...loggerResource, resource: URI.revive(loggerResource.resource) });
-			}
-		});
-
-		this._register(channel.listen<[URI, boolean]>('onDidChangeVisibility')(([resource, visibility]) => loggerService.setVisibility(URI.revive(resource), visibility)));
-
-		this._register(channel.listen<DidChangeLoggersEvent>('onDidChangeLoggers')(({ added, removed }) => {
-			for (const loggerResource of added) {
-				loggerService.registerLogger({ ...loggerResource, resource: URI.revive(loggerResource.resource) });
-			}
-			for (const loggerResource of removed) {
-				loggerService.deregisterLogger(loggerResource.resource);
-			}
-		}));
-
 	}
 }

@@ -14,13 +14,13 @@ import { ILogService } from '../../log/common/log.js';
 
 export const ILifecycleMainService = createDecorator<LifecycleMainService>('lifecycleMainService');
 
-export interface ShutdownEvent {
+interface ShutdownEvent {
 	/** Delays quitting until `promise` settles. Failures are logged, never block shutdown. */
 	join(id: string, promise: Promise<unknown>): void;
 }
 
 /** Exit code that asks the development runner to start the application again. */
-export const DEVELOPMENT_RELAUNCH_EXIT_CODE = 42;
+const DEVELOPMENT_RELAUNCH_EXIT_CODE = 42;
 
 /**
  * Owns quitting and relaunching. Services that hold external resources join

@@ -4,9 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CharCode } from './charCode.js';
-import { LRUCache } from './map.js';
-import { getKoreanAltChars } from './naturalLanguage/korean.js';
-import { tryNormalizeToBase } from './normalization.js';
 import * as strings from './strings.js';
 
 export interface IFilter {
@@ -21,27 +18,8 @@ export interface IMatch {
 
 // Combined filters
 
-/**
- * @returns A filter which combines the provided set
- * of filters with an or. The *first* filters that
- * matches defined the return value of the returned
- * filter.
- */
-export function or(...filter: IFilter[]): IFilter {
-	return function (word: string, wordToMatchAgainst: string): IMatch[] | null {
-		for (let i = 0, len = filter.length; i < len; i++) {
-			const match = filter[i](word, wordToMatchAgainst);
-			if (match) {
-				return match;
-			}
-		}
-		return null;
-	};
-}
-
 // Prefix
 
-export const matchesStrictPrefix: IFilter = _matchesPrefix.bind(undefined, false);
 export const matchesPrefix: IFilter = _matchesPrefix.bind(undefined, true);
 
 function _matchesPrefix(ignoreCase: boolean, word: string, wordToMatchAgainst: string): IMatch[] | null {
@@ -65,84 +43,9 @@ function _matchesPrefix(ignoreCase: boolean, word: string, wordToMatchAgainst: s
 
 // Contiguous Substring
 
-export function matchesContiguousSubString(word: string, wordToMatchAgainst: string): IMatch[] | null {
-	if (word.length > wordToMatchAgainst.length) {
-		return null;
-	}
-
-	const index = wordToMatchAgainst.toLowerCase().indexOf(word.toLowerCase());
-	if (index === -1) {
-		return null;
-	}
-
-	return [{ start: index, end: index + word.length }];
-}
-
-export function matchesBaseContiguousSubString(word: string, wordToMatchAgainst: string): IMatch[] | null {
-	if (word.length > wordToMatchAgainst.length) {
-		return null;
-	}
-
-	word = tryNormalizeToBase(word);
-	wordToMatchAgainst = tryNormalizeToBase(wordToMatchAgainst);
-	const index = wordToMatchAgainst.indexOf(word);
-	if (index === -1) {
-		return null;
-	}
-
-	return [{ start: index, end: index + word.length }];
-}
-
 // Substring
 
-export function matchesSubString(word: string, wordToMatchAgainst: string): IMatch[] | null {
-	if (word.length > wordToMatchAgainst.length) {
-		return null;
-	}
-
-	return _matchesSubString(word.toLowerCase(), wordToMatchAgainst.toLowerCase(), 0, 0);
-}
-
-function _matchesSubString(word: string, wordToMatchAgainst: string, i: number, j: number): IMatch[] | null {
-	if (i === word.length) {
-		return [];
-	} else if (j === wordToMatchAgainst.length) {
-		return null;
-	} else {
-		if (word[i] === wordToMatchAgainst[j]) {
-			let result: IMatch[] | null = null;
-			if (result = _matchesSubString(word, wordToMatchAgainst, i + 1, j + 1)) {
-				return join({ start: j, end: j + 1 }, result);
-			}
-			return null;
-		}
-
-		return _matchesSubString(word, wordToMatchAgainst, i, j + 1);
-	}
-}
-
 // CamelCase
-
-function isLower(code: number): boolean {
-	return CharCode.a <= code && code <= CharCode.z;
-}
-
-export function isUpper(code: number): boolean {
-	return CharCode.A <= code && code <= CharCode.Z;
-}
-
-function isNumber(code: number): boolean {
-	return CharCode.Digit0 <= code && code <= CharCode.Digit9;
-}
-
-function isWhitespace(code: number): boolean {
-	return (
-		code === CharCode.Space
-		|| code === CharCode.Tab
-		|| code === CharCode.LineFeed
-		|| code === CharCode.CarriageReturn
-	);
-}
 
 const wordSeparators = new Set<number>();
 // These are chosen as natural word separators based on written text.
@@ -151,332 +54,12 @@ const wordSeparators = new Set<number>();
 	.split('')
 	.forEach(s => wordSeparators.add(s.charCodeAt(0)));
 
-function isWordSeparator(code: number): boolean {
-	return isWhitespace(code) || wordSeparators.has(code);
-}
-
-function charactersMatch(codeA: number, codeB: number): boolean {
-	return (codeA === codeB) || (isWordSeparator(codeA) && isWordSeparator(codeB));
-}
-
-const alternateCharsCache: Map<number, ArrayLike<number> | undefined> = new Map();
-/**
- * Gets alternative codes to the character code passed in. This comes in the
- * form of an array of character codes, all of which must match _in order_ to
- * successfully match.
- *
- * @param code The character code to check.
- */
-function getAlternateCodes(code: number): ArrayLike<number> | undefined {
-	if (alternateCharsCache.has(code)) {
-		return alternateCharsCache.get(code);
-	}
-
-	// NOTE: This function is written in such a way that it can be extended in
-	// the future, but right now the return type takes into account it's only
-	// supported by a single "alt codes provider".
-	// `ArrayLike<ArrayLike<number>>` is a more appropriate type if changed.
-	let result: ArrayLike<number> | undefined;
-	const codes = getKoreanAltChars(code);
-	if (codes) {
-		result = codes;
-	}
-
-	alternateCharsCache.set(code, result);
-	return result;
-}
-
-function isAlphanumeric(code: number): boolean {
-	return isLower(code) || isUpper(code) || isNumber(code);
-}
-
-function join(head: IMatch, tail: IMatch[]): IMatch[] {
-	if (tail.length === 0) {
-		tail = [head];
-	} else if (head.end === tail[0].start) {
-		tail[0].start = head.start;
-	} else {
-		tail.unshift(head);
-	}
-	return tail;
-}
-
-function nextAnchor(camelCaseWord: string, start: number): number {
-	for (let i = start; i < camelCaseWord.length; i++) {
-		const c = camelCaseWord.charCodeAt(i);
-		if (isUpper(c) || isNumber(c) || (i > 0 && !isAlphanumeric(camelCaseWord.charCodeAt(i - 1)))) {
-			return i;
-		}
-	}
-	return camelCaseWord.length;
-}
-
-function _matchesCamelCase(word: string, camelCaseWord: string, i: number, j: number): IMatch[] | null {
-	if (i === word.length) {
-		return [];
-	} else if (j === camelCaseWord.length) {
-		return null;
-	} else if (word[i] !== camelCaseWord[j].toLowerCase()) {
-		return null;
-	} else {
-		let result: IMatch[] | null = null;
-		let nextUpperIndex = j + 1;
-		result = _matchesCamelCase(word, camelCaseWord, i + 1, j + 1);
-		while (!result && (nextUpperIndex = nextAnchor(camelCaseWord, nextUpperIndex)) < camelCaseWord.length) {
-			result = _matchesCamelCase(word, camelCaseWord, i + 1, nextUpperIndex);
-			nextUpperIndex++;
-		}
-		return result === null ? null : join({ start: j, end: j + 1 }, result);
-	}
-}
-
-interface ICamelCaseAnalysis {
-	upperPercent: number;
-	lowerPercent: number;
-	alphaPercent: number;
-	numericPercent: number;
-}
-
-// Heuristic to avoid computing camel case matcher for words that don't
-// look like camelCaseWords.
-function analyzeCamelCaseWord(word: string): ICamelCaseAnalysis {
-	let upper = 0, lower = 0, alpha = 0, numeric = 0, code = 0;
-
-	for (let i = 0; i < word.length; i++) {
-		code = word.charCodeAt(i);
-
-		if (isUpper(code)) { upper++; }
-		if (isLower(code)) { lower++; }
-		if (isAlphanumeric(code)) { alpha++; }
-		if (isNumber(code)) { numeric++; }
-	}
-
-	const upperPercent = upper / word.length;
-	const lowerPercent = lower / word.length;
-	const alphaPercent = alpha / word.length;
-	const numericPercent = numeric / word.length;
-
-	return { upperPercent, lowerPercent, alphaPercent, numericPercent };
-}
-
-function isUpperCaseWord(analysis: ICamelCaseAnalysis): boolean {
-	const { upperPercent, lowerPercent } = analysis;
-	return lowerPercent === 0 && upperPercent > 0.6;
-}
-
-function isCamelCaseWord(analysis: ICamelCaseAnalysis): boolean {
-	const { upperPercent, lowerPercent, alphaPercent, numericPercent } = analysis;
-	return lowerPercent > 0.2 && upperPercent < 0.8 && alphaPercent > 0.6 && numericPercent < 0.2;
-}
-
-// Heuristic to avoid computing camel case matcher for words that don't
-// look like camel case patterns.
-function isCamelCasePattern(word: string): boolean {
-	let upper = 0, lower = 0, code = 0, whitespace = 0;
-
-	for (let i = 0; i < word.length; i++) {
-		code = word.charCodeAt(i);
-
-		if (isUpper(code)) { upper++; }
-		if (isLower(code)) { lower++; }
-		if (isWhitespace(code)) { whitespace++; }
-	}
-
-	if ((upper === 0 || lower === 0) && whitespace === 0) {
-		return word.length <= 30;
-	} else {
-		return upper <= 5;
-	}
-}
-
-export function matchesCamelCase(word: string, camelCaseWord: string): IMatch[] | null {
-	if (!camelCaseWord) {
-		return null;
-	}
-
-	camelCaseWord = camelCaseWord.trim();
-
-	if (camelCaseWord.length === 0) {
-		return null;
-	}
-
-	if (!isCamelCasePattern(word)) {
-		return null;
-	}
-
-	// TODO: Consider removing this check
-	if (camelCaseWord.length > 60) {
-		camelCaseWord = camelCaseWord.substring(0, 60);
-	}
-
-	const analysis = analyzeCamelCaseWord(camelCaseWord);
-
-	if (!isCamelCaseWord(analysis)) {
-		if (!isUpperCaseWord(analysis)) {
-			return null;
-		}
-
-		camelCaseWord = camelCaseWord.toLowerCase();
-	}
-
-	let result: IMatch[] | null = null;
-	let i = 0;
-
-	word = word.toLowerCase();
-	while (i < camelCaseWord.length && (result = _matchesCamelCase(word, camelCaseWord, 0, i)) === null) {
-		i = nextAnchor(camelCaseWord, i + 1);
-	}
-
-	return result;
-}
-
 // Matches beginning of words supporting non-ASCII languages
 // If `contiguous` is true then matches word with beginnings of the words in the target. E.g. "pul" will match "Git: Pull"
 // Otherwise also matches sub string of the word with beginnings of the words in the target. E.g. "gp" or "g p" will match "Git: Pull"
 // Useful in cases where the target is words (e.g. command labels)
 
-export function matchesWords(word: string, target: string, contiguous: boolean = false): IMatch[] | null {
-	if (!target || target.length === 0) {
-		return null;
-	}
-
-	let result: IMatch[] | null = null;
-	let targetIndex = 0;
-
-	word = tryNormalizeToBase(word);
-	target = tryNormalizeToBase(target);
-	// Memoize recursive calls within a single top-level invocation. Because word
-	// separators are treated as an equivalence class by `charactersMatch`, the
-	// recursion in `_matchesWords` can otherwise explode exponentially for inputs
-	// like `editor.action` against targets that contain many separators.
-	const memo = new Map<number, IMatch[] | null>();
-	while (targetIndex < target.length) {
-		result = _matchesWords(word, target, 0, targetIndex, contiguous, memo);
-		if (result !== null) {
-			break;
-		}
-		targetIndex = nextWord(target, targetIndex + 1);
-	}
-
-	return result;
-}
-
-function cloneMatches(matches: IMatch[] | null): IMatch[] | null {
-	if (matches === null) {
-		return null;
-	}
-	const result: IMatch[] = [];
-	for (const m of matches) {
-		result.push({ start: m.start, end: m.end });
-	}
-	return result;
-}
-
-function _matchesWords(word: string, target: string, wordIndex: number, targetIndex: number, contiguous: boolean, memo: Map<number, IMatch[] | null>): IMatch[] | null {
-	if (wordIndex === word.length) {
-		return [];
-	} else if (targetIndex === target.length) {
-		return null;
-	}
-
-	const memoKey = wordIndex * (target.length + 1) + targetIndex;
-	const cached = memo.get(memoKey);
-	if (cached !== undefined) {
-		// Caller (`join`) mutates the returned array, so always return a clone.
-		return cloneMatches(cached);
-	}
-
-	const computed = _matchesWordsCompute(word, target, wordIndex, targetIndex, contiguous, memo);
-	memo.set(memoKey, cloneMatches(computed));
-	return computed;
-}
-
-function _matchesWordsCompute(word: string, target: string, wordIndex: number, targetIndex: number, contiguous: boolean, memo: Map<number, IMatch[] | null>): IMatch[] | null {
-	let targetIndexOffset = 0;
-
-	if (!charactersMatch(word.charCodeAt(wordIndex), target.charCodeAt(targetIndex))) {
-		// Verify alternate characters before exiting
-		const altChars = getAlternateCodes(word.charCodeAt(wordIndex));
-		if (!altChars) {
-			return null;
-		}
-		for (let k = 0; k < altChars.length; k++) {
-			if (!charactersMatch(altChars[k], target.charCodeAt(targetIndex + k))) {
-				return null;
-			}
-		}
-		targetIndexOffset += altChars.length - 1;
-	}
-
-	let result: IMatch[] | null = null;
-	let nextWordIndex = targetIndex + targetIndexOffset + 1;
-	result = _matchesWords(word, target, wordIndex + 1, nextWordIndex, contiguous, memo);
-	if (!contiguous) {
-		while (!result && (nextWordIndex = nextWord(target, nextWordIndex)) < target.length) {
-			result = _matchesWords(word, target, wordIndex + 1, nextWordIndex, contiguous, memo);
-			nextWordIndex++;
-		}
-	}
-
-	if (!result) {
-		return null;
-	}
-
-	// If the characters don't exactly match, then they must be word separators (see charactersMatch(...)).
-	// We don't want to include this in the matches but we don't want to throw the target out all together so we return `result`.
-	if (word.charCodeAt(wordIndex) !== target.charCodeAt(targetIndex)) {
-		// Verify alternate characters before exiting
-		const altChars = getAlternateCodes(word.charCodeAt(wordIndex));
-		if (!altChars) {
-			return result;
-		}
-		for (let k = 0; k < altChars.length; k++) {
-			if (altChars[k] !== target.charCodeAt(targetIndex + k)) {
-				return result;
-			}
-		}
-	}
-
-	return join({ start: targetIndex, end: targetIndex + targetIndexOffset + 1 }, result);
-}
-
-function nextWord(word: string, start: number): number {
-	for (let i = start; i < word.length; i++) {
-		if (isWordSeparator(word.charCodeAt(i)) ||
-			(i > 0 && isWordSeparator(word.charCodeAt(i - 1)))) {
-			return i;
-		}
-	}
-	return word.length;
-}
-
 // Fuzzy
-
-const fuzzyContiguousFilter = or(matchesPrefix, matchesCamelCase, matchesContiguousSubString);
-const fuzzySeparateFilter = or(matchesPrefix, matchesCamelCase, matchesSubString);
-const fuzzyRegExpCache = new LRUCache<string, RegExp>(10000); // bounded to 10000 elements
-
-export function matchesFuzzy(word: string, wordToMatchAgainst: string, enableSeparateSubstringMatching = false): IMatch[] | null {
-	if (typeof word !== 'string' || typeof wordToMatchAgainst !== 'string') {
-		return null; // return early for invalid input
-	}
-
-	// Form RegExp for wildcard matches
-	let regexp = fuzzyRegExpCache.get(word);
-	if (!regexp) {
-		regexp = new RegExp(strings.convertSimple2RegExpPattern(word), 'i');
-		fuzzyRegExpCache.set(word, regexp);
-	}
-
-	// RegExp Filter
-	const match = regexp.exec(wordToMatchAgainst);
-	if (match) {
-		return [{ start: match.index, end: match.index + match[0].length }];
-	}
-
-	// Default Filter
-	return enableSeparateSubstringMatching ? fuzzySeparateFilter(word, wordToMatchAgainst) : fuzzyContiguousFilter(word, wordToMatchAgainst);
-}
 
 /**
  * Match pattern against word in a fuzzy way. As in IntelliSense and faster and more
@@ -485,17 +68,6 @@ export function matchesFuzzy(word: string, wordToMatchAgainst: string, enableSep
 export function matchesFuzzy2(pattern: string, word: string): IMatch[] | null {
 	const score = fuzzyScore(pattern, pattern.toLowerCase(), 0, word, word.toLowerCase(), 0, { firstMatchCanBeWeak: true, boostFullMatch: true });
 	return score ? createMatches(score) : null;
-}
-
-export function anyScore(pattern: string, lowPattern: string, patternPos: number, word: string, lowWord: string, wordPos: number): FuzzyScore {
-	const max = Math.min(13, pattern.length);
-	for (; patternPos < max; patternPos++) {
-		const result = fuzzyScore(pattern, lowPattern, patternPos, word, lowWord, wordPos, { firstMatchCanBeWeak: true, boostFullMatch: true });
-		if (result) {
-			return result;
-		}
-	}
-	return [0, wordPos];
 }
 
 //#region --- fuzzyScore ---
@@ -656,14 +228,6 @@ const enum Arrow { Diag = 1, Left = 2, LeftLeft = 3 }
 export type FuzzyScore = [score: number, wordStart: number, ...matches: number[]];
 
 export namespace FuzzyScore {
-	/**
-	 * No matches and value `-100`
-	 */
-	export const Default: FuzzyScore = ([-100, 0]);
-
-	export function isDefault(score?: FuzzyScore): score is [-100, 0] {
-		return !score || (score.length === 2 && score[0] === -100 && score[1] === 0);
-	}
 }
 
 export abstract class FuzzyScoreOptions {
@@ -674,10 +238,6 @@ export abstract class FuzzyScoreOptions {
 		readonly firstMatchCanBeWeak: boolean,
 		readonly boostFullMatch: boolean,
 	) { }
-}
-
-export interface FuzzyScorer {
-	(pattern: string, lowPattern: string, patternPos: number, word: string, lowWord: string, wordPos: number, options?: FuzzyScoreOptions): FuzzyScore | undefined;
 }
 
 export function fuzzyScore(pattern: string, patternLow: string, patternStart: number, word: string, wordLow: string, wordStart: number, options: FuzzyScoreOptions = FuzzyScoreOptions.default): FuzzyScore | undefined {
@@ -917,65 +477,5 @@ function _doScore(
 
 
 //#region --- graceful ---
-
-export function fuzzyScoreGracefulAggressive(pattern: string, lowPattern: string, patternPos: number, word: string, lowWord: string, wordPos: number, options?: FuzzyScoreOptions): FuzzyScore | undefined {
-	return fuzzyScoreWithPermutations(pattern, lowPattern, patternPos, word, lowWord, wordPos, true, options);
-}
-
-export function fuzzyScoreGraceful(pattern: string, lowPattern: string, patternPos: number, word: string, lowWord: string, wordPos: number, options?: FuzzyScoreOptions): FuzzyScore | undefined {
-	return fuzzyScoreWithPermutations(pattern, lowPattern, patternPos, word, lowWord, wordPos, false, options);
-}
-
-function fuzzyScoreWithPermutations(pattern: string, lowPattern: string, patternPos: number, word: string, lowWord: string, wordPos: number, aggressive: boolean, options?: FuzzyScoreOptions): FuzzyScore | undefined {
-	let top = fuzzyScore(pattern, lowPattern, patternPos, word, lowWord, wordPos, options);
-
-	if (top && !aggressive) {
-		// when using the original pattern yield a result we`
-		// return it unless we are aggressive and try to find
-		// a better alignment, e.g. `cno` -> `^co^ns^ole` or `^c^o^nsole`.
-		return top;
-	}
-
-	if (pattern.length >= 3) {
-		// When the pattern is long enough then try a few (max 7)
-		// permutations of the pattern to find a better match. The
-		// permutations only swap neighbouring characters, e.g
-		// `cnoso` becomes `conso`, `cnsoo`, `cnoos`.
-		const tries = Math.min(7, pattern.length - 1);
-		for (let movingPatternPos = patternPos + 1; movingPatternPos < tries; movingPatternPos++) {
-			const newPattern = nextTypoPermutation(pattern, movingPatternPos);
-			if (newPattern) {
-				const candidate = fuzzyScore(newPattern, newPattern.toLowerCase(), patternPos, word, lowWord, wordPos, options);
-				if (candidate) {
-					candidate[0] -= 3; // permutation penalty
-					if (!top || candidate[0] > top[0]) {
-						top = candidate;
-					}
-				}
-			}
-		}
-	}
-
-	return top;
-}
-
-function nextTypoPermutation(pattern: string, patternPos: number): string | undefined {
-
-	if (patternPos + 1 >= pattern.length) {
-		return undefined;
-	}
-
-	const swap1 = pattern[patternPos];
-	const swap2 = pattern[patternPos + 1];
-
-	if (swap1 === swap2) {
-		return undefined;
-	}
-
-	return pattern.slice(0, patternPos)
-		+ swap2
-		+ swap1
-		+ pattern.slice(patternPos + 2);
-}
 
 //#endregion

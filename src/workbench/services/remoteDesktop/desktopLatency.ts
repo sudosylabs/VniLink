@@ -20,7 +20,7 @@ export const latencyStages = ['host', 'queue', 'bridge', 'decode', 'draw'] as co
 export type LatencyStage = typeof latencyStages[number];
 
 /** Milliseconds, half of the stage's pictures at or below `p50`, nineteen in twenty at or below `p95`. */
-export interface StageLatency {
+interface StageLatency {
 	readonly p50: number;
 	readonly p95: number;
 	readonly count: number;

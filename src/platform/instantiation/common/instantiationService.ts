@@ -6,7 +6,7 @@
 import { GlobalIdleValue } from '../../../base/common/async.js';
 import { Event } from '../../../base/common/event.js';
 import { illegalState } from '../../../base/common/errors.js';
-import { DisposableStore, dispose, IDisposable, isDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { dispose, IDisposable, isDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { SyncDescriptor, SyncDescriptor0 } from './descriptors.js';
 import { Graph } from './graph.js';
 import { GetLeadingNonServiceArgs, IInstantiationService, ServiceIdentifier, ServicesAccessor, _util } from './instantiation.js';
@@ -68,22 +68,6 @@ export class InstantiationService implements IInstantiationService {
 		if (this._isDisposed) {
 			throw new Error('InstantiationService has been disposed');
 		}
-	}
-
-	createChild(services: ServiceCollection, store?: DisposableStore): IInstantiationService {
-		this._throwIfDisposed();
-
-		const that = this;
-		const result = new class extends InstantiationService {
-			override dispose(): void {
-				that._children.delete(result);
-				super.dispose();
-			}
-		}(services, this._strict, this, this._enableTracing);
-		this._children.add(result);
-
-		store?.add(result);
-		return result;
 	}
 
 	invokeFunction<R, TS extends any[] = []>(fn: (accessor: ServicesAccessor, ...args: TS) => R, ...args: TS): R {

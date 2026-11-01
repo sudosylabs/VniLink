@@ -48,20 +48,6 @@ class ValidatedIpcMain implements Event.NodeEventEmitter {
 	}
 
 	/**
-	 * Adds a one time `listener` function for the event. This `listener` is invoked
-	 * only the next time a message is sent to `channel`, after which it is removed.
-	 */
-	once(channel: string, listener: ipcMainListener): this {
-		electron.ipcMain.once(channel, (event: electron.IpcMainEvent, ...args: unknown[]) => {
-			if (this.validateEvent(channel, event)) {
-				listener(event, ...args);
-			}
-		});
-
-		return this;
-	}
-
-	/**
 	 * Adds a handler for an `invoke`able IPC. This handler will be called whenever a
 	 * renderer calls `ipcRenderer.invoke(channel, ...args)`.
 	 *

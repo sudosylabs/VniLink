@@ -22,8 +22,6 @@ import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js'
 import { ConfigurationChannel } from '../../platform/configuration/electron-main/configurationChannel.js';
 import { ConfigurationMainService, IConfigurationMainService } from '../../platform/configuration/electron-main/configurationMainService.js';
 import { launchedAtLogin } from '../../platform/configuration/electron-main/systemSettings.js';
-import { IEncryptionMainService } from '../../platform/encryption/common/encryption.js';
-import { EncryptionMainService } from '../../platform/encryption/electron-main/encryptionMainService.js';
 import { ENGINE_CHANNEL_NAME } from '../../platform/engine/common/engineService.js';
 import { EngineChannel } from '../../platform/engine/electron-main/engineChannel.js';
 import { EngineMainService, IEngineMainService } from '../../platform/engine/electron-main/engineMainService.js';
@@ -64,7 +62,7 @@ import { IWindowsMainService, WindowsMainService } from '../../platform/windows/
 import { registerDevelopmentWindow } from './development.js';
 import { contentSecurityPolicy, secureWebContents } from './webContentsSecurity.js';
 
-export interface ApplicationOptions {
+interface ApplicationOptions {
 	readonly showWindow?: boolean;
 	readonly temporaryEngine?: boolean;
 	/** Lets the temporary engine host this computer's screen, for the latency measurement. */
@@ -126,7 +124,6 @@ export class VniLinkApplication extends Disposable {
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
-			[IEncryptionMainService, new SyncDescriptor(EncryptionMainService)],
 			[IStateService, this.stateService],
 		);
 	}

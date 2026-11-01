@@ -3,70 +3,16 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IObservable, ITransaction } from '../base.js';
+import { ITransaction } from '../base.js';
 import { subtransaction } from '../transaction.js';
-import { EqualityComparer, Event, IDisposable, strictEquals } from '../commonFacade/deps.js';
-import { DebugOwner, DebugNameData, IDebugNameData } from '../debugName.js';
+import { EqualityComparer, Event, IDisposable } from '../commonFacade/deps.js';
+import { DebugNameData } from '../debugName.js';
 import { getLogger } from '../logging/logging.js';
 import { BaseObservable } from './baseObservable.js';
 import { DebugLocation } from '../debugLocation.js';
 
 
-export function observableFromEvent<T, TArgs = unknown>(
-	owner: DebugOwner,
-	event: Event<TArgs>,
-	getValue: (args: TArgs | undefined) => T,
-	debugLocation?: DebugLocation,
-): IObservable<T>;
-export function observableFromEvent<T, TArgs = unknown>(
-	event: Event<TArgs>,
-	getValue: (args: TArgs | undefined) => T,
-): IObservable<T>;
-export function observableFromEvent(...args:
-	[owner: DebugOwner, event: Event<any>, getValue: (args: any | undefined) => any, debugLocation?: DebugLocation] |
-	[event: Event<any>, getValue: (args: any | undefined) => any]
-): IObservable<any> {
-	let owner;
-	let event;
-	let getValue;
-	let debugLocation;
-	if (args.length === 2) {
-		[event, getValue] = args;
-	} else {
-		[owner, event, getValue, debugLocation] = args;
-	}
-	return new FromEventObservable(
-		new DebugNameData(owner, undefined, getValue),
-		event,
-		getValue,
-		() => FromEventObservable.globalTransaction,
-		strictEquals,
-		debugLocation ?? DebugLocation.ofCaller()
-	);
-}
-
-export function observableFromEventOpts<T, TArgs = unknown>(
-	options: IDebugNameData & {
-		equalsFn?: EqualityComparer<T>;
-		getTransaction?: () => ITransaction | undefined;
-	},
-	event: Event<TArgs>,
-	getValue: (args: TArgs | undefined) => T,
-	debugLocation = DebugLocation.ofCaller()
-): IObservable<T> {
-	return new FromEventObservable(
-		new DebugNameData(options.owner, options.debugName, options.debugReferenceFn ?? getValue),
-		event,
-		getValue,
-		() => options.getTransaction?.() ?? FromEventObservable.globalTransaction,
-		options.equalsFn ?? strictEquals,
-		debugLocation
-	);
-}
-
 export class FromEventObservable<TArgs, T> extends BaseObservable<T> {
-	public static globalTransaction: ITransaction | undefined;
-
 	private _value: T | undefined;
 	private _hasValue = false;
 	private _subscription: IDisposable | undefined;
@@ -159,24 +105,5 @@ export class FromEventObservable<TArgs, T> extends BaseObservable<T> {
 
 	public debugGetState() {
 		return { value: this._value, hasValue: this._hasValue };
-	}
-}
-
-export namespace observableFromEvent {
-	export const Observer = FromEventObservable;
-
-	export function batchEventsGlobally(tx: ITransaction, fn: () => void): void {
-		let didSet = false;
-		if (FromEventObservable.globalTransaction === undefined) {
-			FromEventObservable.globalTransaction = tx;
-			didSet = true;
-		}
-		try {
-			fn();
-		} finally {
-			if (didSet) {
-				FromEventObservable.globalTransaction = undefined;
-			}
-		}
 	}
 }

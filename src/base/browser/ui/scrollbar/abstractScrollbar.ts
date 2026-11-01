@@ -20,7 +20,6 @@ import { INewScrollPosition, Scrollable, ScrollbarVisibility } from '../../../co
 const POINTER_DRAG_RESET_DISTANCE = 140;
 
 export interface ISimplifiedPointerEvent {
-	buttons: number;
 	pageX: number;
 	pageY: number;
 }
@@ -187,23 +186,6 @@ export abstract class AbstractScrollbar extends Widget {
 			return;
 		}
 		this._onPointerDown(e);
-	}
-
-	public delegatePointerDown(e: PointerEvent): void {
-		const domTop = this.domNode.domNode.getClientRects()[0].top;
-		const sliderStart = domTop + this._scrollbarState.getSliderPosition();
-		const sliderStop = domTop + this._scrollbarState.getSliderPosition() + this._scrollbarState.getSliderSize();
-		const pointerPos = this._sliderPointerPosition(e);
-		if (sliderStart <= pointerPos && pointerPos <= sliderStop) {
-			// Act as if it was a pointer down on the slider
-			if (e.button === 0) {
-				e.preventDefault();
-				this._sliderPointerDown(e);
-			}
-		} else {
-			// Act as if it was a pointer down on the scrollbar
-			this._onPointerDown(e);
-		}
 	}
 
 	private _onPointerDown(e: PointerEvent): void {

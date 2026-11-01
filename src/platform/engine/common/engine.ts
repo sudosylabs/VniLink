@@ -7,7 +7,7 @@
 
 import { isFileName, isFilePage, isFilePath, isFilePlaces, isFileTarget, isFileToken, type FilePage, type FilePlaces, type FileTarget, type FileToken } from './files.js';
 
-export interface Grants { view: boolean; control: boolean; clipboard: boolean; transfer: boolean; }
+interface Grants { view: boolean; control: boolean; clipboard: boolean; transfer: boolean; }
 
 export type OperatingSystem = 'macos' | 'windows' | 'linux' | 'other';
 
@@ -51,7 +51,7 @@ export interface SharingPolicy {
 	system_actions: boolean;
 }
 
-export interface Device {
+interface Device {
 	os: OperatingSystem | null;
 	presence: DevicePresence;
 	endpoint_id: string;
@@ -67,14 +67,14 @@ export function deviceName(device: Pick<Device, 'pet_name' | 'hostname' | 'endpo
 	return device.pet_name ?? device.hostname ?? device.endpoint_id;
 }
 
-export interface Capabilities {
+interface Capabilities {
 	desktop_capture: boolean; keyboard: boolean; pointer: boolean; clipboard: boolean; file_transfer: boolean;
 	audio: boolean; monitors: number; h264_encode: boolean; h264_decode: boolean;
 }
 
 export interface SessionInfo { id: string; generation: string; role: 'Controller' | 'Host'; phase: string | { Failed: { message: string } }; peer_id: string; }
 
-export interface PointerSettings { sensitivity_percent: number; reverse_wheel: boolean; swap_buttons: boolean; }
+interface PointerSettings { sensitivity_percent: number; reverse_wheel: boolean; swap_buttons: boolean; }
 
 export interface DisplayInfo {
 	id: string;
@@ -97,9 +97,9 @@ export interface VideoCodecCaps {
 
 export interface RelayInput { url: string; authenticated: boolean; replacementToken: string; }
 
-export type ServiceKind = 'Desktop' | 'Files' | 'Terminal' | 'Camera' | 'SystemAudio' | 'Microphone' | 'System' | 'ScreenSnapshot';
+type ServiceKind = 'Desktop' | 'Files' | 'Terminal' | 'Camera' | 'SystemAudio' | 'Microphone' | 'System' | 'ScreenSnapshot';
 
-export interface ServiceSummary {
+interface ServiceSummary {
 	id: string; connectionId: string; generation: string; peer_id: string;
 	kind: ServiceKind;
 	/** A `Failed` close says what failed in this computer's own producer. */
@@ -116,12 +116,12 @@ export interface TerminalPolicy {
 }
 
 /** A shell this computer can offer to paired computers, by the id its user picks it with. */
-export interface TerminalShell { id: string; label: string }
+interface TerminalShell { id: string; label: string }
 
 /** The shells this computer can offer, what automatic resolves to, and the one offered now. */
 export interface TerminalShells { shells: TerminalShell[]; automatic: string; current: string | null }
 
-export interface TerminalSession {
+interface TerminalSession {
 	id: string; process_id: number; shell: string; rows: number; columns: number;
 	persistent: boolean; attached: boolean;
 }
@@ -150,7 +150,7 @@ export type EngineEvent =
 
 export type SessionPhase = string | { Failed: { message: string } };
 
-export interface SessionPath { relay: boolean; selected: boolean; rtt_ms: string; tx_bytes: string; rx_bytes: string; }
+interface SessionPath { relay: boolean; selected: boolean; rtt_ms: string; tx_bytes: string; rx_bytes: string; }
 
 export type VideoCodec = 'h264' | 'h265' | 'vp8' | 'vp9' | 'av1';
 
@@ -179,7 +179,7 @@ export interface RelayInfo { url: string; authenticated: boolean; }
 
 export interface ControlRequestInfo { endpoint_id: string; }
 
-export interface EngineSnapshot {
+interface EngineSnapshot {
 	endpoint_id: string;
 	hosting: boolean;
 	public_relay: boolean;
@@ -405,10 +405,6 @@ function displays(value: unknown): value is DisplayInfo[] {
 	return Array.isArray(value) && value.length <= 16 && value.every((item: unknown) => display(item));
 }
 
-export function equalQualityLimits(a: Readonly<QualityLimits>, b: Readonly<QualityLimits>): boolean {
-	return a.max_bitrate_kbps === b.max_bitrate_kbps && a.max_frame_rate === b.max_frame_rate && a.max_width === b.max_width && a.max_height === b.max_height;
-}
-
 export function isQualityLimits(value: unknown): value is QualityLimits {
 	return record(value) && int(value.max_bitrate_kbps, 1, 50000) && int(value.max_frame_rate, 1, 60) && int(value.max_width, 1, 7680)
 		&& int(value.max_height, 1, 7680) && Object.keys(value).length === 4;
@@ -438,7 +434,7 @@ function systemPolicy(value: unknown): value is SystemPolicy {
 
 export type SystemActionKind = 'lock' | 'restart' | 'shutdown';
 
-export type SystemOperationState = 'admitted' | 'refused' | 'executed' | 'failed' | 'scheduled' | 'cancelled';
+type SystemOperationState = 'admitted' | 'refused' | 'executed' | 'failed' | 'scheduled' | 'cancelled';
 
 /** One lock, restart or shutdown asked of a paired computer, as it stands. */
 export interface SystemOperation {
@@ -458,7 +454,7 @@ export interface SystemPrivacy {
 }
 
 /** A restart or shutdown counting down on this computer. */
-export interface ScheduledSystemAction {
+interface ScheduledSystemAction {
 	readonly id: string;
 	readonly action: 'restart' | 'shutdown';
 	readonly endpoint_id: string;
@@ -649,7 +645,7 @@ function session(value: unknown): value is SessionInfo | null {
 }
 
 /** The engine's export cap for a diagnostic snapshot, `MAX_EXPORT_BYTES`. */
-export const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
+const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 
 /** A diagnostic snapshot as the engine exports it: one JSON object within the cap, naming its schema version. */
 function diagnosticSnapshot(value: unknown): value is string {
@@ -664,13 +660,13 @@ function diagnosticSnapshot(value: unknown): value is string {
 	}
 }
 
-export type LogFilterSource = 'environment' | 'setting' | 'default';
+type LogFilterSource = 'environment' | 'setting' | 'default';
 
 /** The longest log filter the engine accepts, `vnilink_log::MAX_FILTER_BYTES`. */
 export const MAX_LOG_FILTER_BYTES = 1024;
 
 /** The most of its log file the engine returns, `MAX_LOG_TAIL` in the bridge. */
-export const MAX_ENGINE_LOG_TAIL = 256 * 1024;
+const MAX_ENGINE_LOG_TAIL = 256 * 1024;
 
 function utf8Length(value: string): number {
 	return new TextEncoder().encode(value).length;
@@ -685,7 +681,7 @@ function logFilterSource(value: unknown): value is LogFilterSource {
 }
 
 /** The engine's export cap for its flight recorder, `vnilink_log::MAX_EXPORT_BYTES`. */
-export const MAX_RECORDER_BYTES = 4 * 1024 * 1024;
+const MAX_RECORDER_BYTES = 4 * 1024 * 1024;
 
 /** The flight recorder as the engine exports it: JSON lines within the cap, each one object. */
 function diagnosticRecorder(value: unknown): value is string {
@@ -901,7 +897,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 
 export const nativeCapabilityNames = ['desktopView', 'desktopControl', 'clipboard', 'files', 'terminal', 'camera', 'systemAudio', 'microphone', 'lock', 'restart', 'shutdown', 'privacy', 'recording'] as const;
 
-export type NativeCapabilityName = typeof nativeCapabilityNames[number];
+type NativeCapabilityName = typeof nativeCapabilityNames[number];
 
 export interface NativeBackend { readonly name: string; readonly ready: boolean; readonly error: string | null; }
 
@@ -971,10 +967,6 @@ export interface NativeScreenSource {
 
 export function isNativeScreenSource(value: unknown): value is NativeScreenSource {
 	return record(value) && typeof value.displayId === 'number' && uint(value.displayId, 4294967295) && value.displayId > 0 && [value.width, value.height, value.pixelWidth, value.pixelHeight].every(size => typeof size === 'number' && uint(size, 65535) && size >= 2) && Object.keys(value).length === 5;
-}
-
-export function isNativeScreenSources(value: unknown): value is NativeScreenSource[] {
-	return Array.isArray(value) && value.length <= 16 && value.every(isNativeScreenSource);
 }
 
 export type CodecPreference = 'auto' | VideoCodec;

@@ -70,7 +70,7 @@ type SortColumn = 'name' | 'modified' | 'size';
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** Folders first, then by the chosen column, names in natural order. */
-export function sortEntries(entries: readonly FileEntry[], column: SortColumn, descending: boolean): FileEntry[] {
+function sortEntries(entries: readonly FileEntry[], column: SortColumn, descending: boolean): FileEntry[] {
 	const folder = (entry: FileEntry) => entry.kind === 'dir' ? 0 : 1;
 	const compare = (a: FileEntry, b: FileEntry): number => {
 		switch (column) {
@@ -83,7 +83,7 @@ export function sortEntries(entries: readonly FileEntry[], column: SortColumn, d
 }
 
 /** A name not yet in `taken`: "New Folder", then "New Folder 2". */
-export function freshName(base: string, taken: readonly string[]): string {
+function freshName(base: string, taken: readonly string[]): string {
 	const names = new Set(taken.map(name => name.toLocaleLowerCase()));
 	if (!names.has(base.toLocaleLowerCase())) {
 		return base;

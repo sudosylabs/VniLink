@@ -7,9 +7,9 @@
 
 import { record } from './engine.js';
 
-export type DataChannelKind = 'video' | 'terminal' | 'input' | 'files' | 'camera' | 'audio' | 'snapshot';
+type DataChannelKind = 'video' | 'terminal' | 'input' | 'files' | 'camera' | 'audio' | 'snapshot';
 
-export type MediaChannelConfig = { readonly type: 'camera'; readonly deviceId: string; readonly width: number; readonly height: number; readonly fps: number } | { readonly type: 'audio'; readonly deviceId: string; readonly sourceKind: 'Microphone' | 'System'; readonly channels: 1 | 2; readonly voice: boolean } | { readonly type: 'snapshot'; readonly prompt: boolean; readonly access: boolean };
+type MediaChannelConfig = { readonly type: 'camera'; readonly deviceId: string; readonly width: number; readonly height: number; readonly fps: number } | { readonly type: 'audio'; readonly deviceId: string; readonly sourceKind: 'Microphone' | 'System'; readonly channels: 1 | 2; readonly voice: boolean } | { readonly type: 'snapshot'; readonly prompt: boolean; readonly access: boolean };
 
 export interface DataChannelRequest {
 	media?: MediaChannelConfig;
@@ -79,11 +79,11 @@ export function isDataPacket(value: unknown): value is DataPacket {
 /** File operations on a `files` channel; see `files.ts`. */
 export const MAX_FILE_OPERATIONS = 4;
 
-export function isSnapshotMedia(value: unknown): value is { type: 'snapshot'; prompt: boolean; access: boolean } {
+function isSnapshotMedia(value: unknown): value is { type: 'snapshot'; prompt: boolean; access: boolean } {
 	return record(value) && Object.keys(value).length === 3 && value.type === 'snapshot' && typeof value.prompt === 'boolean' && typeof value.access === 'boolean';
 }
 
-export function isMediaChannelConfig(value: unknown): value is MediaChannelConfig {
+function isMediaChannelConfig(value: unknown): value is MediaChannelConfig {
 	if (!record(value) || typeof value.deviceId !== 'string' || value.deviceId.length === 0 || value.deviceId.length > 256 || value.deviceId.includes('\0') || Object.keys(value).length !== 5) {
 		return false;
 	}
@@ -112,13 +112,13 @@ export type DesktopCondition =
 	| 'encoder.slow' | 'decoder.slow' | 'decoder.recovering' | 'encoder.software' | 'decoder.software' | 'relay.path';
 
 /** Every condition, from the most to the least severe: the engine's order. */
-export const desktopConditions: readonly DesktopCondition[] = ['link.blackout', 'relay.backlog', 'link.congestion', 'link.loss', 'host.secureDesktop', 'encoder.slow', 'decoder.slow', 'decoder.recovering', 'encoder.software', 'decoder.software', 'relay.path'];
+const desktopConditions: readonly DesktopCondition[] = ['link.blackout', 'relay.backlog', 'link.congestion', 'link.loss', 'host.secureDesktop', 'encoder.slow', 'decoder.slow', 'decoder.recovering', 'encoder.software', 'decoder.software', 'relay.path'];
 
 /** What most holds a picture's bitrate where it is, as the engine names it; see `vnilink::RateLimit`. */
 export type DesktopRateLimit = 'none' | 'setting' | 'relay' | 'network' | 'encoder' | 'receiver';
 
 /** Every rate limit, as the engine names it. */
-export const desktopRateLimits: readonly DesktopRateLimit[] = ['none', 'setting', 'relay', 'network', 'encoder', 'receiver'];
+const desktopRateLimits: readonly DesktopRateLimit[] = ['none', 'setting', 'relay', 'network', 'encoder', 'receiver'];
 
 /** How a desktop picture is doing, from the engine's adaptation: what arrives, what waits, why the quality is where it is, and what is wrong. */
 export interface DesktopMediaStatus {
@@ -185,7 +185,7 @@ export interface DesktopCursorImage {
 }
 
 /** The largest pointer side the engine carries. */
-export const MAX_CURSOR_EDGE = 512;
+const MAX_CURSOR_EDGE = 512;
 
 function isCursorImage(value: unknown): value is DesktopCursorImage {
 	if (!record(value) || Object.keys(value).length !== 5 || !(value.pixels instanceof Uint8Array)) {

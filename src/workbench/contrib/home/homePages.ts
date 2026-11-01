@@ -28,7 +28,7 @@ export const enum HomePageGroup {
 	Settings = 'settings',
 }
 
-export interface IHomePageDescriptor {
+interface IHomePageDescriptor {
 	readonly id: string;
 	readonly group: HomePageGroup;
 	/** Position within the group; lower comes first. */

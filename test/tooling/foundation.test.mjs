@@ -23,13 +23,10 @@ const { BufferLogger } = await load('../../src/platform/log/common/bufferLog.ts'
 
 const { LogService } = await load('../../src/platform/log/common/logService.ts');
 
-const performance = await load('../../src/base/common/performance.ts');
-
-test('log levels parse, print and order like upstream', () => {
+test('log levels parse and order like upstream', () => {
 	assert.equal(log.parseLogLevel('trace'), log.LogLevel.Trace);
 	assert.equal(log.parseLogLevel('critical'), log.LogLevel.Error);
 	assert.equal(log.parseLogLevel('nope'), undefined);
-	assert.equal(log.LogLevelToString(log.LogLevel.Warning), 'warn');
 	assert.equal(log.DEFAULT_LOG_LEVEL, log.LogLevel.Info);
 	assert.ok(log.LogLevel.Trace < log.LogLevel.Debug && log.LogLevel.Debug < log.LogLevel.Error);
 });
@@ -86,15 +83,6 @@ test('native titlebar height resolves through platform utilities', async () => {
 		visit(join(root, rel));
 	}
 	assert.deepEqual(offenders, []);
-});
-
-test('performance marks record and clear', () => {
-	performance.mark('vnilink/test-mark');
-	const marks = performance.getMarks().filter(mark => mark.name === 'vnilink/test-mark');
-	assert.equal(marks.length, 1);
-	assert.ok(typeof marks[0].startTime === 'number');
-	performance.clearMarks('vnilink/test-mark');
-	assert.equal(performance.getMarks().filter(mark => mark.name === 'vnilink/test-mark').length, 0);
 });
 
 test('message logging preserves error arguments and falls back safely for circular values', () => {

@@ -48,10 +48,8 @@ export interface INativeHostService {
 	readonly onDidChangeWindowState: Event<IWindowState>;
 	getWindowState(): Promise<IWindowState>;
 	focusWindow(options?: ITargetWindowOptions): Promise<void>;
-	minimizeWindow(options?: ITargetWindowOptions): Promise<void>;
 	maximizeWindow(options?: ITargetWindowOptions): Promise<void>;
 	unmaximizeWindow(options?: ITargetWindowOptions): Promise<void>;
-	closeWindow(options?: ITargetWindowOptions): Promise<void>;
 	setFullScreen(fullscreen: boolean, options?: ITargetWindowOptions): Promise<void>;
 	/**
 	 * Whether a remote desktop in this window has the keyboard, so the
@@ -135,35 +133,6 @@ export function isPng(value: unknown): value is VSBuffer {
 
 function isClipboardType(value: unknown): boolean {
 	return value === undefined || value === 'selection' || value === 'clipboard';
-}
-
-export function isWindowState(value: unknown): value is IWindowState {
-	if (typeof value !== 'object' || value === null) {
-		return false;
-	}
-	return (
-		'windowId' in value &&
-		Number.isSafeInteger(value.windowId) &&
-		Number(value.windowId) > 0 &&
-		'revision' in value &&
-		Number.isSafeInteger(value.revision) &&
-		Number(value.revision) >= 0 &&
-		'focused' in value &&
-		typeof value.focused === 'boolean' &&
-		'maximized' in value &&
-		typeof value.maximized === 'boolean' &&
-		'fullscreen' in value &&
-		typeof value.fullscreen === 'boolean' &&
-		'alwaysOnTop' in value &&
-		typeof value.alwaysOnTop === 'boolean' &&
-		'zoomFactor' in value &&
-		typeof value.zoomFactor === 'number' &&
-		Number.isFinite(value.zoomFactor) &&
-		value.zoomFactor >= 0.25 &&
-		value.zoomFactor <= 5 &&
-		'backgroundMaterial' in value &&
-		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'glass' || value.backgroundMaterial === 'mica')
-	);
 }
 
 const messageBoxKeys = ['message', 'detail', 'type', 'buttons', 'defaultId', 'cancelId', 'title', 'noLink', 'checkboxLabel', 'checkboxChecked', 'targetWindowId'];

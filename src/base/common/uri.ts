@@ -431,17 +431,6 @@ export interface UriComponents {
 	fragment?: string;
 }
 
-export function isUriComponents(thing: unknown): thing is UriComponents {
-	if (!thing || typeof thing !== 'object') {
-		return false;
-	}
-	return typeof (<UriComponents>thing).scheme === 'string'
-		&& (typeof (<UriComponents>thing).authority === 'string' || typeof (<UriComponents>thing).authority === 'undefined')
-		&& (typeof (<UriComponents>thing).path === 'string' || typeof (<UriComponents>thing).path === 'undefined')
-		&& (typeof (<UriComponents>thing).query === 'string' || typeof (<UriComponents>thing).query === 'undefined')
-		&& (typeof (<UriComponents>thing).fragment === 'string' || typeof (<UriComponents>thing).fragment === 'undefined');
-}
-
 interface UriState extends UriComponents {
 	$mid: MarshalledId.Uri;
 	external?: string;
@@ -756,10 +745,3 @@ function percentDecode(str: string): string {
 	}
 	return str.replace(_rEncodedAsHex, (match) => decodeURIComponentGraceful(match));
 }
-
-/**
- * Mapped-type that replaces all occurrences of URI with UriComponents
- */
-export type UriDto<T> = { [K in keyof T]: T[K] extends URI
-	? UriComponents
-	: UriDto<T[K]> };

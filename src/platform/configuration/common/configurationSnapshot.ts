@@ -24,7 +24,7 @@ export interface ConfigurationSnapshot {
 	readonly restricted: readonly string[];
 }
 
-export interface ConfigurationUpdate {
+interface ConfigurationUpdate {
 	readonly key: string;
 	readonly value: unknown;
 }

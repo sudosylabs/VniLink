@@ -26,7 +26,7 @@ import { ContextMenuMenuDelegate, ContextMenuService as HTMLContextMenuService }
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { stripIcons } from '../../../../base/common/iconLabels.js';
 import { coalesce } from '../../../../base/common/arrays.js';
-import { type Event, Emitter } from '../../../../base/common/event.js';
+import { Emitter } from '../../../../base/common/event.js';
 import { AnchorAlignment, AnchorAxisAlignment, isAnchor } from '../../../../base/browser/ui/contextview/contextview.js';
 import { IMenuService } from '../../../../platform/actions/common/actions.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
@@ -40,9 +40,6 @@ export class ContextMenuService implements IContextMenuService {
 	declare readonly _serviceBrand: undefined;
 
 	private readonly impl: HTMLContextMenuService | NativeContextMenuService;
-
-	get onDidShowContextMenu(): Event<void> { return this.impl.onDidShowContextMenu; }
-	get onDidHideContextMenu(): Event<void> { return this.impl.onDidHideContextMenu; }
 
 	constructor(
 		@IContextViewService contextViewService: IContextViewService,
@@ -70,10 +67,8 @@ export class NativeContextMenuService extends Disposable implements IContextMenu
 	declare readonly _serviceBrand: undefined;
 
 	private readonly _onDidShowContextMenu = this._store.add(new Emitter<void>());
-	readonly onDidShowContextMenu = this._onDidShowContextMenu.event;
 
 	private readonly _onDidHideContextMenu = this._store.add(new Emitter<void>());
-	readonly onDidHideContextMenu = this._onDidHideContextMenu.event;
 
 	constructor(
 		private readonly menuPopup: typeof popup,

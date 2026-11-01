@@ -9,7 +9,7 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { IConnectionService, type RunningRelays } from './connectionService.js';
 
-export class ConnectionService implements IConnectionService {
+class ConnectionService implements IConnectionService {
 	declare public readonly _serviceBrand: undefined;
 
 	constructor(@IEngineService private readonly engine: IEngineService) { }

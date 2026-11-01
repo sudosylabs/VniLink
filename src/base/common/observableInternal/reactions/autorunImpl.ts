@@ -229,30 +229,8 @@ export class AutorunObserver<TChangeSummary = any> implements IObserver, IReader
 	}
 
 	private _store: DisposableStore | undefined = undefined;
-	get store(): DisposableStore {
-		this._ensureNoRunning();
-		if (this._disposed) {
-			throw new BugIndicatingError('Cannot access store after dispose');
-		}
-
-		if (this._store === undefined) {
-			this._store = new DisposableStore();
-		}
-		return this._store;
-	}
 
 	private _delayedStore: DisposableStore | undefined = undefined;
-	get delayedStore(): DisposableStore {
-		this._ensureNoRunning();
-		if (this._disposed) {
-			throw new BugIndicatingError('Cannot access store after dispose');
-		}
-
-		if (this._delayedStore === undefined) {
-			this._delayedStore = new DisposableStore();
-		}
-		return this._delayedStore;
-	}
 
 	public debugGetState() {
 		return {

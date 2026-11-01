@@ -95,25 +95,6 @@ export class LinkedList<E> {
 		}
 	}
 
-	pop(): E | undefined {
-		if (this._last === Node.Undefined) {
-			return undefined;
-		} else {
-			const res = this._last.element;
-			this._remove(this._last);
-			return res as E;
-		}
-	}
-
-	peek(): E | undefined {
-		if (this._last === Node.Undefined) {
-			return undefined;
-		} else {
-			const res = this._last.element;
-			return res as E;
-		}
-	}
-
 	private _remove(node: Node<E> | typeof Node.Undefined): void {
 		if (node.prev !== Node.Undefined && node.next !== Node.Undefined) {
 			// middle

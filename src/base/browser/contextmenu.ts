@@ -12,10 +12,6 @@ import { ResolvedKeybinding } from '../common/keybindings.js';
 import { OmitOptional } from '../common/types.js';
 
 export interface IContextMenuEvent {
-	readonly shiftKey?: boolean;
-	readonly ctrlKey?: boolean;
-	readonly altKey?: boolean;
-	readonly metaKey?: boolean;
 }
 
 /**
@@ -42,7 +38,6 @@ export interface IContextMenuDelegate {
 	onHide?(didCancel: boolean): void;
 	closeAnimation?: IContextViewCloseAnimation;
 	actionRunner?: IActionRunner;
-	skipTelemetry?: boolean;
 	autoSelectFirstItem?: boolean;
 	anchorAlignment?: AnchorAlignment;
 	anchorAxisAlignment?: AnchorAxisAlignment;

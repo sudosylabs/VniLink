@@ -3,9 +3,7 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DisposableStore } from '../../../base/common/lifecycle.js';
 import * as descriptors from './descriptors.js';
-import { ServiceCollection } from './serviceCollection.js';
 
 // ------ internal util
 
@@ -63,15 +61,6 @@ export interface IInstantiationService {
 	 * Calls a function with a service accessor.
 	 */
 	invokeFunction<R, TS extends any[] = []>(fn: (accessor: ServicesAccessor, ...args: TS) => R, ...args: TS): R;
-
-	/**
-	 * Creates a child of this service which inherits all current services
-	 * and adds/overwrites the given services.
-	 *
-	 * NOTE that the returned child is `disposable` and should be disposed when not used
-	 * anymore. This will also dispose all the services that this service has created.
-	 */
-	createChild(services: ServiceCollection, store?: DisposableStore): IInstantiationService;
 
 	/**
 	 * Disposes this instantiation service.

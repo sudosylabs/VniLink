@@ -28,14 +28,14 @@ export interface NativeDataChannel {
 }
 
 /** The engine's pointer as napi hands it over; the image only when the shape changed. */
-export interface NativeCursor {
+interface NativeCursor {
 	x: number;
 	y: number;
 	visible: boolean;
 	image?: { width: number; height: number; hotspotX: number; hotspotY: number; pixels: Uint8Array } | null;
 }
 
-export interface DataPort {
+interface DataPort {
 	postMessage(message: unknown): void;
 	on(event: 'message', listener: (event: { data: unknown }) => void): void;
 	on(event: 'close', listener: () => void): void;

@@ -19,14 +19,14 @@ import { EngineDesktopSession, type DesktopVideoChannel } from './engineDesktopS
 import { probeWindowDecoders, type DecoderSupport } from './windowDecoders.js';
 import { type DesktopFailure, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
 
-export type DesktopChannelOpener = (
+type DesktopChannelOpener = (
 	request: Omit<DataChannelRequest, 'requestId'>,
 	consume: (packet: DataPacket) => Promise<void>,
 	onError: (error: Error) => void,
 ) => Promise<DesktopVideoChannel & { input(command: DesktopInputCommand): void }>;
 
 /** What the other computer reports about its screen, as a reason it can't be opened. */
-export function desktopRefusal(status: RemoteStatus | undefined): DesktopFailure | undefined {
+function desktopRefusal(status: RemoteStatus | undefined): DesktopFailure | undefined {
 	switch (status) {
 		case 'available': return undefined;
 		case 'turnedOff': return 'turnedOff';
@@ -38,7 +38,7 @@ export function desktopRefusal(status: RemoteStatus | undefined): DesktopFailure
 }
 
 /** Why the other computer refused to open its screen, from the engine's error category. */
-export function desktopOpenFailure(error: unknown): DesktopFailure {
+function desktopOpenFailure(error: unknown): DesktopFailure {
 	switch (engineErrorCategory(error) ?? '') {
 		case 'Unauthorized':
 		case 'TransferDenied': return 'turnedOff';

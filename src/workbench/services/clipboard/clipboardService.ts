@@ -19,7 +19,7 @@ import { INativeHostService } from '../../../platform/native/common/native.js';
  * `NativeClipboardService` (workbench/services/clipboard/electron-browser)
  * reaches it: the window's session refuses web clipboard permissions.
  */
-export class NativeClipboardService implements IClipboardService {
+class NativeClipboardService implements IClipboardService {
 	declare public readonly _serviceBrand: undefined;
 
 	constructor(@INativeHostService private readonly nativeHostService: INativeHostService) { }

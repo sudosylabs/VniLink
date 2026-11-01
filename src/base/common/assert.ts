@@ -25,14 +25,6 @@ export function ok(value?: unknown, message?: string) {
 	}
 }
 
-export function assertNever(value: never, message = 'Unreachable'): never {
-	throw new Error(message);
-}
-
-export function softAssertNever(value: never): void {
-	// no-op
-}
-
 /**
  * Asserts that a condition is `truthy`.
  *
@@ -56,15 +48,6 @@ export function assert(
 }
 
 /**
- * Like assert, but doesn't throw.
- */
-export function softAssert(condition: boolean, message = 'Soft Assertion Failed'): void {
-	if (!condition) {
-		onUnexpectedError(new BugIndicatingError(message));
-	}
-}
-
-/**
  * condition must be side-effect free!
  */
 export function assertFn(condition: () => boolean): void {
@@ -73,17 +56,4 @@ export function assertFn(condition: () => boolean): void {
 		condition();
 		onUnexpectedError(new BugIndicatingError('Assertion Failed'));
 	}
-}
-
-export function checkAdjacentItems<T>(items: readonly T[], predicate: (item1: T, item2: T) => boolean): boolean {
-	let i = 0;
-	while (i < items.length - 1) {
-		const a = items[i];
-		const b = items[i + 1];
-		if (!predicate(a, b)) {
-			return false;
-		}
-		i++;
-	}
-	return true;
 }

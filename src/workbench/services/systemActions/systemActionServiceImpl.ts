@@ -85,7 +85,7 @@ export function systemRequestMessage(error: unknown): string {
 	}
 }
 
-export class SystemActionService extends Disposable implements ISystemActionService {
+class SystemActionService extends Disposable implements ISystemActionService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly changed = this._register(new Emitter<string>());
 	public readonly onDidChange = this.changed.event;

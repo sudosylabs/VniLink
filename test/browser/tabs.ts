@@ -14,7 +14,7 @@ import { MenuService } from '../../src/platform/actions/common/menuService.js';
 import { ICommandService } from '../../src/platform/commands/common/commands.js';
 import { IConfigurationService } from '../../src/platform/configuration/common/configuration.js';
 import { ContextKeyService } from '../../src/platform/contextkey/browser/contextKeyService.js';
-import { ContextKeyExpr, IContextKeyService, RawContextKey } from '../../src/platform/contextkey/common/contextkey.js';
+import { IContextKeyService, RawContextKey } from '../../src/platform/contextkey/common/contextkey.js';
 import { IEngineService } from '../../src/platform/engine/common/engineService.js';
 import { SyncDescriptor } from '../../src/platform/instantiation/common/descriptors.js';
 import { InstantiationService } from '../../src/platform/instantiation/common/instantiationService.js';
@@ -81,7 +81,7 @@ export async function verifyTabs(): Promise<boolean> {
 	disposables.add(registerAction2(viewAction('second')));
 	disposables.add(registerAction2(class extends Action2 {
 		constructor() {
-			super({ id: 'test.action.busy', title: 'Busy', precondition: BusyAllowedContext, menu: { id: ViewActionsMenu, when: ContextKeyExpr.equals(ActiveTabContext.key, 'dynamic') } });
+			super({ id: 'test.action.busy', title: 'Busy', precondition: BusyAllowedContext, menu: { id: ViewActionsMenu, when: ActiveTabContext.isEqualTo('dynamic') } });
 		}
 
 		public override run(): Promise<void> {

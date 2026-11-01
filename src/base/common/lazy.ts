@@ -20,11 +20,6 @@ export class Lazy<T> {
 	) { }
 
 	/**
-	 * True if the lazy value has been resolved.
-	 */
-	get hasValue(): boolean { return this._state === LazyValueState.Completed; }
-
-	/**
 	 * Get the wrapped value.
 	 *
 	 * This will force evaluation of the lazy value if it has not been resolved yet. Lazy values are only
@@ -49,9 +44,4 @@ export class Lazy<T> {
 		}
 		return this._value!;
 	}
-
-	/**
-	 * Get the wrapped value without forcing evaluation.
-	 */
-	get rawValue(): T | undefined { return this._value; }
 }

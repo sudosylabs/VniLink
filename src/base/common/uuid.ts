@@ -4,12 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 
-const _UUIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isUUID(value: string): boolean {
-	return _UUIDPattern.test(value);
-}
-
 export const generateUuid = (function (): () => string {
 
 	// use `randomUUID` if possible
@@ -63,8 +57,3 @@ export const generateUuid = (function (): () => string {
 		return result;
 	};
 })();
-
-/** Namespace should be 3 letters, e.g. `abc-<uuid>`. */
-export function prefixedUuid(namespace: string): string {
-	return `${namespace}-${generateUuid()}`;
-}

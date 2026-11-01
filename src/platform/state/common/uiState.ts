@@ -13,7 +13,7 @@ export type FilesPane = 'local' | 'remote';
 /** Which corner of a remote desktop the picture's details sit in. */
 export type DesktopStatsCorner = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight';
 
-export const desktopStatsCorners: readonly DesktopStatsCorner[] = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'];
+const desktopStatsCorners: readonly DesktopStatsCorner[] = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'];
 
 /** A folder as the engine names it: a root id and a path relative to that root. */
 export interface FolderLocation {
@@ -67,7 +67,7 @@ function boundedString(value: unknown, maximum: number): value is string {
 	return typeof value === 'string' && value.length <= maximum;
 }
 
-export function isUIStateKey(value: unknown): value is UIStateKey {
+function isUIStateKey(value: unknown): value is UIStateKey {
 	return typeof value === 'string' && (value === 'files.showHidden' || value === 'desktop.showStats' || lastFolderKey.test(value) || statsCornerKey.test(value) || swapModifiersKey.test(value));
 }
 

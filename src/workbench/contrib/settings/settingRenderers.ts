@@ -36,7 +36,7 @@ export interface ISettingControl extends IDisposable {
 }
 
 /** A setting control's constructor: the setting and its schema, then injected services. */
-export type SettingControlCtor = IConstructorSignature<ISettingControl, [key: string, schema: ISettingSchema]>;
+type SettingControlCtor = IConstructorSignature<ISettingControl, [key: string, schema: ISettingSchema]>;
 
 export const Extensions = {
 	SettingControls: 'workbench.registry.settingControls',
@@ -76,7 +76,7 @@ Registry.add(Extensions.SettingControls, new SettingControlsRegistry());
 let nextRowId = 0;
 
 /** The parts of a setting row a control fills in. */
-export interface ISettingRow {
+interface ISettingRow {
 	readonly element: HTMLElement;
 	/** One line under the title; empty hides it. */
 	readonly help: HTMLElement;

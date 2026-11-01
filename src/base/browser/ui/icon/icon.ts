@@ -9,7 +9,7 @@ import './icon.css';
 import type { IconId, IconVariant } from '../../../common/icons.js';
 import { iconSvg } from './iconAssets.js';
 
-export interface IconOptions {
+interface IconOptions {
 	variant?: IconVariant;
 	/** Omit for decorative icons; name icon-only buttons on the button itself. */
 	label?: string;

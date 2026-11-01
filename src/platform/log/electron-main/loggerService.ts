@@ -25,11 +25,6 @@ export interface ILoggerMainService extends ILoggerService {
 	createLogger(id: string, options?: Omit<ILoggerOptions, 'id'>, windowId?: number): ILogger;
 
 	registerLogger(resource: ILoggerResource, windowId?: number): void;
-
-	getGlobalLoggers(): ILoggerResource[];
-
-	deregisterLoggers(windowId: number): void;
-
 }
 
 export class LoggerMainService extends LoggerService implements ILoggerMainService {
@@ -60,16 +55,6 @@ export class LoggerMainService extends LoggerService implements ILoggerMainServi
 		super.deregisterLogger(resource);
 	}
 
-	getGlobalLoggers(): ILoggerResource[] {
-		const resources: ILoggerResource[] = [];
-		for (const resource of super.getRegisteredLoggers()) {
-			if (!this.loggerResourcesByWindow.has(resource.resource)) {
-				resources.push(resource);
-			}
-		}
-		return resources;
-	}
-
 	getOnDidChangeLogLevelEvent(windowId: number): Event<LogLevel | [URI, LogLevel]> {
 		return Event.filter(this.onDidChangeLogLevel, arg => isLogLevel(arg) || this.isInterestedLoggerResource(arg[0], windowId));
 	}
@@ -87,14 +72,6 @@ export class LoggerMainService extends LoggerService implements ILoggerMainServi
 				};
 				return r;
 			}), e => e.added.length > 0 || e.removed.length > 0);
-	}
-
-	deregisterLoggers(windowId: number): void {
-		for (const [resource, resourceWindow] of this.loggerResourcesByWindow) {
-			if (resourceWindow === windowId) {
-				this.deregisterLogger(resource);
-			}
-		}
 	}
 
 	private isInterestedLoggerResource(resource: URI, windowId: number | undefined): boolean {

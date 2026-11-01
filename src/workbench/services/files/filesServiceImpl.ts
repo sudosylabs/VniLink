@@ -27,7 +27,7 @@ interface FilesChannel {
 	close(): void;
 }
 
-export type FilesChannelOpener = (
+type FilesChannelOpener = (
 	request: Omit<DataChannelRequest, 'requestId'>,
 	consume: (packet: DataPacket) => Promise<void>,
 	onError: (error: Error) => void,

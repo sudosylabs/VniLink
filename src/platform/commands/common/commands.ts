@@ -52,16 +52,12 @@ export interface ICommandMetadata {
 		readonly constraint?: TypeConstraint;
 		readonly schema?: IJSONSchema;
 	}>;
-	readonly returns?: string;
 }
 
 export interface ICommandRegistry {
-	readonly onDidRegisterCommand: Event<string>;
 	registerCommand<Args extends unknown[]>(id: string, command: ICommandHandler<Args>): IDisposable;
 	registerCommand<Args extends unknown[]>(command: ICommand<Args>): IDisposable;
-	registerCommandAlias(oldId: string, newId: string): IDisposable;
 	getCommand(id: string): ICommand | undefined;
-	getCommands(): ICommandsMap;
 }
 
 export const CommandsRegistry: ICommandRegistry = new class implements ICommandRegistry {

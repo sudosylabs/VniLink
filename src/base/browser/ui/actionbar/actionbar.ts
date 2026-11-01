@@ -252,25 +252,6 @@ export class ActionBar extends Disposable implements IActionRunner {
 		}
 	}
 
-	// Some action bars should not be focusable at times
-	// When an action bar is not focusable make sure to make all the elements inside it not focusable
-	// When an action bar is focusable again, make sure the first item can be focused
-	setFocusable(focusable: boolean): void {
-		this.focusable = focusable;
-		if (this.focusable) {
-			const firstEnabled = this.viewItems.find(vi => vi instanceof BaseActionViewItem && vi.isEnabled());
-			if (firstEnabled instanceof BaseActionViewItem) {
-				firstEnabled.setFocusable(true);
-			}
-		} else {
-			this.viewItems.forEach(vi => {
-				if (vi instanceof BaseActionViewItem) {
-					vi.setFocusable(false);
-				}
-			});
-		}
-	}
-
 	private isTriggerKeyEvent(event: StandardKeyboardEvent): boolean {
 		let ret = false;
 		this._triggerKeys.keys.forEach(keyCode => {
@@ -317,35 +298,6 @@ export class ActionBar extends Disposable implements IActionRunner {
 
 	getContainer(): HTMLElement {
 		return this.domNode;
-	}
-
-	hasAction(action: IAction): boolean {
-		return this.viewItems.findIndex(candidate => candidate.action.id === action.id) !== -1;
-	}
-
-	getAction(indexOrElement: number | HTMLElement): IAction | undefined {
-
-		// by index
-		if (typeof indexOrElement === 'number') {
-			return this.viewItems[indexOrElement]?.action;
-		}
-
-		// by element
-		if (DOM.isHTMLElement(indexOrElement)) {
-			while (indexOrElement.parentElement !== this.actionsList) {
-				if (!indexOrElement.parentElement) {
-					return undefined;
-				}
-				indexOrElement = indexOrElement.parentElement;
-			}
-			for (let i = 0; i < this.actionsList.childNodes.length; i++) {
-				if (this.actionsList.childNodes[i] === indexOrElement) {
-					return this.viewItems[i].action;
-				}
-			}
-		}
-
-		return undefined;
 	}
 
 	push(arg: IAction | ReadonlyArray<IAction>, options: IActionOptions = {}): void {
@@ -425,23 +377,6 @@ export class ActionBar extends Disposable implements IActionRunner {
 		this.refreshRole();
 	}
 
-	getWidth(index: number): number {
-		return this.actionsList.children.item(index)?.clientWidth ?? 0;
-	}
-
-	getHeight(index: number): number {
-		return this.actionsList.children.item(index)?.clientHeight ?? 0;
-	}
-
-	pull(index: number): void {
-		if (index >= 0 && index < this.viewItems.length) {
-			this.actionsList.childNodes[index].remove();
-			this.viewItemDisposables.deleteAndDispose(this.viewItems[index]);
-			dispose(this._viewItems.splice(index, 1));
-			this.refreshRole();
-		}
-	}
-
 	clear(): void {
 		if (this.isEmpty()) {
 			return;
@@ -459,12 +394,6 @@ export class ActionBar extends Disposable implements IActionRunner {
 
 	isEmpty(): boolean {
 		return this.viewItems.length === 0;
-	}
-
-	isFocused(index?: number): boolean {
-		return index === undefined
-			? DOM.isAncestor(DOM.getActiveElement(), this.domNode)
-			: DOM.isAncestor(DOM.getActiveElement(), this.actionsList.children[index]);
 	}
 
 	focus(index?: number): void;
@@ -615,52 +544,4 @@ export class ActionBar extends Disposable implements IActionRunner {
 		this.getContainer().remove();
 		super.dispose();
 	}
-}
-
-export function prepareActions(actions: IAction[]): IAction[] {
-	if (!actions.length) {
-		return actions;
-	}
-
-	// Clean up leading separators
-	let firstIndexOfAction = -1;
-	for (let i = 0; i < actions.length; i++) {
-		if (actions[i].id === Separator.ID) {
-			continue;
-		}
-
-		firstIndexOfAction = i;
-		break;
-	}
-
-	if (firstIndexOfAction === -1) {
-		return [];
-	}
-
-	actions = actions.slice(firstIndexOfAction);
-
-	// Clean up trailing separators
-	for (let h = actions.length - 1; h >= 0; h--) {
-		const isSeparator = actions[h].id === Separator.ID;
-		if (isSeparator) {
-			actions.splice(h, 1);
-		} else {
-			break;
-		}
-	}
-
-	// Clean up separator duplicates
-	let foundAction = false;
-	for (let k = actions.length - 1; k >= 0; k--) {
-		const isSeparator = actions[k].id === Separator.ID;
-		if (isSeparator && !foundAction) {
-			actions.splice(k, 1);
-		} else if (!isSeparator) {
-			foundAction = true;
-		} else if (isSeparator) {
-			foundAction = false;
-		}
-	}
-
-	return actions;
 }

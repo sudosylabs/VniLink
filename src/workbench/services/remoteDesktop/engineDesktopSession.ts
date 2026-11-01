@@ -114,7 +114,7 @@ export interface DesktopVideoChannel {
 }
 
 /** The two channels of a session: the picture, and for control the input. */
-export interface DesktopChannels {
+interface DesktopChannels {
 	video: DesktopVideoChannel;
 	input: { input(command: DesktopInputCommand): void; close(): void } | undefined;
 }

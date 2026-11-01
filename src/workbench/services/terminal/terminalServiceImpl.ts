@@ -13,7 +13,7 @@ import type { ITerminalChildProcess } from '../../../platform/terminal/common/te
 import { EnginePty, type TerminalChannelOpener } from './enginePty.js';
 import { ITerminalService } from './terminalService.js';
 
-export class TerminalService implements ITerminalService {
+class TerminalService implements ITerminalService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly openChannel: TerminalChannelOpener;
 

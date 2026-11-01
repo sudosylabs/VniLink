@@ -21,7 +21,6 @@ export interface IStateService extends IStateReadService {
 	readonly _serviceBrand: undefined;
 
 	setItem(key: string, data?: object | string | number | boolean | undefined | null): void;
-	setItems(items: readonly { key: string; data?: object | string | number | boolean | undefined | null }[]): void;
 
 	removeItem(key: string): void;
 

@@ -20,12 +20,12 @@ import { product } from '../../product/common/product.js';
 export const ITrayMainService = createDecorator<TrayMainService>('trayMainService');
 
 /** Matches the artwork rendered by `build/lib/trayAssets.ts`. */
-export type TrayState = 'idle' | 'active' | 'paused';
+type TrayState = 'idle' | 'active' | 'paused';
 
-export type TrayAction = { readonly kind: 'open' | 'quit' | 'pause' | 'resume' } | { readonly kind: 'disconnect'; readonly sessionId: string };
+type TrayAction = { readonly kind: 'open' | 'quit' | 'pause' | 'resume' } | { readonly kind: 'disconnect'; readonly sessionId: string };
 
 /** A menu row before Electron sees it, so the menu can be compared and tested. */
-export type TrayMenuEntry = { readonly type: 'separator' } | { readonly label: string; readonly enabled: boolean; readonly action?: TrayAction };
+type TrayMenuEntry = { readonly type: 'separator' } | { readonly label: string; readonly enabled: boolean; readonly action?: TrayAction };
 
 /** Someone connected outranks everything; anything that stops devices reaching this computer shows as paused. */
 export function trayState(status: HostingStatus): TrayState {

@@ -35,10 +35,6 @@ export type MakeSideAsync<T extends Side> = {
 };
 
 export class SimpleTypedRpcConnection<T extends Side> {
-	public static createHost<T extends API>(channelFactory: ChannelFactory, getHandler: () => T['host']): SimpleTypedRpcConnection<MakeSideAsync<T['client']>> {
-		return new SimpleTypedRpcConnection(channelFactory, getHandler);
-	}
-
 	public static createClient<T extends API>(channelFactory: ChannelFactory, getHandler: () => T['client']): SimpleTypedRpcConnection<MakeSideAsync<T['host']>> {
 		return new SimpleTypedRpcConnection(channelFactory, getHandler);
 	}

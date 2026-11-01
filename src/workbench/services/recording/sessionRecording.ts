@@ -36,7 +36,7 @@ export function formatElapsed(milliseconds: number): string {
 }
 
 /** Starts one recording of a paired computer: its id, or why it didn't start. */
-export type RecordingStarter = () => Promise<{ readonly failure: RecordingStartFailure } | { readonly recording: string }>;
+type RecordingStarter = () => Promise<{ readonly failure: RecordingStartFailure } | { readonly recording: string }>;
 
 /**
  * A tab's recording of a paired computer, one at a time: started and

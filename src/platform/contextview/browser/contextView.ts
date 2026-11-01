@@ -7,8 +7,6 @@ import { IContextMenuDelegate } from '../../../base/browser/contextmenu.js';
 import { StandardMouseEvent } from '../../../base/browser/mouseEvent.js';
 import { AnchorAlignment, AnchorAxisAlignment, IAnchor, IContextViewCloseAnimation, IContextViewProvider } from '../../../base/browser/ui/contextview/contextview.js';
 import { IAction } from '../../../base/common/actions.js';
-import { Event } from '../../../base/common/event.js';
-import { AnchorPosition } from '../../../base/common/layout.js';
 import { IDisposable } from '../../../base/common/lifecycle.js';
 import { IMenuActionOptions, MenuId } from '../../actions/common/actions.js';
 import { IContextKeyService } from '../../contextkey/common/contextkey.js';
@@ -22,9 +20,7 @@ export interface IContextViewService extends IContextViewProvider {
 
 	showContextView(delegate: IContextViewDelegate, container?: HTMLElement, shadowRoot?: boolean, useWindowContainerForShadowRoot?: boolean): IOpenContextView;
 	hideContextView(data?: any): void;
-	getContextViewElement(): HTMLElement;
 	layout(): void;
-	anchorAlignment?: AnchorAlignment;
 }
 
 export interface IContextViewDelegate {
@@ -39,14 +35,11 @@ export interface IContextViewDelegate {
 	 */
 	getAnchor(): HTMLElement | StandardMouseEvent | IAnchor;
 	render(container: HTMLElement): IDisposable;
-	onDOMEvent?(e: any, activeElement: HTMLElement): void;
 	onHide?(data?: any): void;
 	closeAnimation?: IContextViewCloseAnimation;
 	focus?(): void;
-	layout?(): void;
 	anchorAlignment?: AnchorAlignment;
 	anchorAxisAlignment?: AnchorAxisAlignment;
-	anchorPosition?: AnchorPosition;
 
 	// context views with higher layers are rendered over contet views with lower layers
 	layer?: number; // Default: 0
@@ -61,9 +54,6 @@ export const IContextMenuService = createDecorator<IContextMenuService>('context
 export interface IContextMenuService {
 
 	readonly _serviceBrand: undefined;
-
-	readonly onDidShowContextMenu: Event<void>;
-	readonly onDidHideContextMenu: Event<void>;
 
 	showContextMenu(delegate: IContextMenuDelegate | IContextMenuMenuDelegate): void;
 }

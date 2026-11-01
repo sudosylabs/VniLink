@@ -125,8 +125,6 @@ function _define() {
 
 interface IMarkService {
 	mark(name: string, markOptions?: { startTime?: number }): void;
-	clearMarks(name?: string): void;
-	getMarks(): PerformanceMark[];
 }
 
 function isMarkService(value: unknown): value is IMarkService {
@@ -153,24 +151,4 @@ const perf = _factory(globalThis);
 
 export function mark(name: string, markOptions?: { startTime?: number }): void {
 	perf.mark(name, markOptions);
-}
-
-/**
- * Clears performance marks. If a name is given, only marks with that exact
- * name are removed. If no name is given, all marks are removed.
- */
-export function clearMarks(name?: string): void {
-	perf.clearMarks(name);
-}
-
-export interface PerformanceMark {
-	readonly name: string;
-	readonly startTime: number;
-}
-
-/**
- * Returns all marks, sorted by `startTime`.
- */
-export function getMarks(): PerformanceMark[] {
-	return perf.getMarks();
 }

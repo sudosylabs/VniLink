@@ -15,7 +15,7 @@ import { isPermissionSnapshot, PERMISSIONS_CHANNEL_NAME, type PermissionCommand,
 import { IPermissionService } from './permissionService.js';
 
 /** OS consent for this computer; re-read when the window regains focus after a settings visit. */
-export class PermissionService extends Disposable implements IPermissionService {
+class PermissionService extends Disposable implements IPermissionService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly channel: IChannel;
 	private readonly focused = this._register(new Emitter<void>());

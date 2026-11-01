@@ -7,7 +7,6 @@
 
 import { Icons } from '../../src/base/common/icons.js';
 import { renderIcon } from '../../src/base/browser/ui/icon/icon.js';
-import { button } from '../../src/base/browser/ui/button/vnilinkButton.js';
 
 function assert(value: boolean, message: string): void {
 	if (!value) {
@@ -37,14 +36,6 @@ export function verifyIcons(): boolean {
 		const named = renderIcon(Icons.home, { label: '<Home>' });
 		assert(named.getAttribute('role') === 'img' && named.getAttribute('aria-label') === '<Home>' && !named.hasAttribute('aria-hidden'), 'Named icon accessibility failed');
 		assert(named.querySelector('Home') === null, 'Label treated as markup');
-		let clicks = 0;
-		const action = button('Back', 'test-button', {
-			icon: Icons.back, onClick: () => {
-				clicks++;
-			}
-		});
-		action.click();
-		assert(clicks === 1 && action.textContent === 'Back' && action.querySelector('[aria-hidden="true"]') !== null, 'Icon button behavior changed');
 		return true;
 	} finally {
 		fixture.remove();

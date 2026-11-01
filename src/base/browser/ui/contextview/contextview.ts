@@ -19,7 +19,7 @@ import * as platform from '../../../common/platform.js';
 import { OmitOptional } from '../../../common/types.js';
 import './contextview.css';
 
-export { AnchorAlignment, AnchorAxisAlignment, AnchorPosition } from '../../../common/layout.js';
+export { AnchorAlignment, AnchorAxisAlignment } from '../../../common/layout.js';
 
 export const enum ContextViewDOMPosition {
 	ABSOLUTE = 1,
@@ -98,8 +98,6 @@ export function hasRequiredAncestorClasses(element: HTMLElement, classNames: ICo
 
 export const CONTEXT_VIEW_MENU_MOTION_CLASS = 'context-view-menu-motion';
 export const CONTEXT_VIEW_MENU_MOTION_CLOSING_CLASS = 'context-view-menu-motion-closing';
-export const CONTEXT_VIEW_MENU_MOTION_CLOSE_ANIMATION_DURATION = 150;
-export const CONTEXT_VIEW_MENU_MOTION_ANCESTOR_CLASSES = [['modern-ui', 'modern-ui-frosted-glass'], 'monaco-enable-motion'] as const;
 export const CONTEXT_VIEW_CLOSE_ANIMATION_DURATION_VARIABLE = '--vscode-context-view-close-animation-duration';
 export const CONTEXT_VIEW_MENU_MOTION_SHADOW_VARIABLE = '--vscode-context-view-menu-motion-shadow';
 /** Inherited while an opacity animation isolates descendant menu backdrops. */
@@ -109,12 +107,6 @@ export const CONTEXT_VIEW_MENU_MOTION_CLOSE_START_TRANSFORM_VARIABLE = '--vscode
 
 export const CONTEXT_VIEW_MENU_MOTION_OPEN_DURATION_MS = 250;
 export const CONTEXT_VIEW_MENU_MOTION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
-
-export const contextViewMenuCloseAnimation: IContextViewCloseAnimation = {
-	className: CONTEXT_VIEW_MENU_MOTION_CLOSING_CLASS,
-	duration: CONTEXT_VIEW_MENU_MOTION_CLOSE_ANIMATION_DURATION,
-	requiredAncestorClasses: CONTEXT_VIEW_MENU_MOTION_ANCESTOR_CLASSES,
-};
 
 function getContextViewMenuMotionCss(enabledSelectorPrefix: string): string {
 	return /* css */ `

@@ -32,11 +32,6 @@ export class WindowsMainService extends Disposable {
 		return window?.id === windowId ? window : undefined;
 	}
 
-	/** Whether the window currently shows the workbench, so it may receive privileged messages. */
-	public isWorkbenchWindow(window: BrowserWindow): boolean {
-		return !window.isDestroyed() && window.webContents.mainFrame.url === WORKBENCH_URL;
-	}
-
 	public async openMainWindow(show: boolean): Promise<BrowserWindow> {
 		const window = this.createWindow();
 		this.mainWindow = window;

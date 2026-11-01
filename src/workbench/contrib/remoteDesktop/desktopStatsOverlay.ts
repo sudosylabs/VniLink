@@ -33,7 +33,7 @@ function bitrateText(kbps: number): string {
 }
 
 /** Why the quality is lowered, or the bitrate held, when it is; empty when nothing holds it. */
-export function qualityText(stats: DesktopStats, name: string): string {
+function qualityText(stats: DesktopStats, name: string): string {
 	const { status } = stats;
 	switch (status.reason) {
 		case 'networkPressure': return nls.localize('desktop.lowNetwork', 'Lowered for the network');
@@ -54,7 +54,7 @@ export function qualityText(stats: DesktopStats, name: string): string {
 }
 
 /** One short phrase for what is wrong with the picture, naming whose side it is. */
-export function conditionText(condition: DesktopCondition, name: string): string {
+function conditionText(condition: DesktopCondition, name: string): string {
 	switch (condition) {
 		case 'link.blackout': return nls.localize('desktop.condition.blackout', 'No picture from {0}', name);
 		case 'relay.backlog': return nls.localize('desktop.condition.relayBacklog', 'Relayed connection is delayed');
@@ -87,7 +87,7 @@ function latencyLabel(stage: LatencyStage, name: string): string {
 }
 
 /** What the picture's details say beyond its stats: the display shown, and whether a still was. */
-export interface DesktopPictureFacts {
+interface DesktopPictureFacts {
 	readonly display: DisplayInfo | undefined;
 	/** Whether a still picture, in full colour, was shown in this session. */
 	readonly stillShown: boolean;

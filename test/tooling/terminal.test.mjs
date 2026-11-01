@@ -175,26 +175,24 @@ test('launch refusals come from what the computer reports, before any channel op
 	}
 });
 
-test('shutting down while starting closes the late channel and fires nothing', async () => {
+test('disposing while starting closes the late channel and fires nothing', async () => {
 	const f = fixture();
 	const starting = f.pty.start();
-	f.pty.shutdown();
+	f.pty.dispose();
 	assert.equal(await starting, undefined);
 	assert.equal(f.ready, 0);
 	assert.deepEqual(f.exits, []);
-	assert(f.requests.length === 0 || f.closed === 1, 'A channel opened after shutdown stayed open');
-	f.pty.dispose();
+	assert(f.requests.length === 0 || f.closed === 1, 'A channel opened after disposal stayed open');
 });
 
-test('shutdown releases output still waiting for the emulator', async () => {
+test('disposing releases output still waiting for the emulator', async () => {
 	const f = fixture();
 	await f.pty.start();
 	const pending = f.packet('terminal', 'never parsed');
-	f.pty.shutdown();
-	await pending;
-	assert.deepEqual(f.exits, [], 'Shutdown reported an exit');
-	assert.equal(f.closed, 1);
-	f.pty.shutdown();
-	assert.equal(f.closed, 1, 'Shutdown closed the channel twice');
 	f.pty.dispose();
+	await pending;
+	assert.deepEqual(f.exits, [], 'Disposal reported an exit');
+	assert.equal(f.closed, 1);
+	f.pty.dispose();
+	assert.equal(f.closed, 1, 'Disposal closed the channel twice');
 });
