@@ -2405,7 +2405,6 @@ impl CommandShape {
             | "setRelayPublic"
             | "relayRestartRequired"
             | "savedRelays"
-            | "controlCheck"
             | "controlRequest"
             | "rejectControlRequest"
             | "controllerSessions"

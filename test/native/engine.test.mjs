@@ -143,7 +143,7 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		assert.equal(a.hosting, false);
 		assert.equal(b.devices.length, 0);
 		const { file } = await execute(first, { type: 'exportPairingFile', ttlSeconds: 60, allowControl: false });
-		assert.match(file.check, /^[0-9]{3}$/);
+		assert.match(file.check, /^[0-9]{6}$/);
 		const { preview } = await execute(second, { type: 'openPairingFile', bytes: file.bytes });
 		assert.equal(preview.endpoint_id, a.endpoint_id);
 		assert.equal(typeof preview.id, 'string');

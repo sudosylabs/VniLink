@@ -230,9 +230,9 @@ test('device commands use neutral connections and consume a fresh pairing previe
 		async engineCommand(command) {
 			commands.push(command);
 			switch (command.type) {
-				case 'openPairingFile': return { type: 'pairingPreview', preview: { id: String(++attempt), endpoint_id: 'peer', check: '042', expires_at_ms: '1000' } };
+				case 'openPairingFile': return { type: 'pairingPreview', preview: { id: String(++attempt), endpoint_id: 'peer', check: '042517', expires_at_ms: '1000' } };
 				case 'confirmPairing':
-					if (command.digits !== '042') {
+					if (command.digits !== '042517') {
 						throw new Error('PairingCheckMismatch');
 					}
 					return { type: 'device', device: device('peer') };
@@ -244,10 +244,10 @@ test('device commands use neutral connections and consume a fresh pairing previe
 	}, true));
 	try {
 		await assert.rejects(service.pair(new Uint8Array([1, 2]), '123'), /PairingCheckMismatch/);
-		assert.equal(await service.pair(new Uint8Array([1, 2]), '042'), 'peer');
+		assert.equal(await service.pair(new Uint8Array([1, 2]), '042517'), 'peer');
 		assert.deepEqual(commands.filter(command => command.type === 'confirmPairing'), [
 			{ type: 'confirmPairing', previewId: '1', digits: '123' },
-			{ type: 'confirmPairing', previewId: '2', digits: '042' },
+			{ type: 'confirmPairing', previewId: '2', digits: '042517' },
 		]);
 		assert.equal(commands.some(command => command.type === 'setSharingPolicy'), false);
 		await service.connect('peer');

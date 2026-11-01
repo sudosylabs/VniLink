@@ -26,7 +26,7 @@ import { ProcessRunner } from './processes.ts';
 export interface AgentPeer {
 	/** The agent's `.vnl` file, absolute. */
 	readonly file: string;
-	/** The three digits the agent printed beside it. */
+	/** The six digits the agent printed beside it. */
 	readonly check: string;
 }
 
@@ -38,8 +38,8 @@ export function agentPeer(file: string | undefined, check: string | undefined, c
 	if (file === undefined || check === undefined) {
 		throw new Error('--peer and --peer-check go together: the agent\'s .vnl file and the digits it printed beside it');
 	}
-	if (!/^\d{3}$/.test(check)) {
-		throw new Error('--peer-check takes the three digits the agent printed');
+	if (!/^\d{6}$/.test(check)) {
+		throw new Error('--peer-check takes the six digits the agent printed');
 	}
 	return { file: resolve(cwd, file), check };
 }

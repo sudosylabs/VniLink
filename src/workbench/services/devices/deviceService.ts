@@ -28,6 +28,11 @@ export interface PairingFile {
 	readonly expiresAt: number;
 }
 
+export interface ControlCheck {
+	readonly endpointId: string;
+	readonly check: string;
+}
+
 export const IDeviceService = createDecorator<IDeviceService>('deviceService');
 
 /** Window-owned device state. Views never depend on the preload transport. */
@@ -49,7 +54,8 @@ export interface IDeviceService {
 	forget(id: string): Promise<void>;
 	exportPairingFile(): Promise<PairingFile>;
 	pair(bytes: Uint8Array, digits: string): Promise<string>;
-	pairingCheck(): Promise<string>;
+	/** Fires on the controller with the digits to read out on the host once it is waiting for its owner. */
+	readonly onDidReceiveControlCheck: Event<ControlCheck>;
 	incomingPairing(): Promise<ControlRequestInfo | null>;
 	approvePairing(digits: string): Promise<void>;
 	rejectPairing(): Promise<void>;

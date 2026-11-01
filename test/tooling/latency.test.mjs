@@ -48,7 +48,7 @@ test('latency options are bounded', () => {
 	assert.deepEqual(options, { seconds: 5, settleSeconds: 1, output: resolve('/out'), app: undefined, holdSeconds: 0, frameRate: undefined, bitrate: undefined, busy: false, peer: undefined });
 	assert.equal(latencyOptions('/root', ['--fps', '60', '--bitrate', '50000']).bitrate, 50000);
 	assert.throws(() => latencyOptions('/root', ['--busy']));
-	assert.equal(latencyOptions('/root', ['--busy', '--peer', 'agent.vnl', '--peer-check', '123']).busy, true);
+	assert.equal(latencyOptions('/root', ['--busy', '--peer', 'agent.vnl', '--peer-check', '123123']).busy, true);
 	assert.throws(() => latencyOptions('/root', ['--bitrate', '0']));
 	assert.throws(() => latencyOptions('/root', ['--bitrate', '50001']));
 	assert.throws(() => latencyOptions('/root', ['--bitrate', 'automatic']));
@@ -160,14 +160,14 @@ test('a two-computer run names the agent by its file and digits, and which compu
 	assert.equal(latencyOptions('/root', ['--fps', '30']).frameRate, 30);
 	assert.throws(() => latencyOptions('/root', ['--fps', '0']));
 	assert.throws(() => latencyOptions('/root', ['--fps', '29.97']));
-	const options = latencyOptions('/root', ['--peer', 'agent.vnl', '--peer-check', '042', '--hosts', 'peer']);
-	assert.deepEqual(options.peer, { file: resolve('agent.vnl'), check: '042', hosts: 'peer' });
-	assert.equal(latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123']).peer?.hosts, 'here');
+	const options = latencyOptions('/root', ['--peer', 'agent.vnl', '--peer-check', '042123', '--hosts', 'peer']);
+	assert.deepEqual(options.peer, { file: resolve('agent.vnl'), check: '042123', hosts: 'peer' });
+	assert.equal(latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123123']).peer?.hosts, 'here');
 	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl']), /go together/);
-	assert.throws(() => latencyOptions('/root', ['--peer-check', '123']), /go together/);
-	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '12']), /three digits/);
-	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123', '--hosts', 'both']));
-	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123', '--hold', '5']), /--hold/);
+	assert.throws(() => latencyOptions('/root', ['--peer-check', '123123']), /go together/);
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '12']), /six digits/);
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123123', '--hosts', 'both']));
+	assert.throws(() => latencyOptions('/root', ['--peer', '/a.vnl', '--peer-check', '123123', '--hold', '5']), /--hold/);
 	assert.throws(() => latencyOptions('/root', ['--hosts', 'peer']), /needs --peer/);
 	// SSH is gone: its options are unknown.
 	assert.throws(() => latencyOptions('/root', ['--remote', 'someone@studio.local']));

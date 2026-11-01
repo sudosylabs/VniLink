@@ -264,7 +264,7 @@ class SmokeSuite {
 				document.querySelector('.device-pairing-popover .monaco-button.primary').click();
 				return code();
 			})()`);
-			assert.equal(code, '042');
+			assert.equal(code, '042517');
 			assert.equal(await download, 'VniLink.vnl');
 			await driver.screenshot('devices-pairing-popover');
 			await window.webContents.executeJavaScript(`(async () => {
@@ -272,15 +272,15 @@ class SmokeSuite {
 				const popover = document.querySelector('.device-pairing-popover');
 				const deadline = Date.now() + 3000;
 				const boxes = () => [...popover.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
-				while (boxes().length !== 3) {
+				while (boxes().length !== 6) {
 					if (Date.now() > deadline) { throw new Error('Incoming pairing field did not appear'); }
 					await new Promise(resolve => requestAnimationFrame(resolve));
 				}
 				if (popover.querySelector('.device-pairing-code:not([hidden])')) { throw new Error('Incoming confirmation disclosed the expected code'); }
-				[...'731'].forEach((digit, index) => {
+				[...'731904'].forEach((digit, index) => {
 					boxes()[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
 				});
-				boxes()[2].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+				boxes()[5].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 			})()`);
 			// Opening an invitation: choose it, type the creator's digits, then read ours back.
 			const frame = `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`;
@@ -301,8 +301,8 @@ class SmokeSuite {
 			await window.webContents.executeJavaScript(`(async () => {
 				await browserTests.browserScenarios.openFixtureInvitationFile();
 				const boxes = [...document.querySelectorAll('.device-pairing-field:not([hidden]) .code-input-digit')];
-				if (boxes.length !== 3) { throw new Error('The opened invitation did not ask for three digits'); }
-				[...'04'].forEach((digit, index) => {
+				if (boxes.length !== 6) { throw new Error('The opened invitation did not ask for six digits'); }
+				[...'04251'].forEach((digit, index) => {
 					boxes[index].focus();
 					boxes[index].dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: digit, bubbles: true, cancelable: true }));
 				});
@@ -310,8 +310,8 @@ class SmokeSuite {
 			await window.webContents.executeJavaScript(frame);
 			await driver.screenshot('devices-import-code');
 			await window.webContents.executeJavaScript(`(async () => {
-				const box = document.querySelectorAll('.device-pairing-field .code-input-digit')[2];
-				box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '2', bubbles: true, cancelable: true }));
+				const box = document.querySelectorAll('.device-pairing-field .code-input-digit')[5];
+				box.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '7', bubbles: true, cancelable: true }));
 				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
 				const deadline = Date.now() + 3000;
 				while (!document.querySelector('.device-pairing-popover .device-pairing-code:not([hidden])')) {

@@ -53,7 +53,7 @@ export class BrowserScenarios {
 
 	public requestFixturePairing(): void {
 		if (this.deviceFixture) {
-			this.deviceFixture.incoming = { endpoint_id: 'test-computer', check: '731' };
+			this.deviceFixture.incoming = { endpoint_id: 'test-computer' };
 		}
 	}
 

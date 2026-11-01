@@ -131,7 +131,10 @@ export type EngineEvent =
 	/** A folder watched with `watchLocal` changed. */
 	| { type: 'folderChanged'; watch: string }
 	| { type: 'devicePaired' | 'deviceAuthorized' | 'deviceRevoked' | 'deviceUnpaired'; endpoint_id: string }
-	| { type: 'controlRequested'; endpoint_id: string; check: string }
+	/** A computer is asking this one to pair; its owner types the digits shown on the other screen. */
+	| { type: 'controlRequested'; endpoint_id: string }
+	/** The host parked this computer's request; these are the digits to read out on the host. */
+	| { type: 'controlCheck'; endpoint_id: string; check: string }
 	/** A paired computer asked this one to restart or shut down; it runs after `remainingMs` unless cancelled. */
 	| { type: 'systemActionScheduled'; id: string; action: 'restart' | 'shutdown'; endpoint_id: string; remainingMs: number }
 	| { type: 'systemActionEnded'; id: string; state: SystemOperationState }
@@ -174,7 +177,7 @@ function isWindowDecoders(value: unknown): value is WindowDecoder[] {
 
 export interface RelayInfo { url: string; authenticated: boolean; }
 
-export interface ControlRequestInfo { endpoint_id: string; check: string; }
+export interface ControlRequestInfo { endpoint_id: string; }
 
 export interface EngineSnapshot {
 	endpoint_id: string;
@@ -269,7 +272,7 @@ export type EngineCommand =
 	| { type: 'setRelayPublic' }
 	| { type: 'setRelayCustom'; urls: string[] }
 	| { type: 'savedRelays' | 'relayRestartRequired' }
-	| { type: 'controlCheck' | 'controlRequest' | 'rejectControlRequest' }
+	| { type: 'controlRequest' | 'rejectControlRequest' }
 	| { type: 'confirmControlRequest'; digits: string }
 	| { type: 'controllerSessions' | 'hostedSessions' | 'hostedServices' }
 	| { type: 'peerAvailability'; endpointId: string }
@@ -303,7 +306,6 @@ export type EngineReply =
 	| { type: 'sessions'; sessions: SessionInfo[] }
 	| { type: 'services'; services: ServiceSummary[] }
 	| { type: 'peerAvailability'; report: RemoteCapabilityStatus[] | null }
-	| { type: 'check'; check: string }
 	| { type: 'controlRequest'; request: ControlRequestInfo | null }
 	| { type: 'nativeSharingStatus'; displays: NativeSharingStatus[] }
 	| { type: 'recordingStatus'; status: RecordingStatus }
@@ -592,7 +594,8 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 		case 'folderChanged': return decimal(value.watch) && Object.keys(value).length === 2;
 		case 'devicePaired': case 'deviceAuthorized': case 'deviceRevoked': case 'deviceUnpaired':
 			return text(value.endpoint_id) && Object.keys(value).length === 2;
-		case 'controlRequested': return text(value.endpoint_id) && text(value.check) && Object.keys(value).length === 3;
+		case 'controlRequested': return text(value.endpoint_id) && Object.keys(value).length === 2;
+		case 'controlCheck': return text(value.endpoint_id) && /^[0-9]{6}$/.test(String(value.check)) && Object.keys(value).length === 3;
 		case 'systemActionScheduled': return decimal(value.id) && (value.action === 'restart' || value.action === 'shutdown') && text(value.endpoint_id) && noticeMs(value.remainingMs) && Object.keys(value).length === 5;
 		case 'systemActionEnded': return decimal(value.id) && systemOperationStates.includes(String(value.state)) && Object.keys(value).length === 3;
 		case 'addressesUpdated': return text(value.endpoint_id) && Object.keys(value).length === 2;
@@ -621,7 +624,7 @@ function relay(value: unknown): value is RelayInfo {
 }
 
 function controlRequest(value: unknown): value is ControlRequestInfo | null {
-	return value === null || (record(value) && text(value.endpoint_id) && text(value.check) && Object.keys(value).length === 2);
+	return value === null || (record(value) && text(value.endpoint_id) && Object.keys(value).length === 1);
 }
 
 function sessions(value: unknown): value is SessionInfo[] {
@@ -765,7 +768,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'exportPairingFile': keys = ['ttlSeconds', 'allowControl']; valid = Number.isInteger(value.ttlSeconds) && typeof value.ttlSeconds === 'number' && value.ttlSeconds > 0 && value.ttlSeconds <= 86400 && typeof value.allowControl === 'boolean'; break;
 		case 'openPairingFile': keys = ['bytes']; valid = bytes(value.bytes); break;
 		case 'openPairingFileBase64': keys = ['data']; valid = base64(value.data); break;
-		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{3}$/.test(value.digits); break;
+		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{6}$/.test(value.digits); break;
 		case 'revoke': case 'unpair': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
 		case 'disconnect': keys = []; valid = true; break;
@@ -803,8 +806,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'setRelayPublic': keys = []; valid = true; break;
 		case 'setRelayCustom': keys = ['urls']; valid = strings(value.urls); break;
 		case 'relayRestartRequired': case 'savedRelays': keys = []; valid = true; break;
-		case 'controlCheck': case 'controlRequest': case 'rejectControlRequest': keys = []; valid = true; break;
-		case 'confirmControlRequest': keys = ['digits']; valid = typeof value.digits === 'string' && /^[0-9]{3}$/.test(value.digits); break;
+		case 'controlRequest': case 'rejectControlRequest': keys = []; valid = true; break;
+		case 'confirmControlRequest': keys = ['digits']; valid = typeof value.digits === 'string' && /^[0-9]{6}$/.test(value.digits); break;
 		case 'controllerSessions': case 'hostedSessions': case 'hostedServices': keys = []; valid = true; break;
 		case 'peerAvailability': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'controllerSession': keys = ['sessionId']; valid = decimal(value.sessionId); break;
@@ -859,7 +862,6 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'sessions': return Array.isArray(value.sessions) && sessions(value.sessions) && Object.keys(value).length === 2;
 		case 'services': return Array.isArray(value.services) && value.services.every((service: unknown) => serviceInfo(service)) && Object.keys(value).length === 2;
 		case 'peerAvailability': return (value.report === null || remoteReport(value.report)) && Object.keys(value).length === 2;
-		case 'check': return text(value.check) && Object.keys(value).length === 2;
 		case 'controlRequest': return controlRequest(value.request) && Object.keys(value).length === 2;
 		case 'nativeSharingStatus': return Array.isArray(value.displays) && value.displays.length <= 16 && value.displays.every(sharingStatus) && Object.keys(value).length === 2;
 		case 'recordingStatus': return recordingStatus(value.status) && Object.keys(value).length === 2;

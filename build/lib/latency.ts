@@ -120,7 +120,7 @@
  * The other computer runs the test agent, built from the same commit
  * (`node build/run.ts testkit:agent --allow screen`; the sides show and read
  * its real screen, so the agent refuses them without `--allow screen`). The
- * agent prints digits; the run prints three of its own; the person at the
+ * agent prints digits; the run shows six of its own; the person at the
  * agent types them on its terminal, and nothing is approved without that.
  * The agent starts its side from its own checkout (`testkit:launch`, the
  * launch a run on one computer uses), in folders of its own that it removes

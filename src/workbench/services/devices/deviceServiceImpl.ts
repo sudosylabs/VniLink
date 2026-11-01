@@ -14,7 +14,7 @@ import { deviceName, type EngineCommand, type EngineEvent, type EngineReply, typ
 /** Engine events after which the device list may have changed. */
 const deviceEvents: ReadonlySet<EngineEvent['type']> = new Set(['devicePaired', 'deviceAuthorized', 'deviceRevoked', 'deviceUnpaired', 'peerRenamed', 'sessionChanged', 'presenceChanged']);
 
-import { type DeviceSummary, IDeviceService, type PairingFile } from './deviceService.js';
+import { type ControlCheck, type DeviceSummary, IDeviceService, type PairingFile } from './deviceService.js';
 
 export class DeviceService extends Disposable implements IDeviceService {
 	declare public readonly _serviceBrand: undefined;
@@ -22,6 +22,8 @@ export class DeviceService extends Disposable implements IDeviceService {
 	public readonly onDidChangeDevices = this.changed.event;
 	private readonly availabilityChanged = this._register(new Emitter<string>());
 	public readonly onDidChangeAvailability = this.availabilityChanged.event;
+	private readonly controlChecked = this._register(new Emitter<ControlCheck>());
+	public readonly onDidReceiveControlCheck = this.controlChecked.event;
 	private readonly stateChanged = this._register(new Emitter<void>());
 	public readonly onDidChangeState = this.stateChanged.event;
 	private loaded = false;
@@ -150,14 +152,6 @@ export class DeviceService extends Disposable implements IDeviceService {
 		return reply.device.endpoint_id;
 	}
 
-	public async pairingCheck(): Promise<string> {
-		const reply = await this.execute({ type: 'controlCheck' });
-		if (reply.type !== 'check') {
-			throw new Error('Invalid pairing check');
-		}
-		return reply.check;
-	}
-
 	public async incomingPairing(): Promise<ControlRequestInfo | null> {
 		const reply = await this.execute({ type: 'controlRequest' });
 		if (reply.type !== 'controlRequest') {
@@ -207,6 +201,8 @@ export class DeviceService extends Disposable implements IDeviceService {
 		for (const event of batch.events) {
 			if (event.type === 'peerAvailabilityChanged' || event.type === 'presenceChanged') {
 				this.availabilityChanged.fire(event.endpoint_id);
+			} else if (event.type === 'controlCheck') {
+				this.controlChecked.fire({ endpointId: event.endpoint_id, check: event.check });
 			}
 		}
 		if (!(batch.resync || batch.events.some(event => deviceEvents.has(event.type)))) {
