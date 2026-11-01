@@ -287,6 +287,7 @@ impl Pointer {
     /// rectangle under the pointer is read and written there, in a texture
     /// of `pool`. A picture elsewhere, or a failed overlay, is composited in
     /// memory.
+    #[cfg(windows)]
     pub(crate) fn composite_picture(
         &self,
         frame: RawFrame,
