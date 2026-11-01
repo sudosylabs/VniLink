@@ -310,12 +310,7 @@ mod tests {
             .unwrap();
         host.set_desktop_sharing(true, false, false, false).unwrap();
         let parent = viewer.begin_connect_services(host.endpoint_id()).unwrap();
-        let until = Instant::now() + Duration::from_secs(10);
-        while viewer.controller_session(parent.id).unwrap().phase != crate::FfiSessionPhase::Active
-        {
-            assert!(Instant::now() < until, "the viewer did not connect");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        crate::wait::session_active(&viewer, parent.id);
         let parent = viewer.controller_session(parent.id).unwrap();
         let owner = viewer
             .attach_controller_service(parent.id, parent.generation, crate::FfiServiceKind::Desktop)

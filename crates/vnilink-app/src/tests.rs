@@ -147,7 +147,6 @@ fn subscriptions_poll_empty_and_report_lag() {
 #[test]
 fn independent_controller_handles_cross_the_ffi() {
     use crate::FfiSessionPhase;
-    use std::time::{Duration, Instant};
     struct Capture;
     impl vnilink::HostCapture for Capture {
         fn monitor(&self) -> (u16, u16) {
@@ -189,20 +188,7 @@ fn independent_controller_handles_cross_the_ffi() {
     let pending_a = controller.begin_connect_services(a.endpoint_id()).unwrap();
     let pending_b = controller.begin_connect_services(b.endpoint_id()).unwrap();
     assert_ne!(pending_a.id, pending_b.id);
-    let wait = |id, phase| {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let session = controller.controller_session(id).unwrap();
-            if session.phase == phase {
-                break session;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "FFI session timed out: {session:?}"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    };
+    let wait = |id, phase| crate::wait::session_phase(&controller, id, phase);
     let sa = wait(pending_a.id, FfiSessionPhase::Active);
     let sb = wait(pending_b.id, FfiSessionPhase::Active);
     assert_eq!(controller.controller_sessions().unwrap().len(), 2);
@@ -224,20 +210,13 @@ fn independent_controller_handles_cross_the_ffi() {
     let (da, db) = (desktop(&sa), desktop(&sb));
     let (va, vb) = (da.subscribe_video().unwrap(), db.subscribe_video().unwrap());
     for (host, payload) in [(&a, 1u8), (&b, 2u8)] {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let hosted = loop {
-            if let Some(service) = host
-                .inner
+        let hosted = crate::wait::wait_for("the host's Desktop", || {
+            host.inner
                 .hosted_services()
                 .unwrap()
                 .into_iter()
                 .find(|service| service.kind == vnilink::ServiceKind::Desktop)
-            {
-                break service;
-            }
-            assert!(Instant::now() < deadline, "the host's Desktop");
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        });
         host.inner
             .publish_desktop_video(
                 hosted.id,

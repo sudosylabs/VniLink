@@ -10,15 +10,7 @@ use crate::{
     AudioProvider, AudioSource, BackendStartup, FfiAudioDevice, FfiAudioPacket, FfiSessionPhase,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
-fn wait(mut condition: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(8);
-    while !condition() {
-        assert!(Instant::now() < until, "desktop audio did not settle");
-        std::thread::sleep(Duration::from_millis(2));
-    }
-}
 fn core() -> Arc<VnilinkCore> {
     Arc::new(VnilinkCore {
         inner: Arc::new(
@@ -119,7 +111,7 @@ impl Fixture {
         let parent = controller
             .begin_connect_services(host.endpoint_id())
             .unwrap();
-        wait(|| controller.controller_session(parent.id).unwrap().phase == FfiSessionPhase::Active);
+        crate::wait::session_active(&controller, parent.id);
         let parent = controller.controller_session(parent.id).unwrap();
         let owner = controller
             .attach_controller_service(parent.id, parent.generation, FfiServiceKind::Desktop)
@@ -157,24 +149,19 @@ fn desktop_system_audio_mute_disable_retry_and_revocation_are_independent_of_vid
     let f = Fixture::new();
     let opened = Arc::new(Mutex::new(Vec::new()));
     let companion = f.start(opened.clone());
-    wait(|| companion.status().phase == DesktopAudioPhase::Playing);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Playing);
     assert_eq!(f.captures.load(Ordering::Acquire), 1);
     let first = lock(&opened)[0].clone();
     companion.set_muted(true);
     assert_eq!(companion.status().phase, DesktopAudioPhase::Muted);
     // Exercise the actual Opus transport and decoder while muted.
-    let mut block = None;
-    wait(|| {
-        block = first.poll_internal().unwrap();
-        block.is_some()
-    });
-    let block = block.unwrap();
+    let block = crate::wait::wait_for("a decoded block", || first.poll_internal().unwrap());
     assert!(block.samples.iter().all(|sample| *sample == 0.0));
     companion.set_enabled(false);
     assert!(first.is_cancelled());
     assert!(!f.desktop.is_cancelled());
     companion.set_enabled(true);
-    wait(|| companion.status().phase == DesktopAudioPhase::Muted);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Muted);
     assert_eq!(f.captures.load(Ordering::Acquire), 2);
     let second = lock(&opened)[1].clone();
     assert_ne!(first.info().id, second.info().id);
@@ -183,7 +170,7 @@ fn desktop_system_audio_mute_disable_retry_and_revocation_are_independent_of_vid
     f.host
         .set_service_sharing(FfiServiceKind::SystemAudio, false)
         .unwrap();
-    wait(|| companion.status().phase == DesktopAudioPhase::Unavailable);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Unavailable);
     assert!(second.is_cancelled());
     assert!(!f.desktop.is_cancelled());
     f.host
@@ -191,10 +178,10 @@ fn desktop_system_audio_mute_disable_retry_and_revocation_are_independent_of_vid
         .unwrap();
     assert_eq!(companion.status().phase, DesktopAudioPhase::Unavailable);
     companion.set_enabled(true);
-    wait(|| companion.status().phase == DesktopAudioPhase::Playing);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Playing);
     let third = lock(&opened)[2].clone();
     f.desktop.close();
-    wait(|| companion.status().phase == DesktopAudioPhase::Stopped);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Stopped);
     assert!(third.is_cancelled());
     let info = f.desktop.info();
     assert_eq!(
@@ -213,7 +200,7 @@ fn desktop_audio_permission_and_output_failures_leave_desktop_running() {
         .unwrap();
     let opened = Arc::new(Mutex::new(Vec::new()));
     let companion = f.start(opened.clone());
-    wait(|| companion.status().phase == DesktopAudioPhase::Unavailable);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Unavailable);
     assert!(lock(&opened).is_empty());
     assert_eq!(f.captures.load(Ordering::Acquire), 0);
     assert!(!f.desktop.is_cancelled());
@@ -233,7 +220,7 @@ fn desktop_audio_permission_and_output_failures_leave_desktop_running() {
             })
         }),
     );
-    wait(|| companion.status().phase == DesktopAudioPhase::Unavailable);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Unavailable);
     assert!(lock(&failed).as_ref().unwrap().is_cancelled());
     assert!(!f.desktop.is_cancelled());
     assert!(matches!(
@@ -268,8 +255,8 @@ fn closing_during_playback_startup_retires_the_late_result() {
             assert!(lock(&late).as_ref().unwrap().is_cancelled());
         }
         release.send(()).unwrap();
-        wait(|| Arc::strong_count(lock(&late).as_ref().unwrap()) == 1);
-        wait(|| companion.status().phase == DesktopAudioPhase::Stopped);
+        crate::wait::until!(Arc::strong_count(lock(&late).as_ref().unwrap()) == 1);
+        crate::wait::until!(companion.status().phase == DesktopAudioPhase::Stopped);
         assert!(lock(&late).as_ref().unwrap().is_cancelled());
         assert_eq!(f.desktop.is_cancelled(), close_desktop);
     }
@@ -281,7 +268,7 @@ fn repeated_audio_restarts_release_private_service_records() {
     let opened = Arc::new(Mutex::new(Vec::new()));
     let companion = f.start(opened);
     for _ in 0..=vnilink::MAX_SERVICE_RECORDS {
-        wait(|| companion.status().phase == DesktopAudioPhase::Playing);
+        crate::wait::until!(companion.status().phase == DesktopAudioPhase::Playing);
         companion.set_enabled(false);
         assert_eq!(
             f.controller.controller_services().unwrap().len(),
@@ -300,11 +287,12 @@ fn silent_system_audio_stays_connected_without_fabricating_packets() {
     let f = Fixture::new();
     let opened = Arc::new(Mutex::new(Vec::new()));
     let companion = f.start(opened.clone());
-    wait(|| companion.status().phase == DesktopAudioPhase::Playing);
+    crate::wait::until!(companion.status().phase == DesktopAudioPhase::Playing);
     let audio = lock(&opened)[0].clone();
-    wait(|| audio.poll_internal().unwrap().is_some());
+    crate::wait::until!(audio.poll_internal().unwrap().is_some());
     // Exceeds the transport's three-second packet timeout. Idle keepalives
     // preserve liveness, but never become invented encoded/decoded frames.
+    // A real timer: the transport's packet timeout is what is under test.
     std::thread::sleep(Duration::from_millis(3300));
     assert!(!audio.is_cancelled());
     assert_eq!(companion.status().phase, DesktopAudioPhase::Playing);

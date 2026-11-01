@@ -660,3 +660,6 @@ mod tests;
 
 #[cfg(test)]
 mod desktop_tests;
+
+#[cfg(test)]
+mod wait;

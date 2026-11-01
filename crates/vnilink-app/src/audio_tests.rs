@@ -6,17 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 use crate::{audio::*, *};
-use std::{
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
-fn wait(mut condition: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(8);
-    while !condition() {
-        assert!(Instant::now() < until);
-        std::thread::sleep(Duration::from_millis(2));
-    }
-}
+use std::sync::{Arc, Mutex};
 fn core() -> VnilinkCore {
     VnilinkCore {
         inner: Arc::new(
@@ -104,7 +94,7 @@ fn ffi_audio_callback_format_mute_owner_and_capability_contract() {
     let parent = controller
         .begin_connect_services(host.endpoint_id())
         .unwrap();
-    wait(|| controller.controller_session(parent.id).unwrap().phase == FfiSessionPhase::Active);
+    crate::wait::session_active(&controller, parent.id);
     let parent = controller.controller_session(parent.id).unwrap();
     let support = controller
         .remote_service_support(parent.id, parent.generation)
@@ -125,12 +115,7 @@ fn ffi_audio_callback_format_mute_owner_and_capability_contract() {
         .is_err());
     audio.set_muted(true);
     // A block is decoded as soon as its packet arrives.
-    let mut muted_block = None;
-    wait(|| {
-        muted_block = audio.poll_internal().unwrap();
-        muted_block.is_some()
-    });
-    let muted_block = muted_block.unwrap();
+    let muted_block = crate::wait::wait_for("a decoded block", || audio.poll_internal().unwrap());
     assert_eq!(muted_block.timestamp, 0);
     assert_eq!(muted_block.samples.len(), 1920);
     assert!(muted_block.samples.iter().all(|&s| s == 0.0));
@@ -141,17 +126,12 @@ fn ffi_audio_callback_format_mute_owner_and_capability_contract() {
     assert!(source.publish(wrong).is_err());
     audio.set_muted(false);
     source.publish(next).unwrap();
-    let mut audible = None;
-    wait(|| {
-        audible = audio.poll_internal().unwrap();
-        audible.is_some()
-    });
-    let audible = audible.unwrap();
+    let audible = crate::wait::wait_for("a decoded block", || audio.poll_internal().unwrap());
     assert_eq!(audible.timestamp, 960);
     assert!(audible.samples.iter().any(|v| v.abs() > 0.01));
     assert_eq!(audio.playback_stats().received, 2);
     audio.close();
-    wait(|| source.is_cancelled());
+    crate::wait::until!(source.is_cancelled());
     assert!(audio.poll_playback().is_err());
     assert_eq!(
         controller.controller_session(parent.id).unwrap().phase,
