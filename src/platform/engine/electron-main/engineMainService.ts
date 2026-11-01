@@ -306,9 +306,12 @@ export class EngineMainService extends Disposable {
 				reject(error);
 			};
 			const timeout = setTimeout(() => {
-				// A slow call fails alone; the engine stays up for the rest.
+				// A slow call fails alone; the engine stays up for the rest. Cancelling
+				// stops the wait, not the work: the command may still finish, so the
+				// message says so and callers re-read before they repeat a change.
+				this.logService.warn(`[engine] ${command.type} did not answer in time; its outcome is unknown.`);
 				cancellation.cancel();
-				fail(new Error('Engine operation timed out'));
+				fail(new Error('Engine operation timed out and may still finish'));
 			}, timeoutFor(command));
 			this.waiting.add(fail);
 			channel.call<unknown>('execute', [command], cancellation.token).then(reply => {

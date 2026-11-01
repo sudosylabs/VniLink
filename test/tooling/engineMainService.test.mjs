@@ -24,7 +24,7 @@ export class MessageChannelMain { port1 = {}; port2 = {}; }`;
 
 const ipc = `
 import { Event } from '${root}/src/base/common/event.js';
-export class Client { getChannel() { return { listen: () => Event.None, call: async () => ({ type: 'done' }) }; } dispose() { } }`;
+export class Client { getChannel() { return { listen: () => Event.None, call: () => globalThis.engineCalls?.shift()?.() ?? Promise.resolve({ type: 'done' }) }; } dispose() { } }`;
 
 const output = await build({
 	stdin: { contents: `export { EngineMainService } from './src/platform/engine/electron-main/engineMainService.ts'; export { forks } from 'electron';`, loader: 'ts', resolveDir: root },
@@ -39,6 +39,8 @@ const output = await build({
 
 const { EngineMainService, forks } = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
 
+const warnings = [];
+
 const settle = async () => {
 	for (let step = 0; step < 20; step++) {
 		await Promise.resolve();
@@ -49,7 +51,7 @@ const settle = async () => {
 async function startService(context) {
 	context.mock.timers.enable({ apis: ['setTimeout'] });
 	forks.length = 0;
-	const service = new EngineMainService({ error() { } });
+	const service = new EngineMainService({ error() { }, warn: message => warnings.push(message) });
 	const story = [];
 	service.onDidChangeAvailability(available => story.push(available ? 'available' : 'unavailable'));
 	service.onDidChangeRestarting(restarting => story.push(restarting ? 'restarting' : 'steady'));
@@ -138,4 +140,18 @@ test('stopping the service ends the engine without restarting it', async context
 	await settle();
 	assert.equal(forks.length, 1);
 	assert.equal(service.isRestarting, false);
+});
+
+test('a command that does not answer in time fails alone and says its outcome is unknown', async context => {
+	const { service } = await startService(context);
+	globalThis.engineCalls = [() => new Promise(() => { })];
+	const slow = service.execute({ type: 'startHosting' });
+	const failure = assert.rejects(slow, /timed out and may still finish/);
+	await settle();
+	context.mock.timers.tick(10_000);
+	await failure;
+	assert.deepEqual(warnings, ['[engine] startHosting did not answer in time; its outcome is unknown.']);
+	assert.deepEqual(await service.execute({ type: 'snapshot' }), { type: 'done' }, 'A timed-out command held the next one');
+	assert.equal(service.available, true, 'A timeout restarted the engine');
+	await service.stop();
 });

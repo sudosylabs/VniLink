@@ -2210,7 +2210,8 @@ pub struct EventWatch {
 }
 #[napi]
 impl EventWatch {
-    /// Stops waking the host. The wake thread ends within a second.
+    /// Stops waking the host: no wake starts after this returns. The wake
+    /// thread ends within a second.
     #[napi]
     pub fn close(&self) {
         self.closed.store(true, Ordering::Release);
@@ -2247,7 +2248,7 @@ impl Engine {
                 while !stop.load(Ordering::Acquire) && !engine_closed.load(Ordering::Acquire) {
                     // Queued events are dropped before the wake, so one that
                     // arrives later wakes the host again.
-                    if subscription.wait(EVENT_WATCH_CHECK) {
+                    if subscription.wait(EVENT_WATCH_CHECK) && !stop.load(Ordering::Acquire) {
                         // Full means a wake is already waiting for this read.
                         let _queued = wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
                     }
