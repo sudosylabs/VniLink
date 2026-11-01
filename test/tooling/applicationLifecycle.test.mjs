@@ -31,10 +31,10 @@ export class MessageChannelMain { }`;
 
 /** Main services the composition test replaces; each records only what the test asserts. */
 const services = {
-	engineMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { app } from 'electron';
+	engineMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { app, state } from 'electron';
 		export const IEngineMainService = createDecorator('engineMainService');
 		export const shutdown = { stops: 0 }; let release; export const stopped = new Promise(resolve => { release = resolve; }); export function finish() { release(); }
-		export class EngineMainService { available = true; onDidChangeAvailability = Event.None; onDidChangeRestartRequired = Event.None; setRestartHandler() { } async start() { app.emit('activate'); } async refreshRestartRequired() { } async execute(command) { return command.type === 'nativeRuntime' ? { type: 'nativeRuntime', backends: [] } : { type: 'done' }; } stop() { shutdown.stops++; return stopped; } }`,
+		export class EngineMainService { available = true; onDidChangeAvailability = Event.None; onDidChangeRestartRequired = Event.None; setRestartHandler() { } async start() { if (state.activateDuringStart !== false) { app.emit('activate'); } } async refreshRestartRequired() { } async execute(command) { return command.type === 'nativeRuntime' ? { type: 'nativeRuntime', backends: [] } : { type: 'done' }; } stop() { shutdown.stops++; return stopped; } }`,
 	configurationMainService: `import { Event } from '${root}/src/base/common/event.js'; import { createDecorator } from '${root}/src/platform/instantiation/common/instantiation.js'; import { state } from 'electron';
 		export const IConfigurationMainService = createDecorator('configurationMainService');
 		export class ConfigurationMainService { get snapshot() { return { restricted: state.background ? [] : ['application.runInBackground'] }; } getValue() { return 'system'; } onDidChangeConfiguration = Event.None; async initialize() { } async flush() { } async restoreEngineDefaults() { } }`,
@@ -195,6 +195,8 @@ test('a login launch that runs in the background hosts without opening a window'
 	const { VniLinkApplication, app, state, setRunInBackground } = await load('./src/code/electron-main/app.ts', 'VniLinkApplication', `export { setRunInBackground } from './src/platform/configuration/electron-main/systemSettings.js';`);
 	setRunInBackground(true);
 	state.atLogin = true;
+	// Nobody opens VniLink while it starts.
+	state.activateDuringStart = false;
 	const application = new VniLinkApplication({});
 	await application.start();
 	assert.equal(state.windows, 0);
@@ -219,5 +221,21 @@ test('a second launch writes no log and prunes none of the first launch\'s logs'
 		assert.equal(state.windows, before.windows, 'The second launch opened a window');
 	} finally {
 		state.locked = true;
+	}
+});
+
+test('opening VniLink while a login-item start is still starting opens the window once it is ready', async () => {
+	// The engine fixture is opened (`activate`) while it starts.
+	const { VniLinkApplication, state } = await load('./src/code/electron-main/app.ts', 'VniLinkApplication');
+	const before = state.windows;
+	Object.assign(state, { background: true, atLogin: true, windowOpen: false });
+	try {
+		const application = new VniLinkApplication({ showWindow: false });
+		await application.start();
+		await new Promise(resolve => setImmediate(resolve));
+		assert.equal(state.windows, before + 1, 'The request made during startup was dropped');
+		application.dispose();
+	} finally {
+		Object.assign(state, { background: false, atLogin: false });
 	}
 });

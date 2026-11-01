@@ -91,6 +91,8 @@ export class VniLinkApplication extends Disposable {
 	private readonly instantiationService: InstantiationService;
 	private started: Promise<void> | undefined;
 	private restored = false;
+	/** A launch or activation that arrived before startup could open a window. */
+	private windowRequested = false;
 	private opening: Promise<void> | undefined;
 
 	constructor(private readonly options: ApplicationOptions = {}) {
@@ -188,6 +190,11 @@ export class VniLinkApplication extends Disposable {
 			if (!this.options.temporaryEngine && this.runsInBackground() && launchedAtLogin()) {
 				// Started by the login item: accept paired devices without a window until the user opens one.
 				this.restored = true;
+				if (this.windowRequested) {
+					this.instantiationService.invokeFunction(accessor => {
+						this.showWindow(accessor.get(IWindowsMainService), accessor.get(ILifecycleMainService));
+					});
+				}
 				return;
 			}
 			const window = await this.openWindow();
@@ -259,7 +266,11 @@ export class VniLinkApplication extends Disposable {
 
 	/** Focuses the window, or opens it when the application runs without one. */
 	private showWindow(windows: WindowsMainService, lifecycle: LifecycleMainService): void {
-		if (!this.restored || lifecycle.quitting) {
+		if (lifecycle.quitting) {
+			return;
+		}
+		if (!this.restored) {
+			this.windowRequested = true;
 			return;
 		}
 		if (windows.getMainWindow()) {
