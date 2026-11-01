@@ -55,6 +55,17 @@ export function packageConfiguration(root: string, stage: string, output: string
 		npmRebuild: false,
 		nodeGypRebuild: false,
 		publish: null,
+		// Electron's own switches, set in the binary so no environment variable or argument can undo them:
+		// the app is never a Node interpreter, loads only its sealed archive and is not inspectable.
+		electronFuses: {
+			runAsNode: false,
+			enableCookieEncryption: true,
+			enableNodeOptionsEnvironmentVariable: false,
+			enableNodeCliInspectArguments: false,
+			enableEmbeddedAsarIntegrityValidation: true,
+			onlyLoadAppFromAsar: true,
+			grantFileProtocolExtraPrivileges: false,
+		},
 		mac: {
 			executableName: product.platforms.darwin.executableName,
 			icon: icon('darwin'),
