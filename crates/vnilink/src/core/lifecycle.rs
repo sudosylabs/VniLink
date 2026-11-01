@@ -457,6 +457,10 @@ impl Core {
     /// [`Core::open`] already saves this secret in the installation record.
     /// After [`Core::reset_identity`], the new secret is only in the store.
     /// This stopped core still reports the key it bound.
+    ///
+    /// Only the `test-probes` build has it: no application path needs the
+    /// secret outside the store, so a production build cannot hand it out.
+    #[cfg(any(test, feature = "test-probes"))]
     pub fn export_identity(&self) -> [u8; 32] {
         let _engine = self.engine();
         self.shared.secret.to_bytes()
