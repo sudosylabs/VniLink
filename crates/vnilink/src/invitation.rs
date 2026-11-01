@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use iroh::{PublicKey, SecretKey, Signature};
 use rand::RngExt;
+use subtle::ConstantTimeEq;
 
 use crate::codec::{read_array, read_u8, write_sockaddr};
 use crate::error::Error;
@@ -21,6 +22,10 @@ const DOMAIN: &[u8] = b"vnilink-invitation-v1";
 pub(crate) const MAX_INVITATION_CHARS: usize = 16_384;
 pub(crate) const MAX_DIRECT_ADDRS: usize = 8;
 pub(crate) const MAX_TTL: Duration = Duration::from_secs(15 * 60);
+/// How far apart two computers' clocks may be. The reader accepts an
+/// invitation this long after its expiry by its own clock, and refuses one
+/// that claims to outlast [`MAX_TTL`] by more than this.
+pub(crate) const CLOCK_SKEW: Duration = Duration::from_secs(2 * 60);
 pub(crate) const MAX_REPLAY: usize = 64;
 
 /// Signed pairing payload. Possession is not logged. Pairing does not grant control.
@@ -62,8 +67,20 @@ impl ReplayCache {
         expires_at_ms: u64,
         now_ms: u64,
     ) -> Result<(), Error> {
-        self.entries.retain(|(_, expiry)| *expiry > now_ms);
-        if self.entries.iter().any(|(seen, _)| seen == &nonce) {
+        // An invitation stays openable for the clock skew after its expiry,
+        // so it is remembered that long too.
+        let skew = CLOCK_SKEW.as_millis() as u64;
+        self.entries
+            .retain(|(_, expiry)| expiry.saturating_add(skew) > now_ms);
+        // The nonce is what a presented invitation proves it holds: every
+        // entry is compared, whatever the first one said.
+        let replayed = self
+            .entries
+            .iter()
+            .fold(subtle::Choice::from(0), |found, (seen, _)| {
+                found | seen.ct_eq(&nonce)
+            });
+        if bool::from(replayed) {
             return Err(Error::InvitationReplayed);
         }
         if self.entries.len() >= MAX_REPLAY {
@@ -126,8 +143,14 @@ pub(crate) fn open(token: &str, now: SystemTime) -> Result<(Invitation, [u8; 16]
     }
     let bytes = decode_hex(&token[PREFIX.len()..])?;
     let (invitation, nonce, signature) = parse(&bytes)?;
-    if unix_ms(now)? >= invitation.expires_at_ms {
+    let now_ms = unix_ms(now)?;
+    let skew = CLOCK_SKEW.as_millis() as u64;
+    if now_ms >= invitation.expires_at_ms.saturating_add(skew) {
         return Err(Error::InvitationExpired);
+    }
+    let furthest = now_ms.saturating_add((MAX_TTL + CLOCK_SKEW).as_millis() as u64);
+    if invitation.expires_at_ms > furthest {
+        return Err(Error::InvalidInvitation("lifetime is longer than allowed"));
     }
     let key = PublicKey::from_bytes(&invitation.endpoint_id)
         .map_err(|_| Error::InvalidInvitation("endpoint id is not a valid key"))?;
@@ -455,11 +478,50 @@ mod tests {
     }
 
     #[test]
+    fn a_reader_whose_clock_runs_ahead_still_opens_a_fresh_invitation() {
+        let secret = SecretKey::generate();
+        let now = SystemTime::now();
+        let (token, invitation) =
+            issue(&secret, &[], &[], Duration::from_secs(60), now, None).unwrap();
+        let ahead = now + Duration::from_secs(60) + CLOCK_SKEW / 2;
+        let (_, nonce) = open(&token, ahead).unwrap();
+
+        let mut cache = ReplayCache::new();
+        cache
+            .remember(nonce, invitation.expires_at_ms, unix_ms(ahead).unwrap())
+            .unwrap();
+        assert!(
+            matches!(
+                cache.remember(nonce, invitation.expires_at_ms, unix_ms(ahead).unwrap()),
+                Err(Error::InvitationReplayed)
+            ),
+            "a nonce is remembered while the invitation can still be opened"
+        );
+    }
+
+    #[test]
+    fn an_invitation_that_outlasts_the_longest_lifetime_is_refused() {
+        let secret = SecretKey::generate();
+        let now = SystemTime::now();
+        let (token, _) = issue(&secret, &[], &[], MAX_TTL, now, None).unwrap();
+        let behind = now - CLOCK_SKEW / 2;
+        assert!(
+            open(&token, behind).is_ok(),
+            "a slow reader clock is within skew"
+        );
+        let far_behind = now - CLOCK_SKEW * 2;
+        assert!(matches!(
+            open(&token, far_behind),
+            Err(Error::InvalidInvitation(_))
+        ));
+    }
+
+    #[test]
     fn expired_and_replayed_invitations_are_rejected() {
         let secret = SecretKey::generate();
         let now = SystemTime::now();
         let (token, _) = issue(&secret, &[], &[], Duration::from_secs(1), now, None).unwrap();
-        let later = now + Duration::from_secs(2);
+        let later = now + Duration::from_secs(2) + CLOCK_SKEW;
         assert!(matches!(open(&token, later), Err(Error::InvitationExpired)));
 
         let (token, invitation) =
@@ -657,7 +719,10 @@ mod tests {
             Err(Error::InvitationCacheFull)
         ));
         extra[0] = 8;
-        cache.remember(extra, now + 20_000, now + 5_000).unwrap();
+        let after_skew = now + 5_000 + CLOCK_SKEW.as_millis() as u64;
+        cache
+            .remember(extra, after_skew + 15_000, after_skew)
+            .unwrap();
     }
 
     #[test]
