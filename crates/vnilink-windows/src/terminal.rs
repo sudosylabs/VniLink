@@ -61,6 +61,8 @@ use windows::{
 /// How often an idle writer or supervisor looks whether its terminal was closed.
 const STOP_CHECK: Duration = Duration::from_millis(20);
 /// How often closing asks a writer blocked in a write to give it up.
+/// How long a shell that refuses to be terminated is given to finish exiting.
+const EXITING: Duration = Duration::from_secs(1);
 const CANCEL_RETRY: Duration = Duration::from_millis(5);
 /// Output that follows other output this closely is a busy shell's.
 const BUSY: Duration = Duration::from_millis(2);
@@ -148,6 +150,10 @@ fn coord(size: TerminalSize) -> COORD {
         X: size.columns as i16,
         Y: size.rows as i16,
     }
+}
+/// `work` for a thread of this terminal, recording as the engine that opened it.
+fn within<T>(work: impl FnOnce() -> T) -> impl FnOnce() -> T {
+    vnilink::trace::within(tracing::Span::current(), work)
 }
 fn handle(value: &impl AsRawHandle) -> HANDLE {
     HANDLE(value.as_raw_handle())
@@ -300,6 +306,8 @@ struct Session {
     reader: Option<JoinHandle<()>>,
     gatherer: Option<JoinHandle<()>>,
     writer: Option<IoWorker>,
+    /// Wakes the writer from its wait for a command when the session ends.
+    wake: Option<std::sync::mpsc::SyncSender<TerminalCommand>>,
     stop: Arc<AtomicBool>,
     writer_stop: Arc<AtomicBool>,
     drain: Arc<AtomicBool>,
@@ -310,14 +318,28 @@ impl Session {
             self.drain.store(true, Ordering::Release);
         }
         self.writer_stop.store(true, Ordering::Release);
+        if let Some(wake) = self.wake.take() {
+            // A full queue is worked through and the flag checked before the
+            // writer waits again, so only an empty one needs the wake-up.
+            vnilink::ignored!(
+                vnilink::trace::TERMINAL,
+                "a full queue is worked through, and the flag checked, before it waits",
+                wake.try_send(TerminalCommand::Stop)
+            );
+        }
         if let Some(process) = &self.process {
             unsafe {
-                if WaitForSingleObject(handle(process), 0) != WAIT_OBJECT_0 {
-                    ignored_hr!(
-                        vnilink::trace::TERMINAL,
-                        "a shell that cannot be ended ends with its console",
-                        TerminateProcess(handle(process), 1)
-                    );
+                if WaitForSingleObject(handle(process), 0) != WAIT_OBJECT_0
+                    && TerminateProcess(handle(process), 1).is_err()
+                {
+                    // Windows refuses to terminate a process that is already
+                    // exiting; the exit is what is waited for.
+                    if WaitForSingleObject(handle(process), millis(EXITING)) != WAIT_OBJECT_0 {
+                        tracing::warn!(
+                            target: vnilink::trace::TERMINAL,
+                            "a shell that cannot be ended ends with its console"
+                        );
+                    }
                 }
             }
         }
@@ -417,7 +439,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         let (read, pieces) = std::sync::mpsc::sync_channel::<Vec<u8>>(TERMINAL_QUEUE);
         let reader = std::thread::Builder::new()
             .name("vnilink-conpty-read".into())
-            .spawn(move || {
+            .spawn(within(move || {
                 let mut read = Some(read);
                 let mut bytes = vec![0; TERMINAL_CHUNK];
                 loop {
@@ -438,7 +460,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                         Err(_) => break,
                     }
                 }
-            })
+            }))
             .map_err(|_| Error::Unsupported("Windows terminal reader"))?;
         let mut session = Session {
             console: None,
@@ -447,6 +469,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
             reader: Some(reader),
             gatherer: None,
             writer: None,
+            wake: None,
             stop: stop.clone(),
             drain: drain.clone(),
             writer_stop: writer_stop.clone(),
@@ -465,7 +488,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         session.gatherer = Some(
             std::thread::Builder::new()
                 .name("vnilink-conpty-output".into())
-                .spawn(move || gather(pieces, out, discarding, done))
+                .spawn(within(move || gather(pieces, out, discarding, done)))
                 .map_err(|_| Error::Unsupported("Windows terminal output"))?,
         );
         startup.check()?;
@@ -515,13 +538,14 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         drop(main_thread);
         startup.check()?;
         let (commands, incoming) = std::sync::mpsc::sync_channel(TERMINAL_QUEUE);
+        session.wake = Some(commands.clone());
         let (ready, acknowledgement) = std::sync::mpsc::sync_channel(1);
         let writer_quit = writer_stop.clone();
         let core_stop = stop.clone();
         let done = Finished(finished.clone());
         let writer = std::thread::Builder::new()
             .name("vnilink-conpty-write".into())
-            .spawn(move || {
+            .spawn(within(move || {
                 let _done = done;
                 // Closing cancels this thread's writes and waits for it to end.
                 let thread = unsafe {
@@ -582,7 +606,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
                         Err(_) => break,
                     }
                 }
-            })
+            }))
             .map_err(|_| Error::Unsupported("Windows terminal writer"))?;
         // The thread publishes an owned cancellation handle before any write.
         session.writer = Some(IoWorker {
@@ -629,7 +653,7 @@ impl HostTerminalFactory for WindowsTerminalFactory {
         };
         std::thread::Builder::new()
             .name("vnilink-conpty".into())
-            .spawn(supervisor)
+            .spawn(within(supervisor))
             .map_err(|_| Error::Unsupported("Windows terminal supervisor"))?;
         Ok(TerminalBackend {
             process_id,
@@ -735,6 +759,34 @@ mod tests {
             unsafe { WaitForSingleObject(handle(&process), 5000) },
             WAIT_OBJECT_0
         );
+    }
+    /// A shell that exits ends its terminal with its code, with nobody
+    /// closing it: the writer waiting for input does not hold the exit back.
+    #[test]
+    fn a_shell_that_exits_reports_its_code() {
+        let mut backend = cmd()
+            .open(SIZE, BackendStartup::new(Duration::from_secs(5)))
+            .unwrap();
+        backend
+            .commands
+            .send(TerminalCommand::Input(b"exit 7\r\n".to_vec()))
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let exit = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(event) = backend.output.recv().await {
+                    if let TerminalEvent::Exited(code) = event {
+                        return Some(code);
+                    }
+                }
+                None
+            })
+            .await
+        });
+        assert_eq!(exit, Ok(Some(7)));
     }
     /// The processes whose parent is `parent`.
     fn children_of(parent: u32) -> Vec<u32> {
