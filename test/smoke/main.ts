@@ -105,6 +105,51 @@ class SmokeSuite {
 	}
 
 	/** The notice window counts down from its deadline, answers Cancel, and closes when its signal aborts. */
+	/** Stops the engine process the way a crash does and follows the window until the engine is back and answering. */
+	private async verifyEngineRestart(window: BrowserWindow): Promise<void> {
+		const engine = app.getAppMetrics().find(metric => metric.type === 'Utility' && metric.name === 'VniLink Engine');
+		assert(engine, 'The engine process is not running');
+		// The window listens before the process is stopped, so nothing it is told is missed.
+		await window.webContents.executeJavaScript(`(() => {
+			const service = window.driver.engine;
+			const story = [];
+			const changes = [
+				service.onDidChangeRestarting(restarting => story.push(restarting ? 'restarting' : 'steady')),
+				service.onDidChangeAvailability(available => story.push(available ? 'available' : 'unavailable')),
+			];
+			const back = new Promise((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error('The engine did not come back: ' + story.join(', '))), 30000);
+				changes.push(service.onDidChangeAvailability(available => { if (available) { clearTimeout(timer); resolve(); } }));
+			});
+			window.engineRestart = { story, changes, back };
+		})()`);
+		process.kill(engine.pid, 'SIGKILL');
+		const outcome: unknown = await window.webContents.executeJavaScript(`(async () => {
+			const service = window.driver.engine;
+			const { story, changes, back } = window.engineRestart;
+			await back;
+			const snapshot = await service.execute({ type: 'snapshot' });
+			const hostingEvent = new Promise((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error('No hosting event arrived from the restarted engine')), 10000);
+				changes.push(service.onDidReceiveEvents(batch => {
+					if (batch.events.some(event => event.type === 'hostingChanged' && event.hosting === false)) { clearTimeout(timer); resolve(); }
+				}));
+			});
+			const configuration = window.driver.mainProcess.getChannel('configuration');
+			await configuration.call('updateValue', { key: 'application.acceptConnections', value: false });
+			await hostingEvent;
+			await configuration.call('updateValue', { key: 'application.acceptConnections', value: true });
+			for (const change of changes) { change.dispose(); }
+			return { story, snapshot, restarting: service.restarting };
+		})()`);
+		assert(record(outcome));
+		assert(Array.isArray(outcome.story));
+		assert.deepEqual(outcome.story.slice(0, 2), ['restarting', 'unavailable'], 'Windows were not told the engine was coming back before they heard it was gone');
+		assert.deepEqual(outcome.story.slice(-2), ['steady', 'available']);
+		assert(isEngineReply(outcome.snapshot) && outcome.snapshot.type === 'snapshot' && outcome.snapshot.snapshot.hosting, 'The restarted engine does not host again');
+		assert.equal(outcome.restarting, false);
+	}
+
 	private async verifyNotice(): Promise<void> {
 		const theme = nativeTheme.themeSource;
 		const known = new Set(BrowserWindow.getAllWindows());
@@ -382,6 +427,9 @@ class SmokeSuite {
 		}
 		if (this.selection.includes('notice')) {
 			await this.verifyNotice();
+		}
+		if (this.selection.includes('engine-restart')) {
+			await this.verifyEngineRestart(window);
 		}
 		if (!this.selection.names.some((name: string) => ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload'].includes(name))) {
 			return;
