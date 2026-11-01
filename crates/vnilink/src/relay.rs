@@ -21,8 +21,9 @@ const MAX_AUTH_TOKEN_BYTES: usize = 256;
 ///
 /// The default is the public n0 set (`RelayMode::Default`). A custom list
 /// replaces that set for this installation only.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub enum RelaySettings {
+    #[default]
     Public,
     Custom(Vec<CustomRelay>),
 }
@@ -53,12 +54,6 @@ impl fmt::Debug for CustomRelay {
                 &self.auth_token.as_ref().map(|_| "[redacted]"),
             )
             .finish()
-    }
-}
-
-impl Default for RelaySettings {
-    fn default() -> Self {
-        Self::Public
     }
 }
 

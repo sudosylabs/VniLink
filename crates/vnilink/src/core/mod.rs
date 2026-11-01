@@ -69,8 +69,6 @@ mod job_journal;
 mod jobs;
 #[cfg(all(any(unix, windows), any(test, feature = "test-probes")))]
 pub use jobs::PrestageHooks;
-#[cfg(test)]
-pub(crate) use jobs::PREPARE_SCAN_HOOKS;
 #[cfg(any(test, feature = "test-probes"))]
 pub use jobs::{MAX_ACTIVE_JOBS, SERVE_SOURCE_PROBE};
 mod input_cleanup;
@@ -893,11 +891,13 @@ fn persist(shared: &Shared, state: &mut State) -> Result<(), Error> {
         &state.record_relay,
         &state.trust,
         &state.replay,
-        &state.terminal_policy,
-        &state.file_retention_policy,
-        &state.power_policy,
-        &state.file_resource_policy,
-        &state.system_policy,
+        installation::Policies {
+            terminal: &state.terminal_policy,
+            file_retention: &state.file_retention_policy,
+            power: &state.power_policy,
+            file_resource: &state.file_resource_policy,
+            system: &state.system_policy,
+        },
     )?;
     save_installation(shared, state, store.as_ref(), &bytes)
 }

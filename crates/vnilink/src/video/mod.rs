@@ -28,10 +28,12 @@ mod recovery;
 mod report;
 mod viewer;
 
-pub(crate) use counters::{VideoCounters, VideoCounts};
+pub(crate) use counters::VideoCounters;
+#[cfg(test)]
+pub(crate) use datagram::parity_count;
 pub(crate) use datagram::{
-    fragment, fragmented_size, parity_count, FragmentCounts, Losses, Reassembler, Unfinished,
-    FRAG_HEADER, MAX_PROTECTION,
+    fragment, fragmented_size, FragmentCounts, Losses, Reassembler, Unfinished, FRAG_HEADER,
+    MAX_PROTECTION,
 };
 pub(crate) use frame::micros_since;
 pub(crate) use frame::{

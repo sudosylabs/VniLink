@@ -972,7 +972,7 @@ mod tests {
             }
         };
         let replace = crossing(|from, to| std::fs::rename(from, to));
-        let no_replace = crossing(|from, to| vnilink_rename::rename_noreplace(from, to));
+        let no_replace = crossing(vnilink_rename::rename_noreplace);
         let commits = Commits {
             replace: &replace,
             no_replace: &no_replace,

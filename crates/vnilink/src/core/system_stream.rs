@@ -1128,6 +1128,7 @@ fn current_privacy(state: &State) -> PrivacyState {
     }
 }
 
+#[cfg(test)]
 fn set_privacy(
     shared: &Shared,
     admission: &Admission,
@@ -1330,16 +1331,14 @@ fn set_privacy_inner(
     if previous.is_some() {
         state.privacy = None;
     }
-    if display_held || input_held {
-        if state.privacy.is_none() {
-            state.privacy = Some(PrivacyLease {
-                connection_id: admission.connection_id,
-                service_id,
-                display_private: display_held,
-                input_blocked: input_held,
-                actions: actions.clone(),
-            });
-        }
+    if (display_held || input_held) && state.privacy.is_none() {
+        state.privacy = Some(PrivacyLease {
+            connection_id: admission.connection_id,
+            service_id,
+            display_private: display_held,
+            input_blocked: input_held,
+            actions: actions.clone(),
+        });
     }
     Err(1)
 }

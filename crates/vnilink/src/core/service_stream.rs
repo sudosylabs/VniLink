@@ -47,13 +47,19 @@ fn patience(request: &fs::Request) -> Duration {
     }
 }
 
-fn encode(bytes: &Vec<u8>) -> Result<Vec<u8>, Error> {
+fn encode(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     let mut out = (bytes.len() as u32).to_be_bytes().to_vec();
     out.extend_from_slice(bytes);
     Ok(out)
 }
 pub(super) async fn write(send: &mut SendStream, bytes: Vec<u8>) -> Result<(), Error> {
-    crate::sidestream::write_frame(send, &bytes, encode, "the service frame was not written").await
+    crate::sidestream::write_frame(
+        send,
+        bytes.as_slice(),
+        encode,
+        "the service frame was not written",
+    )
+    .await
 }
 pub(super) async fn read(recv: &mut RecvStream) -> Result<Vec<u8>, Error> {
     crate::sidestream::read_frame(
@@ -1020,7 +1026,7 @@ pub(super) async fn serve(
     if body[1] == PROBE && remote_id == 0 && kind == crate::snapshot::WIRE_KIND {
         return super::snapshot::probe(shared, connection_id, peer, send, stamp).await;
     }
-    if body[1] == 2 && remote_id == 0 && matches!(kind, 4 | 5 | 6) {
+    if body[1] == 2 && remote_id == 0 && matches!(kind, 4..=6) {
         {
             let state = lock(&shared.state);
             let session = live_session(&state, true, connection_id)?;
@@ -1079,10 +1085,8 @@ pub(super) async fn serve(
                     && (Some(r.info.kind) == service_kind && kind != 3
                         || r.remote_id == Some(remote_id))
             })
-        {
-            Err(4)
-        } else if kind == 8
-            && !super::snapshot::snapshot_room(&state, &peer, std::time::Instant::now())
+            || kind == 8
+                && !super::snapshot::snapshot_room(&state, &peer, std::time::Instant::now())
         {
             Err(4)
         } else {
@@ -1251,15 +1255,9 @@ pub(super) async fn serve(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use crate::error::Error;
     use crate::test_support::{loopback_core, pair_for_control, transfer_pair, FilesystemLocation};
     use crate::{Core, ServiceKind, SessionInfo};
-
-    fn wait(name: &str, condition: impl FnMut() -> bool) {
-        crate::test_support::wait_until(name, Duration::from_secs(8), condition);
-    }
 
     fn active(core: &Core, id: u64) -> SessionInfo {
         crate::test_support::wait_active(core, id)

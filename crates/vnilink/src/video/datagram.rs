@@ -74,7 +74,7 @@ const MIN_PARITY: usize = 2;
 /// data: none at zero, else [`MAX_PROTECTION`] at most. Above the base
 /// share never fewer than [`MIN_PARITY`], at it one.
 pub(crate) fn parity_count(data: usize, protection: f64) -> usize {
-    if !(protection > 0.0) {
+    if protection.is_nan() || protection <= 0.0 {
         return 0;
     }
     let floor = if protection > super::report::BASE_PROTECTION {

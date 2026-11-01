@@ -7,12 +7,14 @@
 
 //! Relative motion and high-resolution scroll. Absolute positions are not scaled.
 
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 use super::{MAX_PRECISE_WHEEL, WHEEL_DETENT};
 
 /// Adds one precise-scroll sample to a remainder and returns whole detents.
 ///
 /// 120 precise units are one detent. A remainder smaller than a detent is kept
 /// so later samples are not dropped. The remainder keeps the sign of the sum.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 pub(crate) fn accumulate_detents(pending: &mut i32, delta: i32) -> i32 {
     let delta = delta.clamp(-MAX_PRECISE_WHEEL, MAX_PRECISE_WHEEL);
     *pending = pending.saturating_add(delta);

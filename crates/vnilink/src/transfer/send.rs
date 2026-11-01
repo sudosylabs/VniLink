@@ -132,7 +132,7 @@ pub(crate) async fn send(
                 position += plain as u64;
                 sent_to(position, false);
                 sent += 1;
-                if sent % RECHECK_EVERY == 0 && !may_send() {
+                if sent.is_multiple_of(RECHECK_EVERY) && !may_send() {
                     crate::ignored!(
                         crate::trace::FILES,
                         "a stream that cannot be reset is closed with its link",
@@ -198,7 +198,9 @@ pub(crate) async fn send(
 /// Whether `offset` is a segment boundary of a `size`-byte file and `held`
 /// bytes fit in the segment there.
 fn holds_within_segment(offset: u64, held: u64, size: u64) -> bool {
-    offset <= size && offset % SEGMENT_LEN == 0 && held <= segment_len(offset, size, SEGMENT_LEN)
+    offset <= size
+        && offset.is_multiple_of(SEGMENT_LEN)
+        && held <= segment_len(offset, size, SEGMENT_LEN)
 }
 
 /// Reads the held source from `offset` to its end once, segment by
@@ -298,9 +300,8 @@ fn send_block(
     let plain = block.len();
     let first = mode.is_none();
     let framed = match *mode {
-        None => codec::probe(&block).map(|frame| {
+        None => codec::probe(&block).inspect(|frame| {
             *mode = Some(if frame.is_some() { MODE_ZSTD } else { MODE_RAW });
-            frame
         }),
         Some(MODE_ZSTD) => codec::encode(&block).map(Some),
         Some(_) => Ok(None),

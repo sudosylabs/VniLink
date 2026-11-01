@@ -14,14 +14,15 @@ pub(super) struct Factory {
     pub(super) revision: u64,
     pub(super) adapter: Option<Arc<dyn HostPowerFactory>>,
 }
+type PendingBackend = (
+    BackendStartup,
+    crate::service::StartupGuard,
+    tokio::task::JoinHandle<Result<Box<dyn PowerInhibitor>, Error>>,
+);
 struct Slot {
     revision: u64,
     inhibitor: Option<Box<dyn PowerInhibitor>>,
-    pending: Option<(
-        BackendStartup,
-        crate::service::StartupGuard,
-        tokio::task::JoinHandle<Result<Box<dyn PowerInhibitor>, Error>>,
-    )>,
+    pending: Option<PendingBackend>,
     failure: Option<String>,
 }
 impl Slot {

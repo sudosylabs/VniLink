@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::events::{EventHub, EventSubscription};
 use crate::installation::{self, InstallationStore};
 use crate::invitation::ReplayCache;
-use crate::keyboard::{self, KeyboardMode};
+use crate::keyboard::KeyboardMode;
 use crate::protocol::Capabilities;
 use crate::relay::RelaySettings;
 use crate::trust::Trust;
@@ -516,11 +516,13 @@ impl Core {
                 &state.record_relay,
                 &Trust::default(),
                 &ReplayCache::new(),
-                &state.terminal_policy,
-                &state.file_retention_policy,
-                &state.power_policy,
-                &state.file_resource_policy,
-                &state.system_policy,
+                installation::Policies {
+                    terminal: &state.terminal_policy,
+                    file_retention: &state.file_retention_policy,
+                    power: &state.power_policy,
+                    file_resource: &state.file_resource_policy,
+                    system: &state.system_policy,
+                },
             )?;
             save_installation(&self.shared, &mut state, store.as_ref(), &bytes)?;
         }

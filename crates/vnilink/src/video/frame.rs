@@ -217,7 +217,7 @@ fn validate_payload(payload: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 pub(crate) fn check_video_len(len: usize) -> Result<(), Error> {
-    if len < VIDEO_HEADER || len > VIDEO_HEADER + MAX_REGION_BYTES + MAX_VIDEO_FRAME {
+    if !(VIDEO_HEADER..=VIDEO_HEADER + MAX_REGION_BYTES + MAX_VIDEO_FRAME).contains(&len) {
         Err(Error::Malformed)
     } else {
         Ok(())

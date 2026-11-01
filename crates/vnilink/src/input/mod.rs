@@ -13,7 +13,6 @@ mod map;
 mod motion;
 mod queue;
 pub mod usage;
-mod window;
 
 pub(crate) use events::{key_text_problem, swap_command_key, swap_pointer_button};
 pub use events::{InputEvent, PointerButton};
@@ -26,8 +25,6 @@ pub(crate) use motion::accumulate_detents;
 pub(crate) use motion::PointerPlan;
 pub use motion::PointerSettings;
 pub(crate) use queue::{HeldInput, InputFault, InputOutbox, Outbound};
-pub(crate) use window::validate_window;
-pub use window::WindowGeometry;
 
 /// Finished text on the control stream, in bytes. This is a short phrase,
 /// not a clipboard paste. The control frame also carries the tag and the

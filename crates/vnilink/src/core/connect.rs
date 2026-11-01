@@ -539,7 +539,7 @@ pub(super) async fn establish(
     // accepted here; the controller never accepts anything else.
     let aux_stop = stop_rx.clone();
     let aux_connection = connection.clone();
-    let aux_shared = Arc::clone(&shared);
+    let aux_shared = Arc::clone(shared);
     let aux_peer = device.endpoint_id;
     let aux = tokio::spawn(async move {
         super::fs::serve_aux_controller(aux_shared, aux_connection, aux_peer, aux_stop).await;

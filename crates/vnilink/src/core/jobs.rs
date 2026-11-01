@@ -678,13 +678,13 @@ pub(super) const ACTIVE_STATES: &[JobState] = &[
     JobState::WaitingDecision,
 ];
 
-/// Retention: partials live under the transfer directory per job
-/// (`staging/job-{id}`), removed on Complete (verified publish), Failed and
-/// forget; retained on Cancelled/Interrupted for byte-reusing resume until
-/// the resume policy evicts them at the next load.
-/// Manifests bound each job's file count, free-space admission bounds its
-/// bytes and `MAX_ACTIVE_JOBS` bounds concurrency, so disk stays
-/// proportional to in-flight plus resumable work, not unbounded history.
+// Retention: partials live under the transfer directory per job
+// (`staging/job-{id}`), removed on Complete (verified publish), Failed and
+// forget; retained on Cancelled/Interrupted for byte-reusing resume until
+// the resume policy evicts them at the next load.
+// Manifests bound each job's file count, free-space admission bounds its
+// bytes and `MAX_ACTIVE_JOBS` bounds concurrency, so disk stays
+// proportional to in-flight plus resumable work, not unbounded history.
 
 /// Resumable payload cache: seven days, at most 4 GiB across inactive jobs.
 /// Active work remains protected by the manifest and concurrency limits.
@@ -967,8 +967,11 @@ pub(super) fn sending_at(
 /// engine (`Core::engine_key`) and job after the source opens, before it
 /// is authorized. Production leaves it unset. The probe must return
 /// promptly for jobs it does not recognize: suites run in parallel.
-pub static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<fn(usize, u64)>> =
+pub static SERVE_SOURCE_PROBE: std::sync::Mutex<Option<ServeSourceProbe>> =
     std::sync::Mutex::new(None);
+
+/// A [`SERVE_SOURCE_PROBE`]: the serving engine's key and the job.
+pub type ServeSourceProbe = fn(usize, u64);
 
 /// Opens file `file` of the peer's sending job `job` for serving, or says
 /// which status refuses it. The source is reached through the leg's pinned
@@ -1194,19 +1197,15 @@ pub(super) fn jobs_changed(shared: &Shared) {
 }
 
 mod api;
-pub(crate) use api::*;
 mod driver;
-pub(crate) use driver::*;
+use driver::*;
 mod persist;
-pub(crate) use persist::*;
+pub(super) use persist::*;
 mod publish;
-pub(crate) use publish::*;
 mod receiver;
-pub(crate) use receiver::*;
 mod sender;
-pub(crate) use sender::*;
 mod serve;
-pub(crate) use serve::*;
+pub(super) use serve::*;
 
 #[cfg(test)]
 mod lifecycle_tests {

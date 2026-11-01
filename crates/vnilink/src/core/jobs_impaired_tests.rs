@@ -342,11 +342,9 @@ fn run_case(
     controller: &Arc<Core>,
     host: &Arc<Core>,
     files: &crate::ServiceInfo,
-    from: &FilesystemLocation,
-    to: &FilesystemLocation,
+    (from, to): (&FilesystemLocation, &FilesystemLocation),
     name: &str,
-    controller_root: &Path,
-    host_root: &Path,
+    (controller_root, host_root): (&Path, &Path),
 ) -> Value {
     let started = Instant::now();
     let (folder, names) = from.entry(name);
@@ -437,11 +435,12 @@ fn run_matrix(matrix: &Matrix) -> Value {
                 &controller,
                 &host,
                 &files,
-                &from,
-                &to,
+                (&from, &to),
                 name,
-                &controller_scratch.0.join("root"),
-                &host_scratch.0.join("root"),
+                (
+                    &controller_scratch.0.join("root"),
+                    &host_scratch.0.join("root"),
+                ),
             )
         })
         .collect();

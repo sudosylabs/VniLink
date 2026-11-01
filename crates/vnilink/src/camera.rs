@@ -165,10 +165,10 @@ impl CameraSource {
         self.stopped.store(true, Ordering::Release);
     }
 }
+#[non_exhaustive]
 pub struct CameraBackend {
     pub config: CameraConfig,
     pub source: Arc<CameraSource>,
-    _claim: (),
 }
 impl CameraBackend {
     pub fn new(config: CameraConfig, source: Arc<CameraSource>) -> Result<Self, Error> {
@@ -183,11 +183,7 @@ impl CameraBackend {
         {
             return Err(Error::Busy);
         }
-        Ok(Self {
-            config,
-            source,
-            _claim: (),
-        })
+        Ok(Self { config, source })
     }
 }
 impl Drop for CameraBackend {

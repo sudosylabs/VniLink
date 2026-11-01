@@ -607,10 +607,12 @@ pub(super) async fn handle_fs_request(
                 peer,
                 generation,
                 id,
-                root,
-                &path,
-                offset,
-                limit,
+                ListPage {
+                    root,
+                    path: &path,
+                    offset,
+                    limit,
+                },
                 fs::ListHooks::none(),
             )
             .await
@@ -691,6 +693,14 @@ fn list_gate(
     }
 }
 
+/// The page of a directory a listing asks for.
+struct ListPage<'a> {
+    root: u64,
+    path: &'a str,
+    offset: u64,
+    limit: u16,
+}
+
 /// Serves one remote listing: admission under short locks, enumeration
 /// on a bounded worker, then an exact liveness/grant recheck before the
 /// page is encoded. A stale completion never publishes its page.
@@ -700,12 +710,15 @@ async fn serve_list_page(
     peer: &[u8; 32],
     generation: u64,
     id: u32,
-    root: u64,
-    path: &str,
-    offset: u64,
-    limit: u16,
+    page: ListPage<'_>,
     hooks: fs::ListHooks,
 ) -> (fs::Response, Option<Vec<u8>>) {
+    let ListPage {
+        root,
+        path,
+        offset,
+        limit,
+    } = page;
     // Fast gates first, without holding anything across an await.
     if let Some(status) = list_gate(&lock(&shared.state), session_id, peer, generation) {
         return (fs::Response::coded(id, status), None);
@@ -892,10 +905,12 @@ mod listing_tests {
                         &STALE_PEER,
                         7,
                         9,
-                        files.root,
-                        &files.path(""),
-                        0,
-                        50,
+                        ListPage {
+                            root: files.root,
+                            path: &files.path(""),
+                            offset: 0,
+                            limit: 50,
+                        },
                         hooks,
                     )
                     .await;
@@ -916,10 +931,12 @@ mod listing_tests {
                 &STALE_PEER,
                 7,
                 10,
-                files.root,
-                &files.path(""),
-                0,
-                50,
+                ListPage {
+                    root: files.root,
+                    path: &files.path(""),
+                    offset: 0,
+                    limit: 50,
+                },
                 fs::ListHooks::none(),
             ));
             assert!(sibling.is_ok(), "sibling list refused while parked");

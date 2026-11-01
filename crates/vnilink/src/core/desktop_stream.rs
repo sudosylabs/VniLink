@@ -1469,15 +1469,15 @@ impl Core {
 }
 
 mod client;
-pub(crate) use client::*;
+use client::*;
 mod datagrams;
-pub(crate) use datagrams::*;
+use datagrams::*;
 mod input;
-pub(crate) use input::*;
+pub(super) use input::*;
 mod send;
-pub(crate) use send::*;
+use send::*;
 mod serve;
-pub(crate) use serve::*;
+pub(super) use serve::*;
 
 #[cfg(test)]
 mod tests {

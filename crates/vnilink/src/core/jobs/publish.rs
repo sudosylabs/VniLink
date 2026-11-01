@@ -496,7 +496,7 @@ impl Core {
                             drop(state_guard);
                             drop(jobs);
                             save_jobs(&self.shared)?;
-                            return Ok(None);
+                            Ok(None)
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
                             // Remount raced the pre-stage check: stand down
@@ -514,7 +514,7 @@ impl Core {
                                 std::fs::remove_file(staged)
                             );
                             save_jobs(&self.shared)?;
-                            return Ok(None);
+                            Ok(None)
                         }
                         Err(_) => {
                             drop(state_guard);
@@ -525,7 +525,7 @@ impl Core {
                                 std::fs::remove_file(staged)
                             );
                             self.mark_failed(id, PUBLISH_FAILED)?;
-                            return Ok(None);
+                            Ok(None)
                         }
                     }
                 }
@@ -553,7 +553,7 @@ impl Core {
                                 drop(state_guard);
                                 drop(jobs);
                                 save_jobs(&self.shared)?;
-                                return Ok(None);
+                                Ok(None)
                             }
                             Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
                                 if record.state != JobState::Cancelled {
@@ -569,7 +569,7 @@ impl Core {
                                     std::fs::remove_file(staged)
                                 );
                                 save_jobs(&self.shared)?;
-                                return Ok(None);
+                                Ok(None)
                             }
                             Err(_) => {
                                 drop(state_guard);
@@ -580,7 +580,7 @@ impl Core {
                                     std::fs::remove_file(staged)
                                 );
                                 self.mark_failed(id, PUBLISH_FAILED)?;
-                                return Ok(None);
+                                Ok(None)
                             }
                         }
                     } else {
@@ -602,7 +602,7 @@ impl Core {
                                 drop(state_guard);
                                 drop(jobs);
                                 save_jobs(&self.shared)?;
-                                return Ok(None);
+                                Ok(None)
                             }
                             Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
                                 if record.state != JobState::Cancelled {
@@ -618,7 +618,7 @@ impl Core {
                                     std::fs::remove_file(staged)
                                 );
                                 save_jobs(&self.shared)?;
-                                return Ok(None);
+                                Ok(None)
                             }
                             Err(_) => {
                                 drop(state_guard);
@@ -629,7 +629,7 @@ impl Core {
                                     std::fs::remove_file(staged)
                                 );
                                 self.mark_failed(id, PUBLISH_FAILED)?;
-                                return Ok(None);
+                                Ok(None)
                             }
                         }
                     }

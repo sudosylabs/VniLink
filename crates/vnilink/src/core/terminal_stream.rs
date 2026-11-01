@@ -8,7 +8,7 @@
 //! Independently cancelled terminal pipe over an admitted neutral connection.
 // trace: records every ignored failure
 use super::service_stream::{read, write, HostedEnd, HostedEnding};
-use super::terminal_runtime::{self, HostedTerminal};
+use super::terminal_runtime::{self};
 use super::*;
 use crate::terminal::{
     TerminalCommand, TerminalEvent, TerminalOptions, TerminalSessionInfo, TerminalSize,

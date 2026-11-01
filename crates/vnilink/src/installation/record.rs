@@ -46,17 +46,30 @@ impl std::fmt::Debug for Record {
     }
 }
 
+/// The settings a record carries besides identity, relay, trust and replay
+/// protection, borrowed from where the core keeps them.
+pub(crate) struct Policies<'a> {
+    pub terminal: &'a crate::terminal::TerminalPolicy,
+    pub file_retention: &'a crate::job::FileRetentionPolicy,
+    pub power: &'a crate::power::PowerPolicy,
+    pub file_resource: &'a crate::job::FileResourcePolicy,
+    pub system: &'a crate::system::SystemPolicy,
+}
+
 pub(crate) fn encode(
     secret: &[u8; 32],
     relay: &RelaySettings,
     trust: &Trust,
     replay: &ReplayCache,
-    terminal_policy: &crate::terminal::TerminalPolicy,
-    file_retention_policy: &crate::job::FileRetentionPolicy,
-    power_policy: &crate::power::PowerPolicy,
-    file_resource_policy: &crate::job::FileResourcePolicy,
-    system_policy: &crate::system::SystemPolicy,
+    policies: Policies<'_>,
 ) -> Result<Vec<u8>, Error> {
+    let Policies {
+        terminal: terminal_policy,
+        file_retention: file_retention_policy,
+        power: power_policy,
+        file_resource: file_resource_policy,
+        system: system_policy,
+    } = policies;
     let mut body = Vec::new();
     body.extend_from_slice(MAGIC);
     body.push(VERSION);
@@ -535,10 +548,6 @@ impl Reader<'_> {
         Ok(u16::from_be_bytes(self.array()?))
     }
 
-    fn u64(&mut self) -> Result<u64, Error> {
-        Ok(u64::from_be_bytes(self.array()?))
-    }
-
     fn array<const N: usize>(&mut self) -> Result<[u8; N], Error> {
         let slice = self.take(N)?;
         let mut array = [0; N];
@@ -608,11 +617,13 @@ mod tests {
             .unwrap(),
             trust,
             &ReplayCache::new(),
-            &crate::terminal::TerminalPolicy::default(),
-            &crate::job::FileRetentionPolicy::default(),
-            &crate::power::PowerPolicy::default(),
-            &crate::job::FileResourcePolicy::default(),
-            &crate::system::SystemPolicy::default(),
+            Policies {
+                terminal: &crate::terminal::TerminalPolicy::default(),
+                file_retention: &crate::job::FileRetentionPolicy::default(),
+                power: &crate::power::PowerPolicy::default(),
+                file_resource: &crate::job::FileResourcePolicy::default(),
+                system: &crate::system::SystemPolicy::default(),
+            },
         )
         .unwrap()
     }
@@ -734,11 +745,13 @@ mod tests {
             &crate::RelaySettings::Public,
             &trust,
             &crate::invitation::ReplayCache::new(),
-            &crate::terminal::TerminalPolicy::default(),
-            &crate::job::FileRetentionPolicy::default(),
-            &crate::power::PowerPolicy::default(),
-            &crate::job::FileResourcePolicy::default(),
-            &policy,
+            super::Policies {
+                terminal: &crate::terminal::TerminalPolicy::default(),
+                file_retention: &crate::job::FileRetentionPolicy::default(),
+                power: &crate::power::PowerPolicy::default(),
+                file_resource: &crate::job::FileResourcePolicy::default(),
+                system: &policy,
+            },
         )
         .unwrap();
         let record = crate::installation::decode(&bytes).unwrap();

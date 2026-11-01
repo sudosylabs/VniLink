@@ -54,14 +54,13 @@ pub(super) async fn read_frame_within(
 ) -> Result<ControlMessage, Error> {
     let mut len_buf = [0u8; 2];
     let length = recv.read_exact(&mut len_buf);
-    let read = match timeout {
+    match timeout {
         Some(timeout) => tokio::time::timeout(timeout, length)
             .await
             .map_err(|_| Error::Timeout)?
             .map_err(Error::network_debug)?,
         None => length.await.map_err(Error::network_debug)?,
     };
-    let _ = read;
     let len = usize::from(u16::from_be_bytes(len_buf));
     if len == 0 || len > MAX_ADDRESS_FRAME {
         return Err(Error::Malformed);

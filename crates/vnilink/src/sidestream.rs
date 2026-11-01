@@ -45,7 +45,7 @@ const READ_STEP: usize = 64 * 1024;
 
 /// Length-prefixed frame write shared by the side streams. `did_not_write`
 /// names the stream that stayed shut.
-pub(crate) async fn write_frame<F>(
+pub(crate) async fn write_frame<F: ?Sized>(
     send: &mut iroh::endpoint::SendStream,
     frame: &F,
     encode: impl FnOnce(&F) -> Result<Vec<u8>, Error>,
