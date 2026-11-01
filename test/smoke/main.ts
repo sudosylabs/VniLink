@@ -20,6 +20,7 @@ import { isNativeWindowConfiguration } from '../../src/platform/window/common/wi
 import { TestApplication } from '../automation/application.js';
 import type { WindowDriver } from '../automation/driver.js';
 import { ScenarioSelection, browserScenarioNames } from '../automation/scenarios.js';
+import { contentSecurityPolicy } from '../../src/code/electron-main/webContentsSecurity.js';
 import { registerDevelopmentWindow } from '../../src/code/electron-main/development.js';
 import { NOTICE_URL } from '../../src/platform/systemActions/common/notice.js';
 import { windowPrompt } from '../../src/platform/systemActions/electron-main/noticeWindow.js';
@@ -495,6 +496,15 @@ class SmokeSuite {
 		}
 		if ((await net.fetch('vnilink://app/main.cjs')).status !== 404) {
 			throw new Error('Unlisted asset accessible');
+		}
+		// The policy travels as a header, which `frame-ancestors` needs, on every document the protocol serves.
+		const policy = (await net.fetch('vnilink://app/index.html')).headers.get('content-security-policy');
+		if (policy !== contentSecurityPolicy || !policy.includes("frame-ancestors 'none'")) {
+			throw new Error(`The workbench is served without its content security policy: ${String(policy)}`);
+		}
+		// A page cannot open another window, whatever script runs in it.
+		if (await window.webContents.executeJavaScript(`window.open('about:blank') === null`) !== true) {
+			throw new Error('A page opened a window');
 		}
 		if (this.selection.includes('navigation')) {
 			await this.verifyHomeNavigation(window);
