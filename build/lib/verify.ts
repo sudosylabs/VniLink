@@ -136,19 +136,37 @@ interface TemporaryEngine {
 	execute(command: string): Promise<string>;
 }
 
+/** How long the staged addon may take for each step of the release probe. */
+const releaseProbeTimeout = 60_000;
+
+/** `promise`, or a failure naming `what` if it has not settled in time. */
+async function within<T>(promise: Promise<T>, what: string): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	const timeout = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			reject(new Error(`The staged addon did not finish ${what} in ${String(releaseProbeTimeout / 1000)} seconds`));
+		}, releaseProbeTimeout);
+	});
+	try {
+		return await Promise.race([promise, timeout]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 /** Checks the staged payload, then loads its addon with an isolated temporary identity. */
 export async function verifyRelease(root: string): Promise<void> {
 	const directory = join(root, '.build/release', `${process.platform}-${process.arch}`);
 	await verifyReleaseFiles(directory);
 	const addon = createRequire(import.meta.url)(join(directory, 'app/native/vnilink.node')) as { openTemporaryEngine(): Promise<TemporaryEngine> };
-	const engine = await addon.openTemporaryEngine();
+	const engine = await within(addon.openTemporaryEngine(), 'opening a temporary engine');
 	try {
-		const reply = JSON.parse(await engine.execute(JSON.stringify({ type: 'snapshot' }))) as { type: string; snapshot: { endpoint_id: string; devices: unknown[] } };
+		const reply = JSON.parse(await within(engine.execute(JSON.stringify({ type: 'snapshot' })), 'a snapshot')) as { type: string; snapshot: { endpoint_id: string; devices: unknown[] } };
 		assert.equal(reply.type, 'snapshot');
 		assert.match(reply.snapshot.endpoint_id, /^[a-f0-9]{64}$/);
 		assert.equal(reply.snapshot.devices.length, 0, 'Temporary release probe unexpectedly has paired devices');
 	} finally {
-		await engine.execute(JSON.stringify({ type: 'shutdown' }));
+		await within(engine.execute(JSON.stringify({ type: 'shutdown' })), 'shutting the engine down');
 	}
 	console.log('Release payload verified; staged addon opened and shut down a temporary engine under Node. Packaged Electron/OS behaviour remains a later check.');
 }

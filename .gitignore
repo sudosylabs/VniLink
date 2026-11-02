@@ -4,3 +4,6 @@ docs/**
 /out/
 /dist/
 /.build/
+
+# macOS Finder metadata
+.DS_Store
