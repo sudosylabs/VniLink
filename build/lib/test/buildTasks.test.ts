@@ -15,7 +15,7 @@ import { assertNativeFresh, compileNative, stageNative, type NativeIdentity, typ
 import { isMacintosh, isWindows } from '../platform.ts';
 import { ProcessRunner } from '../processes.ts';
 import { define, execute, parallel, series, type Task } from '../task.ts';
-import { agentSides, launchAgentSide, selectPeer, selectRuns, selectServices, testkitServices } from '../test.ts';
+import { agentSides, launchAgentSide, selectPeer, selectRuns, selectServices, testkitServices } from '../testkit.ts';
 
 const root = join(import.meta.dirname, '../../..');
 

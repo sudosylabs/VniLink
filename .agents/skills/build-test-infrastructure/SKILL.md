@@ -22,10 +22,14 @@ The build is TypeScript run directly by Node (type stripping): `node build/run.t
 | `build/lib/native.ts` | Addon identity, `compileNative`, `stageNative`, `assertNativeFresh`, and `nativeCargo`/`nativeArtifact` for every Cargo run with the addon's toolchain |
 | `build/lib/release.ts`, `package.ts`, `installers.ts` | Release payload, unsigned app assembly, installers |
 | `build/lib/package.{darwin,win32,linux}.ts` | Per-platform installer options and artifact extensions |
-| `build/lib/verify.ts` | Inventories and checks for every artifact |
-| `build/lib/test.ts` | UI suite, Rust tests, Linux container validation |
+| `build/lib/inventory.ts`, `verify.ts` | Artifact inventories and manifests; the `verify:*` tasks that check and run each artifact |
+| `build/lib/test.ts` | UI suite, Rust and loom tests, Linux container validation |
+| `build/lib/testkit.ts` | The test kit's suites, stress runs and benches, its agent and the sides it launches |
+| `build/lib/containers.ts` | The project's Linux container: image, mounts, cache volumes and teardown |
+| `build/lib/measure/` | The latency and impaired-network measurements; each documents itself at the top of its task |
+| `build/lib/environmentVariables.ts` | Every `VNILINK_*` variable, who sets it and what it means |
 | `build/lib/unitTests.ts`, `test/unit/electron` | `test:unit` (mocha in Node) and `test:unit:electron` (mocha in a hidden window) over `src/**/test/<layer>/*.test.ts` |
-| `build/lib/processes.ts`, `watch.ts`, `development.ts` | The only classes: owners of processes, watchers and the dev session |
+| `build/lib/processes.ts`, `watch.ts`, `development.ts` | The only classes: owners of processes (`run`, `output`, `processOutput`), watchers and the dev session |
 
 Read VS Code's `build/lib/gulp/task.ts` and its gulpfiles before changing composition; read `test/automation/src` before changing drivers.
 
