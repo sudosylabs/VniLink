@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use vnilink::{ConflictChoice, JobDestination, JobItem, JobState};
 use vnilink_testkit::files::{
-    drive, drive_to_end, finished, only_job, payload, received, settled, tree, upload,
+    drive, drive_to_end, finished, only_job, payload, received, settled, tree, upload, Job, Way,
 };
 use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
@@ -40,32 +40,24 @@ fn settled_value<T: PartialEq + Clone>(
     })
 }
 
-/// A small file arrives, and both sides see it complete, promptly with only
-/// the background drivers advancing it, as the Files tab leaves it to them;
-/// the second rides the same Files service as the first.
+/// A small file arrives, and both sides see it complete, with only the
+/// background drivers advancing it, as the Files tab leaves it to them;
+/// the second rides the same Files service as the first. How soon it
+/// completes is the files bench's to measure.
 #[test]
-fn a_small_file_completes_promptly_on_its_own() -> TestResult {
-    let _trace = traced();
+fn a_small_file_completes_on_its_own() -> TestResult {
+    let trace = traced();
     let pair = Pair::for_files();
     drive(&pair);
     let files = pair.open_files();
     for name in ["first.bin", "second.bin"] {
         std::fs::write(pair.controller.folder().join(name), vec![7u8; 2500])?;
-        // Submitting scans and offers the file: it counts.
-        let started = std::time::Instant::now();
         let job = upload(&pair, &files, name, "")?;
-        wait_for(
-            &format!("{name} to complete within two seconds"),
-            Duration::from_secs(2),
-            || {
-                (pair.controller.core.job_snapshot(job).ok()?.state == JobState::Complete)
-                    .then_some(())
-            },
-        );
-        assert!(
-            started.elapsed() <= Duration::from_secs(2),
-            "{name} completes within two seconds of its submission: {:?}",
-            started.elapsed()
+        let sent = finished(&pair.controller.core, job, DEFAULT_WAIT);
+        assert_eq!(
+            sent.state,
+            JobState::Complete,
+            "the drivers alone complete {name}: {sent:?}"
         );
         assert_eq!(
             std::fs::read(pair.host.folder().join(name))?.len(),
@@ -73,6 +65,20 @@ fn a_small_file_completes_promptly_on_its_own() -> TestResult {
             "a completed small file landed whole"
         );
     }
+    trace.wait_for_records_with("job state", &[("engine", "host"), ("to", "complete")], 2);
+    // The receiver's story: its sender mirrors it at moments of its own.
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        host:
+          files: file received outcome=received resumed_at=0 size=2500 took=2500
+          files: received files flushed job=1
+          files: job state done_bytes=2500 files_done=1 from=transferring job=1 sender=false to=complete
+          files: file received outcome=received resumed_at=0 size=2500 took=2500
+          files: received files flushed job=2
+          files: job state done_bytes=2500 files_done=1 from=transferring job=2 sender=false to=complete
+    "#]],
+        || trace.engine_story("host", &["files"]),
+    );
     Ok(())
 }
 
@@ -234,9 +240,8 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
     }
     let files = pair.open_files();
     drive(&pair);
-    let job = upload(&pair, &files, "many", "")?;
-    let receiver = received(&pair.host.core);
-    let asking = settled(&pair.host.core, receiver, Duration::from_secs(5));
+    let job = Job::submit(&pair, &files, Way::Upload, "many", "")?;
+    let asking = settled(&pair.host.core, job.host, Duration::from_secs(5));
     assert_eq!(
         asking.state,
         JobState::WaitingDecision,
@@ -245,23 +250,29 @@ fn a_thousand_skipped_files_take_no_pass_each() -> TestResult {
     // The sender mirrors the question once it next asks how far the
     // receiver is; the answer is given after that, as a person gives it.
     wait_for("the sender to mirror the question", DEFAULT_WAIT, || {
-        (pair.controller.core.job_snapshot(job).ok()?.state == JobState::WaitingDecision)
+        (pair
+            .controller
+            .core
+            .job_snapshot(job.controller)
+            .ok()?
+            .state
+            == JobState::WaitingDecision)
             .then_some(())
     });
     pair.host
         .core
-        .job_resolve(receiver, ConflictChoice::Skip, true)?;
+        .job_resolve(job.host, ConflictChoice::Skip, true)?;
     // How long the skipping takes is the computer's speed; the bound only
     // ends a hang.
     let done = wait_for("every file to be skipped", Duration::from_secs(60), || {
-        let now = pair.host.core.job_snapshot(receiver).ok()?;
+        let now = pair.host.core.job_snapshot(job.host).ok()?;
         (now.state == JobState::Complete).then_some(now)
     });
     assert_eq!(
         done.skipped_files, FILES as u64,
         "skip for all skips every name the receiver has"
     );
-    let sent = finished(&pair.controller.core, job, DEFAULT_WAIT);
+    let sent = finished(&pair.controller.core, job.controller, DEFAULT_WAIT);
     assert_eq!(
         sent.state,
         JobState::Complete,
@@ -534,15 +545,8 @@ fn diagnostics_count_a_finished_transfer() -> TestResult {
     let bytes = payload(200 * 1024, 1901);
     std::fs::write(pair.controller.folder().join("counted.bin"), &bytes)?;
     let files = pair.open_files();
-    let job = upload(&pair, &files, "counted.bin", "arrived")?;
-    let receiver = received(&pair.host.core);
-    let (sender, got) = drive_to_end(
-        &pair.controller.core,
-        job,
-        &pair.host.core,
-        receiver,
-        TRANSFER,
-    );
+    let job = Job::submit(&pair, &files, Way::Upload, "counted.bin", "arrived")?;
+    let (sender, got) = job.drive_to_end(&pair, TRANSFER);
     assert_eq!(
         (sender.state, got.state),
         (JobState::Complete, JobState::Complete),
@@ -599,7 +603,7 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
     let many: Vec<(String, usize)> = (0..20)
         .map(|n| (format!("many/f{n:02}.bin"), 3000))
         .collect();
-    write_named(&pair.controller.folder(), &many, 2000);
+    write_named(&pair.controller.folder(), &many, 2000)?;
     let files = pair.open_files();
     let job = upload(&pair, &files, "many", "")?;
     let receiver = only_job(host)?;
@@ -637,7 +641,7 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
     let again: Vec<(String, usize)> = (0..10)
         .map(|n| (format!("again/g{n:02}.bin"), 3000))
         .collect();
-    write_named(&pair.controller.folder(), &again, 2100);
+    write_named(&pair.controller.folder(), &again, 2100)?;
     upload(&pair, &files, "again", "")?;
     let receiver = host
         .job_list()?
@@ -675,10 +679,17 @@ fn small_files_arrive_ahead_and_land_in_order() -> TestResult {
 
 /// Writes each of `files` (relative path, size) under `folder`, the n-th
 /// with the contents of seed `first_seed + n`.
-fn write_named(folder: &std::path::Path, files: &[(String, usize)], first_seed: u64) {
+fn write_named(
+    folder: &std::path::Path,
+    files: &[(String, usize)],
+    first_seed: u64,
+) -> std::io::Result<()> {
     for (n, (path, size)) in files.iter().enumerate() {
         let path = folder.join(path);
-        std::fs::create_dir_all(path.parent().expect("a file in a folder")).expect("a folder");
-        std::fs::write(path, payload(*size, first_seed + n as u64)).expect("a file");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, payload(*size, first_seed + n as u64))?;
     }
+    Ok(())
 }

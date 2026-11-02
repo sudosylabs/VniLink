@@ -15,10 +15,10 @@
 use std::time::{Duration, SystemTime};
 
 use vnilink::{Core, EntryToken, Error, TokenKind};
-use vnilink_testkit::files::{token_of, Location};
-use vnilink_testkit::{traced, Engine, PositionalFs, Scratch, ScratchVolume, TestResult};
+use vnilink_testkit::files::{token_of, Location, OnDisk};
+use vnilink_testkit::{traced, Engine, PositionalFs, ScratchVolume, TestResult};
 
-use super::{is_stale, read};
+use super::{is_stale, past_the_creation_tick_of, read};
 
 /// Replaces the file at `path` with another holding `bytes`, of another
 /// size, as something else writing there would.
@@ -135,9 +135,9 @@ fn positional_volumes_change_files_by_fingerprint_and_never_delete_folders() -> 
         let f = token_of(core, root, &path, "f.txt");
         let at = std::fs::metadata(folder.join("f.txt"))?.modified()?;
         // FAT keeps creation times to 10 ms, but macOS's msdos reports them
-        // to the even second: the new file is made past that tick.
-        // A real timer: the volume keeps creation times to the even second.
-        std::thread::sleep(Duration::from_millis(2_100));
+        // to the even second: the new file is made past that tick, which a
+        // probe on the volume shows.
+        past_the_creation_tick_of(&folder.join("f.txt"), volume.path())?;
         std::fs::remove_file(folder.join("f.txt"))?;
         std::fs::write(folder.join("f.txt"), b"f.txt")?;
         modified(&folder.join("f.txt"), at)?;
@@ -204,11 +204,9 @@ fn positional_volumes_change_files_by_fingerprint_and_never_delete_folders() -> 
 #[test]
 fn a_fingerprint_names_nothing_on_a_volume_with_stable_ids() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    std::fs::write(scratch.join("kept.txt"), b"kept")?;
-    let engine = Engine::start("engine");
-    let core: &Core = &engine.core;
-    let here = Location::of(core, scratch.path());
+    let disk = OnDisk::new("")?;
+    std::fs::write(disk.folder.join("kept.txt"), b"kept")?;
+    let (core, here) = (disk.core(), &disk.location);
     let listed = token_of(core, here.root, &here.path(""), "kept.txt");
     assert_eq!(
         listed.kind,
@@ -232,6 +230,10 @@ fn a_fingerprint_names_nothing_on_a_volume_with_stable_ids() -> TestResult {
             .is_err_and(|error| is_stale(&error)),
         "a fingerprint deletes nothing here"
     );
-    assert_eq!(read(&scratch.join("kept.txt")), b"kept", "the file stays");
+    assert_eq!(
+        read(&disk.folder.join("kept.txt")),
+        b"kept",
+        "the file stays"
+    );
     Ok(())
 }

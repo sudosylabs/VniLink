@@ -516,7 +516,7 @@ fn a_source_opened_before_its_drive_changed_serves_its_own_bytes() -> TestResult
     });
 
     let probe = ServeProbe::arm(controller, job);
-    let polled = std::thread::scope(|scope| {
+    let polled = std::thread::scope(|scope| -> Result<_, Box<dyn std::error::Error>> {
         let polling = scope.spawn(|| host.job_poll(receiver));
         probe.wait_until_parked();
         // Another volume at the letter, its second file a decoy of the same
@@ -524,12 +524,17 @@ fn a_source_opened_before_its_drive_changed_serves_its_own_bytes() -> TestResult
         // not move a folder holding the file the serve has open.
         let volume = pair.controller.folder().with_file_name("other-volume");
         let other = volume.join("files/set");
-        std::fs::create_dir_all(&other).expect("the decoy's folder");
-        std::fs::write(other.join("one.txt"), &one).expect("a copy");
-        std::fs::write(other.join("two.txt"), payload(512, 1609)).expect("the decoy");
-        drive.share_other(&pair.controller, &volume);
+        let decoy = std::fs::create_dir_all(&other)
+            .and_then(|()| std::fs::write(other.join("one.txt"), &one))
+            .and_then(|()| std::fs::write(other.join("two.txt"), payload(512, 1609)));
+        if decoy.is_ok() {
+            drive.share_other(&pair.controller, &volume);
+        }
+        // Released before anything fails, so the parked poll returns.
         probe.release();
-        polling.join().expect("the receiver's poll")
+        let polled = polling.join().map_err(|_| "the receiver's poll panicked")?;
+        decoy?;
+        Ok(polled?)
     })?;
     drop(probe);
     assert_eq!(

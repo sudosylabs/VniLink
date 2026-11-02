@@ -10,27 +10,18 @@
 //! when what is there now is another object; nothing is left beside it.
 
 use vnilink::Error;
-use vnilink_testkit::{traced, Engine, Scratch, TestResult};
+use vnilink_testkit::{traced, TestResult};
 
-use vnilink_testkit::files::{identity, link_folder, set_aside, token_of, Location};
+use vnilink_testkit::files::{identity, link_folder, set_aside, token_of, OnDisk};
 
 use super::{is_message, is_stale, names_in, past_the_tick_of, read, DELETE_FAILED};
-
-/// An engine sharing its whole disk, and `folder` addressed in it.
-fn sharing_the_disk(folder: &std::path::Path) -> Result<(Engine, Location), Error> {
-    let engine = Engine::start("engine");
-    let location = Location::of(&engine.core, folder);
-    Ok((engine, location))
-}
 
 #[test]
 fn mkdir_creates_single_levels_with_conflicts() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
+    let (core, files) = (disk.core(), &disk.location);
 
     core.create_dir(files.root, &files.path(""), "docs")?;
     assert!(root.join("docs").is_dir(), "the folder is made");
@@ -74,12 +65,10 @@ fn mkdir_creates_single_levels_with_conflicts() -> TestResult {
 #[test]
 fn rename_file_keeps_identity_and_bytes() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("before.txt"), b"vnl-rename-bytes")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let before_ino = identity(&root.join("before.txt"));
     let token = token_of(core, files.root, &files.path(""), "before.txt");
@@ -103,7 +92,7 @@ fn rename_file_keeps_identity_and_bytes() -> TestResult {
         "the file is the same object"
     );
     assert_eq!(
-        names_in(&root),
+        names_in(root),
         ["after.txt"],
         "no temporary or duplicate sibling is left"
     );
@@ -113,14 +102,13 @@ fn rename_file_keeps_identity_and_bytes() -> TestResult {
 #[test]
 fn rename_folder_moves_children_without_transfer() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::create_dir_all(root.join("pack/sub"))?;
     std::fs::create_dir(root.join("pack/empty"))?;
     std::fs::write(root.join("pack/sub/a.txt"), b"a-bytes")?;
     std::fs::write(root.join("pack/top.txt"), b"top-bytes")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let child = identity(&root.join("pack/sub/a.txt"));
     let token = token_of(core, files.root, &files.path(""), "pack");
@@ -149,12 +137,10 @@ fn rename_folder_moves_children_without_transfer() -> TestResult {
 #[test]
 fn rename_collision_after_preflight_preserves_both() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("source.txt"), b"source-bytes")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     // Preflight: the destination is free when first checked.
     let token = token_of(core, files.root, &files.path(""), "source.txt");
@@ -188,12 +174,10 @@ fn rename_collision_after_preflight_preserves_both() -> TestResult {
 #[test]
 fn rename_against_a_replaced_source_is_refused() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("note.txt"), b"original-bytes")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let stale = token_of(core, files.root, &files.path(""), "note.txt");
     // Barrier-controlled replacement between list and mutation: the
@@ -246,12 +230,10 @@ fn rename_against_a_replaced_source_is_refused() -> TestResult {
 #[test]
 fn rename_missing_source_and_bad_names_fail_cleanly() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("kept.txt"), b"kept")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     assert!(
         core.rename_entry(files.root, &files.path(""), "ghost.txt", None, "x.txt")
@@ -274,19 +256,20 @@ fn rename_missing_source_and_bad_names_fail_cleanly() -> TestResult {
         "a source outside the folder is refused"
     );
     assert_eq!(read(&root.join("kept.txt")), b"kept", "the file is kept");
-    assert!(!scratch.join("out.txt").exists(), "nothing left the folder");
+    assert!(
+        !disk.scratch.join("out.txt").exists(),
+        "nothing left the folder"
+    );
     Ok(())
 }
 
 #[test]
 fn case_only_rename_keeps_the_object() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("Case.txt"), b"case-bytes")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let before = identity(&root.join("Case.txt"));
     let token = token_of(core, files.root, &files.path(""), "Case.txt");
@@ -327,15 +310,14 @@ fn case_only_rename_keeps_the_object() -> TestResult {
 #[test]
 fn delete_removes_a_file_and_a_folder_tree() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::create_dir_all(root.join("pack/sub"))?;
     std::fs::create_dir(root.join("pack/empty"))?;
     std::fs::write(root.join("pack/sub/a.txt"), b"a-bytes")?;
     std::fs::write(root.join("pack/top.txt"), b"top-bytes")?;
     std::fs::write(root.join("note.txt"), b"note-bytes")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let note = token_of(core, files.root, &files.path(""), "note.txt");
     core.delete_entry(files.root, &files.path(""), "note.txt", Some(note))?;
@@ -344,8 +326,8 @@ fn delete_removes_a_file_and_a_folder_tree() -> TestResult {
     let folder = token_of(core, files.root, &files.path(""), "pack");
     core.delete_entry(files.root, &files.path(""), "pack", Some(folder))?;
     assert!(!root.join("pack").exists(), "the folder tree is deleted");
-    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
-    let names = names_in(&root);
+    assert!(set_aside(root).is_empty(), "nothing is left set aside");
+    let names = names_in(root);
     assert!(names.is_empty(), "nothing is left: {names:?}");
     Ok(())
 }
@@ -353,12 +335,10 @@ fn delete_removes_a_file_and_a_folder_tree() -> TestResult {
 #[test]
 fn delete_against_a_replaced_source_is_refused() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("note.txt"), b"original-bytes")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let stale = token_of(core, files.root, &files.path(""), "note.txt");
     std::fs::write(root.join("note.tmp"), b"replacement-bytes")?;
@@ -377,7 +357,7 @@ fn delete_against_a_replaced_source_is_refused() -> TestResult {
         b"replacement-bytes",
         "the replacement is kept"
     );
-    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
+    assert!(set_aside(root).is_empty(), "nothing is left set aside");
 
     core.delete_entry(files.root, &files.path(""), "note.txt", None)?;
     assert!(
@@ -390,12 +370,10 @@ fn delete_against_a_replaced_source_is_refused() -> TestResult {
 #[test]
 fn delete_missing_source_and_bad_names_fail_cleanly() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("kept.txt"), b"kept")?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let missing = core.delete_entry(files.root, &files.path(""), "ghost.txt", None);
     assert!(
@@ -415,9 +393,9 @@ fn delete_missing_source_and_bad_names_fail_cleanly() -> TestResult {
         "a name with a separator is refused"
     );
     assert_eq!(read(&root.join("kept.txt")), b"kept", "the file is kept");
-    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
+    assert!(set_aside(root).is_empty(), "nothing is left set aside");
     assert!(
-        !scratch.join("kept.txt").exists(),
+        !disk.scratch.join("kept.txt").exists(),
         "nothing left the folder"
     );
     Ok(())
@@ -426,10 +404,9 @@ fn delete_missing_source_and_bad_names_fail_cleanly() -> TestResult {
 #[test]
 fn delete_refuses_a_listed_symlink() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    let outside = scratch.join("outside");
-    std::fs::create_dir_all(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
+    let outside = disk.scratch.join("outside");
     std::fs::create_dir(&outside)?;
     std::fs::write(outside.join("secret.txt"), b"secret-bytes")?;
     // A link to a file on Unix; Windows plants a junction to the folder,
@@ -438,8 +415,7 @@ fn delete_refuses_a_listed_symlink() -> TestResult {
     std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("link"))?;
     #[cfg(windows)]
     link_folder(&outside, &root.join("link"))?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let token = token_of(core, files.root, &files.path(""), "link");
     let result = core.delete_entry(files.root, &files.path(""), "link", Some(token));
@@ -466,9 +442,9 @@ fn delete_refuses_a_listed_symlink() -> TestResult {
 #[test]
 fn delete_folder_unlinks_symlink_children_without_following() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    let outside = scratch.join("outside");
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
+    let outside = disk.scratch.join("outside");
     std::fs::create_dir_all(root.join("pack"))?;
     std::fs::create_dir_all(outside.join("dir"))?;
     std::fs::write(outside.join("secret.txt"), b"secret-bytes")?;
@@ -479,13 +455,12 @@ fn delete_folder_unlinks_symlink_children_without_following() -> TestResult {
     #[cfg(unix)]
     std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("pack/link"))?;
     link_folder(&outside.join("dir"), &root.join("pack/dirlink"))?;
-    let (engine, files) = sharing_the_disk(&root)?;
-    let core = &engine.core;
+    let (core, files) = (disk.core(), &disk.location);
 
     let token = token_of(core, files.root, &files.path(""), "pack");
     core.delete_entry(files.root, &files.path(""), "pack", Some(token))?;
     assert!(!root.join("pack").exists(), "the folder is deleted");
-    assert!(set_aside(&root).is_empty(), "nothing is left set aside");
+    assert!(set_aside(root).is_empty(), "nothing is left set aside");
     assert_eq!(
         read(&outside.join("secret.txt")),
         b"secret-bytes",
@@ -506,17 +481,15 @@ fn delete_folder_unlinks_symlink_children_without_following() -> TestResult {
 #[test]
 fn moving_to_the_trash_refuses_what_changed_since_it_was_listed() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let folder = scratch.join("trash");
-    std::fs::create_dir(&folder)?;
+    let disk = OnDisk::new("trash")?;
+    let folder = &disk.folder;
     std::fs::write(folder.join("a.txt"), b"first")?;
-    let (engine, location) = sharing_the_disk(&folder)?;
-    let core = &engine.core;
+    let (core, location) = (disk.core(), &disk.location);
     let listed = core
         .list_dir(location.root, &location.path(""), 0, 10)?
         .entries[0]
         .token;
-    past_the_tick_of(&folder.join("a.txt"), scratch.path());
+    past_the_tick_of(&folder.join("a.txt"), disk.scratch.path())?;
     std::fs::remove_file(folder.join("a.txt"))?;
     std::fs::write(folder.join("a.txt"), b"replacement")?;
     let trashed = core.trash_entry(location.root, &location.path(""), "a.txt", Some(listed));
@@ -544,15 +517,13 @@ fn moving_to_the_trash_refuses_what_changed_since_it_was_listed() -> TestResult 
 #[test]
 fn a_file_made_again_under_its_name_is_not_the_listed_file() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let folder = scratch.join("recycled");
-    std::fs::create_dir(&folder)?;
+    let disk = OnDisk::new("recycled")?;
+    let folder = &disk.folder;
     std::fs::write(folder.join("a.txt"), b"first")?;
-    let (engine, location) = sharing_the_disk(&folder)?;
-    let core = &engine.core;
+    let (core, location) = (disk.core(), &disk.location);
     let listed = token_of(core, location.root, &location.path(""), "a.txt");
     assert!(listed.born.is_some(), "the listing carries a creation time");
-    past_the_tick_of(&folder.join("a.txt"), scratch.path());
+    past_the_tick_of(&folder.join("a.txt"), disk.scratch.path())?;
     std::fs::remove_file(folder.join("a.txt"))?;
     std::fs::write(folder.join("a.txt"), b"replacement")?;
     let renamed = core.rename_entry(

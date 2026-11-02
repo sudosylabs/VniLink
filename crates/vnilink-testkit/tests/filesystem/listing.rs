@@ -11,14 +11,13 @@
 use vnilink::{EntryKind, MAX_LISTED, MAX_PAGE};
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 
-use vnilink_testkit::files::Location;
+use vnilink_testkit::files::{Location, OnDisk};
 
 #[test]
 fn listings_are_exact_sorted_and_paged() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("beta.txt"), b"beta-bytes")?;
     std::fs::write(root.join("alpha.txt"), b"a")?;
     std::fs::write(root.join("sp ace-ß.txt"), b"unicode-bytes")?;
@@ -27,9 +26,7 @@ fn listings_are_exact_sorted_and_paged() -> TestResult {
     std::fs::create_dir_all(root.join("nested/deep"))?;
     std::fs::write(root.join("nested/deep/inner.txt"), b"inner")?;
 
-    let engine = Engine::start("engine");
-    let core = &engine.core;
-    let files = Location::of(core, &root);
+    let (core, files) = (disk.core(), &disk.location);
 
     let page = core.list_dir(files.root, &files.path(""), 0, 50)?;
     let names: Vec<&str> = page
@@ -124,15 +121,12 @@ fn listings_skip_non_utf8_names_and_count_them() -> TestResult {
     use std::os::unix::ffi::OsStringExt;
 
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let root = scratch.join("root");
-    std::fs::create_dir(&root)?;
+    let disk = OnDisk::new("root")?;
+    let root = &disk.folder;
     std::fs::write(root.join("plain.txt"), b"p")?;
     let raw = OsString::from_vec(vec![0x66, 0xFF, 0x62]);
 
-    let engine = Engine::start("engine");
-    let core = &engine.core;
-    let files = Location::of(core, &root);
+    let (core, files) = (disk.core(), &disk.location);
     // APFS refuses non-UTF8 names at creation; the listing path is still
     // exercised where the platform allows the fixture.
     if std::fs::write(root.join(&raw), b"raw").is_err() {

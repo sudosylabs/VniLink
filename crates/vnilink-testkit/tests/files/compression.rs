@@ -13,7 +13,7 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::JobState;
-use vnilink_testkit::files::{drive_to_end, payload, received, tree, upload};
+use vnilink_testkit::files::{payload, tree, Job, Way};
 use vnilink_testkit::{traced, Pair, TestResult};
 
 const TRANSFER: Duration = Duration::from_secs(60);
@@ -46,15 +46,8 @@ fn compressible_segments_travel_compressed_and_the_rest_as_they_are() -> TestRes
     std::fs::write(source.join("mixed.bin"), mixed)?;
     std::fs::write(source.join("tiny.txt"), text(300))?;
     let files = pair.open_files();
-    let job = upload(&pair, &files, "set", "arrived")?;
-    let receiver = received(&pair.host.core);
-    let (sent, got) = drive_to_end(
-        &pair.controller.core,
-        job,
-        &pair.host.core,
-        receiver,
-        TRANSFER,
-    );
+    let job = Job::submit(&pair, &files, Way::Upload, "set", "arrived")?;
+    let (sent, got) = job.drive_to_end(&pair, TRANSFER);
     assert_eq!(
         (sent.state, got.state),
         (JobState::Complete, JobState::Complete)
