@@ -11,6 +11,7 @@ import { settingDefaults } from '../../common/configurationSchema.js';
 import { isConfigurationSnapshot, isConfigurationUpdate } from '../../common/configurationSnapshot.js';
 
 suite('configurationSnapshot', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const snapshot = { revision: 1, values: settingDefaults('user'), errors: { power: 'Unavailable' }, restricted: ['security.allowRestart'] };
 	test('a valid update is accepted', () => {
 		assert.strictEqual(isConfigurationUpdate({ key: 'appearance.theme', value: 'dark' }), true);
@@ -38,5 +39,4 @@ suite('configurationSnapshot', () => {
 	test('a snapshot with an authenticated relay but no token is accepted', () => {
 		assert.strictEqual(isConfigurationSnapshot({ ...snapshot, values: { 'connection.relays': [{ url: 'https://relay.example/', authenticated: true }] } }), true);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

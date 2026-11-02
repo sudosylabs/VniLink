@@ -9,13 +9,12 @@ import assert from 'assert';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { settingDefaults } from '../../common/configurationSchema.js';
 import { UserSettings } from '../../node/userSettings.js';
 
 suite('UserSettings', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let dir: string;
 	let path: string;
 
@@ -31,7 +30,6 @@ suite('UserSettings', () => {
 		path = join(dir, 'settings.json');
 	});
 	teardown(async () => {
-		disposables.clear();
 		await rm(dir, { recursive: true, force: true });
 	});
 	suite('a readable file', () => {
@@ -130,5 +128,4 @@ suite('UserSettings', () => {
 			assert.strictEqual(settings.values['appearance.theme'], 'light');
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

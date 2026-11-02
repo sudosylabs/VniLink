@@ -6,7 +6,6 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import type { RecordingStatus } from '../../../../../platform/engine/common/engine.js';
@@ -33,7 +32,7 @@ class TestSettings implements Pick<IConfigurationService, 'getValue'> {
 const status: RecordingStatus = { id: '4', phase: 'Recording', failure: null, frames: '0', bytes: '0', durationMs: '0', segments: 1 };
 
 suite('NativeRuntimeService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let engine: TestEngineService;
 	/** How many new recording files the service asked main for. */
 	let destinations: number;
@@ -59,9 +58,6 @@ suite('NativeRuntimeService', () => {
 	setup(() => {
 		engine = disposables.add(new TestEngineService(() => ({ type: 'recordingStatus', status })));
 		destinations = 0;
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('a recording takes its limits from the persisted settings', async () => {
 		const service = createService({ 'recording.maxSegmentSize': 2, 'recording.maxSegmentDuration': 1, 'recording.maxSegments': 2, 'recording.maxTotalSize': 4 });
@@ -89,5 +85,4 @@ suite('NativeRuntimeService', () => {
 		assert.ok(command.type === 'startRecording');
 		assert.strictEqual(command.destination, '/Pictures/VniLink/new.mkv');
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

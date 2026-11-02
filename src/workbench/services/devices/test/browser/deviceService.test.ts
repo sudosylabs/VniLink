@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { EngineCommand, EngineReply, RemoteCapabilityStatus } from '../../../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../../../platform/engine/common/engineService.js';
@@ -22,7 +21,7 @@ function summary(id: string, overrides: Partial<DeviceSummary> = {}): DeviceSumm
 }
 
 suite('DeviceService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let engine: TestEngineService;
 
 	/** The service under test, built as the workbench builds it, on `engine`. */
@@ -43,9 +42,6 @@ suite('DeviceService', () => {
 	}
 	setup(() => {
 		engine = disposables.add(new TestEngineService(snapshots(() => [])));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('names devices by pet name, then host name, then id, and publishes an empty list', async () => {
 		let devices = [
@@ -312,5 +308,4 @@ suite('DeviceService', () => {
 			assert.deepStrictEqual(engine.commands[0], { type: 'beginConnectServices', endpointId: 'peer' });
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

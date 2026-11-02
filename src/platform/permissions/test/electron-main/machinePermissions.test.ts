@@ -43,6 +43,7 @@ class TestPreferences implements Pick<Electron.SystemPreferences, 'getMediaAcces
 }
 
 suite('MachinePermissions', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	let preferences: TestPreferences;
 	/** The settings pages opened, in order. */
 	let urls: string[];
@@ -153,5 +154,4 @@ suite('MachinePermissions', () => {
 			assert.deepStrictEqual(urls, []);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

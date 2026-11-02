@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { DataPacket } from '../../../../../platform/engine/common/dataChannel.js';
 import { IDataChannelService } from '../../../../../platform/engine/common/dataChannelService.js';
@@ -50,15 +49,12 @@ function isClosed(frame: VideoFrame): boolean {
 }
 
 suite('CameraService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let dataChannels: TestDataChannelService;
 	let decoders: TestVideoDecoderService;
 	setup(() => {
 		dataChannels = new TestDataChannelService();
 		decoders = new TestVideoDecoderService();
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 
 	/** The service, as the workbench builds it, on a computer connected to `peer` as session 4 of generation 2. */
@@ -210,14 +206,10 @@ suite('CameraService', () => {
 			assert.strictEqual(cameraOpenFailure(error), failure);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('EngineCameraStream', () => {
-	const disposables = new DisposableStore();
-	teardown(() => {
-		disposables.clear();
-	});
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	test('a channel that opens after the stream ended is closed', () => {
 		const decoders = new TestVideoDecoderService();
 		const stream = disposables.add(new EngineCameraStream((codec, output, error) => decoders.createDecoder(codec, output, error)));
@@ -230,5 +222,4 @@ suite('EngineCameraStream', () => {
 		});
 		assert.strictEqual(closed, true);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

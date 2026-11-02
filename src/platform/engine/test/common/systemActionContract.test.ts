@@ -41,6 +41,7 @@ const events: readonly (readonly [string, unknown, boolean])[] = [
 ];
 
 suite('Engine system action contract', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	for (const [name, value, accepted] of commands) {
 		test(`a command is ${accepted ? 'accepted' : 'refused'}: ${name}`, () => {
 			assert.strictEqual(isEngineCommand(value), accepted);
@@ -56,5 +57,4 @@ suite('Engine system action contract', () => {
 			assert.strictEqual(isEngineEvent(value), accepted);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

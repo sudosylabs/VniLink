@@ -61,6 +61,7 @@ function setDefaultApp(value: boolean | undefined): void {
 }
 
 suite('registerDevelopmentWindow', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	let development: string | undefined;
 	let defaultApp: boolean | undefined;
 	let window: TestWindow;
@@ -126,5 +127,4 @@ suite('registerDevelopmentWindow', () => {
 		window.press(devtools);
 		assert.strictEqual(window.prevented, 1);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

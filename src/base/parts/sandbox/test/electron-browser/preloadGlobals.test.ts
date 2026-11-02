@@ -54,6 +54,7 @@ class TestIpcRenderer implements IPreloadIpcRenderer {
 }
 
 suite('Preload globals', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	let ipcRenderer: TestIpcRenderer;
 	/** Ports handed to the page, under their nonce. */
 	let posted: { nonce: string; ports: readonly MessagePort[] }[];
@@ -208,5 +209,4 @@ suite('Preload globals', () => {
 		ipcRenderer.deliver('vnilink:message', [], 'after');
 		assert.strictEqual(heard, 1);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

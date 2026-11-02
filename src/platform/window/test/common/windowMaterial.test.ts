@@ -23,6 +23,7 @@ const releases: readonly (readonly [platform: string, release: string, material:
 ];
 
 suite('resolveWindowMaterial', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	for (const [platform, release, material] of releases) {
 		test(`${platform} ${release} uses ${material}`, () => {
 			assert.strictEqual(resolveWindowMaterial(platform, release, false, false), material);
@@ -34,5 +35,4 @@ suite('resolveWindowMaterial', () => {
 			assert.strictEqual(resolveWindowMaterial(platform, release, false, true), 'none');
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

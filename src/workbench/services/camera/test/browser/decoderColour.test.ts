@@ -30,6 +30,7 @@ async function decodesInSoftware(codec: string): Promise<boolean> {
  * asserted.
  */
 suite('decoderColour', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('at least one codec decodes in software', async () => {
 		const supported = await Promise.all(codecs.map(decodesInSoftware));
 		assert.ok(supported.some(Boolean), 'no codec decoded in software');
@@ -59,5 +60,4 @@ suite('decoderColour', () => {
 			});
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

@@ -26,10 +26,10 @@ const cases: readonly (readonly [string, unknown, boolean])[] = [
 ];
 
 suite('isMessageBoxOptions', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	for (const [name, options, shown] of cases) {
 		test(`a window's message box is ${shown ? 'shown' : 'refused'}: ${name}`, () => {
 			assert.strictEqual(isMessageBoxOptions(options, 3), shown);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

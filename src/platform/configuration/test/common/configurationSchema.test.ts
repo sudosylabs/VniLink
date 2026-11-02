@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { settingDefaults, settingKeys, settingSchema, validateSetting } from '../../common/configurationSchema.js';
 
 suite('configurationSchema', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	for (const key of settingKeys()) {
 		test(`${key} has a title and a valid default`, () => {
 			const schema = settingSchema(key);
@@ -39,5 +40,4 @@ suite('configurationSchema', () => {
 	test('the native background is not a setting', () => {
 		assert.strictEqual(settingKeys().includes('appearance.nativeBackground'), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

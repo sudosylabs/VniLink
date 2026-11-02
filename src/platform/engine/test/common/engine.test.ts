@@ -63,6 +63,7 @@ const runtime = { type: 'nativeRuntime', backends: [{ name: 'terminal', ready: t
 const rename = (token: unknown) => ({ type: 'renameLocal', root: '0', path: 'Volumes/STICK', name: 'a', token, newName: 'b' });
 
 suite('isEngineCommand', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	suite('control', () => {
 		accepts(isEngineCommand, [
 			['a pairing confirmation with the largest preview id', { type: 'confirmPairing', previewId: '18446744073709551615', digits: '123456' }],
@@ -223,10 +224,10 @@ suite('isEngineCommand', () => {
 			['a permission report with a status for input', { type: 'reportNativePermissions', screen: true, input: 'granted', camera: false, microphone: false }],
 		]);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('isEngineReply', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	suite('identity, codecs and events', () => {
 		accepts(isEngineReply, [
 			['an endpoint', { type: 'endpoint', endpointId: 'abc' }],
@@ -324,10 +325,10 @@ suite('isEngineReply', () => {
 			['a device of an unknown kind', { type: 'nativeDevices', devices: [{ id: 'one', name: 'Camera', kind: 'unknown' }] }],
 		]);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('isEngineEvent', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const failed = (closed: object) => ({ type: 'serviceChanged', service: { ...service, phase: { Closed: closed } } });
 	accepts(isEngineEvent, [
 		['a hosting change', { type: 'hostingChanged', hosting: false }],
@@ -364,5 +365,4 @@ suite('isEngineEvent', () => {
 		['an unknown presence', { type: 'presenceChanged', endpoint_id: 'peer', presence: 'asleep' }],
 		['an availability change with an extra field', { type: 'peerAvailabilityChanged', endpoint_id: 'peer', extra: 1 }],
 	]);
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

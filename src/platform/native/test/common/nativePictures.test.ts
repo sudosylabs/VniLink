@@ -11,6 +11,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { isNativeHostRequest, isPng } from '../../common/native.js';
 
 suite('Native host pictures', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const png = VSBuffer.wrap(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]));
 	test('a buffer starting with the PNG signature is a PNG', () => {
 		assert.strictEqual(isPng(png), true);
@@ -33,5 +34,4 @@ suite('Native host pictures', () => {
 	test('a window may not copy text as a clipboard picture', () => {
 		assert.strictEqual(isNativeHostRequest('writeClipboardPicture', [3, 'text']), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

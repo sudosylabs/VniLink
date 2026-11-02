@@ -11,6 +11,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { getNativeTitlebarHeight } from '../../common/window.js';
 
 suite('getNativeTitlebarHeight', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	// The height follows the platform the test runs on; macOS reports its kernel version, 25 being Tahoe.
 	test('a macOS Tahoe titlebar is 32 pixels high, other platforms 30', () => {
 		assert.strictEqual(getNativeTitlebarHeight('25.0.0'), isMacintosh ? 32 : 30);
@@ -18,5 +19,4 @@ suite('getNativeTitlebarHeight', () => {
 	test('a macOS titlebar before Tahoe is 28 pixels high, other platforms 30', () => {
 		assert.strictEqual(getNativeTitlebarHeight('24.6.0'), isMacintosh ? 28 : 30);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

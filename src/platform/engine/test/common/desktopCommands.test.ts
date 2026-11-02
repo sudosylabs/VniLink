@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { isEngineCommand, isEngineReply } from '../../common/engine.js';
 
 suite('Engine desktop contracts', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const session = { id: '1', generation: '7', role: 'Controller', peer_id: 'peer', phase: 'Active' };
 	test('a session names its connection', () => {
 		assert.strictEqual(isEngineReply({ type: 'sessions', sessions: [session] }), true);
@@ -68,5 +69,4 @@ suite('Engine desktop contracts', () => {
 			assert.strictEqual(isEngineCommand({ type: 'setWindowDecoders', decoders }), false);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

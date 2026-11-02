@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { RemoteStatus, SessionInfo } from '../../../../../platform/engine/common/engine.js';
 import { IDataChannelService } from '../../../../../platform/engine/common/dataChannelService.js';
@@ -38,7 +37,7 @@ function text(event: IProcessDataEvent): string {
 }
 
 suite('EnginePty', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	/** A shell on `deviceId` at 100×30, with its channel, its engine and what it fired recorded. */
 	function shell({ status = 'available', sessions = [session], openFails = false, writeDelay = false }: ShellOptions = {}) {
@@ -108,9 +107,6 @@ suite('EnginePty', () => {
 		};
 	}
 	type Shell = ReturnType<typeof shell>;
-	teardown(() => {
-		disposables.clear();
-	});
 	test('a shell opens on the active controller session at the view size and reports ready', async () => {
 		const f = shell();
 		assert.strictEqual(await f.pty.start(), undefined);
@@ -271,5 +267,4 @@ suite('EnginePty', () => {
 		f.pty.dispose();
 		assert.strictEqual(f.closed, 1, 'disposal closed the channel twice');
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

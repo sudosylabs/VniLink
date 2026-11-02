@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { windowIdFromContext } from '../../electron-main/windowContext.js';
 
 suite('windowIdFromContext', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('a window context names its window', () => {
 		assert.strictEqual(windowIdFromContext('window:12'), 12);
 	});
@@ -18,5 +19,4 @@ suite('windowIdFromContext', () => {
 			assert.throws(() => windowIdFromContext(context), /application window/);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

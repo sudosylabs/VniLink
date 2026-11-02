@@ -7,7 +7,7 @@
 
 import assert from 'assert';
 import type { Event } from '../../../../base/common/event.js';
-import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import type { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
@@ -40,15 +40,12 @@ const logsHome = URI.file('/profile/logs/20261102T000000');
 const own = { scheme: 'file', path: '/profile/logs/20261102T000000/window2/renderer.log' };
 
 suite('WindowLoggerChannel', () => {
-	const disposables = new DisposableStore();
+	ensureNoDisposablesAreLeakedInTestSuite();
 	let inner: TestServerChannel;
 	let channel: WindowLoggerChannel;
 	setup(() => {
 		inner = new TestServerChannel();
 		channel = new WindowLoggerChannel(inner, logsHome);
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('a window creates a logger in its own folder, under the id its IPC context names', async () => {
 		await channel.call('window:2', 'createLogger', [own, { name: 'Window' }, 7]);
@@ -99,5 +96,4 @@ suite('WindowLoggerChannel', () => {
 		assert.throws(() => channel.listen('window:2', 'onDidSomethingElse'), /Event not found/);
 		assert.deepStrictEqual(inner.calls, []);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

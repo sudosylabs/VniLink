@@ -16,6 +16,7 @@ const snapshot: PermissionSnapshot = {
 };
 
 suite('isPermissionCommand', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('a status query is accepted', () => {
 		assert.strictEqual(isPermissionCommand({ type: 'status' }), true);
 	});
@@ -28,10 +29,10 @@ suite('isPermissionCommand', () => {
 	test('a request for a permission the computer does not have is refused', () => {
 		assert.strictEqual(isPermissionCommand({ type: 'request', kind: 'files' }), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('isPermissionSnapshot', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('a snapshot listing every permission is accepted', () => {
 		assert.strictEqual(isPermissionSnapshot(snapshot), true);
 	});
@@ -41,5 +42,4 @@ suite('isPermissionSnapshot', () => {
 	test('a snapshot without its permissions is refused', () => {
 		assert.strictEqual(isPermissionSnapshot({ development: false, permissions: [] }), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

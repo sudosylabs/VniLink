@@ -7,7 +7,7 @@
 
 import assert from 'assert';
 import { Emitter } from '../../../../base/common/event.js';
-import { DisposableStore, toDisposable, type IDisposable } from '../../../../base/common/lifecycle.js';
+import { toDisposable, type IDisposable } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { IHostingMainService, type HostingMainService, type HostingStatus } from '../../../hosting/electron-main/hostingMainService.js';
 import { TestInstantiationService } from '../../../instantiation/test/common/instantiationServiceMock.js';
@@ -27,6 +27,7 @@ function labels(menu: readonly TrayMenuEntry[]): string[] {
 }
 
 suite('tray presentation', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const states: readonly (readonly [description: string, status: HostingStatus, state: ReturnType<typeof trayState>])[] = [
 		['a computer ready for paired devices is idle', ready, 'idle'],
 		['a computer someone is connected to is active', connected, 'active'],
@@ -85,10 +86,10 @@ suite('tray presentation', () => {
 		const requested = new Set((['idle', 'active', 'paused'] as const).flatMap(state => (['darwin', 'win32', 'linux'] as const).flatMap(platform => [true, false].map(dark => trayImageName(state, platform, dark)))));
 		assert.deepStrictEqual([...requested].sort(), rendered.sort());
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('traySupported', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('macOS and Windows always show tray icons', async () => {
 		assert.strictEqual(await traySupported(() => Promise.reject(new Error('gdbus is not asked')), false), true);
 	});
@@ -101,7 +102,6 @@ suite('traySupported', () => {
 	test('Linux without gdbus cannot know, so shows none', async () => {
 		assert.strictEqual(await traySupported(() => Promise.reject(Object.assign(new Error('spawn gdbus ENOENT'), { code: 'ENOENT' })), true), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 /** A tray icon recording what it shows; `choose` runs a menu entry and `click` clicks the icon. */
@@ -231,16 +231,13 @@ class TestHostingService implements Pick<HostingMainService, 'status' | 'onDidCh
 }
 
 suite('TrayMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let hosting: TestHostingService;
 	setup(() => {
 		hosting = new TestHostingService(ready);
 		disposables.add(toDisposable(() => {
 			hosting.dispose();
 		}));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	function createTray(environment: TestTrayEnvironment): { readonly tray: TrayMainService; readonly icon: TestTrayIcon } {
 		disposables.add(toDisposable(() => {
@@ -355,5 +352,4 @@ suite('TrayMainService', () => {
 		tray.dispose();
 		assert.strictEqual(environment.listensForTheme, false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

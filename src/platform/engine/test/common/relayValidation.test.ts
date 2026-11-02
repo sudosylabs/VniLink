@@ -15,6 +15,7 @@ function relay(url: string, authenticated = false, replacementToken = ''): Relay
 }
 
 suite('validateRelays', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const saved = new Set(['https://saved.example/']);
 	for (const url of ['https://relay.example/', 'http://localhost:3340/', 'http://127.0.0.2/', 'http://[::1]/']) {
 		test(`${url} is accepted`, () => {
@@ -47,10 +48,10 @@ suite('validateRelays', () => {
 			assert.strictEqual(validateRelays([input], saved)[0]?.field, 'token');
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('relaysChanged', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const saved: RelayInfo[] = [{ url: 'https://relay.example.com/', authenticated: true }];
 	test('a draft that differs only in how its URL is written is unchanged', () => {
 		assert.strictEqual(relaysChanged(saved, [relay('https://RELAY.example.com', true)]), false);
@@ -64,5 +65,4 @@ suite('relaysChanged', () => {
 	test('two empty lists are unchanged', () => {
 		assert.strictEqual(relaysChanged([], []), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

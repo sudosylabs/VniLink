@@ -13,6 +13,7 @@ import { noticeCountdown, noticeTitle } from '../../common/noticeText.js';
 const restart: NoticeContent = { action: 'restart', name: 'Studio Mac', deadline: 30_000 };
 
 suite('System action notice', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('the title names who asks to restart', () => {
 		assert.strictEqual(noticeTitle(restart), 'Studio Mac wants to restart this computer');
 	});
@@ -42,5 +43,4 @@ suite('System action notice', () => {
 			assert.strictEqual(isNoticeAnswer(answer), valid);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

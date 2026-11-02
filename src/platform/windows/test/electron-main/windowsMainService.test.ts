@@ -8,7 +8,6 @@
 import assert from 'assert';
 import type { BrowserWindow } from 'electron';
 import { DeferredPromise } from '../../../../base/common/async.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../instantiation/test/common/instantiationServiceMock.js';
 import { ILogService, NullLogService } from '../../../log/common/log.js';
@@ -56,15 +55,12 @@ class TestWindowsMainService extends WindowsMainService {
 }
 
 suite('WindowsMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let service: TestWindowsMainService;
 	setup(() => {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ILogService, disposables.add(new NullLogService()));
 		service = disposables.add(instantiationService.createInstance(TestWindowsMainService));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('a window asked for while its page loads stays hidden, not blank', async () => {
 		const opened = service.openMainWindow(false);
@@ -94,5 +90,4 @@ suite('WindowsMainService', () => {
 		await opened;
 		assert.strictEqual(service.window.shown, 0);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

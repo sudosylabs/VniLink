@@ -11,6 +11,7 @@ import type { StreamMatrix } from '../../../camera/decoderColour.js';
 import { probeWindowDecoders } from '../../windowDecoders.js';
 
 suite('probeWindowDecoders', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('the window says which codecs it decodes, hardware ones marked with their matrix, each once, and whether it shows stills', async () => {
 		// A hardware decoder that shows neither matrix right answers nothing for `prefer-hardware`, as VP9's does here.
 		// H.264 shows BT.709 in hardware; H.265 only BT.601, as Chromium's VA-API path converts.
@@ -29,5 +30,4 @@ suite('probeWindowDecoders', () => {
 			{ codec: 'av1', hardware: false, chroma444: true, bt601: false },
 		]);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

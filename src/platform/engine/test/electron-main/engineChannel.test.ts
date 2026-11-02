@@ -8,7 +8,6 @@
 import assert from 'assert';
 import type { MessagePortMain } from 'electron';
 import { EventEmitter } from 'events';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../instantiation/test/common/instantiationServiceMock.js';
 import { INativeHostMainService } from '../../../native/electron-main/nativeHostMainService.js';
@@ -59,7 +58,7 @@ const port = upcastPartial<MessagePortMain>({
 });
 
 suite('EngineChannel', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let engine: TestEngineMainService;
 	let contents: TestWebContents;
 
@@ -83,9 +82,6 @@ suite('EngineChannel', () => {
 	setup(() => {
 		engine = disposables.add(new TestEngineMainService(() => ({ type: 'done' })));
 		contents = new TestWebContents();
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	for (const command of privateCommands) {
 		test(`a window cannot send ${JSON.stringify(command)}, which only main may send`, async () => {
@@ -119,5 +115,4 @@ suite('EngineChannel', () => {
 		contents.emit('destroyed');
 		assert.strictEqual(engine.closedOwners.length, 1);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

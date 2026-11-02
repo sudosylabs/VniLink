@@ -80,6 +80,7 @@ class TestNativeDataChannel implements NativeDataChannel {
 const request: DataChannelRequest = { kind: 'video', requestId: 'test', sessionId: '1', generation: '2' };
 
 suite('DataChannelHost', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const hosts: DataChannelHost[] = [];
 
 	/** A host for a `kind` channel whose window end records what it was posted, with `receive` sending it a message. */
@@ -308,5 +309,4 @@ suite('DataChannelHost', () => {
 		host.close();
 		assert.strictEqual(native.closed, 1);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

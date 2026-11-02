@@ -38,6 +38,7 @@ const failures: readonly (readonly [string, string])[] = [
 ];
 
 suite('System action messages', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	for (const [operation, message] of outcomes) {
 		test(`a ${operation.action} ${operation.state}${operation.detail ? ` (${operation.detail})` : ''} reads '${message}'`, () => {
 			assert.strictEqual(systemActionMessage(operation), message);
@@ -48,5 +49,4 @@ suite('System action messages', () => {
 			assert.strictEqual(systemRequestMessage(new Error(error)), message);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

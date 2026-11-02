@@ -37,6 +37,7 @@ const refusedFrames: readonly (readonly [string, () => WebFrameMain])[] = [
 ];
 
 suite('ValidatedIpcMain', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	let ipc: TestIpcMain;
 	let window: WebContents;
 	let calls: number;
@@ -109,5 +110,4 @@ suite('ValidatedIpcMain', () => {
 		ipc.emit('vnilink:message', ipcEvent(window), 'after');
 		assert.deepStrictEqual(heard, []);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

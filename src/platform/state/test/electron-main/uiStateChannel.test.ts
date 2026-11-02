@@ -9,7 +9,6 @@ import assert from 'assert';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../log/common/log.js';
 import { UIStateChannel } from '../../electron-main/uiStateChannel.js';
@@ -27,7 +26,7 @@ const refusedShowHidden: readonly unknown[] = ['yes', 1, null, undefined, { root
 const refusedFolders: readonly unknown[] = [true, '/Users', { root: '', path: 'a' }, { root: 1, path: 'a' }, { root: '0' }, { root: '0', path: 'a'.repeat(4097) }, { root: '0', path: 'a', extra: 1 }];
 
 suite('UIStateChannel', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let folder: string;
 	let path: string;
 	let state: StateService;
@@ -50,64 +49,76 @@ suite('UIStateChannel', () => {
 		channel = new UIStateChannel(state);
 	});
 	teardown(async () => {
-		// Closing saves what is pending; disposing first would cancel the save.
-		await Promise.all(opened.map(service => service.close()));
-		disposables.clear();
 		await rm(folder, { recursive: true, force: true });
 	});
-	test('a call that does not come from an application window is refused', async () => {
+
+	/**
+	 * A test that closes the state files it opened as it ends, saving what is
+	 * pending, before the leak check disposes them: disposing first would
+	 * cancel the save.
+	 */
+	function stateTest(name: string, body: () => Promise<void> | void): void {
+		test(name, async () => {
+			try {
+				await body();
+			} finally {
+				await Promise.all(opened.map(service => service.close()));
+			}
+		});
+	}
+	stateTest('a call that does not come from an application window is refused', async () => {
 		await assert.rejects(channel.call('renderer', 'set', { key: 'files.showHidden', value: true }), /window/i);
 	});
-	test('a window remembers the last folder of a computer\'s pane', async () => {
+	stateTest('a window remembers the last folder of a computer\'s pane', async () => {
 		await channel.call('window:1', 'set', { key: lastFolder, value: folderValue });
 		assert.deepStrictEqual(await channel.call('window:1', 'get', { key: lastFolder }), folderValue);
 	});
-	test('a window remembers whether hidden files show', async () => {
+	stateTest('a window remembers whether hidden files show', async () => {
 		await channel.call('window:1', 'set', { key: 'files.showHidden', value: true });
 		assert.strictEqual(await channel.call('window:1', 'get', { key: 'files.showHidden' }), true);
 	});
-	test('a folder never saved reads as nothing', async () => {
+	stateTest('a folder never saved reads as nothing', async () => {
 		await channel.call('window:1', 'set', { key: lastFolder, value: folderValue });
 		assert.strictEqual(await channel.call('window:1', 'get', { key: 'files.lastFolder.other.local' }), undefined);
 	});
-	test('a remote desktop remembers, for each computer, whether it exchanges Control and Command', async () => {
+	stateTest('a remote desktop remembers, for each computer, whether it exchanges Control and Command', async () => {
 		await channel.call('window:1', 'set', { key: 'desktop.swapModifiers.studio', value: false });
 		assert.strictEqual(await channel.call('window:1', 'get', { key: 'desktop.swapModifiers.studio' }), false);
 	});
-	test('a modifier exchange that is not a boolean is refused', async () => {
+	stateTest('a modifier exchange that is not a boolean is refused', async () => {
 		await assert.rejects(channel.call('window:1', 'set', { key: 'desktop.swapModifiers.studio', value: 'off' }), /Invalid UI state value/);
 	});
 	for (const key of refusedKeys) {
-		test(`the key ${String(key)} cannot be read`, async () => {
+		stateTest(`the key ${String(key)} cannot be read`, async () => {
 			await assert.rejects(channel.call('window:1', 'get', { key }), /Invalid UI state key/);
 		});
-		test(`the key ${String(key)} cannot be written`, async () => {
+		stateTest(`the key ${String(key)} cannot be written`, async () => {
 			await assert.rejects(channel.call('window:1', 'set', { key, value: true }), /Invalid UI state value/);
 			assert.deepStrictEqual(state.getItem('windowsState'), { main: true }, 'a refused write changed the state file');
 		});
 	}
 	for (const value of refusedShowHidden) {
-		test(`whether hidden files show cannot be ${value === undefined ? 'undefined' : JSON.stringify(value)}`, async () => {
+		stateTest(`whether hidden files show cannot be ${value === undefined ? 'undefined' : JSON.stringify(value)}`, async () => {
 			await assert.rejects(channel.call('window:1', 'set', { key: 'files.showHidden', value }), /Invalid UI state value/);
 			assert.strictEqual(state.getItem('files.showHidden'), undefined);
 		});
 	}
 	for (const value of refusedFolders) {
-		test(`a last folder cannot be ${JSON.stringify(value)}`, async () => {
+		stateTest(`a last folder cannot be ${JSON.stringify(value)}`, async () => {
 			await assert.rejects(channel.call('window:1', 'set', { key: lastFolder, value }), /Invalid UI state value/);
 			assert.strictEqual(state.getItem(lastFolder), undefined);
 		});
 	}
-	test('a read that carries a value is refused', async () => {
+	stateTest('a read that carries a value is refused', async () => {
 		await assert.rejects(channel.call('window:1', 'get', { key: lastFolder, value: 1 }), /Invalid UI state key/);
 	});
-	test('an unknown command is refused', async () => {
+	stateTest('an unknown command is refused', async () => {
 		await assert.rejects(channel.call('window:1', 'clear', {}), /Unknown UI state command/);
 	});
-	test('the channel offers no events', () => {
+	stateTest('the channel offers no events', () => {
 		assert.throws(() => channel.listen('window:1', 'onDidChange'), /Unknown UI state event/);
 	});
-	test('saved values survive a restart and a removed one is gone, leaving the main process\'s keys', async () => {
+	stateTest('saved values survive a restart and a removed one is gone, leaving the main process\'s keys', async () => {
 		await channel.call('window:1', 'set', { key: lastFolder, value: folderValue });
 		await channel.call('window:1', 'set', { key: 'files.showHidden', value: true });
 		await channel.call('window:1', 'remove', { key: 'files.showHidden' });
@@ -117,5 +128,4 @@ suite('UIStateChannel', () => {
 		assert.strictEqual(reopened.getItem('files.showHidden'), undefined);
 		assert.deepStrictEqual(reopened.getItem('windowsState'), { main: true });
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

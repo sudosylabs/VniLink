@@ -17,6 +17,7 @@ const running: FileJob = {
 };
 
 suite('Files text', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const sizes: readonly (readonly [number, string])[] = [
 		[4, '4 bytes'],
 		[4000, '4 KB'],
@@ -64,5 +65,4 @@ suite('Files text', () => {
 			assert.strictEqual(jobStatus(job, rate), text);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

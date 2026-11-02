@@ -11,6 +11,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../test/com
 import { renderIcon } from '../../icon.js';
 
 suite('renderIcon', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	let host: HTMLElement;
 	setup(() => {
 		host = document.createElement('div');
@@ -74,5 +75,4 @@ suite('renderIcon', () => {
 		const named = renderIcon(Icons.home, { label: '<Home>' });
 		assert.strictEqual(named.querySelector('Home'), null);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
-import { DisposableStore, isDisposable } from '../../../../base/common/lifecycle.js';
+import { isDisposable } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { BufferLogger } from '../../common/bufferLog.js';
 import { AbstractMessageLogger, DEFAULT_LOG_LEVEL, format, LogLevel, parseLogLevel } from '../../common/log.js';
@@ -22,10 +22,7 @@ class CaptureLogger extends AbstractMessageLogger {
 }
 
 suite('log', () => {
-	const disposables = new DisposableStore();
-	teardown(() => {
-		disposables.clear();
-	});
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	suite('levels', () => {
 		for (const [name, level] of [['trace', LogLevel.Trace], ['critical', LogLevel.Error], ['nope', undefined]] as const) {
 			test(`'${name}' parses as ${level === undefined ? 'no level' : LogLevel[level]}`, () => {
@@ -106,5 +103,4 @@ suite('log', () => {
 			assert.deepStrictEqual(logger.messages, []);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

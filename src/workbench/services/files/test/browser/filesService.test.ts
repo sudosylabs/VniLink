@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { toDisposable } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IDataChannelService } from '../../../../../platform/engine/common/dataChannelService.js';
 import { engineErrorCategory, type RemoteStatus } from '../../../../../platform/engine/common/engine.js';
@@ -42,22 +42,21 @@ function quiet(operation: FileOperation): FileAnswer {
 }
 
 suite('FilesService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let dataChannels: TestDataChannelService;
 	let status: RemoteStatus;
 	setup(() => {
 		dataChannels = new TestDataChannelService();
 		dataChannels.fileAnswer = quiet;
 		status = 'available';
-	});
-	teardown(() => {
-		// A session still connected ends as one whose channel was lost, which releases it.
-		for (const channel of dataChannels.opened) {
-			if (!channel.closed) {
-				channel.onError(new Error('Data channel disconnected'));
+		// A session a running transfer keeps ends as one whose channel was lost, which releases it.
+		disposables.add(toDisposable(() => {
+			for (const channel of dataChannels.opened) {
+				if (!channel.closed) {
+					channel.onError(new Error('Data channel disconnected'));
+				}
 			}
-		}
-		disposables.clear();
+		}));
 	});
 
 	/** The service, as the workbench builds it, on a computer connected to `peer` as session 4 of generation 2. */
@@ -205,5 +204,4 @@ suite('FilesService', () => {
 		assert.strictEqual(listing.skipped, 1);
 		session.release();
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

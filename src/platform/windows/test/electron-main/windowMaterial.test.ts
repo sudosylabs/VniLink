@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { EventEmitter } from 'events';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import type { GlassOptions, LiquidGlassOwner } from '../../electron-main/liquidGlass.js';
 import { WindowMaterial } from '../../electron-main/windowMaterial.js';
@@ -88,15 +87,12 @@ class TestGlassOwner implements LiquidGlassOwner {
 const lightGlass = ['add', true, { opaque: true, tintColor: '#F1F1F3CC' }];
 
 suite('WindowMaterial', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let window: TestMaterialWindow;
 	let theme: TestNativeTheme;
 	setup(() => {
 		window = new TestMaterialWindow();
 		theme = new TestNativeTheme();
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	function createMaterial(platform: string, release: string, createGlass: () => LiquidGlassOwner | undefined = () => undefined): WindowMaterial {
 		return disposables.add(new WindowMaterial(window, platform, release, createGlass, theme));
@@ -207,5 +203,4 @@ suite('WindowMaterial', () => {
 			assert.deepStrictEqual(window.calls.at(-1), ['background', '#fafafa']);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

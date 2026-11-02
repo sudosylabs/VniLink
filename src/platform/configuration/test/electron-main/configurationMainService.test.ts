@@ -9,7 +9,6 @@ import assert from 'assert';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import type { EngineCommand, EngineReply } from '../../../engine/common/engine.js';
 import { IEngineMainService } from '../../../engine/electron-main/engineMainService.js';
@@ -40,7 +39,7 @@ function systemSettings(): SystemSettings {
 }
 
 suite('ConfigurationMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let folder: string;
 	let path: string;
 	let engine: TestEngineMainService;
@@ -86,7 +85,6 @@ suite('ConfigurationMainService', () => {
 		log = new TestLogService();
 	});
 	teardown(async () => {
-		disposables.clear();
 		await rm(folder, { recursive: true, force: true });
 	});
 	suite('user settings', () => {
@@ -247,5 +245,4 @@ suite('ConfigurationMainService', () => {
 			assert.strictEqual(log.errors.length, 1);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

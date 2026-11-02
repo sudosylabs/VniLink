@@ -8,7 +8,7 @@
 import assert from 'assert';
 import { timeout } from '../../../../base/common/async.js';
 import { Emitter, type Event } from '../../../../base/common/event.js';
-import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Disposable } from '../../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../base/test/common/virtualScheduling/index.js';
@@ -93,7 +93,7 @@ class TestLogService extends NullLogService {
 }
 
 suite('EngineMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	/** Every engine process started, oldest first. */
 	let forks: TestEngineProcess[];
 	let answers: Answer[];
@@ -151,9 +151,6 @@ suite('EngineMainService', () => {
 		answers = [];
 		log = new TestLogService();
 		story = [];
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('windows learn that a crashed engine is coming back before they learn it is gone', () => runWithFakedTimers({}, async () => {
 		const service = await startService();
@@ -295,5 +292,4 @@ suite('EngineMainService', () => {
 		assert.ok(log.errors.includes('[engine] partial'));
 		await service.stop();
 	}));
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

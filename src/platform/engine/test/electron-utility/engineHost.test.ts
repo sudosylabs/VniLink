@@ -8,7 +8,6 @@
 import assert from 'assert';
 import { EventEmitter } from 'events';
 import { timeout } from '../../../../base/common/async.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import type { MessagePortMain } from '../../../../base/parts/sandbox/node/electronTypes.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../base/test/common/virtualScheduling/index.js';
@@ -108,7 +107,7 @@ function settled(): Promise<void> {
 const locked = (index: number): EngineEvent => ({ type: 'hostLocked', locked: index % 2 === 0 });
 
 suite('EngineHost', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let native: TestNativeEngine;
 	let posted: unknown[];
 
@@ -131,9 +130,6 @@ suite('EngineHost', () => {
 	setup(() => {
 		native = new TestNativeEngine();
 		posted = [];
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	suite('opening', () => {
 		test('an opened engine is reported ready to main', async () => {
@@ -279,5 +275,4 @@ suite('EngineHost', () => {
 			assert.strictEqual(port.closed, true);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

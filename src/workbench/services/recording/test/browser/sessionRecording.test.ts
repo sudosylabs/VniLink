@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { recordingStartFailure, type RecordingStartFailure } from '../../sessionRecording.js';
 
 suite('recordingStartFailure', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const cases: readonly (readonly [string, RecordingStartFailure])[] = [
 		['Unauthorized: recording is not allowed', 'notAllowed'],
 		['NoSession: no camera is open on this connection', 'disconnected'],
@@ -20,5 +21,4 @@ suite('recordingStartFailure', () => {
 			assert.strictEqual(recordingStartFailure(new Error(message)), failure);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

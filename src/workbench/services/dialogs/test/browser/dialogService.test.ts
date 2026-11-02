@@ -46,6 +46,7 @@ function resolvedBackground(token: string): string {
 }
 
 suite('DialogService', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	suite('native', () => {
 		test('returns the answer of the native box', async () => {
 			const answer = await dialogService(NativeDialogService, new TestMessageBoxHost(0)).show(restart);
@@ -203,5 +204,4 @@ suite('DialogService', () => {
 			assert.deepStrictEqual(await answer, { button: 1, checked: true });
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

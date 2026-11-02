@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { isPictureName } from '../../common/recording.js';
 
 suite('isPictureName', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('a PNG file name is a picture name', () => {
 		assert.strictEqual(isPictureName('Studio Mac camera 2026-10-19 14.32.05.png'), true);
 	});
@@ -28,5 +29,4 @@ suite('isPictureName', () => {
 			assert.strictEqual(isPictureName(value), false);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

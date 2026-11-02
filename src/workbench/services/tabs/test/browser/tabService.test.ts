@@ -8,7 +8,6 @@
 import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import type { WorkbenchTab } from '../../tabService.js';
@@ -40,15 +39,12 @@ class TestTab implements WorkbenchTab {
 }
 
 suite('TabService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	function createService(): TabService {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		return disposables.add(instantiationService.createInstance(TabService));
 	}
 	const ids = (service: TabService): string[] => service.tabs.map(tab => tab.id);
-	teardown(() => {
-		disposables.clear();
-	});
 	test('selecting another tab keeps the inactive one open', () => {
 		const service = createService();
 		const first = new TestTab('first');
@@ -160,5 +156,4 @@ suite('TabService', () => {
 			assert.strictEqual(home.disposals, 1);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

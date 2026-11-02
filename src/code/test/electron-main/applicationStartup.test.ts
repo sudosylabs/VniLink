@@ -39,7 +39,7 @@ class RecordingLogService extends NullLogService {
 }
 
 suite('MainWindowRequests', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let windows: TestWindows;
 	let lifecycle: { quitting: boolean };
 	let log: RecordingLogService;
@@ -60,9 +60,6 @@ suite('MainWindowRequests', () => {
 			opened++;
 			return open();
 		}, log);
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('a request while the window is open focuses it rather than opening another', () => {
 		requests.openedAtStartup();
@@ -129,10 +126,10 @@ suite('MainWindowRequests', () => {
 		await timeout(0);
 		assert.strictEqual(opened, 2);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('application startup', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const background: readonly (readonly [description: string, restricted: readonly string[], value: unknown, expected: boolean])[] = [
 		['runs in the background by default', [], undefined, true],
 		['runs in the background when the owner chose it', [], true, true],
@@ -181,5 +178,4 @@ suite('application startup', () => {
 		const waitsFor = joined.map(([id, promise]) => [id, promise === stopped ? 'stop' : promise === flushed ? 'flush' : promise === closed ? 'close' : 'other']);
 		assert.deepStrictEqual(waitsFor, [['engine', 'stop'], ['configuration', 'flush'], ['state', 'close']]);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

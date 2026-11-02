@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { isNativeHostRequest } from '../../common/native.js';
 
 suite('Native host requests', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('a window may say whether its remote desktop has the keyboard', () => {
 		assert.strictEqual(isNativeHostRequest('setRemoteKeyboard', [7, true]), true);
 	});
@@ -27,5 +28,4 @@ suite('Native host requests', () => {
 			assert.strictEqual(isNativeHostRequest(method, args), false);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

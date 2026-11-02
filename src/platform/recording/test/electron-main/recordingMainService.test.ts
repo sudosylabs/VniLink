@@ -10,7 +10,6 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { VSBuffer } from '../../../../base/common/buffer.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { IConfigurationMainService } from '../../../configuration/electron-main/configurationMainService.js';
 import { TestInstantiationService } from '../../../instantiation/test/common/instantiationServiceMock.js';
@@ -29,7 +28,7 @@ const refusedPictures: readonly (readonly [string, unknown, unknown])[] = [
 ];
 
 suite('RecordingMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let folder: string;
 
 	/** The service, with `saved` as the saved recording folder and /Pictures as the operating system's. */
@@ -42,7 +41,6 @@ suite('RecordingMainService', () => {
 		folder = await mkdtemp(join(tmpdir(), 'vnilink-pictures-'));
 	});
 	teardown(async () => {
-		disposables.clear();
 		await rm(folder, { recursive: true, force: true });
 	});
 	test('the default folder is VniLink in Pictures, whatever folder is saved', async () => {
@@ -65,5 +63,4 @@ suite('RecordingMainService', () => {
 			assert.deepStrictEqual(await readdir(folder), []);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

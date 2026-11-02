@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { isDesktopInputCommand, isEngineCommand } from '../../common/engine.js';
 
 suite('Desktop input commands', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const target = { sessionId: '4', generation: '2' };
 	const accepted: [string, unknown][] = [
 		['a key with its composing state', { type: 'submitLocalKey', ...target, usage: 0x2f, down: true, text: '', composing: true }],
@@ -54,5 +55,4 @@ suite('Desktop input commands', () => {
 	test('no engine command pastes: text crosses on a desktop\'s own clipboard pipe', () => {
 		assert.strictEqual(isEngineCommand({ type: 'submitClipboard', ...target, text: 'a' }), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

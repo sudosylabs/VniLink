@@ -6,7 +6,6 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IEngineService } from '../../../../../platform/engine/common/engineService.js';
 import { TestEngineService } from '../../../../../platform/engine/test/common/testEngineService.js';
@@ -15,7 +14,7 @@ import { INativeHostService } from '../../../../../platform/native/common/native
 import { ApplicationService } from '../../applicationServiceImpl.js';
 
 suite('ApplicationService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let engine: TestEngineService;
 	/** What the service asked the native host to do, in order. */
 	let native: string[];
@@ -39,9 +38,6 @@ suite('ApplicationService', () => {
 			throw new Error(`Unexpected command ${command.type}`);
 		}));
 		native = [];
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('restart is not required until the engine says so', () => {
 		const service = createService();
@@ -72,5 +68,4 @@ suite('ApplicationService', () => {
 		engine.setRestartRequired(false);
 		assert.strictEqual(changes, 0);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

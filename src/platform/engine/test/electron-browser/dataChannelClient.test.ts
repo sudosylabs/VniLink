@@ -7,7 +7,7 @@
 
 import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../base/common/async.js';
-import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+import { toDisposable } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import type { DataPacket, DesktopAudioStatus } from '../../common/dataChannel.js';
 import type { DesktopInputCommand } from '../../common/engine.js';
@@ -81,7 +81,7 @@ const job: FileJob = {
 const audioStatus: DesktopAudioStatus = { phase: 'muted', enabled: true, muted: true, playbackFailed: false, error: null };
 
 suite('DataChannelClient', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let errors: Error[];
 
 	/**
@@ -110,9 +110,6 @@ suite('DataChannelClient', () => {
 	}
 	setup(() => {
 		errors = [];
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	suite('packets', () => {
 		test('a packet is acknowledged only once it was consumed', async () => {
@@ -254,5 +251,4 @@ suite('DataChannelClient', () => {
 			await assert.rejects(client.desktopAudio({ type: 'status' }), /unavailable/);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

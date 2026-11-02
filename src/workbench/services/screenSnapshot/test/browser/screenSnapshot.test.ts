@@ -20,6 +20,7 @@ function jpeg(width: number, height: number): Uint8Array {
 }
 
 suite('parseScreenSnapshot', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const image = jpeg(8, 8);
 	const ready = { outcome: 'ready', width: 8, height: 8, capturedUnixMs: '1700000000000', displayId: 'display-7', mime: 'image/jpeg', endpointId: 'a'.repeat(64), sessionId: '1', generation: '2' };
 	test('a ready snapshot carries its size, capture time, computer and generation', () => {
@@ -66,5 +67,4 @@ suite('parseScreenSnapshot', () => {
 			assert.strictEqual(parseScreenSnapshot(JSON.stringify(metadata), undefined), undefined);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

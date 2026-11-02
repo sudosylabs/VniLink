@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../base/common/async.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import type { EngineCommand, EngineEvent, EngineReply } from '../../../engine/common/engine.js';
 import { engineDevice, snapshotReply, TestEngineService } from '../../../engine/test/common/testEngineService.js';
@@ -39,7 +38,7 @@ function answered(engine: TestEngineService): boolean {
 }
 
 suite('SystemActionNotices', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let engine: TestEngineService;
 	let errors: unknown[];
 	/** The notices shown and not yet closed, in the order they opened. */
@@ -61,7 +60,6 @@ suite('SystemActionNotices', () => {
 		open = [];
 	});
 	teardown(() => {
-		disposables.clear();
 		assert.deepStrictEqual(errors, []);
 	});
 	for (const [answer, choice, expected] of [[0, 'cancel a restart', 'cancelHostedSystemAction'], [1, 'start a restart now', 'runHostedSystemActionNow']] as const) {
@@ -130,5 +128,4 @@ suite('SystemActionNotices', () => {
 		await timeout(0);
 		assert.deepStrictEqual(open, []);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

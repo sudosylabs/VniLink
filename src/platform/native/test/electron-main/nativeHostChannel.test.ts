@@ -12,7 +12,6 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Event } from '../../../../base/common/event.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../instantiation/test/common/instantiationServiceMock.js';
@@ -71,7 +70,7 @@ const refusedWrites: readonly (readonly [string, unknown[]])[] = [
 ];
 
 suite('NativeHostChannel', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let nativeShell: TestNativeShell;
 	let relaunches: number;
 
@@ -89,9 +88,6 @@ suite('NativeHostChannel', () => {
 	setup(() => {
 		nativeShell = new TestNativeShell();
 		relaunches = 0;
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('a request naming another window is refused', async () => {
 		await assert.rejects(createChannel().call('window:7', 'getWindowState', [8]), /Invalid/);
@@ -198,5 +194,4 @@ suite('NativeHostChannel', () => {
 			await assert.rejects(createChannel(logs).call('window:7', 'readLogTails', [7, 'main.log']), /Invalid/);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

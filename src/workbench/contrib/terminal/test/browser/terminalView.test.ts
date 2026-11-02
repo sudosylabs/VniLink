@@ -183,6 +183,7 @@ class TerminalFixture extends Disposable {
 const drawn = webgl ? test : test.skip;
 
 suite('TerminalView', () => {
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	// The view lays the terminal out from its resize observer, and a layout that changes the
 	// observed size makes the browser report, with a later frame, the notification it could not
 	// deliver. That report is the browser's notice of a second layout pass, not a failure.
@@ -195,7 +196,6 @@ suite('TerminalView', () => {
 		await animationFrames();
 		window.onerror = reportError;
 	});
-	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let fixture: TerminalFixture;
 	setup(() => {
 		fixture = disposables.add(new TerminalFixture());

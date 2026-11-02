@@ -8,7 +8,6 @@
 import assert from 'assert';
 import { DeferredPromise } from '../../../../../base/common/async.js';
 import { Event } from '../../../../../base/common/event.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/virtualScheduling/index.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
@@ -35,7 +34,7 @@ function until(service: DevicePairingService, kind: PairingStep['kind']): Promis
 }
 
 suite('DevicePairingService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let devices: TestDeviceService;
 	function createService(): DevicePairingService {
 		const instantiationService = disposables.add(new TestInstantiationService());
@@ -66,9 +65,6 @@ suite('DevicePairingService', () => {
 	}
 	setup(() => {
 		devices = disposables.add(new TestDeviceService());
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	suite('invitation', () => {
 		test('a new invitation shows its check digits once it is ready', () => withService(async service => {
@@ -223,5 +219,4 @@ suite('DevicePairingService', () => {
 			assert.strictEqual(service.state.step.kind, 'idle', 'the late invitation was not taken up');
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

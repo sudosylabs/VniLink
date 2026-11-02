@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import type { RenderProcessGoneDetails } from 'electron';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { NullLogService } from '../../../log/common/log.js';
 import { recoverRenderer, type RecoverableWindow } from '../../electron-main/rendererRecovery.js';
@@ -66,7 +65,7 @@ class RecordingLogService extends NullLogService {
 }
 
 suite('recoverRenderer', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let window: TestWindow;
 	let log: RecordingLogService;
 	let time: number;
@@ -75,9 +74,6 @@ suite('recoverRenderer', () => {
 		log = disposables.add(new RecordingLogService());
 		time = 0;
 		recoverRenderer(window, log, () => time);
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('a crashed renderer is reloaded', () => {
 		window.renderProcessGone('crashed', 11);
@@ -114,5 +110,4 @@ suite('recoverRenderer', () => {
 		window.stopResponding();
 		assert.deepStrictEqual(log.warnings, ['[window] the renderer stopped responding']);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

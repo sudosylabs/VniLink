@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../base/common/async.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { IConfigurationMainService } from '../../../configuration/electron-main/configurationMainService.js';
 import { TestConfigurationMainService } from '../../../configuration/test/common/testConfigurationMainService.js';
@@ -44,7 +43,7 @@ function settle(): Promise<void> {
 }
 
 suite('HostingMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let state: HostedState;
 	/** Whether the engine refuses `startHosting`. */
 	let refuseStart: boolean;
@@ -55,9 +54,6 @@ suite('HostingMainService', () => {
 		refuseStart = false;
 		engine = disposables.add(new TestEngineService(command => reply(command)));
 		configuration = disposables.add(new TestConfigurationMainService({ [ACCEPT]: true }));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	function reply(command: EngineCommand): EngineReply {
 		if (command.type === 'startHosting') {
@@ -254,5 +250,4 @@ suite('HostingMainService', () => {
 		assert.strictEqual(count('startHosting'), 2);
 		assert.strictEqual(hosting.status.hosting, true);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

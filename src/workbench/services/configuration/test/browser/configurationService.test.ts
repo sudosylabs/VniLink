@@ -8,7 +8,7 @@
 import assert from 'assert';
 import { DeferredPromise } from '../../../../../base/common/async.js';
 import type { Event } from '../../../../../base/common/event.js';
-import { DisposableStore, toDisposable } from '../../../../../base/common/lifecycle.js';
+import { toDisposable } from '../../../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { settingDefaults } from '../../../../../platform/configuration/common/configurationSchema.js';
@@ -48,7 +48,7 @@ class TestConfigurationChannel implements IChannel {
 }
 
 suite('ConfigurationService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let channel: TestConfigurationChannel;
 	let service: ConfigurationService;
 	let loading: Promise<void>;
@@ -63,7 +63,6 @@ suite('ConfigurationService', () => {
 		// The first read is always answered, so no test leaves it pending.
 		await channel.first.complete(snapshot(0));
 		await loading;
-		disposables.clear();
 	});
 	test('a window keeps its own copy of a snapshot', () => {
 		const sent = { ...quality };
@@ -105,5 +104,4 @@ suite('ConfigurationService', () => {
 		channel.receive(snapshot(4));
 		assert.strictEqual(service.getValue('appearance.theme'), 'dark');
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

@@ -9,7 +9,6 @@ import assert from 'assert';
 import { mkdtemp, readFile, rm, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { AutostartLoginItem, autostartEntry, SystemSettings } from '../../electron-main/systemSettings.js';
 
@@ -33,14 +32,11 @@ class TestLoginItem implements LoginItem {
 }
 
 suite('SystemSettings', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	/** Whether a tray icon can show. */
 	let trayShows: boolean;
 	setup(() => {
 		trayShows = true;
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	async function createSettings(item: TestLoginItem): Promise<SystemSettings> {
 		const settings = disposables.add(new SystemSettings(item, () => Promise.resolve(trayShows)));
@@ -111,10 +107,10 @@ suite('SystemSettings', () => {
 		await settings.refresh();
 		assert.strictEqual(count(), 1);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('autostartEntry', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('refuses an executable path with a line break', () => {
 		assert.throws(() => autostartEntry('/opt/vni\nlink'));
 	});
@@ -122,10 +118,10 @@ suite('autostartEntry', () => {
 		const entry = autostartEntry('/opt/Vni "Link"/$HOME/50%/a\\b');
 		assert.ok(entry.split('\n').includes(String.raw`Exec="/opt/Vni \\"Link\\"/\\$HOME/50%%/a\\\\b" --hidden`), entry);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
 
 suite('AutostartLoginItem', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	let directory: string;
 	let path: string;
 	setup(async () => {
@@ -154,5 +150,4 @@ suite('AutostartLoginItem', () => {
 		await item.write(false);
 		assert.strictEqual(await item.read(), false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

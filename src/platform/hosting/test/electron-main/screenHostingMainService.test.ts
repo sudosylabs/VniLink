@@ -8,7 +8,6 @@
 import assert from 'assert';
 import { timeout } from '../../../../base/common/async.js';
 import { Emitter } from '../../../../base/common/event.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { IConfigurationMainService } from '../../../configuration/electron-main/configurationMainService.js';
 import { TestConfigurationMainService } from '../../../configuration/test/common/testConfigurationMainService.js';
@@ -72,7 +71,7 @@ class TestPermissions implements Pick<PermissionsMainService, 'isGranted' | 'onD
 }
 
 suite('ScreenHostingMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let engine: TestEngineService;
 	let permissions: TestPermissions;
 	let configuration: TestConfigurationMainService;
@@ -80,9 +79,6 @@ suite('ScreenHostingMainService', () => {
 		engine = disposables.add(new TestEngineService(() => ({ type: 'done' })));
 		permissions = new TestPermissions(disposables.add(new Emitter<void>()));
 		configuration = disposables.add(new TestConfigurationMainService({ [SHARING]: false }));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	async function startService(environment: TestScreenEnvironment): Promise<ScreenHostingMainService> {
 		const instantiationService = disposables.add(new TestInstantiationService());
@@ -176,5 +172,4 @@ suite('ScreenHostingMainService', () => {
 		service.dispose();
 		assert.strictEqual(environment.followsDisplays, false);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

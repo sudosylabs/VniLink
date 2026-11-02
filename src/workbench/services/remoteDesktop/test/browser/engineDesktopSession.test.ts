@@ -8,7 +8,6 @@
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
 import { Emitter } from '../../../../../base/common/event.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/virtualScheduling/index.js';
 import type { DataPacket, DesktopCursor, DesktopDecoderReport, DesktopMediaStatus } from '../../../../../platform/engine/common/dataChannel.js';
@@ -46,7 +45,7 @@ async function latencyOf(session: EngineDesktopSession): Promise<DesktopLatencyS
 }
 
 suite('EngineDesktopSession', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	/** Frames handed to listeners belong to them; the suite closes them. */
 	const shown: VideoFrame[] = [];
 
@@ -106,7 +105,6 @@ suite('EngineDesktopSession', () => {
 		return { session, codecs, closed, inputs, pictures, ends, pointers, failures, keyframes, cursors, reports };
 	}
 	teardown(() => {
-		disposables.clear();
 		for (const frame of shown.splice(0)) {
 			frame.close();
 		}
@@ -450,5 +448,4 @@ suite('EngineDesktopSession', () => {
 			assert.deepStrictEqual(ends, []);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

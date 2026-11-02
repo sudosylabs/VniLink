@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../base/common/async.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import type { EngineCommand, EngineReply, PowerPolicy, RelayInfo, RelayInput, SharingPolicy, SystemPolicy, SystemSupport, TerminalPolicy } from '../../../engine/common/engine.js';
 import { TestEngineMainService } from '../../../engine/test/electron-main/testEngineMainService.js';
@@ -82,7 +81,7 @@ class EnginePolicies {
 }
 
 suite('EngineSettings', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let policies: EnginePolicies;
 	let engine: TestEngineMainService;
 
@@ -100,9 +99,6 @@ suite('EngineSettings', () => {
 	setup(() => {
 		policies = new EnginePolicies();
 		engine = disposables.add(new TestEngineMainService(policies.handler));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	suite('reading and writing', () => {
 		test('policies are read whole, in the units settings show', async () => {
@@ -225,5 +221,4 @@ suite('EngineSettings', () => {
 			assert.strictEqual(settings.values['power.lockAfterControl'], false);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

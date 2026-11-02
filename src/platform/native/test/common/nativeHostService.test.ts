@@ -7,7 +7,7 @@
 
 import assert from 'assert';
 import type { Event } from '../../../../base/common/event.js';
-import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+import { toDisposable } from '../../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { SyncDescriptor } from '../../../instantiation/common/descriptors.js';
@@ -55,7 +55,7 @@ class CountingMainProcessService extends TestMainProcessService {
 }
 
 suite('NativeHostService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let channel: TestNativeHostChannel;
 	let mainProcess: CountingMainProcessService;
 	let instantiationService: TestInstantiationService;
@@ -71,9 +71,6 @@ suite('NativeHostService', () => {
 			[IMainProcessService, mainProcess],
 			[INativeHostService, new SyncDescriptor(NativeHostService, [7])],
 		), true));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('is not created until a consumer asks for it', () => {
 		assert.strictEqual(mainProcess.requested, 0);
@@ -112,5 +109,4 @@ suite('NativeHostService', () => {
 		instantiationService.dispose();
 		assert.deepStrictEqual(channel.calls, []);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

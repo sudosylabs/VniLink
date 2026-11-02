@@ -10,7 +10,7 @@ import type { WebContents } from 'electron';
 import { EventEmitter } from 'events';
 import { timeout } from '../../../../common/async.js';
 import { errorHandler, setUnexpectedErrorHandler } from '../../../../common/errors.js';
-import { DisposableStore } from '../../../../common/lifecycle.js';
+import { toDisposable } from '../../../../common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../test/common/utils.js';
 import { Server } from '../../electron-main/ipc.electron.js';
 import { ValidatedIpcMain, WORKBENCH_URL } from '../../electron-main/ipcMain.js';
@@ -30,7 +30,7 @@ class TestWebContents extends EventEmitter {
 }
 
 suite('Electron IPC server', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let ipc: TestIpcMain;
 	let window: TestWebContents;
 	let unexpected: unknown[];
@@ -57,12 +57,11 @@ suite('Electron IPC server', () => {
 		unexpected = [];
 		previousErrorHandler = errorHandler.getUnexpectedErrorHandler();
 		setUnexpectedErrorHandler(error => unexpected.push(error));
+		// A connection lives until its window says goodbye or goes away, as in the application.
+		disposables.add(toDisposable(() => ipc.emit('vnilink:disconnect', { sender: window, senderFrame: window.mainFrame }, null)));
 	});
 	teardown(() => {
 		setUnexpectedErrorHandler(previousErrorHandler);
-		// A connection lives until its window says goodbye or goes away, as in the application.
-		ipc.emit('vnilink:disconnect', { sender: window, senderFrame: window.mainFrame }, null);
-		disposables.clear();
 	});
 	test('a window that says hello connects', async () => {
 		const server = createServer();
@@ -88,5 +87,4 @@ suite('Electron IPC server', () => {
 		// A closed window would otherwise keep its connection and every event subscription with it.
 		assert.strictEqual(server.connections.length, 0);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

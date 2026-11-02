@@ -8,7 +8,6 @@
 import assert from 'assert';
 import { EventEmitter } from 'events';
 import { DeferredPromise, timeout } from '../../../../base/common/async.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../base/test/common/virtualScheduling/runWithFakedTimers.js';
 import { TestInstantiationService } from '../../../instantiation/test/common/instantiationServiceMock.js';
@@ -60,7 +59,7 @@ class RecordingLogService extends NullLogService {
 }
 
 suite('LifecycleMainService', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let application: TestApplication;
 	let log: RecordingLogService;
 	let lifecycle: LifecycleMainService;
@@ -70,9 +69,6 @@ suite('LifecycleMainService', () => {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ILogService, log);
 		lifecycle = disposables.add(instantiationService.createInstance(LifecycleMainService, application, new EventEmitter()));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 
 	/** Joins a participant that finishes when the returned promise is completed, counting how often it is asked. */
@@ -167,5 +163,4 @@ suite('LifecycleMainService', () => {
 		application.emit('session-end');
 		assert.strictEqual(lifecycle.quitting, true);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { DesktopLatency } from '../../desktopLatency.js';
 
 suite('DesktopLatency', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('stage times summarise as the median and the time nineteen in twenty beat', () => {
 		const latency = new DesktopLatency();
 		for (let ms = 1; ms <= 100; ms++) {
@@ -37,5 +38,4 @@ suite('DesktopLatency', () => {
 		}
 		assert.deepStrictEqual(latency.take(), { draw: { p50: 1, p95: 1, count: 240 } });
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

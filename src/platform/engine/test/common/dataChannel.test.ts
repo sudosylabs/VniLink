@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { isChannelRequest, isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor } from '../../common/dataChannel.js';
 
 suite('Data channel guards', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	suite('isChannelRequest', () => {
 		const video = { kind: 'video', requestId: 'test', sessionId: '1', generation: '2' };
 		const camera = { requestId: 'media', kind: 'camera', sessionId: '1', generation: '1', media: { type: 'camera', deviceId: 'camera-1', width: 1280, height: 720, fps: 30 } };
@@ -91,5 +92,4 @@ suite('Data channel guards', () => {
 			assert.strictEqual(isDesktopCursor({ x: 5, y: 6, visible: true, image: { ...image, pixels: new Uint8Array(4) } }), false);
 		});
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

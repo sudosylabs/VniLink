@@ -16,6 +16,7 @@ function context(argv: readonly string[], overrides: Partial<LaunchContext> = {}
 }
 
 suite('planLaunch', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	test('names the process after the product', () => {
 		assert.strictEqual(planLaunch(context([])).name, product.name);
 	});
@@ -56,5 +57,4 @@ suite('planLaunch', () => {
 		const plan = planLaunch(context([], { hasSwitch: name => name === 'remote-debugging-port' }));
 		assert.strictEqual(plan.action.kind, 'start');
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

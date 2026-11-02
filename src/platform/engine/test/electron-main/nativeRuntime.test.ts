@@ -6,7 +6,6 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { permissionKinds, type PermissionKind, type PermissionSnapshot } from '../../../permissions/common/permissions.js';
 import { synchronizeNativePermissions } from '../../electron-main/nativeRuntime.js';
@@ -21,13 +20,10 @@ function permissions(...granted: PermissionKind[]): PermissionSnapshot {
 }
 
 suite('synchronizeNativePermissions', () => {
-	const disposables = new DisposableStore();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let engine: TestEngineService;
 	setup(() => {
 		engine = disposables.add(new TestEngineService(() => ({ type: 'done' })));
-	});
-	teardown(() => {
-		disposables.clear();
 	});
 	test('on a Mac without Accessibility consent, permissions are reported and input is not installed', async () => {
 		await synchronizeNativePermissions(engine, 'darwin', permissions());
@@ -56,5 +52,4 @@ suite('synchronizeNativePermissions', () => {
 		await synchronizeNativePermissions(engine, 'darwin', permissions('accessibility'));
 		assert.deepStrictEqual(engine.commands, []);
 	});
-	ensureNoDisposablesAreLeakedInTestSuite();
 });

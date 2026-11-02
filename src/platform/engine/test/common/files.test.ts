@@ -10,6 +10,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { isFileOperation } from '../../common/files.js';
 
 suite('isFileOperation', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
 	const accepted: [string, unknown][] = [
 		['a listing under a root', { type: 'list', root: '0', path: 'Users/someone', offset: '0' }],
 		['a later page of a root', { type: 'list', root: '2', path: '', offset: '500' }],
@@ -44,5 +45,4 @@ suite('isFileOperation', () => {
 			assert.strictEqual(isFileOperation(operation), false);
 		});
 	}
-	ensureNoDisposablesAreLeakedInTestSuite();
 });
