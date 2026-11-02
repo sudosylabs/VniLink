@@ -72,7 +72,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 - Unit tests follow VS Code's: beside the module in `test/<layer>/`, mocha's TDD interface, VS Code's test infrastructure copied through the importer (`base/test/common/utils.ts`, `virtualScheduling`, `instantiationServiceMock.ts`), and the copied lint rules that require the leak check, forbid `.only` and keep suite callbacks synchronous. `test:unit` bundles the tests with esbuild code splitting, so a module has one instance across suites; `test:unit:electron` gives each test file its own script. `check` runs `test:unit`; `test:ui` without a scenario selection runs `test:unit:electron` first. `check:unused` and `check:upstream` treat test folders as test code and copied tests as entry points.
 - Browser scenarios live in `test/browser`, are listed in `test/automation/scenarios.ts`, and run with `npm run test:ui -- --scenario <name>`. A scenario builds its subject through an `InstantiationService` with fake services (`test/browser/settingsFixture.ts`).
 - Smoke scenarios (`test/smoke/main.ts`) drive the real app through `window.driver`, wait for explicit readiness, and keep logs and screenshots in `.build/test-runs`.
-- Tooling tests (`test/tooling/*.test.mjs`) import build and source modules directly; polling has a condition, a bound and a useful timeout message.
+- Build tests (`build/lib/test/*.test.ts`, `node:test`, as VS Code's) import build modules directly and are type-checked by `build/tsconfig.json`; `test:tooling` runs them. Waits have a condition, a bound and a useful timeout message; a rule about source text is a lint rule, not a test.
 - Temporary profiles and work directories are removed on success, failure and interruption.
 
 ## Fixtures

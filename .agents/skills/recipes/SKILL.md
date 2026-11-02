@@ -20,7 +20,7 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 2. If the engine must apply it: a `user` setting joins a group in `engineCommands` in `platform/configuration/electron-main/configurationMainService.ts`; an engine setting maps to its policy field in `engineSettings.ts`.
 3. Show it by adding the key to a section of a page in `contrib/settings/settings.contribution.ts`. Booleans, numbers and enums render themselves (`settingRenderers.ts`). A control the generic renderers cannot express implements `ISettingControl` and is registered with `registerControl(key, Ctor)`; imitate `codecSettingControl.ts`. Content that is not a setting is an `ISettingsWidget` (`powerStatusWidget.ts`).
 4. Read it anywhere with `IConfigurationService.getValue(key)`; never add a page-level Save. Settings apply when valid.
-5. Tests: schema and source behaviour in `test/tooling/settings.test.mjs`; the page through `SettingsFixture` in `test/browser/settings.ts`.
+5. Tests: the schema in `platform/configuration/test/common/configurationSchema.test.ts`, saving in `test/node/userSettings.test.ts`; the page through `SettingsFixture` in `test/browser/settings.ts`.
 
 ## Add a workbench service
 
