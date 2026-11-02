@@ -99,7 +99,7 @@ jobs:
   fedora:
     runs-on: ubuntu-24.04
     container:
-      image: fedora:43
+      image: fedora:43@sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42
       # An init reaps orphans, as in the Debian image: the job's own PID 1 keeps
       # them as zombies, which still answer kill(pid, 0).
       options: --shm-size=512m --init
@@ -120,9 +120,14 @@ jobs:
           cache: npm
       - name: Install Fedora packages
         run: node build/lib/prerequisites.ts packages fedora build test:ui test:rust | xargs dnf install -y
+      # A pinned rustup, checked against its published hash, rather than whatever the install script fetches.
       - name: Install rustup
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          curl --proto '=https' --tlsv1.2 -sSfo rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+          echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  rustup-init' | sha256sum --check
+          chmod +x rustup-init
+          ./rustup-init -y --default-toolchain none --profile minimal
+          rm rustup-init
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - run: npm ci
       # The Rust build, vendored codecs included, from the last run with the
