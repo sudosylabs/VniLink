@@ -38,7 +38,7 @@ const vscodeRules = {
 };
 
 export default [
-	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', 'build/lint/vscode/**', '.claude/**', ...upstreamIgnores] },
+	{ ignores: ['node_modules/**', 'out/**', 'out.next/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', 'build/lint/vscode/**', '.claude/**', ...upstreamIgnores] },
 	{ ...js.configs.recommended, files: ['**/*.mjs'] },
 	...[...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked].map(config => ({ ...config, files: ['src/**/*.ts', 'test/**/*.ts', 'build/**/*.ts'] })),
 	{

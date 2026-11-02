@@ -7,8 +7,9 @@
 
 /** The application's bundles and resources, shared by the one-shot, release and watch builds. */
 import { build, type BuildOptions } from 'esbuild';
-import { cp, mkdir, readFile, rm } from 'node:fs/promises';
-import { basename, join, relative } from 'node:path';
+import { cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
+import { basename, dirname, join, relative } from 'node:path';
+import { acquireLock } from './lock.ts';
 import { compileNative, defaultNativeOptions, stageGlass, stageSpdlog, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 import { define, execute, parallel, series } from './task.ts';
@@ -118,9 +119,16 @@ export interface ApplicationBuildOptions extends BundleOptions {
 	readonly native?: NativeOptions;
 }
 
-/** Compiles the addon, then bundles, stages resources and publishes the addon into `outputDirectory`. */
+/**
+ * Compiles the addon, then bundles, stages resources and publishes the addon
+ * into `outputDirectory`. The output is built beside it (`out.next` for
+ * `out`) and renamed into place, so a build that fails or is stopped leaves
+ * the previous output whole; a lock keeps two builds from publishing at once.
+ */
 export async function buildApplication(root: string, signal: AbortSignal, options: ApplicationBuildOptions = {}): Promise<void> {
-	const { production = false, outputDirectory = join(root, 'out') } = options;
+	const { production = false } = options;
+	const published = options.outputDirectory ?? join(root, 'out');
+	const outputDirectory = join(dirname(published), `${basename(published)}.next`);
 	const native = options.native ?? defaultNativeOptions();
 	const processes = new ProcessRunner(signal);
 	let compiled: NativeIdentity | undefined;
@@ -154,9 +162,16 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 			}),
 		),
 	);
+	await mkdir(dirname(published), { recursive: true });
+	const releaseLock = await acquireLock(`${published}.lock`);
 	try {
 		await execute(define('application:build', task), signal);
+		signal.throwIfAborted();
+		await rm(published, { recursive: true, force: true });
+		await rename(outputDirectory, published);
 	} finally {
 		await processes.stop();
+		await rm(outputDirectory, { recursive: true, force: true });
+		await releaseLock();
 	}
 }
