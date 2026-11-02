@@ -18,7 +18,7 @@ use vnilink_testkit::events::drain;
 use vnilink_testkit::session::{wait_control_check, wait_request};
 use vnilink_testkit::{holds, traced, wait_for, Engine, TestResult};
 
-use super::support::{ask, exchange, Answer, ASKING};
+use super::support::{check, exchange, Answer, Approval, Asking, ASKING, FILE_LIFETIME};
 
 /// The controller keeps waiting while the host's owner reads the digits,
 /// longer than an ordinary frame read takes, and its link comes up once
@@ -79,38 +79,12 @@ fn the_controller_waits_while_the_host_owner_types_the_digits() -> TestResult {
 #[test]
 fn the_host_rejects_a_control_request_whose_digits_do_not_match() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true)?;
-    host.core.start_hosting()?;
-    let denied = ask(&host, &controller, Answer::WrongDigits)?;
-    assert!(
-        matches!(denied.answered, Err(Error::PairingCheckMismatch)),
-        "wrong digits are refused"
-    );
-    assert!(
-        matches!(denied.connected, Err(Error::Unauthorized)),
-        "a mismatched request turns the controller away: {:?}",
-        denied.connected
-    );
-    assert!(
-        host.core.snapshot()?.devices.is_empty(),
-        "the host remembers nobody"
-    );
-    assert_eq!(
-        controller.core.snapshot()?.devices.len(),
-        1,
-        "the controller still remembers the host"
-    );
-
-    let approved = ask(&host, &controller, Answer::Digits)?;
-    approved.answered?;
-    assert_eq!(
-        approved.connected?.phase,
-        SessionPhase::Active,
-        "the right digits approve the controller"
-    );
-    vnilink_testkit::assert_story(
+    let approval = check(
+        &trace,
+        Asking {
+            lifetime: FILE_LIFETIME,
+            answers: &[Answer::WrongDigits, Answer::Digits],
+        },
         expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
@@ -120,7 +94,15 @@ fn the_host_rejects_a_control_request_whose_digits_do_not_match() -> TestResult 
           pairing: control request answered refused=pairing check mismatch
           pairing: control request answered
     "#]],
-        || trace.story(&["pairing"]),
+    )?;
+    assert!(
+        matches!(approval.asked[0].answered, Err(Error::PairingCheckMismatch)),
+        "wrong digits are refused as a mismatch"
+    );
+    assert_eq!(
+        approval.controller.core.snapshot()?.devices.len(),
+        1,
+        "the controller still remembers the host"
     );
     Ok(())
 }
@@ -172,32 +154,12 @@ fn a_file_without_the_control_switch_does_not_ask_the_host() -> TestResult {
 #[test]
 fn rejecting_the_control_request_leaves_the_file_usable() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true)?;
-    host.core.start_hosting()?;
-    let denied = ask(&host, &controller, Answer::Reject)?;
-    denied.answered?;
-    assert!(
-        matches!(denied.connected, Err(Error::Unauthorized)),
-        "a rejected controller is turned away: {:?}",
-        denied.connected
-    );
-    assert!(
-        matches!(
-            host.core.reject_control_request(),
-            Err(Error::NoControlRequest)
-        ),
-        "a rejected request is answered"
-    );
-    let approved = ask(&host, &controller, Answer::Digits)?;
-    approved.answered?;
-    assert_eq!(
-        approved.connected?.phase,
-        SessionPhase::Active,
-        "the file still approves the controller"
-    );
-    vnilink_testkit::assert_story(
+    let approval = check(
+        &trace,
+        Asking {
+            lifetime: FILE_LIFETIME,
+            answers: &[Answer::Reject, Answer::Digits],
+        },
         expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
@@ -207,7 +169,13 @@ fn rejecting_the_control_request_leaves_the_file_usable() -> TestResult {
           pairing: control request rejected
           pairing: control request answered
     "#]],
-        || trace.story(&["pairing"]),
+    )?;
+    assert!(
+        matches!(
+            approval.host.core.reject_control_request(),
+            Err(Error::NoControlRequest)
+        ),
+        "no request is left to reject"
     );
     Ok(())
 }
@@ -217,34 +185,14 @@ fn rejecting_the_control_request_leaves_the_file_usable() -> TestResult {
 #[test]
 fn approving_control_after_the_window_expires_is_refused() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    let file = host
-        .core
-        .export_pairing_file(Duration::from_secs(2), true)?;
-    let preview = controller.core.open_pairing_file(&file.bytes)?;
-    controller.core.confirm_pairing(&preview, &file.check)?;
-    host.core.start_hosting()?;
     // The owner answers three seconds after the digits show, past the
     // file's two.
-    let late = ask(
-        &host,
-        &controller,
-        Answer::DigitsAfter(Duration::from_secs(3)),
-    )?;
-    assert!(
-        matches!(late.answered, Err(Error::InvitationExpired)),
-        "a late approval is refused as expired"
-    );
-    assert!(
-        matches!(late.connected, Err(Error::Unauthorized)),
-        "the controller is turned away"
-    );
-    assert!(
-        host.core.control_request()?.is_none(),
-        "an expired request is gone"
-    );
-    vnilink_testkit::assert_story(
+    let approval = check(
+        &trace,
+        Asking {
+            lifetime: Duration::from_secs(2),
+            answers: &[Answer::DigitsAfter(Duration::from_secs(3))],
+        },
         expect![[r#"
         controller:
           pairing: pairing file opened bytes=284
@@ -253,7 +201,10 @@ fn approving_control_after_the_window_expires_is_refused() -> TestResult {
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=2
           pairing: control request answered refused=invitation expired
     "#]],
-        || trace.story(&["pairing"]),
+    )?;
+    assert!(
+        matches!(approval.asked[0].answered, Err(Error::InvitationExpired)),
+        "a late approval is refused as expired"
     );
     Ok(())
 }
@@ -355,46 +306,30 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
     Ok(())
 }
 
-/// One host, one controller, `attempts` connections each rejected by the
-/// host's owner after the controller showed its digits; the digits shown.
-fn rejected_connections(
-    host: &Engine,
-    controller: &Engine,
-    attempts: usize,
-) -> Result<Vec<String>, Error> {
-    (0..attempts)
-        .map(|_| {
-            let rejected = ask(host, controller, Answer::Reject)?;
-            rejected.answered?;
-            assert!(
-                matches!(rejected.connected, Err(Error::Unauthorized)),
-                "a rejected controller is turned away: {:?}",
-                rejected.connected
-            );
-            Ok(rejected.shown)
-        })
-        .collect()
-}
-
 /// The digits come from the connection and both ids, not from the
 /// controller's key: the same controller asking twice shows different
 /// digits, so a key chosen to match digits seen once matches nothing later.
 #[test]
 fn the_digits_follow_the_connection_not_the_controllers_key() -> TestResult {
-    let _trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true)?;
-    host.core.start_hosting()?;
-    let shown = rejected_connections(&host, &controller, 2)?;
-    assert_eq!(shown[0].len(), 6, "six digits");
-    assert!(
-        shown[0].bytes().all(|byte| byte.is_ascii_digit()),
-        "the controller shows digits: {}",
-        shown[0]
-    );
+    let trace = traced();
+    let approval = check(
+        &trace,
+        Asking {
+            lifetime: FILE_LIFETIME,
+            answers: &[Answer::Reject, Answer::Reject],
+        },
+        expect![[r#"
+            controller:
+              pairing: pairing file opened bytes=284
+              pairing: invitation accepted
+            host:
+              pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
+              pairing: control request rejected
+              pairing: control request rejected
+        "#]],
+    )?;
     assert_ne!(
-        shown[0], shown[1],
+        approval.asked[0].shown, approval.asked[1].shown,
         "another connection of the same computers shows other digits"
     );
     Ok(())
@@ -406,20 +341,32 @@ fn the_digits_follow_the_connection_not_the_controllers_key() -> TestResult {
 #[test]
 fn three_wrong_answers_close_the_window() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true)?;
-    host.core.start_hosting()?;
-    for _ in 0..3 {
-        let denied = ask(&host, &controller, Answer::WrongDigits)?;
+    let Approval {
+        host,
+        controller,
+        asked,
+    } = check(
+        &trace,
+        Asking {
+            lifetime: FILE_LIFETIME,
+            answers: &[Answer::WrongDigits; 3],
+        },
+        expect![[r#"
+        controller:
+          pairing: pairing file opened bytes=284
+          pairing: invitation accepted
+        host:
+          pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
+          pairing: control request answered refused=pairing check mismatch
+          pairing: control request answered refused=pairing check mismatch
+          pairing: pairing window closed after wrong digits
+          pairing: control request answered refused=pairing check mismatch
+    "#]],
+    )?;
+    for denied in &asked {
         assert!(
             matches!(denied.answered, Err(Error::PairingCheckMismatch)),
-            "wrong digits are refused"
-        );
-        assert!(
-            matches!(denied.connected, Err(Error::Unauthorized)),
-            "wrong digits turn the controller away: {:?}",
-            denied.connected
+            "wrong digits are refused as a mismatch"
         );
     }
     let denied = controller.connect_services(&host);
@@ -435,20 +382,6 @@ fn three_wrong_answers_close_the_window() -> TestResult {
         host.core.snapshot()?.devices.is_empty(),
         "wrong digits remember nobody"
     );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          pairing: pairing file opened bytes=284
-          pairing: invitation accepted
-        host:
-          pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
-          pairing: control request answered refused=pairing check mismatch
-          pairing: control request answered refused=pairing check mismatch
-          pairing: pairing window closed after wrong digits
-          pairing: control request answered refused=pairing check mismatch
-    "#]],
-        || trace.story(&["pairing"]),
-    );
     Ok(())
 }
 
@@ -456,13 +389,28 @@ fn three_wrong_answers_close_the_window() -> TestResult {
 /// turned away without a prompt.
 #[test]
 fn a_window_shows_a_bounded_number_of_requests() -> TestResult {
-    let _trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true)?;
-    host.core.start_hosting()?;
-    let shown = rejected_connections(&host, &controller, 5)?;
-    assert_eq!(shown.len(), 5, "the owner is shown five requests");
+    let trace = traced();
+    let Approval {
+        host, controller, ..
+    } = check(
+        &trace,
+        Asking {
+            lifetime: FILE_LIFETIME,
+            answers: &[Answer::Reject; 5],
+        },
+        expect![[r#"
+            controller:
+              pairing: pairing file opened bytes=284
+              pairing: invitation accepted
+            host:
+              pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
+              pairing: control request rejected
+              pairing: control request rejected
+              pairing: control request rejected
+              pairing: control request rejected
+              pairing: control request rejected
+        "#]],
+    )?;
     let denied = controller.connect_services(&host);
     assert!(
         matches!(denied, Err(Error::Unauthorized)),

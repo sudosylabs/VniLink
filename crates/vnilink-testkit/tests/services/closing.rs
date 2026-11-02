@@ -13,22 +13,20 @@ use expect_test::expect;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use vnilink::camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory};
 use vnilink::power::PowerPolicy;
 use vnilink::{
-    usage, BackendStartup, CloseCause, CoreEvent, Error, InputEvent, PointerButton, ServiceKind,
-    ServicePhase, SessionPhase,
+    BackendStartup, CloseCause, CoreEvent, Error, ServiceKind, ServicePhase, SessionPhase,
 };
 use vnilink_testkit::camera::{config, CAMERA};
-use vnilink_testkit::desktop::{keyframe, InputLog};
+use vnilink_testkit::desktop::InputLog;
 use vnilink_testkit::events::wait_hosted_close;
 use vnilink_testkit::session::service_ended;
 use vnilink_testkit::terminal::Hosting;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::phase;
+use super::support::{check, phase, DesktopClose};
 
 /// The controller names each close: a service that followed its connection
 /// across a redial and one on a connection that closed both name the
@@ -340,249 +338,92 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
     Ok(())
 }
 
-/// How a test ends a Desktop.
-#[derive(Clone, Copy, Debug)]
-enum DesktopClose {
-    HandleClose,
-    OwnerClose,
-    HostClose,
-    HostStopsSharing,
-    HandleDropped,
-}
-
+/// A Desktop whose handle is closed releases what it held and leaves the
+/// connection and Files; a redial keeps it closed by its owner.
 #[test]
-fn a_desktop_closed_by_its_handle_keeps_files() -> TestResult {
-    let _trace = traced();
-    keeps_files(DesktopClose::HandleClose)
+fn a_desktop_closed_by_its_handle_releases_what_it_held_and_keeps_files() -> TestResult {
+    let trace = traced();
+    check(
+        &trace,
+        DesktopClose::HandleClose,
+        expect![[r#"
+        controller:
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+        host:
+          hosting: service opened connection=1 kind=Some(Files) service=2
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+    "#]],
+    )
 }
 
+/// A Desktop whose owner is closed releases what it held and leaves the
+/// connection and Files; a redial keeps it closed by its owner.
 #[test]
-fn a_desktop_closed_by_its_owner_keeps_files() -> TestResult {
-    let _trace = traced();
-    keeps_files(DesktopClose::OwnerClose)
+fn a_desktop_closed_by_its_owner_releases_what_it_held_and_keeps_files() -> TestResult {
+    let trace = traced();
+    check(
+        &trace,
+        DesktopClose::OwnerClose,
+        expect![[r#"
+        controller:
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+        host:
+          hosting: service opened connection=1 kind=Some(Files) service=2
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+    "#]],
+    )
 }
 
+/// A Desktop the host closes releases what it held and leaves the
+/// connection and Files; a redial keeps it closed by its peer.
 #[test]
-fn a_desktop_closed_by_the_host_keeps_files() -> TestResult {
-    let _trace = traced();
-    keeps_files(DesktopClose::HostClose)
+fn a_desktop_closed_by_the_host_releases_what_it_held_and_keeps_files() -> TestResult {
+    let trace = traced();
+    check(
+        &trace,
+        DesktopClose::HostClose,
+        expect![[r#"
+        controller:
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+        host:
+          hosting: service opened connection=1 kind=Some(Files) service=2
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+    "#]],
+    )
 }
 
+/// A Desktop the host stops sharing releases what it held and leaves the
+/// connection and Files; a redial keeps it closed by its peer.
 #[test]
-fn a_desktop_the_host_stops_sharing_keeps_files() -> TestResult {
-    let _trace = traced();
-    keeps_files(DesktopClose::HostStopsSharing)
+fn a_desktop_the_host_stops_sharing_releases_what_it_held_and_keeps_files() -> TestResult {
+    let trace = traced();
+    check(
+        &trace,
+        DesktopClose::HostStopsSharing,
+        expect![[r#"
+        controller:
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+        host:
+          hosting: service opened connection=1 kind=Some(Files) service=2
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Revoked
+    "#]],
+    )
 }
 
+/// A Desktop whose handle is dropped releases what it held and leaves the
+/// connection and Files; a redial keeps it closed by its owner.
 #[test]
-fn a_desktop_whose_handle_is_dropped_keeps_files() -> TestResult {
-    let _trace = traced();
-    keeps_files(DesktopClose::HandleDropped)
-}
-
-/// A Desktop service ended by `close` stops its pictures, names who closed
-/// it, and leaves the connection and its Files service; a redial after it
-/// keeps the first close's cause. (What the close releases is
-/// [`releases_what_it_held`].)
-#[track_caller]
-fn keeps_files(close: DesktopClose) -> TestResult {
-    let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let here = pair.host.location();
-    let (root, folder) = (here.root, here.path(""));
-    InputLog::install(&pair.host, (1920, 1080))?;
-    host.set_service_sharing(ServiceKind::Files, true)?;
-    let session = pair.connect_services();
-    let incoming = host.snapshot()?.incoming.ok_or("the host's session")?;
-    let desktop = pair.attach(&session, ServiceKind::Desktop);
-    let handle = controller.open_desktop_service(desktop.id, desktop.generation)?;
-    assert!(
-        matches!(
-            controller.open_desktop_service(desktop.id, desktop.generation),
-            Err(Error::Busy)
-        ),
-        "{close:?}: a Desktop owner opens once"
-    );
-    let (files, pipe) = pair.controller.open_files(&session)?;
-    let subscription = handle.subscribe_video()?;
-    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
-    host.publish_desktop_video(remote.id, remote.generation, keyframe(7, vec![7]))?;
-    assert_eq!(
-        subscription
-            .recv_timeout(Duration::from_secs(5))
-            .ok_or("a picture")?
-            .payload,
-        vec![7],
-        "{close:?}: the Desktop carries the host's pictures"
-    );
-    match close {
-        DesktopClose::HandleClose => handle.close(),
-        DesktopClose::OwnerClose => {
-            controller.close_controller_service(desktop.id, desktop.generation)?
-        }
-        DesktopClose::HostClose => host.close_hosted_service(remote.id, remote.generation)?,
-        DesktopClose::HostStopsSharing => host.set_service_sharing(ServiceKind::Desktop, false)?,
-        DesktopClose::HandleDropped => drop(handle),
-    }
-    let expected = match close {
-        DesktopClose::HostClose | DesktopClose::HostStopsSharing => {
-            ServicePhase::Closed(CloseCause::PeerClose)
-        }
-        _ => ServicePhase::Closed(CloseCause::OwnerClose),
-    };
-    wait_for(
-        &format!("{close:?}: the Desktop to close as {expected:?}"),
-        DEFAULT_WAIT,
-        || (phase(&pair.controller, &desktop).ok()? == expected).then_some(()),
-    );
-    // The host ends its side of the desktop just after the controller's.
-    pair.host.wait_released(Some(ServiceKind::Desktop));
-    assert!(
-        matches!(
-            host.publish_desktop_video(remote.id, remote.generation, keyframe(8, vec![8])),
-            Err(Error::NoSession | Error::StaleSession)
-        ),
-        "{close:?}: a closed Desktop takes no pictures"
-    );
-    assert!(
-        subscription.try_recv().is_none(),
-        "{close:?}: no picture follows the close"
-    );
-    let incoming_now = host.snapshot()?.incoming.ok_or("the host's session")?;
-    assert_eq!(
-        controller.controller_session(session.id)?.phase,
-        SessionPhase::Active,
-        "{close:?}: the controller's connection stays"
-    );
-    assert_eq!(
-        (incoming_now.id, incoming_now.phase),
-        (incoming.id, SessionPhase::Active),
-        "{close:?}: the host's session stays"
-    );
-    pipe.mkdir(root, &folder, "after-desktop-close")?;
-    assert_eq!(
-        pipe.list(root, &folder, 0, 20)?.entries[0].name,
-        "after-desktop-close",
-        "{close:?}: Files works after the Desktop closed"
-    );
-    assert!(!pipe.is_cancelled(), "{close:?}: Files is not cancelled");
-    assert_eq!(
-        phase(&pair.controller, &files)?,
-        ServicePhase::Active,
-        "{close:?}: Files stays active"
-    );
-    controller.drop_controller_link(session.id)?;
-    pair.controller.redialed(&session);
-    assert_eq!(
-        phase(&pair.controller, &desktop)?,
-        expected,
-        "{close:?}: the redial keeps the first close's cause"
-    );
-    let files = controller.controller_service(files.id)?;
-    let fresh_pipe = controller.open_files_service(files.id, files.generation)?;
-    pipe.close();
-    assert!(
-        !fresh_pipe.is_cancelled(),
-        "{close:?}: closing the old pipe leaves the new one"
-    );
-    fresh_pipe.mkdir(root, &folder, "after-reconnect")?;
-    Ok(())
-}
-
-#[test]
-fn a_desktop_closed_by_its_handle_releases_what_it_held() -> TestResult {
-    let _trace = traced();
-    releases_what_it_held(DesktopClose::HandleClose)
-}
-
-#[test]
-fn a_desktop_closed_by_its_owner_releases_what_it_held() -> TestResult {
-    let _trace = traced();
-    releases_what_it_held(DesktopClose::OwnerClose)
-}
-
-#[test]
-fn a_desktop_closed_by_the_host_releases_what_it_held() -> TestResult {
-    let _trace = traced();
-    releases_what_it_held(DesktopClose::HostClose)
-}
-
-#[test]
-fn a_desktop_the_host_stops_sharing_releases_what_it_held() -> TestResult {
-    let _trace = traced();
-    releases_what_it_held(DesktopClose::HostStopsSharing)
-}
-
-#[test]
-fn a_desktop_whose_handle_is_dropped_releases_what_it_held() -> TestResult {
-    let _trace = traced();
-    releases_what_it_held(DesktopClose::HandleDropped)
-}
-
-/// A Desktop service ended by `close` releases the keys and buttons it
-/// held on the host, latest first, and the ended desktop takes no input.
-#[track_caller]
-fn releases_what_it_held(close: DesktopClose) -> TestResult {
-    let pair = Pair::for_desktop();
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let applied = InputLog::install(&pair.host, (1920, 1080))?;
-    let connection = pair.connect_services();
-    let owner = pair.attach(&connection, ServiceKind::Desktop);
-    let handle = controller.open_desktop_service(owner.id, owner.generation)?;
-    let key = InputEvent::key_down(usage::A);
-    let button = InputEvent::button_down(PointerButton::Left);
-    handle.submit_input(key)?;
-    handle.submit_input(button)?;
-    applied.exactly(2);
-    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
-    let ended = match close {
-        DesktopClose::HandleClose => {
-            handle.close();
-            Some(handle)
-        }
-        DesktopClose::OwnerClose => {
-            controller.close_controller_service(owner.id, owner.generation)?;
-            Some(handle)
-        }
-        DesktopClose::HostClose => {
-            host.close_hosted_service(remote.id, remote.generation)?;
-            Some(handle)
-        }
-        DesktopClose::HostStopsSharing => {
-            host.set_service_sharing(ServiceKind::Desktop, false)?;
-            Some(handle)
-        }
-        DesktopClose::HandleDropped => {
-            drop(handle);
-            None
-        }
-    };
-    assert_eq!(
-        applied.wait_for(4),
-        vec![
-            key,
-            button,
-            InputEvent::button_up(PointerButton::Left),
-            InputEvent::key_up(usage::A)
-        ],
-        "{close:?}: the close releases what the Desktop held, latest first"
-    );
-    if let Some(handle) = ended {
-        wait_for(
-            &format!("{close:?}: the desktop to end"),
-            DEFAULT_WAIT,
-            || handle.is_cancelled().then_some(()),
-        );
-        assert!(
-            handle.submit_input(key).is_err(),
-            "{close:?}: a closed Desktop takes no input"
-        );
-    }
-    pair.host.wait_released(Some(ServiceKind::Desktop));
-    assert_eq!(
-        applied.events().len(),
-        4,
-        "{close:?}: the close releases each held key and button once"
-    );
-    Ok(())
+fn a_desktop_whose_handle_is_dropped_releases_what_it_held_and_keeps_files() -> TestResult {
+    let trace = traced();
+    check(
+        &trace,
+        DesktopClose::HandleDropped,
+        expect![[r#"
+        controller:
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+        host:
+          hosting: service opened connection=1 kind=Some(Files) service=2
+          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+    "#]],
+    )
 }

@@ -44,9 +44,7 @@ use vnilink_testkit::events::drain;
 use vnilink_testkit::session::wait_closed;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use support::{ask, Answer};
-
-const FILE_LIFETIME: Duration = Duration::from_secs(60);
+use support::{ask, Answer, FILE_LIFETIME};
 
 /// How many devices `events` says were paired and authorized; pairing
 /// publishes nothing else besides a session's lifecycle and what a connect

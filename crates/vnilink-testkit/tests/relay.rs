@@ -9,10 +9,8 @@
 //! they exchange crosses a relay on this computer.
 
 use expect_test::expect;
-use std::time::Duration;
 
-use vnilink::JobState;
-use vnilink_testkit::files::{self, drive, finished, received, tree, write_files};
+use vnilink_testkit::files::{check, Moving, Way};
 use vnilink_testkit::relay::LocalRelay;
 use vnilink_testkit::{traced, Pair, TestResult, FILES};
 
@@ -44,33 +42,39 @@ fn a_connection_without_a_direct_route_goes_through_the_relay() -> TestResult {
     Ok(())
 }
 
-/// Files cross the relay exactly.
+/// A folder uploaded across the relay arrives byte for byte, both sides
+/// completing it.
 #[test]
 fn files_cross_the_relay_exactly() -> TestResult {
-    let _trace = traced();
+    let trace = traced();
     let relay = LocalRelay::start();
     let (host, controller) = FILES;
     let pair = Pair::relayed(relay.url(), host, controller);
-    drive(&pair);
-    write_files(
-        &pair.controller.folder().join("set"),
-        &[("a.txt", 1024), ("b/c.bin", 3 * 1024 * 1024 + 11)],
-    );
     std::fs::create_dir_all(pair.host.folder().join("inbox"))?;
-    let service = pair.controller.files_on(&pair.host)?;
-    files::upload(&pair, &service, "set", "inbox")?;
-    let job = received(&pair.host.core);
-    let done = finished(&pair.host.core, job, Duration::from_secs(120));
-    assert_eq!(
-        done.state,
-        JobState::Complete,
-        "an upload across the relay completes: {done:?}"
-    );
-    assert_eq!(
-        tree(&pair.host.folder().join("inbox/set")),
-        tree(&pair.controller.folder().join("set")),
-        "the folder arrives byte for byte"
-    );
+    check(
+        &trace,
+        &pair,
+        Moving {
+            way: Way::Upload,
+            files: &[("a.txt", 1024), ("b/c.bin", 3 * 1024 * 1024 + 11)],
+            folders: &[],
+            from: "set",
+            to: "inbox",
+            drivers: true,
+        },
+        expect![[r#"
+            controller:
+              files: job state from=preparing job=1 sender=true to=serving
+              files: file served ended=sent from=0 sent=1024 size=1024
+              files: file served ended=sent from=0 sent=3145739 size=3145739
+              files: job state done_bytes=3146763 files_done=2 from=serving job=1 sender=true to=complete
+            host:
+              files: file received outcome=received resumed_at=0 size=1024 took=1024
+              files: file received outcome=received resumed_at=0 size=3145739 took=3145739
+              files: received files flushed job=1
+              files: job state done_bytes=3146763 files_done=2 from=transferring job=1 sender=false to=complete
+        "#]],
+    )?;
     assert!(relay.carried() > 0, "the files crossed the relay");
     Ok(())
 }

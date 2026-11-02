@@ -19,7 +19,7 @@ use vnilink::{
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
-use super::support::{ended, refusal, SessionEnd, MONITOR};
+use super::support::{check, refusal, Closing, Later, SessionEnd, MONITOR};
 
 /// Stopping hosting turns new sessions away even when none is live, while
 /// the host keeps what it granted its peers; stopping a hosted session that
@@ -62,22 +62,38 @@ fn stopping_hosting_disables_new_sessions_even_when_none_is_active() -> TestResu
     Ok(())
 }
 
-/// Stopping hosting ends the live session on both sides; the controller
-/// keeps its grant, and hosting again admits it.
+/// Stopping hosting ends the live session on both sides and turns a later
+/// connect away; the controller keeps its grant, and hosting again admits
+/// it.
 #[test]
 fn stopping_hosting_ends_the_active_session() -> TestResult {
     let trace = traced();
-    let (host, controller) = ended(SessionEnd::StopHosting)?;
+    let (host, controller) = check(
+        &trace,
+        Closing {
+            by: SessionEnd::StopHosting,
+            later: Later::Refused(Error::NotHosting),
+        },
+        expect![[r#"
+            controller:
+              pairing: invitation accepted
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              session: session phase from=connecting generation=1 role=Controller session=1 to=active
+              session: session phase from=active generation=1 role=Controller session=1 to=closed
+              session: session failed failure=not hosting session=2
+              session: session phase from=connecting generation=0 role=Controller session=2 to=failed
+            host:
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              pairing: invitation accepted
+              session: session phase from=active generation=1 role=Host session=1 to=stopping
+              session: session phase from=stopping generation=1 role=Host session=1 to=closed
+        "#]],
+    )?;
     let snapshot = host.core.snapshot()?;
     assert!(!snapshot.hosting, "the host no longer hosts");
     assert!(
         snapshot.devices[0].grants.control,
         "stopping hosting keeps the controller's grant"
-    );
-    assert_eq!(
-        refusal(&controller, &host)?,
-        Error::NotHosting.to_string(),
-        "a host that stopped hosting turns a connect away"
     );
     host.core.start_hosting()?;
     assert_eq!(
@@ -85,54 +101,38 @@ fn stopping_hosting_ends_the_active_session() -> TestResult {
         SessionPhase::Active,
         "hosting again admits the controller"
     );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session failed failure=not hosting session=2
-          session: session phase from=connecting generation=0 role=Controller session=2 to=failed
-          session: session phase from=connecting generation=3 role=Controller session=3 to=active
-        host:
-          session: session phase from=active generation=1 role=Host session=1 to=stopping
-          session: session phase from=stopping generation=1 role=Host session=1 to=closed
-    "#]],
-        || trace.story(&["session", "hosting"]),
-    );
     Ok(())
 }
 
 /// The controller disconnecting closes both sides; the host keeps hosting,
-/// a second disconnect finds no session, and the controller connects again.
+/// and the controller connects again.
 #[test]
 fn disconnect_closes_both_sides() -> TestResult {
     let trace = traced();
-    let (host, controller) = ended(SessionEnd::Disconnect)?;
+    let (host, _controller) = check(
+        &trace,
+        Closing {
+            by: SessionEnd::Disconnect,
+            later: Later::Admitted,
+        },
+        expect![[r#"
+            controller:
+              pairing: invitation accepted
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              session: session phase from=connecting generation=1 role=Controller session=1 to=active
+              session: session phase from=active generation=1 role=Controller session=1 to=stopping
+              session: session phase from=stopping generation=1 role=Controller session=1 to=closed
+              session: session phase from=connecting generation=3 role=Controller session=2 to=active
+            host:
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              pairing: invitation accepted
+              session: the session's control stream ended error=network session=1
+              session: session phase from=active generation=1 role=Host session=1 to=closed
+        "#]],
+    )?;
     assert!(
         host.core.snapshot()?.hosting,
         "a controller disconnecting leaves the host hosting"
-    );
-    assert!(
-        matches!(controller.core.disconnect(), Err(Error::NoSession)),
-        "there is nothing left to disconnect"
-    );
-    assert_eq!(
-        controller.connect_services(&host)?.phase,
-        SessionPhase::Active,
-        "the controller connects again"
-    );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=stopping
-          session: session phase from=stopping generation=1 role=Controller session=1 to=closed
-          session: session phase from=connecting generation=3 role=Controller session=2 to=active
-        host:
-          session: the session's control stream ended error=network session=1
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-    "#]],
-        || trace.story(&["session", "hosting"]),
     );
     Ok(())
 }
@@ -142,33 +142,31 @@ fn disconnect_closes_both_sides() -> TestResult {
 #[test]
 fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
     let trace = traced();
-    let (host, controller) = ended(SessionEnd::Revoke)?;
+    let (host, _controller) = check(
+        &trace,
+        Closing {
+            by: SessionEnd::Revoke,
+            later: Later::Refused(Error::Unauthorized),
+        },
+        expect![[r#"
+            controller:
+              pairing: invitation accepted
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              session: session phase from=connecting generation=1 role=Controller session=1 to=active
+              session: session phase from=active generation=1 role=Controller session=1 to=closed
+              session: session failed failure=unauthorized session=2
+              session: session phase from=connecting generation=0 role=Controller session=2 to=failed
+            host:
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              pairing: invitation accepted
+              pairing: unpair requested
+              session: session phase from=active generation=1 role=Host session=1 to=stopping
+              session: session phase from=stopping generation=1 role=Host session=1 to=closed
+        "#]],
+    )?;
     assert!(
         host.core.snapshot()?.devices.is_empty(),
         "a revoked controller is forgotten"
-    );
-    assert_eq!(
-        refusal(&controller, &host)?,
-        Error::Unauthorized.to_string(),
-        "a revoked controller is refused"
-    );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          pairing: invitation accepted
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session failed failure=unauthorized session=2
-          session: session phase from=connecting generation=0 role=Controller session=2 to=failed
-        host:
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-          pairing: invitation accepted
-          pairing: unpair requested
-          session: session phase from=active generation=1 role=Host session=1 to=stopping
-          session: session phase from=stopping generation=1 role=Host session=1 to=closed
-    "#]],
-        || trace.story(&["session", "pairing"]),
     );
     Ok(())
 }
@@ -179,33 +177,31 @@ fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
 #[test]
 fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestResult {
     let trace = traced();
-    let (host, controller) = ended(SessionEnd::Unpair)?;
+    let (host, _controller) = check(
+        &trace,
+        Closing {
+            by: SessionEnd::Unpair,
+            later: Later::Refused(Error::Unauthorized),
+        },
+        expect![[r#"
+            controller:
+              pairing: invitation accepted
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              session: session phase from=connecting generation=1 role=Controller session=1 to=active
+              session: session phase from=active generation=1 role=Controller session=1 to=closed
+              session: session failed failure=unauthorized session=2
+              session: session phase from=connecting generation=0 role=Controller session=2 to=failed
+            host:
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              pairing: invitation accepted
+              pairing: unpair requested
+              session: session phase from=active generation=1 role=Host session=1 to=stopping
+              session: session phase from=stopping generation=1 role=Host session=1 to=closed
+        "#]],
+    )?;
     assert!(
         host.core.snapshot()?.devices.is_empty(),
         "an unpaired controller is forgotten, not kept without grants"
-    );
-    assert_eq!(
-        refusal(&controller, &host)?,
-        Error::Unauthorized.to_string(),
-        "the host refuses a controller it no longer knows"
-    );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          pairing: invitation accepted
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          session: session phase from=active generation=1 role=Controller session=1 to=closed
-          session: session failed failure=unauthorized session=2
-          session: session phase from=connecting generation=0 role=Controller session=2 to=failed
-        host:
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-          pairing: invitation accepted
-          pairing: unpair requested
-          session: session phase from=active generation=1 role=Host session=1 to=stopping
-          session: session phase from=stopping generation=1 role=Host session=1 to=closed
-    "#]],
-        || trace.story(&["session", "pairing"]),
     );
     Ok(())
 }
@@ -243,13 +239,33 @@ fn unpairing_an_unknown_device_reports_not_paired() -> TestResult {
     Ok(())
 }
 
-/// A controller unpairing its host forgets it and ends its outgoing
-/// session; unpairing is local, so the host still knows the controller and
-/// closes its side because the session's stream ended.
+/// A controller unpairing its host forgets it, ends its outgoing session
+/// and no longer dials it; unpairing is local, so the host still knows the
+/// controller and closes its side because the session's stream ended.
 #[test]
 fn a_controller_unpair_ends_its_outgoing_session() -> TestResult {
     let trace = traced();
-    let (host, controller) = ended(SessionEnd::ControllerUnpair)?;
+    let (host, controller) = check(
+        &trace,
+        Closing {
+            by: SessionEnd::ControllerUnpair,
+            later: Later::NotDialled,
+        },
+        expect![[r#"
+            controller:
+              pairing: invitation accepted
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              session: session phase from=connecting generation=1 role=Controller session=1 to=active
+              pairing: unpair requested
+              session: session phase from=active generation=1 role=Controller session=1 to=stopping
+              session: session phase from=stopping generation=1 role=Controller session=1 to=closed
+            host:
+              pairing: invitation issued direct=1 relays=0 ttl_s=60
+              pairing: invitation accepted
+              session: the session's control stream ended error=network session=1
+              session: session phase from=active generation=1 role=Host session=1 to=closed
+        "#]],
+    )?;
     assert!(
         controller.core.snapshot()?.devices.is_empty(),
         "the controller forgets its host"
@@ -258,23 +274,6 @@ fn a_controller_unpair_ends_its_outgoing_session() -> TestResult {
         host.core.snapshot()?.devices.len(),
         1,
         "unpairing is local: the host still knows the controller"
-    );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          pairing: invitation accepted
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-          session: session phase from=connecting generation=1 role=Controller session=1 to=active
-          pairing: unpair requested
-          session: session phase from=active generation=1 role=Controller session=1 to=stopping
-          session: session phase from=stopping generation=1 role=Controller session=1 to=closed
-        host:
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-          pairing: invitation accepted
-          session: the session's control stream ended error=network session=1
-          session: session phase from=active generation=1 role=Host session=1 to=closed
-    "#]],
-        || trace.story(&["session", "pairing"]),
     );
     Ok(())
 }
