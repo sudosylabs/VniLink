@@ -7,6 +7,7 @@
 
 /** Owns launched process groups, failure propagation and bounded teardown on each host OS. */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { isWindows } from './platform.ts';
 
 export interface LaunchedProcess {
 	readonly child: ChildProcess;
@@ -43,7 +44,7 @@ export class ProcessRunner {
 		if (this.#closed) {
 			throw new Error('Process runner is closed');
 		}
-		const child = spawn(command, args, { stdio: 'inherit', ...options, detached: process.platform !== 'win32' });
+		const child = spawn(command, args, { stdio: 'inherit', ...options, detached: !isWindows });
 		const result = new Promise<number>((resolve, reject) => {
 			child.once('error', error => {
 				this.#children.delete(child);
@@ -52,7 +53,7 @@ export class ProcessRunner {
 			child.once('exit', (code, signal) => {
 				this.#children.delete(child);
 				try {
-					if (process.platform !== 'win32' && child.pid) {
+					if (!isWindows && child.pid) {
 						killGroup(child.pid, 'SIGKILL');
 					}
 				} catch (error) {
@@ -89,7 +90,7 @@ async function terminate(child: ChildProcess, result: Promise<number>): Promise<
 		await result.catch(() => undefined);
 		return;
 	}
-	if (process.platform === 'win32') {
+	if (isWindows) {
 		await new Promise<void>((resolve, reject) => {
 			const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
 			const timer = setTimeout(() => {

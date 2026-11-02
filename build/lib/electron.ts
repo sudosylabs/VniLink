@@ -24,6 +24,7 @@ import { assignExecutableUuids, darwinUsageDescriptions, executableUuids } from 
 import { linuxSandbox, linuxSandboxProfile, systemProbe } from './prerequisites.ts';
 import { loadProduct, type Product } from './product.ts';
 import { fileSha256, releaseInventory } from './verify.ts';
+import { isLinux, isMacintosh, isWindows } from './platform.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -50,7 +51,7 @@ export interface ElectronOptions {
  */
 export async function electronExecutable(root: string, signal: AbortSignal, options: ElectronOptions = {}): Promise<string> {
 	const executable = await preparedElectron(root, signal);
-	if (process.platform === 'linux' && options.sandboxed !== false) {
+	if (isLinux && options.sandboxed !== false) {
 		await assertLinuxSandbox(root);
 	}
 	return executable;
@@ -86,7 +87,7 @@ async function preparedElectron(root: string, signal: AbortSignal): Promise<stri
 function platformBranding(root: string, product: Product, signal: AbortSignal): Branding {
 	// The `electron` package's main export is its executable.
 	const stock = require('electron') as string;
-	if (process.platform === 'darwin') {
+	if (isMacintosh) {
 		const bundle = `${product.nameLong}.app`;
 		return {
 			source: join(stock, '../../..'),
@@ -95,11 +96,11 @@ function platformBranding(root: string, product: Product, signal: AbortSignal): 
 			brand: (output, work) => brandDarwin(root, product, join(output, bundle), work, signal),
 		};
 	}
-	if (process.platform === 'win32') {
+	if (isWindows) {
 		const executable = `${product.platforms.win32.executableName}.exe`;
 		return { source: dirname(stock), target: '.', executable, brand: output => brandWin32(root, product, output, executable) };
 	}
-	if (process.platform === 'linux') {
+	if (isLinux) {
 		const executable = product.platforms.linux.executableName;
 		return { source: dirname(stock), target: '.', executable, brand: output => brandLinux(root, product, output, executable) };
 	}
@@ -114,7 +115,7 @@ async function brandingFingerprint(root: string, product: Product): Promise<Reco
 		icons[platform.icon] = (await stat(path)).isDirectory() ? JSON.stringify(await releaseInventory(path)) : await fileSha256(path);
 	}
 	// macOS: what the bundle asks for and the executable UUIDs it identifies by.
-	const darwin: Record<string, string> = process.platform === 'darwin'
+	const darwin: Record<string, string> = isMacintosh
 		? { usage: JSON.stringify(darwinUsageDescriptions), uuids: JSON.stringify(await executableUuids(require('electron') as string, developmentBundleIdentifier(product))) }
 		: {};
 	return { electron, platform: `${process.platform}-${process.arch}`, product: JSON.stringify(product), icons: JSON.stringify(icons), ...darwin };
@@ -217,7 +218,7 @@ async function assertLinuxSandbox(root: string): Promise<void> {
  * `.build/electron` again because it names the path.
  */
 export async function allowLinuxSandbox(root: string, signal: AbortSignal): Promise<void> {
-	if (process.platform !== 'linux') {
+	if (!isLinux) {
 		throw new Error('sandbox:linux allows the development Electron on Linux');
 	}
 	const product = await loadProduct(root);

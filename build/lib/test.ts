@@ -16,6 +16,7 @@ import { launchLatencySide } from './latency.ts';
 import { assertNativeFresh, nativeCargo } from './native.ts';
 import { agentPeer } from './remote.ts';
 import { ProcessRunner } from './processes.ts';
+import { isLinux } from './platform.ts';
 
 /** Runs the selected browser and integration scenarios in Electron with a temporary profile. */
 export async function runUiTests(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
@@ -30,7 +31,7 @@ export async function runUiTests(root: string, signal: AbortSignal, args: readon
 		await assertNativeFresh(root);
 		// Docker's default seccomp policy blocks Chromium namespace creation.
 		// This exception applies only to the maintained isolated Linux test image.
-		const containerFlags = process.platform === 'linux' && process.env.VNILINK_TEST_CONTAINER === '1' ? ['--no-sandbox'] : [];
+		const containerFlags = isLinux && process.env.VNILINK_TEST_CONTAINER === '1' ? ['--no-sandbox'] : [];
 		const electron = await electronExecutable(root, signal, { sandboxed: containerFlags.length === 0 });
 		await processes.run(electron, [join(root, 'out/smoke.cjs'), ...containerFlags, ...args], { env: { ...process.env, VNILINK_TEST_PROFILE: profile } });
 	} finally {

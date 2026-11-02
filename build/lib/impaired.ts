@@ -125,6 +125,7 @@ import { createInterface } from 'node:readline';
 import { checkoutVolume } from './containers.ts';
 import { RELAY_PATH, applyProfile, createTopology, disposeTopology, linkStatistics, selectProfiles, statisticsDelta, topology, writeBurstHooks, type LinkCounters, type LinkPath, type NetemProfile, type Topology } from './netem.ts';
 import { ProcessRunner } from './processes.ts';
+import { isLinux } from './platform.ts';
 
 export const SCENARIOS = Object.freeze({
 	transfer: Object.freeze({ crate: 'vnilink', test: 'core::jobs::impaired_transfer_tests::impaired_transfer_matrix' }),
@@ -885,7 +886,7 @@ async function startRelay(processes: ProcessRunner, binary: string, link: Topolo
  * `measure:impaired`, which runs this in the project container.
  */
 export async function measureImpaired(root: string, signal: AbortSignal, args: readonly string[]): Promise<ImpairedReport> {
-	if (process.platform !== 'linux') {
+	if (!isLinux) {
 		throw new Error('The impaired-network harness needs Linux network namespaces; run `npm run measure:impaired` to use the container');
 	}
 	if (process.getuid?.() !== 0) {

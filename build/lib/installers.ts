@@ -17,6 +17,7 @@ import { acquireLock } from './lock.ts';
 import { ProcessRunner } from './processes.ts';
 import { readProduct, type Product } from './product.ts';
 import { fileSha256, verifyPackageFiles, verifyReleaseFiles, type InstallerArtifact, type ReleaseManifest } from './verify.ts';
+import { isMacintosh } from './platform.ts';
 
 const platforms: Partial<Record<NodeJS.Platform, typeof darwin>> = { darwin, win32, linux };
 
@@ -68,7 +69,7 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 		// profile to what it packages, and the verified application stays as verified.
 		const copy = join(work, 'application');
 		await cp(application, copy, { recursive: true, verbatimSymlinks: true });
-		const prepackaged = process.platform === 'darwin' ? join(copy, `${product.nameLong}.app`) : copy;
+		const prepackaged = isMacintosh ? join(copy, `${product.nameLong}.app`) : copy;
 		const args = ['--config', configPath, '--prepackaged', prepackaged, builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'];
 		await (options.runBuilder ?? runElectronBuilder)(processes, args, root);
 		const artifacts: InstallerArtifact[] = [];

@@ -24,6 +24,7 @@ import { electronExecutable } from '../lib/electron.ts';
 import { loadManifest } from '../lib/prerequisites.ts';
 import { ProcessRunner } from '../lib/processes.ts';
 import { isUpToDate, saveState } from './installState.ts';
+import { isWindows } from '../lib/platform.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -55,7 +56,7 @@ if (!process.env.VNILINK_FORCE_INSTALL && await isUpToDate(root)) {
 			await processes.run('rustup', ['toolchain', 'install', '--no-self-update'], { cwd: root });
 		}));
 		const target = manifest.platforms.win32.rustTarget;
-		if (process.platform === 'win32' && target) {
+		if (isWindows && target) {
 			results.push(await step(`Adding the Rust ${target} target`, `Run \`rustup target add ${target}\` here.`, async () => {
 				log(`rustup target add ${target}`);
 				await processes.run('rustup', ['target', 'add', target], { cwd: root });

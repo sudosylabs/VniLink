@@ -14,6 +14,7 @@ import { acquireLock } from './lock.ts';
 import { assertNativeFresh, GLASS_DIRECTORY, type NativeOptions } from './native.ts';
 import { loadProduct } from './product.ts';
 import { releaseInventory, type ReleaseFile } from './verify.ts';
+import { isMacintosh } from './platform.ts';
 
 async function sourceFingerprint(root: string): Promise<string> {
 	const files: ReleaseFile[] = [];
@@ -43,6 +44,7 @@ interface PackageJson {
 /** Stages `.build/release/<platform>-<arch>` with its inventory; refuses to overlap another release build. */
 export async function buildRelease(root: string, signal: AbortSignal, options: ReleaseOptions = {}): Promise<string> {
 	const product = await loadProduct(root);
+	// Compared by name: the comparison narrows process.platform to a key of product.platforms.
 	const platform = process.platform === 'darwin' || process.platform === 'win32' || process.platform === 'linux' ? product.platforms[process.platform] : undefined;
 	const target = platform?.targets.find(value => value.architecture === process.arch);
 	if (!platform || !target) {
@@ -62,14 +64,14 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		work = stage;
 		const app = join(stage, 'app');
 		const source = await sourceFingerprint(root);
-		const minimum = process.platform === 'darwin' ? { minimumSystemVersion: product.platforms.darwin.minimumSystemVersion } : {};
+		const minimum = isMacintosh ? { minimumSystemVersion: product.platforms.darwin.minimumSystemVersion } : {};
 		const native: NativeOptions = { profile: 'release', target: target.rustTarget, ...minimum };
 		await (options.buildApplication ?? buildApplication)(root, signal, { production: true, outputDirectory: app, native });
 		signal.throwIfAborted();
 		const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as PackageJson;
 		await writeFile(join(app, 'package.json'), JSON.stringify({ name: product.applicationName, productName: product.nameLong, version: packageJson.version, private: true, main: 'main.cjs', type: 'module', author: product.publisherName, description: product.description, homepage: product.repositoryUrl, desktopName: product.platforms.linux.desktopFileName, license: 'AGPL-3.0-only' }, null, 2) + '\n');
 		await writeFile(join(app, 'product.json'), JSON.stringify(product, null, 2) + '\n');
-		const artwork = process.platform === 'darwin' ? [platform.icon, product.platforms.darwin.fallbackIconSource] : [platform.icon];
+		const artwork = isMacintosh ? [platform.icon, product.platforms.darwin.fallbackIconSource] : [platform.icon];
 		for (const asset of artwork) {
 			const destination = join(stage, 'packaging-resources', asset);
 			await mkdir(join(destination, '..'), { recursive: true });
@@ -83,7 +85,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		const paths = new Set(files.map(file => file.path));
 		const bundles = bundleOptions(root, { production: true, outputDirectory: app }).map(option => relative(stage, option.outfile ?? '').split('\\').join('/'));
 		// macOS ships Liquid Glass with its licence; a missing file would silently fall back to vibrancy.
-		const glass = process.platform === 'darwin' ? [`app/${GLASS_DIRECTORY}/index.cjs`, `app/${GLASS_DIRECTORY}/elg.node`, 'app/licenses/elg.txt'] : [];
+		const glass = isMacintosh ? [`app/${GLASS_DIRECTORY}/index.cjs`, `app/${GLASS_DIRECTORY}/elg.node`, 'app/licenses/elg.txt'] : [];
 		for (const name of [...bundles, ...glass, 'app/renderer/renderer.css', 'app/renderer/index.html', 'app/renderer/notice.css', 'app/renderer/notice.html', 'app/assets/tray/idleTemplate.png', 'app/native/vnilink.node', 'app/native/build.json', 'app/licenses/native-codecs/native-codecs.txt', 'app/relink/source/Cargo.lock']) {
 			if (!paths.has(name)) {
 				throw new Error(`Missing release input: ${name}`);

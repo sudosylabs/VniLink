@@ -16,6 +16,7 @@ import { acquireLock } from './lock.ts';
 import { ProcessRunner } from './processes.ts';
 import { validateProduct, type Product, type ProductPlatform } from './product.ts';
 import { packageInventory, verifyReleaseFiles, type ReleaseManifest } from './verify.ts';
+import { isMacintosh } from './platform.ts';
 
 /** electron-builder v26 options; only what VniLink sets is described. */
 export type BuilderConfiguration = Record<string, unknown> & {
@@ -163,7 +164,7 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		}
 		const directory = candidates[0];
 		const layout = packagedLayout(directory, process.platform, product);
-		if (process.platform === 'darwin') {
+		if (isMacintosh) {
 			// Its own executable UUID, so local network privacy decides for VniLink
 			// alone. The fuses changed the Electron framework and the UUID the executable,
 			// so the whole bundle is sealed again, nested code first.

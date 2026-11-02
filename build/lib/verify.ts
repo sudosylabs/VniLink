@@ -18,6 +18,7 @@ import { packagedLayout } from './package.ts';
 import { runPackagedApplication } from './packagedApplication.ts';
 import { ProcessRunner } from './processes.ts';
 import { readProduct, type Product } from './product.ts';
+import { isMacintosh } from './platform.ts';
 
 export interface ReleaseFile {
 	readonly path: string;
@@ -220,7 +221,7 @@ export async function verifyInstallers(root: string, signal: AbortSignal): Promi
 	const product = await readProduct(root);
 	const directory = join(root, 'dist/installers', `${process.platform}-${process.arch}`);
 	const manifest = await verifyInstallerFiles(directory, product);
-	if (process.platform !== 'darwin') {
+	if (!isMacintosh) {
 		console.log('Installer checksums passed. Native installation, upgrade and uninstall checks have not been performed by this command.');
 		return;
 	}

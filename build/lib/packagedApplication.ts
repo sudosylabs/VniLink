@@ -19,6 +19,7 @@ import { assemblyEnvironment, packagedLayout } from './package.ts';
 import { ProcessRunner } from './processes.ts';
 import { readProduct } from './product.ts';
 import { verifyPackageFiles } from './verify.ts';
+import { isMacintosh } from './platform.ts';
 
 /** What `--self-check` prints; see `SelfCheckResult` in the application. */
 interface SelfCheckResult {
@@ -77,7 +78,7 @@ export async function runPackagedApplication(root: string, directory: string, si
 		assert.equal(result.platform, process.platform);
 		// macOS 26 (Darwin 25) and later ship Liquid Glass; vibrancy there means elg did not load
 		// from the package. Reduce Transparency may still turn the material off.
-		if (process.platform === 'darwin' && Number(release().split('.')[0]) >= 25) {
+		if (isMacintosh && Number(release().split('.')[0]) >= 25) {
 			assert.ok(result.material === 'glass' || result.material === 'none', `The packaged window has ${String(result.material)} instead of Liquid Glass`);
 		}
 		console.log(`Packaged application passed isolated launch checks; evidence: ${artifacts}`);
