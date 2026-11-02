@@ -116,15 +116,14 @@
  * says nothing about public relays, their load or distance, TLS, or
  * internet paths.
  */
-import { execFile } from 'node:child_process';
 import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseArgs, promisify } from 'node:util';
+import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline';
 import { checkoutVolume } from './containers.ts';
 import { RELAY_PATH, applyProfile, createTopology, disposeTopology, linkStatistics, selectProfiles, statisticsDelta, topology, writeBurstHooks, type LinkCounters, type LinkPath, type NetemProfile, type Topology } from './netem.ts';
-import { ProcessRunner } from './processes.ts';
+import { processOutput, ProcessRunner } from './processes.ts';
 import { isLinux } from './platform.ts';
 
 export const SCENARIOS = Object.freeze({
@@ -744,7 +743,7 @@ interface RelayMonitor {
 async function relaySockets(link: Topology, signal: AbortSignal): Promise<RelaySocket[]> {
 	const filter = `( sport = :${String(RELAY_PATH.port)} or dport = :${String(RELAY_PATH.port)} )`;
 	const samples = await Promise.all(link.sides.map(async side => {
-		const { stdout } = await promisify(execFile)('ip', ['netns', 'exec', side.namespace, 'ss', '-tinH', filter], { signal });
+		const stdout = await processOutput('ip', ['netns', 'exec', side.namespace, 'ss', '-tinH', filter], { signal });
 		return parseSocketSample(side.namespace, stdout);
 	}));
 	return samples.flat();
@@ -955,14 +954,14 @@ export async function measureImpairedInContainer(root: string, signal: AbortSign
 	resolveOptions(parseImpairedArguments(args));
 	const output = join(root, '.build/impaired-network', String(Date.now()));
 	const container = `vnilink-impaired-${String(process.pid)}-${String(Date.now())}`;
-	const commit = await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: root }).then(result => result.stdout.trim(), () => 'unknown');
+	const commit = await processOutput('git', ['rev-parse', 'HEAD'], { cwd: root }).then(stdout => stdout.trim(), () => 'unknown');
 	const processes = new ProcessRunner(signal);
 	let launched = false;
 	await mkdir(output, { recursive: true });
 	try {
 		await processes.run('docker', ['info', '--format', '{{.OSType}} {{.Architecture}}']);
 		// Runs on one machine compete for its CPUs, and both sets of numbers would be wrong.
-		const running = await promisify(execFile)('docker', ['ps', '--filter', 'name=vnilink-impaired-', '--format', '{{.Names}}']).then(result => result.stdout.trim());
+		const running = (await processes.output('docker', ['ps', '--filter', 'name=vnilink-impaired-', '--format', '{{.Names}}'])).trim();
 		if (running) {
 			throw new Error(`Another impaired-network run is in progress (${running.split('\n').join(', ')}). Wait for it to finish: runs on one machine skew each other's numbers.`);
 		}

@@ -90,8 +90,9 @@ export default [
 		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\.\\./lib/prerequisites\\.ts$)', message: 'The install runs before node_modules exists: import only Node modules and prerequisites.ts.' }] }] },
 	},
 	{
-		files: ['build/lib/preLaunch.ts'],
-		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\./native\\.ts$)', message: 'preLaunch installs the dependencies: import only Node modules and native.ts.' }] }] },
+		// preLaunch installs the dependencies, so it and what it imports use only Node's modules.
+		files: ['build/lib/preLaunch.ts', 'build/lib/processes.ts', 'build/lib/platform.ts'],
+		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\./(native|platform|processes)\\.ts$)', message: 'preLaunch installs the dependencies: import only Node modules, native.ts, platform.ts and processes.ts.' }] }] },
 	},
 	{
 		files: ['build/lib/prerequisites.ts', 'build/lib/native.ts'],

@@ -12,14 +12,12 @@
  * Code's `.build/electron`, the stock distribution is copied once with the
  * product's name and artwork, in the layout of the packaged application.
  */
-import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
-import { ProcessRunner } from './processes.ts';
+import { processOutput, ProcessRunner } from './processes.ts';
 import { assignExecutableUuids, darwinUsageDescriptions, executableUuids } from './macos/identity.ts';
 import { linuxSandbox, linuxSandboxProfile, systemProbe } from './prerequisites.ts';
 import { loadProduct, type Product } from './product.ts';
@@ -27,8 +25,6 @@ import { fileSha256, releaseInventory } from './inventory.ts';
 import { isLinux, isMacintosh, isWindows } from './platform.ts';
 
 const require = createRequire(import.meta.url);
-
-const run = promisify(execFile);
 
 interface Branding {
 	/** The distribution directory or bundle copied from the `electron` package. */
@@ -150,15 +146,15 @@ async function brandDarwin(root: string, product: Product, bundle: string, work:
 		...Object.entries(darwinUsageDescriptions),
 	];
 	for (const [key, value] of values) {
-		await run('plutil', ['-replace', key, '-string', value, plist], { signal });
+		await processOutput('plutil', ['-replace', key, '-string', value, plist], { signal });
 	}
 	// Its own executable UUID, so local network privacy decides for this bundle alone.
 	const executable = join(bundle, 'Contents/MacOS/Electron');
 	await assignExecutableUuids(executable, developmentBundleIdentifier(product));
 	// The executable and Info.plist changed, which breaks their ad-hoc seals;
 	// nested helpers keep their own signatures.
-	await run('codesign', ['--force', '--sign', '-', executable], { signal });
-	await run('codesign', ['--force', '--sign', '-', bundle], { signal });
+	await processOutput('codesign', ['--force', '--sign', '-', executable], { signal });
+	await processOutput('codesign', ['--force', '--sign', '-', bundle], { signal });
 }
 
 /** Compiles the Icon Composer asset with `actool`; without Xcode, falls back to the flat artwork. */
@@ -166,7 +162,7 @@ async function compileIcon(root: string, product: Product, resources: string, wo
 	const { icon, minimumSystemVersion, fallbackIconSource } = product.platforms.darwin;
 	const name = 'AppIcon';
 	try {
-		await run('xcrun', ['actool', join(root, icon), '--compile', resources, '--app-icon', name, '--include-all-app-icons', '--output-partial-info-plist', join(work, 'icon.plist'), '--platform', 'macosx', '--target-device', 'mac', '--minimum-deployment-target', minimumSystemVersion, '--enable-on-demand-resources', 'NO', '--development-region', 'en', '--output-format', 'human-readable-text'], { signal });
+		await processOutput('xcrun', ['actool', join(root, icon), '--compile', resources, '--app-icon', name, '--include-all-app-icons', '--output-partial-info-plist', join(work, 'icon.plist'), '--platform', 'macosx', '--target-device', 'mac', '--minimum-deployment-target', minimumSystemVersion, '--enable-on-demand-resources', 'NO', '--development-region', 'en', '--output-format', 'human-readable-text'], { signal });
 		await stat(join(resources, `${name}.icns`));
 		return name;
 	} catch (error) {
@@ -178,10 +174,10 @@ async function compileIcon(root: string, product: Product, resources: string, wo
 	for (const size of [16, 32, 128, 256, 512]) {
 		for (const scale of [1, 2]) {
 			const suffix = scale === 2 ? '@2x' : '';
-			await run('sips', ['-z', String(size * scale), String(size * scale), join(root, fallbackIconSource), '--out', join(iconset, `icon_${String(size)}x${String(size)}${suffix}.png`)], { signal });
+			await processOutput('sips', ['-z', String(size * scale), String(size * scale), join(root, fallbackIconSource), '--out', join(iconset, `icon_${String(size)}x${String(size)}${suffix}.png`)], { signal });
 		}
 	}
-	await run('iconutil', ['-c', 'icns', iconset, '-o', join(resources, `${name}.icns`)], { signal });
+	await processOutput('iconutil', ['-c', 'icns', iconset, '-o', join(resources, `${name}.icns`)], { signal });
 	return name;
 }
 

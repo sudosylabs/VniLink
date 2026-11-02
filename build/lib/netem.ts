@@ -53,11 +53,8 @@
  * counter reports what it kept off the link. In direct mode the cores keep a
  * relay on `127.0.0.1:9`, where nothing listens.
  */
-import { execFile } from 'node:child_process';
 import { chmod, writeFile } from 'node:fs/promises';
-import { promisify } from 'node:util';
-
-const run = promisify(execFile);
+import { processOutput } from './processes.ts';
 
 export type Loss =
 	| { readonly kind: 'random'; readonly percent: number }
@@ -292,12 +289,12 @@ export function relayPathCommands(link: Topology, addresses: { readonly host: st
 async function runAll(commands: readonly (readonly string[])[], signal: AbortSignal): Promise<void> {
 	for (const [command, ...args] of commands) {
 		signal.throwIfAborted();
-		await run(command, args, { signal });
+		await processOutput(command, args, { signal });
 	}
 }
 
 async function json(command: string, args: readonly string[], signal: AbortSignal): Promise<Record<string, unknown>[]> {
-	return JSON.parse((await run(command, args, { signal })).stdout) as Record<string, unknown>[];
+	return JSON.parse(await processOutput(command, args, { signal })) as Record<string, unknown>[];
 }
 
 /** Creates the link, replacing any namespaces left behind by an interrupted run. */
@@ -308,8 +305,8 @@ export async function createTopology(link: Topology, signal: AbortSignal, path: 
 	const address = async (side: Topology['sides'][number]) => String((await json('ip', ['-n', side.namespace, '-j', 'link', 'show', 'dev', side.device], signal))[0].address);
 	const hostAddress = await address(host);
 	const viewAddress = await address(view);
-	await run('ip', ['-n', host.namespace, 'neigh', 'replace', '127.0.0.1', 'lladdr', viewAddress, 'dev', host.device, 'nud', 'permanent'], { signal });
-	await run('ip', ['-n', view.namespace, 'neigh', 'replace', '127.0.0.1', 'lladdr', hostAddress, 'dev', view.device, 'nud', 'permanent'], { signal });
+	await processOutput('ip', ['-n', host.namespace, 'neigh', 'replace', '127.0.0.1', 'lladdr', viewAddress, 'dev', host.device, 'nud', 'permanent'], { signal });
+	await processOutput('ip', ['-n', view.namespace, 'neigh', 'replace', '127.0.0.1', 'lladdr', hostAddress, 'dev', view.device, 'nud', 'permanent'], { signal });
 	if (path === 'relay') {
 		await runAll(relayPathCommands(link, { host: hostAddress, view: viewAddress }), signal);
 	}
@@ -365,7 +362,7 @@ export async function linkStatistics(link: Topology, signal: AbortSignal): Promi
 /** Deleting the namespaces also deletes the veth pair. Missing namespaces are not an error, and teardown ignores cancellation. */
 export async function disposeTopology(link: Topology): Promise<void> {
 	for (const side of link.sides) {
-		await run('ip', ['netns', 'del', side.namespace]).catch(() => undefined);
+		await processOutput('ip', ['netns', 'del', side.namespace]).catch(() => undefined);
 	}
 }
 

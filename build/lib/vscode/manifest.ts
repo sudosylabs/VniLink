@@ -13,13 +13,11 @@
  * - pruned: verbatim text with whole unused declarations deleted (`pruned` names them);
  * - adapted: reviewed edits, described by `adaptation` or the file's header.
  */
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { processOutput } from '../processes.ts';
 
-const run = promisify(execFile);
 
 /** The manifest's path relative to the repository root. */
 export const manifestPath = 'build/vscode-source.json';
@@ -108,7 +106,7 @@ export async function writeManifestFile(root: string, manifest: VsCodeManifest):
 
 /** Refuses an upstream checkout that is not at the manifest's commit. */
 export async function assertCheckout(manifest: VsCodeManifest, checkout: string): Promise<void> {
-	const { stdout } = await run('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+	const stdout = await processOutput('git', ['-C', checkout, 'rev-parse', 'HEAD']);
 	if (stdout.trim() !== manifest.commit) {
 		throw new Error(`Upstream checkout ${checkout} is at ${stdout.trim()}; the manifest pins ${manifest.commit} (${manifest.ref})`);
 	}

@@ -79,6 +79,32 @@ export class ProcessRunner {
 		return { child, result };
 	}
 
+	/**
+	 * Runs `command` and resolves with what it writes to standard output, once
+	 * its streams have closed. A failure's message carries its standard error.
+	 */
+	public async output(command: string, args: readonly string[], options: SpawnOptions = {}): Promise<string> {
+		const { child, result } = this.start(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+		const stdout: Buffer[] = [];
+		const stderr: Buffer[] = [];
+		child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk));
+		child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
+		const closed = new Promise<void>(resolve => {
+			child.once('close', () => {
+				resolve();
+			});
+		});
+		try {
+			await result;
+		} catch (error) {
+			await closed;
+			const detail = Buffer.concat(stderr).toString('utf8').trim();
+			throw new Error(detail ? `${asError(error).message}: ${detail}` : asError(error).message);
+		}
+		await closed;
+		return Buffer.concat(stdout).toString('utf8');
+	}
+
 	public run(command: string, args: readonly string[], options: SpawnOptions = {}): Promise<number> {
 		return this.start(command, args, options).result;
 	}
@@ -137,4 +163,15 @@ async function terminate(child: ChildProcess, result: Promise<number>): Promise<
 		}
 	}
 	await result.catch(() => undefined);
+}
+
+/** `ProcessRunner.output` for one command, stopped with `signal` if it aborts. */
+export async function processOutput(command: string, args: readonly string[], options: Omit<SpawnOptions, 'signal' | 'stdio'> & { readonly signal?: AbortSignal } = {}): Promise<string> {
+	const { signal, ...spawnOptions } = options;
+	const processes = new ProcessRunner(signal);
+	try {
+		return await processes.output(command, args, spawnOptions);
+	} finally {
+		await processes.stop();
+	}
 }

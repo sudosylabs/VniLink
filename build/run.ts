@@ -50,7 +50,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 		return (await import('./lib/development.ts')).startApplication(root, signal, args);
 	},
 	'dev': async (root, signal, args) => {
-		await (await import('./lib/preLaunch.ts')).preLaunch({ root });
+		await (await import('./lib/preLaunch.ts')).preLaunch({ root, signal });
 		const { DevelopmentSession } = await import('./lib/development.ts');
 		return new DevelopmentSession(root, args, signal).run();
 	},
@@ -64,7 +64,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 		await step('test:ui', args);
 	},
 	'test:ui': async (root, signal, args) => {
-		await (await import('./lib/preLaunch.ts')).preLaunch({ root });
+		await (await import('./lib/preLaunch.ts')).preLaunch({ root, signal });
 		// The whole UI suite starts with the renderer unit tests; a scenario selection runs only those scenarios.
 		if (!args.length) {
 			await step('test:unit:electron');

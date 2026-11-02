@@ -6,12 +6,10 @@
 // ---------------------------------------------------------------------------------------------
 
 /** Makes a development build its own app for macOS privacy permissions. */
-import { execFile } from 'node:child_process';
 import { mkdir, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
+import { processOutput } from './processes.ts';
 
-const run = promisify(execFile);
 
 /** A program and its arguments, as `ProcessRunner.start` takes them. */
 export interface Launch {
@@ -50,7 +48,7 @@ export async function selfResponsible(
 	const changed = await modified(source);
 	if (built === undefined || changed === undefined || changed > built) {
 		await mkdir(dirname(launcher), { recursive: true });
-		await run('xcrun', ['clang', '-O2', '-Wall', '-Werror', '-o', launcher, source], { signal });
+		await processOutput('xcrun', ['clang', '-O2', '-Wall', '-Werror', '-o', launcher, source], { signal });
 	}
 	return { command: launcher, args: [executable, ...args] };
 }

@@ -5,10 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const run = promisify(execFile);
+import { processOutput } from './processes.ts';
 
 /** Third-party sources, which keep their own notices and conventions. */
 export const thirdPartyDirectories: readonly string[] = ['vendor/'];
@@ -19,5 +16,5 @@ export const thirdPartyDirectories: readonly string[] = ['vendor/'];
  */
 export async function git(root: string, args: readonly string[]): Promise<string> {
 	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-	return (await run('git', ['-C', root, ...args], { env, maxBuffer: 64 * 1024 * 1024 })).stdout;
+	return processOutput('git', ['-C', root, ...args], { env });
 }

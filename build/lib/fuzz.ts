@@ -14,9 +14,7 @@
  * `crates/vnilink/fuzz/artifacts/<target>`. The corpus grows in
  * `crates/vnilink/fuzz/corpus/<target>` between runs; both are ignored.
  */
-import { execFile } from 'node:child_process';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { ProcessRunner } from './processes.ts';
 
 export interface FuzzSelection {
@@ -51,7 +49,7 @@ export async function runFuzzTargets(root: string, signal: AbortSignal, args: re
 	const crate = join(root, 'crates/vnilink');
 	const processes = new ProcessRunner(signal);
 	try {
-		const { stdout } = await promisify(execFile)('cargo', ['+nightly', 'fuzz', 'list'], { cwd: crate, signal });
+		const stdout = await processes.output('cargo', ['+nightly', 'fuzz', 'list'], { cwd: crate });
 		const selection = fuzzSelection(args, stdout.split('\n').map(line => line.trim()).filter(Boolean));
 		for (const target of selection.targets) {
 			signal.throwIfAborted();
