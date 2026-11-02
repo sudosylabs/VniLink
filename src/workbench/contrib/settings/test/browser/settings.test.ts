@@ -120,7 +120,8 @@ suite('Settings pages', () => {
 			const reloads = fixture.configuration.reloads;
 			fixture.permissions.focus();
 			await settle();
-			assert.strictEqual(fixture.configuration.reloads, reloads + 1);
+			// The page also reads again when the real window's visibility changes, which the test cannot hold still.
+			assert.ok(fixture.configuration.reloads > reloads, 'focus did not read the settings again');
 		});
 		test('becomes editable, without the reason, once it can be read', () => {
 			fixture.configuration.setError('terminal', undefined);
