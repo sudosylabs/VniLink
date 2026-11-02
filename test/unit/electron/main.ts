@@ -7,13 +7,14 @@
 
 /**
  * The Electron main process of `test:unit:electron`, after VS Code's
- * `test/unit/electron/index.js`: one hidden window runs the renderer unit
+ * `test/unit/electron/index.js`: one window, hidden except on Windows, runs the renderer unit
  * tests (`renderer.ts`) and reports each result here, where it is printed;
  * the process exits 0 only when every test passed. `build/lib/unitTests.ts`
  * passes the bundles and options in `VNILINK_UNIT_*`.
  */
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
+import { isWindows } from '../../../src/base/common/platform.js';
 
 interface TestResult {
 	readonly title: string;
@@ -61,8 +62,8 @@ app.on('window-all-closed', () => {
 });
 
 // The tests wait on animation frames and timers. Chromium slows both for a window that is not
-// seen, as this one never is: on Windows to one frame a second. It renders as if seen, as the
-// smoke launcher's window does (`test/automation/src/application.ts`).
+// seen, as this one is not; the window renders as if seen, as the smoke launcher's window does
+// (`test/automation/src/application.ts`).
 for (const flag of ['disable-backgrounding-occluded-windows', 'disable-renderer-backgrounding', 'disable-background-timer-throttling']) {
 	app.commandLine.appendSwitch(flag);
 }
@@ -84,5 +85,10 @@ void app.whenReady().then(async () => {
 			console.error(event.message);
 		}
 	});
+	// Windows gives a window never shown about one frame a second, whatever the switches say,
+	// so the tests that wait on frames run out of time. It is shown there, without focus.
+	if (isWindows) {
+		window.showInactive();
+	}
 	await window.loadFile(join(output, 'test/unit/electron/renderer.html'));
 });
