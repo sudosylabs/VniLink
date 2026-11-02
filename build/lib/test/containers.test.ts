@@ -6,23 +6,34 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
+import { readFile } from 'node:fs/promises';
 import { suite, test } from 'node:test';
-import { checkoutVolume, linuxValidationVolumes } from '../containers.ts';
+import { checkoutVolume, containerVolumes, imageToolchain } from '../containers.ts';
+
+const dockerfile = await readFile(new URL('../../containers/Dockerfile.linux', import.meta.url), 'utf8');
 
 suite('containers', () => {
 	const main = '/work/vnilink';
 	const worktree = '/work/vnilink/.claude/worktrees/one';
 
 	/** The volume each mount target of a checkout's Linux validation uses. */
-	function volumes(root: string): Map<string, string> {
+	function volumes(root: string, toolchain = 'trixie-rust191'): Map<string, string> {
 		const sources = new Map<string, string>();
-		for (const mount of linuxValidationVolumes(root).filter(argument => argument !== '--mount')) {
+		for (const mount of containerVolumes('linux', toolchain, root).filter(argument => argument !== '--mount')) {
 			const match = /source=([^,]+),target=([^,]+)$/.exec(mount);
 			assert.ok(match, `not a volume mount: ${mount}`);
 			sources.set(match[2], match[1]);
 		}
 		return sources;
 	}
+	test('reads the image\'s distribution and Rust release from its Dockerfile', () => {
+		assert.match(imageToolchain(dockerfile), /^[a-z]+-rust\d+$/);
+		assert.strictEqual(imageToolchain('FROM node:22 AS node\nFROM rust:1.91.0-trixie@sha256:00\n'), 'trixie-rust191');
+	});
+	test('gives another toolchain another target, and keeps node_modules', () => {
+		assert.notStrictEqual(volumes(main).get('/work/target'), volumes(main, 'trixie-rust192').get('/work/target'));
+		assert.strictEqual(volumes(main).get('/work/node_modules'), volumes(main, 'trixie-rust192').get('/work/node_modules'));
+	});
 	test('names a checkout volume after its cache and a digest of the checkout', () => {
 		assert.match(checkoutVolume('vnilink-impaired-release-target', main), /^vnilink-impaired-release-target-[0-9a-f]{12}$/);
 	});

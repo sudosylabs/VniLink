@@ -6,11 +6,11 @@
 // ---------------------------------------------------------------------------------------------
 
 /** Test runners that own processes: the Electron UI suite, Rust tests and the Linux validation container. */
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/src/scenarios.ts';
-import { linuxValidationVolumes } from './containers.ts';
+import { runContainer } from './containers.ts';
 import { electronExecutable } from './electron.ts';
 import { launchLatencySide } from './latency.ts';
 import { assertNativeFresh, defaultNativeOptions, nativeCargo, nativeEnvironment } from './native.ts';
@@ -276,33 +276,5 @@ async function runTestkit(root: string, signal: AbortSignal, command: readonly s
 
 /** Reproducible Linux validation with a read-only checkout and isolated writable volumes. */
 export async function validateLinux(root: string, signal: AbortSignal): Promise<void> {
-	const output = join(root, '.build/linux-validation', String(Date.now()));
-	const container = `vnilink-validation-${String(process.pid)}-${String(Date.now())}`;
-	const processes = new ProcessRunner(signal);
-	let launched = false;
-	await mkdir(output, { recursive: true });
-	try {
-		await processes.run('docker', ['info', '--format', '{{.OSType}} {{.Architecture}}']);
-		await processes.run('docker', ['build', '-f', 'build/containers/Dockerfile.linux', '-t', 'vnilink-linux-validation:local', '.'], { cwd: root });
-		launched = true;
-		await processes.run('docker', [
-			'run', '--name', container, '--shm-size=512m', '--init',
-			'--mount', `type=bind,source=${root},target=/source,readonly`,
-			'--mount', `type=bind,source=${output},target=/evidence`,
-			...linuxValidationVolumes(root),
-			'vnilink-linux-validation:local',
-		]);
-	} finally {
-		await processes.stop();
-		if (launched) {
-			// Removal uses a separate owner because cancellation closes the work runner.
-			const cleanup = new ProcessRunner();
-			try {
-				await cleanup.run('docker', ['rm', '--force', container]);
-			} finally {
-				await cleanup.stop();
-			}
-		}
-		console.log(`Linux evidence: ${output}`);
-	}
+	await runContainer(root, signal, { purpose: 'linux', evidence: 'linux-validation', options: ['--shm-size=512m'] });
 }

@@ -121,7 +121,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline';
-import { checkoutVolume } from './containers.ts';
+import { runContainer } from './containers.ts';
 import { RELAY_PATH, applyProfile, createTopology, disposeTopology, linkStatistics, selectProfiles, statisticsDelta, topology, writeBurstHooks, type LinkCounters, type LinkPath, type NetemProfile, type Topology } from './netem.ts';
 import { processOutput, ProcessRunner } from './processes.ts';
 import { isLinux } from './platform.ts';
@@ -952,44 +952,22 @@ export async function measureImpaired(root: string, signal: AbortSignal, args: r
 export async function measureImpairedInContainer(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
 	// Fail on bad arguments before building an image.
 	resolveOptions(parseImpairedArguments(args));
-	const output = join(root, '.build/impaired-network', String(Date.now()));
-	const container = `vnilink-impaired-${String(process.pid)}-${String(Date.now())}`;
 	const commit = await processOutput('git', ['rev-parse', 'HEAD'], { cwd: root }).then(stdout => stdout.trim(), () => 'unknown');
-	const processes = new ProcessRunner(signal);
-	let launched = false;
-	await mkdir(output, { recursive: true });
-	try {
-		await processes.run('docker', ['info', '--format', '{{.OSType}} {{.Architecture}}']);
-		// Runs on one machine compete for its CPUs, and both sets of numbers would be wrong.
-		const running = (await processes.output('docker', ['ps', '--filter', 'name=vnilink-impaired-', '--format', '{{.Names}}'])).trim();
-		if (running) {
-			throw new Error(`Another impaired-network run is in progress (${running.split('\n').join(', ')}). Wait for it to finish: runs on one machine skew each other's numbers.`);
-		}
-		await processes.run('docker', ['build', '-f', 'build/containers/Dockerfile.linux', '-t', 'vnilink-linux-validation:local', '.'], { cwd: root });
-		launched = true;
-		const environment = ['-e', `VNILINK_COMMIT=${commit}`, ...(process.env.CARGO_BUILD_JOBS ? ['-e', `CARGO_BUILD_JOBS=${process.env.CARGO_BUILD_JOBS}`] : [])];
+	await runContainer(root, signal, {
+		purpose: 'impaired',
+		evidence: 'impaired-network',
 		// Namespaces, veth devices and qdiscs need a privileged container.
-		await processes.run('docker', [
-			'run', '--name', container, '--privileged', '--init', ...environment,
-			'--mount', `type=bind,source=${root},target=/source,readonly`,
-			'--mount', `type=bind,source=${output},target=/evidence`,
-			'--mount', 'type=volume,source=vnilink-linux-cargo-registry,target=/usr/local/cargo/registry',
-			'--mount', `type=volume,source=${checkoutVolume('vnilink-impaired-release-target', root)},target=/work/target`,
-			'--mount', `type=volume,source=${checkoutVolume('vnilink-impaired-node-modules', root)},target=/work/node_modules`,
+		options: [
+			'--privileged', '-e', `VNILINK_COMMIT=${commit}`, ...(process.env.CARGO_BUILD_JOBS ? ['-e', `CARGO_BUILD_JOBS=${process.env.CARGO_BUILD_JOBS}`] : []),
 			'--entrypoint', '/usr/local/bin/vnilink-impaired',
-			'vnilink-linux-validation:local', ...args,
-		]);
-	} finally {
-		await processes.stop();
-		if (launched) {
-			// Removal uses a separate owner because cancellation closes the work runner.
-			const cleanup = new ProcessRunner();
-			try {
-				await cleanup.run('docker', ['rm', '--force', container]);
-			} finally {
-				await cleanup.stop();
+		],
+		args,
+		beforeBuild: async processes => {
+			// Runs on one machine compete for its CPUs, and both sets of numbers would be wrong.
+			const running = (await processes.output('docker', ['ps', '--filter', 'name=vnilink-impaired-', '--format', '{{.Names}}'])).trim();
+			if (running) {
+				throw new Error(`Another impaired-network run is in progress (${running.split('\n').join(', ')}). Wait for it to finish: runs on one machine skew each other's numbers.`);
 			}
-		}
-		console.log(`Impaired-network evidence: ${output}`);
-	}
+		},
+	});
 }
