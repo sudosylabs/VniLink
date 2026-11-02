@@ -59,7 +59,21 @@ export async function assertBundleFresh(root: string, output: string, outputDire
 	}
 }
 
-export function resources(root: string, outputDirectory = join(root, 'out')): Resource[] {
+/**
+ * What a build copies beside its bundles. A release also carries the Rust
+ * sources and lockfile its addon can be relinked from; a development build
+ * and the watcher leave them out, since nothing in a checkout reads them.
+ */
+export function resources(root: string, outputDirectory = join(root, 'out'), { relink = false } = {}): Resource[] {
+	const relinkSources = relink ? [
+		['Cargo.toml', 'relink/source/Cargo.toml'],
+		['Cargo.lock', 'relink/source/Cargo.lock'],
+		['.cargo/config.toml', 'relink/source/.cargo/config.toml'],
+		['rust-toolchain.toml', 'relink/source/rust-toolchain.toml'],
+		['crates', 'relink/source/crates'],
+		['vendor', 'relink/source/vendor'],
+		['.github/workflows/ci.yml', 'relink/source/.github/workflows/ci.yml'],
+	] : [];
 	return [
 		['src/workbench/index.html', 'renderer/index.html'],
 		['src/workbench/notice.html', 'renderer/notice.html'],
@@ -75,13 +89,7 @@ export function resources(root: string, outputDirectory = join(root, 'out')): Re
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],
 		['ThirdPartyNotices.vscode.txt', 'licenses/vscode-third-party.txt'],
 		['assets/licenses', 'licenses/native-codecs'],
-		['Cargo.toml', 'relink/source/Cargo.toml'],
-		['Cargo.lock', 'relink/source/Cargo.lock'],
-		['.cargo/config.toml', 'relink/source/.cargo/config.toml'],
-		['rust-toolchain.toml', 'relink/source/rust-toolchain.toml'],
-		['crates', 'relink/source/crates'],
-		['vendor', 'relink/source/vendor'],
-		['.github/workflows/ci.yml', 'relink/source/.github/workflows/ci.yml'],
+		...relinkSources,
 	].map(([source, output]) => ({ source: join(root, source), output: join(outputDirectory, output) }));
 }
 
@@ -124,8 +132,8 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 				await Promise.all(bundleOptions(root, { production, outputDirectory }).map(value => build(value)));
 			}),
 			define('resources:stage', async () => {
-				const filter = production ? releaseSourceFilter : relinkSourceFilter;
-				await Promise.all(resources(root, outputDirectory).map(({ source, output }) => cp(source, output, { recursive: true, filter })));
+				const staged = resources(root, outputDirectory, { relink: production });
+				await Promise.all(staged.map(({ source, output }) => cp(source, output, { recursive: true, filter: releaseSourceFilter })));
 			}),
 			define('native:stage', async () => {
 				if (!compiled) {
