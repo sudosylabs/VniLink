@@ -23,6 +23,8 @@ members = ["."]
 iroh = { path = "../../../vendor/iroh" }
 enigo = { path = "../../../vendor/enigo" }
 cpal = { path = "../../../vendor/cpal" }
+portable-pty = { path = "../../../vendor/portable-pty" }
+zstd-sys = { path = "../../../vendor/zstd-sys" }
 
 [profile.release]
 debug = 1
@@ -114,6 +116,34 @@ bench = false
 [[bin]]
 name = "job_message"
 path = "fuzz_targets/job_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "address_announcement"
+path = "fuzz_targets/address_announcement.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "invitation"
+path = "fuzz_targets/invitation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pairing_file"
+path = "fuzz_targets/pairing_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relay_url"
+path = "fuzz_targets/relay_url.rs"
 test = false
 doc = false
 bench = false

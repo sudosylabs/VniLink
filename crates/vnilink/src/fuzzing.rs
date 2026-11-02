@@ -126,8 +126,8 @@ pub fn reassemble<'a>(datagrams: impl IntoIterator<Item = &'a [u8]>) {
             // The fuzz case is that decoding never panics, whatever it returns.
             drop(decode_video_body(&body));
         }
-        drop(reassembler.take_unfinished());
-        drop(reassembler.take_fragments());
+        std::hint::black_box(reassembler.take_unfinished());
+        std::hint::black_box(reassembler.take_fragments());
     }
 }
 
@@ -301,6 +301,71 @@ pub fn cursor_state(bytes: &[u8]) {
     }
 }
 
+/// An address announcement a paired peer sends. Decoding keeps only what a
+/// peer may ask this computer to dial, so it may drop entries; what it keeps
+/// is canonical (it encodes to bytes decoding to itself), within the limits,
+/// and dialable: no unspecified, group or port-0 address.
+pub fn address_announcement(bytes: &[u8]) {
+    if let Ok(announcement) = crate::address::decode(bytes) {
+        let again = crate::address::decode(&crate::address::encode(
+            &announcement.relays,
+            &announcement.direct,
+        ))
+        .expect("a decoded announcement encodes to one that decodes");
+        assert_eq!(again, announcement);
+        assert!(announcement.direct.len() <= crate::invitation::MAX_DIRECT_ADDRS);
+        for addr in &announcement.direct {
+            assert!(addr.port() != 0 && !addr.ip().is_unspecified() && !addr.ip().is_multicast());
+        }
+    }
+}
+
+/// An invitation token as anyone may hand over, opened at `now_ms` after the
+/// Unix epoch. One that opens has not expired and does not outlast the
+/// longest lifetime an invitation may have, each allowing for clock skew.
+pub fn invitation(token: &str, now_ms: u64) {
+    use crate::invitation::{open, CLOCK_SKEW, MAX_TTL};
+    let now = std::time::UNIX_EPOCH + std::time::Duration::from_millis(now_ms);
+    if let Ok((invitation, _)) = open(token, now) {
+        let skew = CLOCK_SKEW.as_millis() as u64;
+        assert!(invitation.expires_at_ms.saturating_add(skew) > now_ms);
+        assert!(
+            invitation.expires_at_ms
+                <= now_ms.saturating_add((MAX_TTL + CLOCK_SKEW).as_millis() as u64)
+        );
+    }
+}
+
+/// A pairing file as anyone may send, inspected at `now_ms` after the Unix
+/// epoch. One that inspects carries a token that encloses again to a file
+/// inspecting to the same peer, digits and expiry.
+pub fn pairing_file(bytes: &[u8], now_ms: u64) {
+    use crate::pairing::{enclose, inspect};
+    let now = std::time::UNIX_EPOCH + std::time::Duration::from_millis(now_ms);
+    if let Ok(preview) = inspect(bytes, now, [0; 32]) {
+        let again = inspect(
+            &enclose(&preview.token).expect("an opened token encloses"),
+            now,
+            [0; 32],
+        )
+        .expect("an enclosed token inspects");
+        assert_eq!(again.endpoint_id, preview.endpoint_id);
+        assert_eq!(again.check, preview.check);
+        assert_eq!(again.expires_at_ms, preview.expires_at_ms);
+    }
+}
+
+/// A relay URL as a peer announces or a person types it. One that parses
+/// is canonical: parsing its own text gives it back.
+pub fn relay_url(text: &str) {
+    if let Ok(url) = crate::relay::parse_relay_url(text) {
+        assert_eq!(
+            crate::relay::parse_relay_url(url.as_str()).expect("a canonical relay URL parses"),
+            url
+        );
+    }
+}
+
 /// The System service's replies, chosen by `which`: an operation, the
 /// host's support or its privacy state. Each decodes only from the bytes
 /// it encodes to.
@@ -357,7 +422,7 @@ pub fn job_message(which: u8, bytes: &[u8]) {
     };
     if let Some(manifest) = manifest.filter(|manifest| crate::manifest::validate(manifest).is_ok())
     {
-        drop((manifest.total_bytes(), manifest.file_count()));
+        std::hint::black_box((manifest.total_bytes(), manifest.file_count()));
     }
 }
 

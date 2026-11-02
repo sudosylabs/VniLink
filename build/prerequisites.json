@@ -114,6 +114,16 @@
         "default": "`rustup set default-host x86_64-pc-windows-gnu`, then `rustup toolchain install`"
       }
     },
+    "rust-fuzz": {
+      "title": "Nightly Rust with cargo-fuzz",
+      "purpose": "The fuzz targets in crates/vnilink/fuzz build with nightly Rust and sanitizer flags of cargo-fuzz.",
+      "check": {
+        "custom": "rust-fuzz"
+      },
+      "fix": {
+        "default": "`rustup toolchain install nightly --profile minimal`, then `cargo +nightly install cargo-fuzz --locked`"
+      }
+    },
     "xcode-tools": {
       "title": "Xcode Command Line Tools",
       "platforms": ["darwin"],
@@ -690,6 +700,10 @@
     "test:tooling": {
       "description": "Run the build and application unit tests",
       "requires": ["node"]
+    },
+    "fuzz": {
+      "description": "Run the fuzz targets for a bounded time each",
+      "requires": ["rust", "rust-fuzz"]
     },
     "test:unit": {
       "description": "Run the common and node unit tests under src in Node",

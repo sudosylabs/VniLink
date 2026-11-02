@@ -63,4 +63,6 @@ export async function runNodeTests(root: string, signal: AbortSignal, pattern: s
 export async function checkRust(root: string, signal: AbortSignal): Promise<void> {
 	await runTool(root, signal, 'cargo', ['fmt', '--all', '--', '--check']);
 	await runTool(root, signal, 'cargo', ['clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings']);
+	// The fuzz targets' entry points build only with this feature, which no other build turns on.
+	await runTool(root, signal, 'cargo', ['clippy', '-p', 'vnilink', '--features', 'fuzzing', '--locked', '--', '-D', 'warnings']);
 }
