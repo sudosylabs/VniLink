@@ -116,6 +116,16 @@ async function run(): Promise<void> {
 		}
 	}
 	const runner = mocha.run();
+	// Mocha's browser build hands it every window error through `onerror`, set as the run starts,
+	// and stops the run on one that arrives after its test passed. The report goes through
+	// `unexpected` instead, whichever of the two the browser calls.
+	window.onerror = (message, _source, _line, _column, error) => {
+		const text = typeof message === 'string' ? message : message.type;
+		if (!text.startsWith('ResizeObserver loop')) {
+			unexpected(error, text);
+		}
+		return true;
+	};
 	runner.on('test', test => {
 		running = test.fullTitle();
 	});
