@@ -12,7 +12,7 @@
 
 use expect_test::expect;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use vnilink::{CoreEvent, Error, Grants, JobState, ServiceKind, SessionPhase, SessionRole};
 use vnilink_testkit::desktop::{
@@ -455,25 +455,17 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
     controller.core.job_resume(jb)?;
     // Every byte arrives quickly; a starved runner can take longer to finish
     // both files, so this bounds completion, not speed.
-    let started = Instant::now();
     wait_for(
         "both downloads to complete",
-        Duration::from_secs(31),
+        Duration::from_secs(30),
         || {
-            assert!(
-                started.elapsed() < Duration::from_secs(30),
-                "controller={:?} A={:?} B={:?}",
-                controller.core.job_list(),
-                a.core.job_list(),
-                b.core.job_list()
-            );
-            let poll = |core: &vnilink::Core, job: u64| core.job_poll(job).expect("a poll");
-            poll(&controller.core, ja);
-            poll(&controller.core, jb);
-            poll(&a.core, a.core.job_list().expect("host a's jobs")[0].id);
-            poll(&b.core, b.core.job_list().expect("host b's jobs")[0].id);
-            let state = |job| controller.core.job_snapshot(job).expect("a job").state;
-            (state(ja) == JobState::Complete && state(jb) == JobState::Complete).then_some(())
+            controller.core.job_poll(ja).ok()?;
+            controller.core.job_poll(jb).ok()?;
+            a.core.job_poll(a.core.job_list().ok()?.first()?.id).ok()?;
+            b.core.job_poll(b.core.job_list().ok()?.first()?.id).ok()?;
+            let state = |job| controller.core.job_snapshot(job).map(|job| job.state);
+            (state(ja).ok()? == JobState::Complete && state(jb).ok()? == JobState::Complete)
+                .then_some(())
         },
     );
     assert_eq!(
@@ -493,18 +485,12 @@ fn file_jobs_with_identical_peer_ids_route_to_the_correct_connected_host() -> Te
     let open_job = download(&tabs[1], &b, "still-open.txt")?;
     controller.core.disconnect_session(tabs[0].connection.id)?;
     wait_for("host a's job to be interrupted", DEFAULT_WAIT, || {
-        (controller
-            .core
-            .job_snapshot(closed_job)
-            .expect("a job")
-            .state
-            == JobState::Interrupted)
+        (controller.core.job_snapshot(closed_job).ok()?.state == JobState::Interrupted)
             .then_some(())
     });
     wait_for("host b's job to complete", DEFAULT_WAIT, || {
-        controller.core.drive_jobs().expect("the jobs driven");
-        (controller.core.job_snapshot(open_job).expect("a job").state == JobState::Complete)
-            .then_some(())
+        controller.core.drive_jobs().ok()?;
+        (controller.core.job_snapshot(open_job).ok()?.state == JobState::Complete).then_some(())
     });
     assert!(
         !controller.folder().join("closed.txt").exists(),

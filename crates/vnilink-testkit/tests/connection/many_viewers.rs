@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use vnilink::{Error, Grants, RemoteDesktopService, ServiceInfo, ServiceKind, SessionPhase};
 use vnilink_testkit::desktop::{delta, keyframe, InputLog};
-#[cfg(unix)]
 use vnilink_testkit::files::source;
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
@@ -236,12 +235,11 @@ fn a_saturated_viewer_does_not_slow_another_viewer() -> TestResult {
 /// slow viewer reconnecting, and opening its Desktop again, goes unnoticed
 /// by the fast one; the host stopping then leaves no peer's session
 /// active, and each is closed and forgotten from its side.
-#[cfg(unix)]
 #[test]
 fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
     use vnilink::terminal::TerminalEvent;
     use vnilink::JobState;
-    use vnilink_testkit::terminal::{shell, SIZE};
+    use vnilink_testkit::terminal::{shell, ENTER, SIZE};
 
     let _trace = traced();
     let host = Engine::start("host");
@@ -376,9 +374,17 @@ fn four_peers_share_one_host_through_slow_revoke_and_reconnect() -> TestResult {
             },
         );
     };
-    first.input(b"printf 'FIRST_ALIVE\\n'\n")?;
+    // Neither line holds what its shell prints, so only the answer shows it.
+    let print = |word: &str| {
+        if cfg!(windows) {
+            format!("echo {word}_^ALIVE{ENTER}")
+        } else {
+            format!("printf '%s_ALIVE\\n' {word}{ENTER}")
+        }
+    };
+    first.input(print("FIRST").as_bytes())?;
     answers(&first, "FIRST_ALIVE");
-    second.input(b"printf 'SECOND_ALIVE\\n'\n")?;
+    second.input(print("SECOND").as_bytes())?;
     answers(&second, "SECOND_ALIVE");
 
     host.core

@@ -19,10 +19,7 @@ use vnilink::{
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
-use super::support::refusal;
-
-/// The monitor of the desktops these scenarios install.
-const MONITOR: (u16, u16) = (1920, 1080);
+use super::support::{ended, refusal, SessionEnd, MONITOR};
 
 /// Stopping hosting turns new sessions away even when none is live, while
 /// the host keeps what it granted its peers; stopping a hosted session that
@@ -70,14 +67,7 @@ fn stopping_hosting_disables_new_sessions_even_when_none_is_active() -> TestResu
 #[test]
 fn stopping_hosting_ends_the_active_session() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    InputLog::install(&host, MONITOR)?;
-    host.pair_for_control(&controller)?;
-    controller.connect_services(&host)?;
-    host.core.stop_hosting()?;
-    host.wait_closed(SessionRole::Host);
-    controller.wait_closed(SessionRole::Controller);
+    let (host, controller) = ended(SessionEnd::StopHosting)?;
     let snapshot = host.core.snapshot()?;
     assert!(!snapshot.hosting, "the host no longer hosts");
     assert!(
@@ -117,14 +107,7 @@ fn stopping_hosting_ends_the_active_session() -> TestResult {
 #[test]
 fn disconnect_closes_both_sides() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    InputLog::install(&host, MONITOR)?;
-    host.pair_for_control(&controller)?;
-    controller.connect_services(&host)?;
-    controller.core.disconnect()?;
-    host.wait_closed(SessionRole::Host);
-    controller.wait_closed(SessionRole::Controller);
+    let (host, controller) = ended(SessionEnd::Disconnect)?;
     assert!(
         host.core.snapshot()?.hosting,
         "a controller disconnecting leaves the host hosting"
@@ -159,14 +142,7 @@ fn disconnect_closes_both_sides() -> TestResult {
 #[test]
 fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    InputLog::install(&host, MONITOR)?;
-    host.pair_for_control(&controller)?;
-    controller.connect_services(&host)?;
-    host.core.revoke(&controller.endpoint())?;
-    host.wait_closed(SessionRole::Host);
-    controller.wait_closed(SessionRole::Controller);
+    let (host, controller) = ended(SessionEnd::Revoke)?;
     assert!(
         host.core.snapshot()?.devices.is_empty(),
         "a revoked controller is forgotten"
@@ -203,14 +179,7 @@ fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
 #[test]
 fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    InputLog::install(&host, MONITOR)?;
-    host.pair_for_control(&controller)?;
-    controller.connect_services(&host)?;
-    host.core.unpair(&controller.endpoint())?;
-    host.wait_closed(SessionRole::Host);
-    controller.wait_closed(SessionRole::Controller);
+    let (host, controller) = ended(SessionEnd::Unpair)?;
     assert!(
         host.core.snapshot()?.devices.is_empty(),
         "an unpaired controller is forgotten, not kept without grants"
@@ -280,17 +249,11 @@ fn unpairing_an_unknown_device_reports_not_paired() -> TestResult {
 #[test]
 fn a_controller_unpair_ends_its_outgoing_session() -> TestResult {
     let trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    host.pair_for_control(&controller)?;
-    controller.connect_services(&host)?;
-    controller.core.unpair(&host.endpoint())?;
+    let (host, controller) = ended(SessionEnd::ControllerUnpair)?;
     assert!(
         controller.core.snapshot()?.devices.is_empty(),
         "the controller forgets its host"
     );
-    controller.wait_closed(SessionRole::Controller);
-    host.wait_closed(SessionRole::Host);
     assert_eq!(
         host.core.snapshot()?.devices.len(),
         1,

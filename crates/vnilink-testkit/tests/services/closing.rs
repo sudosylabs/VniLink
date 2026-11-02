@@ -13,7 +13,7 @@ use expect_test::expect;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use vnilink::camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory};
 use vnilink::power::PowerPolicy;
@@ -25,6 +25,7 @@ use vnilink_testkit::camera::{config, CAMERA};
 use vnilink_testkit::desktop::{keyframe, InputLog};
 use vnilink_testkit::events::wait_hosted_close;
 use vnilink_testkit::session::service_ended;
+use vnilink_testkit::terminal::Hosting;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 use super::support::phase;
@@ -69,7 +70,7 @@ fn every_close_names_its_cause_on_the_controller() -> TestResult {
     core.disconnect_session(session.id)?;
     controller.wait_phase(session.id, SessionPhase::Closed);
     assert_eq!(
-        phase(&controller, &orphaned),
+        phase(&controller, &orphaned)?,
         ServicePhase::Closed(CloseCause::ParentLoss),
         "a service closes with its connection"
     );
@@ -154,10 +155,10 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
         ..Default::default()
     })?;
     wait_for("the idle Desktop to expire", DEFAULT_WAIT, || {
-        service_ended(&phase(&pair.controller, &desktop_owner)).then_some(())
+        service_ended(&phase(&pair.controller, &desktop_owner).ok()?).then_some(())
     });
     assert_eq!(
-        phase(&pair.controller, &desktop_owner),
+        phase(&pair.controller, &desktop_owner)?,
         ServicePhase::Closed(CloseCause::IdleExpired),
         "an idle Desktop expires as idle"
     );
@@ -193,20 +194,12 @@ fn a_revoked_grant_and_idle_expiry_name_their_causes() -> TestResult {
 
 /// Removing the host's shell backend closes its hosted Terminal as the
 /// device lost.
-#[cfg(unix)]
 #[test]
 fn removing_a_backend_closes_its_hosted_services_as_device_loss() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_services(&[ServiceKind::Terminal]);
-    let host = &pair.host.core;
-    host.set_terminal_factory(Some(vnilink_testkit::terminal::shell(&pair.host.folder())))?;
-    let parent = pair.connect_services();
-    let owner = pair.attach(&parent, ServiceKind::Terminal);
-    let _terminal = pair.controller.core.open_terminal_service(
-        owner.id,
-        owner.generation,
-        vnilink_testkit::terminal::SIZE,
-    )?;
+    let hosting = Hosting::shell()?;
+    let (pair, host) = (&hosting.pair, &hosting.pair.host.core);
+    let _terminal = hosting.open()?;
     wait_for("the host to serve Terminal", DEFAULT_WAIT, || {
         pair.host
             .hosted(Some(ServiceKind::Terminal))
@@ -284,23 +277,25 @@ fn a_stalled_camera_open_cancels_cleanly_and_adopts_nothing_late() -> TestResult
         .set_camera_factory(Some(Arc::clone(&stall) as _))?;
     let parent = pair.connect_services();
     let owner = pair.attach(&parent, ServiceKind::Camera);
-    let (elapsed, outcome) = std::thread::scope(|scope| -> Result<_, Error> {
+    let outcome = std::thread::scope(|scope| -> Result<_, Error> {
         let opener =
             scope.spawn(|| controller.open_camera_service(owner.id, owner.generation, config()));
         entering
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(DEFAULT_WAIT)
             .expect("the backend starts opening");
-        let started = Instant::now();
         controller.close_controller_service(owner.id, owner.generation)?;
-        Ok((started.elapsed(), opener.join().expect("the open returns")))
+        Ok(opener.join().expect("the open returns"))
     })?;
+    // The backend holds until the host records the open refused, below:
+    // only the close can settle the open here, never the backend finishing,
+    // and an open that waited out its exchange would fail as timed out.
     assert!(
-        elapsed < Duration::from_secs(4),
-        "cancelling settles the open before the exchange times out: {elapsed:?}"
+        matches!(outcome, Err(Error::NoSession)),
+        "closing settles a stalled open as ended, not timed out: {:?}",
+        outcome.err()
     );
-    assert!(outcome.is_err(), "the cancelled open fails");
     assert_eq!(
-        phase(&pair.controller, &owner),
+        phase(&pair.controller, &owner)?,
         ServicePhase::Closed(CloseCause::OwnerClose),
         "the Camera closed by its owner"
     );
@@ -422,7 +417,7 @@ fn close_desktop_beside_files(close: DesktopClose) -> TestResult {
     wait_for(
         &format!("{close:?}: the Desktop to close as {expected:?}"),
         DEFAULT_WAIT,
-        || (phase(&pair.controller, &desktop) == expected).then_some(()),
+        || (phase(&pair.controller, &desktop).ok()? == expected).then_some(()),
     );
     // The host ends its side of the desktop just after the controller's.
     pair.host.wait_released(Some(ServiceKind::Desktop));
@@ -456,14 +451,14 @@ fn close_desktop_beside_files(close: DesktopClose) -> TestResult {
     );
     assert!(!pipe.is_cancelled(), "{close:?}: Files is not cancelled");
     assert_eq!(
-        phase(&pair.controller, &files),
+        phase(&pair.controller, &files)?,
         ServicePhase::Active,
         "{close:?}: Files stays active"
     );
     controller.drop_controller_link(session.id)?;
     pair.controller.redialed(&session);
     assert_eq!(
-        phase(&pair.controller, &desktop),
+        phase(&pair.controller, &desktop)?,
         expected,
         "{close:?}: the redial keeps the first close's cause"
     );

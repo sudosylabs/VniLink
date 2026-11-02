@@ -6,13 +6,15 @@
 // ---------------------------------------------------------------------------------------------
 
 //! What the connection scenarios share: engines that trust each other
-//! without sharing, a refused connection's reason, and a cursor to send.
+//! without sharing, a live connection and what ended it, a refused
+//! connection's reason, and a cursor to send.
 //! Pairing for control, session waits and events are the kit's
 //! ([`vnilink_testkit::session`], [`vnilink_testkit::events`]).
 
 use std::time::Duration;
 
-use vnilink::{CursorState, Error, SessionPhase};
+use vnilink::{CursorState, Error, SessionPhase, SessionRole};
+use vnilink_testkit::desktop::InputLog;
 use vnilink_testkit::{wait_for, Engine, DEFAULT_WAIT};
 
 /// How long an invitation in these scenarios lives.
@@ -27,6 +29,46 @@ pub fn introduce(host: &Engine, controller: &Engine) -> Result<(), Error> {
     host.core
         .accept_invitation(&controller.core.create_invitation(INVITATION)?)?;
     Ok(())
+}
+
+/// What ends a live services connection between a host and its
+/// controller.
+pub enum SessionEnd {
+    /// The host stops hosting.
+    StopHosting,
+    /// The controller disconnects.
+    Disconnect,
+    /// The host revokes the controller.
+    Revoke,
+    /// The host unpairs the controller.
+    Unpair,
+    /// The controller unpairs the host.
+    ControllerUnpair,
+}
+
+/// The monitor of the desktop a host in these scenarios shows.
+pub const MONITOR: (u16, u16) = (1920, 1080);
+
+/// A host showing a desktop and a controller it paired for control, whose
+/// services connection `ending` ended, closed on both sides: the host and
+/// the controller.
+#[track_caller]
+pub fn ended(ending: SessionEnd) -> Result<(Engine, Engine), Error> {
+    let host = Engine::start("host");
+    let controller = Engine::start("controller");
+    InputLog::install(&host, MONITOR)?;
+    host.pair_for_control(&controller)?;
+    controller.connect_services(&host)?;
+    match ending {
+        SessionEnd::StopHosting => host.core.stop_hosting()?,
+        SessionEnd::Disconnect => controller.core.disconnect()?,
+        SessionEnd::Revoke => host.core.revoke(&controller.endpoint())?,
+        SessionEnd::Unpair => host.core.unpair(&controller.endpoint())?,
+        SessionEnd::ControllerUnpair => controller.core.unpair(&host.endpoint())?,
+    }
+    host.wait_closed(SessionRole::Host);
+    controller.wait_closed(SessionRole::Controller);
+    Ok((host, controller))
 }
 
 /// A visible cursor at `position`, without an image.

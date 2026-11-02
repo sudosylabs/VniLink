@@ -67,7 +67,7 @@ fn a_waiting_service_closes_without_withdrawing_the_request() -> TestResult {
     ))?;
     let session = pair.controller.wait_phase(pending.id, SessionPhase::Active);
     assert_eq!(
-        phase(&pair.controller, &service),
+        phase(&pair.controller, &service)?,
         ServicePhase::Closed(CloseCause::OwnerClose),
         "the closed service stays closed after admission"
     );
@@ -125,7 +125,7 @@ fn a_rejected_connection_fails_its_attached_services() -> TestResult {
         .then_some(())
     });
     assert!(
-        matches!(phase(&pair.controller, &service), ServicePhase::Failed(_)),
+        matches!(phase(&pair.controller, &service)?, ServicePhase::Failed(_)),
         "a rejected connection fails its services"
     );
     assert!(

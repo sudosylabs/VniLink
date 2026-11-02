@@ -11,17 +11,14 @@
 //! own sharing leaves of what was granted.
 
 use expect_test::expect;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use vnilink::{CoreEvent, Error, Grants, ServiceKind, SessionPhase};
 use vnilink_testkit::events::drain;
-use vnilink_testkit::session::{other_check, wait_control_check, wait_request};
+use vnilink_testkit::session::{wait_control_check, wait_request};
 use vnilink_testkit::{holds, traced, wait_for, Engine, TestResult};
 
-use super::support::exchange;
-
-/// How long the host takes to ask its owner, at most.
-const ASKING: Duration = Duration::from_secs(5);
+use super::support::{ask, exchange, Answer, ASKING};
 
 /// The controller keeps waiting while the host's owner reads the digits,
 /// longer than an ordinary frame read takes, and its link comes up once
@@ -58,12 +55,7 @@ fn the_controller_waits_while_the_host_owner_types_the_digits() -> TestResult {
         "the approved link to come up",
         Duration::from_secs(8),
         || {
-            (controller
-                .core
-                .controller_session(pending.id)
-                .expect("the controller's session")
-                .phase
-                == SessionPhase::Active)
+            (controller.core.controller_session(pending.id).ok()?.phase == SessionPhase::Active)
                 .then_some(())
         },
     );
@@ -89,25 +81,17 @@ fn the_host_rejects_a_control_request_whose_digits_do_not_match() -> TestResult 
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true);
+    exchange(&host.core, &controller.core, true)?;
     host.core.start_hosting()?;
-    let events = controller.core.subscribe()?;
-    let denied = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect_services(&host));
-        let _request = wait_request(&host.core, ASKING);
-        let wrong = other_check(&wait_control_check(&events, ASKING));
-        assert!(
-            matches!(
-                host.core.confirm_control_request(&wrong),
-                Err(Error::PairingCheckMismatch)
-            ),
-            "wrong digits are refused"
-        );
-        connecting.join().expect("the connecting thread")
-    });
+    let denied = ask(&host, &controller, Answer::WrongDigits)?;
     assert!(
-        matches!(denied, Err(Error::Unauthorized)),
-        "a mismatched request turns the controller away: {denied:?}"
+        matches!(denied.answered, Err(Error::PairingCheckMismatch)),
+        "wrong digits are refused"
+    );
+    assert!(
+        matches!(denied.connected, Err(Error::Unauthorized)),
+        "a mismatched request turns the controller away: {:?}",
+        denied.connected
     );
     assert!(
         host.core.snapshot()?.devices.is_empty(),
@@ -119,16 +103,10 @@ fn the_host_rejects_a_control_request_whose_digits_do_not_match() -> TestResult 
         "the controller still remembers the host"
     );
 
-    let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect_services(&host));
-        let _request = wait_request(&host.core, ASKING);
-        host.core
-            .confirm_control_request(&wait_control_check(&events, ASKING))
-            .expect("the approval");
-        connecting.join().expect("the connecting thread")
-    })?;
+    let approved = ask(&host, &controller, Answer::Digits)?;
+    approved.answered?;
     assert_eq!(
-        session.phase,
+        approved.connected?.phase,
         SessionPhase::Active,
         "the right digits approve the controller"
     );
@@ -154,7 +132,7 @@ fn a_file_without_the_control_switch_does_not_ask_the_host() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, false);
+    exchange(&host.core, &controller.core, false)?;
     host.core.start_hosting()?;
     let events = host.core.subscribe()?;
     let denied = controller.connect_services(&host);
@@ -196,18 +174,14 @@ fn rejecting_the_control_request_leaves_the_file_usable() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true);
+    exchange(&host.core, &controller.core, true)?;
     host.core.start_hosting()?;
-    let events = controller.core.subscribe()?;
-    let denied = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect_services(&host));
-        let _request = wait_request(&host.core, ASKING);
-        host.core.reject_control_request().expect("the rejection");
-        connecting.join().expect("the connecting thread")
-    });
+    let denied = ask(&host, &controller, Answer::Reject)?;
+    denied.answered?;
     assert!(
-        matches!(denied, Err(Error::Unauthorized)),
-        "a rejected controller is turned away: {denied:?}"
+        matches!(denied.connected, Err(Error::Unauthorized)),
+        "a rejected controller is turned away: {:?}",
+        denied.connected
     );
     assert!(
         matches!(
@@ -216,19 +190,10 @@ fn rejecting_the_control_request_leaves_the_file_usable() -> TestResult {
         ),
         "a rejected request is answered"
     );
-    let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect_services(&host));
-        let _request = wait_request(&host.core, ASKING);
-        // The first request showed digits too; the second connection shows
-        // its own, and the owner types those.
-        let _rejected_request_digits = wait_control_check(&events, ASKING);
-        host.core
-            .confirm_control_request(&wait_control_check(&events, ASKING))
-            .expect("the approval");
-        connecting.join().expect("the connecting thread")
-    })?;
+    let approved = ask(&host, &controller, Answer::Digits)?;
+    approved.answered?;
     assert_eq!(
-        session.phase,
+        approved.connected?.phase,
         SessionPhase::Active,
         "the file still approves the controller"
     );
@@ -260,33 +225,21 @@ fn approving_control_after_the_window_expires_is_refused() -> TestResult {
     let preview = controller.core.open_pairing_file(&file.bytes)?;
     controller.core.confirm_pairing(&preview, &file.check)?;
     host.core.start_hosting()?;
-    let events = controller.core.subscribe()?;
-    std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect_services(&host));
-        let _request = wait_request(&host.core, ASKING);
-        let shown = wait_control_check(&events, ASKING);
-        // The owner answers three seconds after being asked, past the
-        // file's two.
-        let asked = Instant::now();
-        let answered = Duration::from_secs(3);
-        wait_for("the owner to answer late", answered * 2, || {
-            (asked.elapsed() >= answered).then_some(())
-        });
-        assert!(
-            matches!(
-                host.core.confirm_control_request(&shown),
-                Err(Error::InvitationExpired)
-            ),
-            "a late approval is refused as expired"
-        );
-        assert!(
-            matches!(
-                connecting.join().expect("the connecting thread"),
-                Err(Error::Unauthorized)
-            ),
-            "the controller is turned away"
-        );
-    });
+    // The owner answers three seconds after the digits show, past the
+    // file's two.
+    let late = ask(
+        &host,
+        &controller,
+        Answer::DigitsAfter(Duration::from_secs(3)),
+    )?;
+    assert!(
+        matches!(late.answered, Err(Error::InvitationExpired)),
+        "a late approval is refused as expired"
+    );
+    assert!(
+        matches!(late.connected, Err(Error::Unauthorized)),
+        "the controller is turned away"
+    );
     assert!(
         host.core.control_request()?.is_none(),
         "an expired request is gone"
@@ -349,7 +302,7 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     // The host pairs the controller first so it can authorize side grants.
-    exchange(&controller.core, &host.core, false);
+    exchange(&controller.core, &host.core, false)?;
     host.core.set_desktop_sharing(Grants {
         view: false,
         control: false,
@@ -357,7 +310,7 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
         transfer: true,
     })?;
 
-    exchange(&host.core, &controller.core, true);
+    exchange(&host.core, &controller.core, true)?;
     host.core.start_hosting()?;
     let session = controller.connect_services(&host)?;
     assert_eq!(
@@ -404,21 +357,21 @@ fn remembered_peer_denied_by_global_policy_never_prompts_again() -> TestResult {
 
 /// One host, one controller, `attempts` connections each rejected by the
 /// host's owner after the controller showed its digits; the digits shown.
-fn rejected_connections(host: &Engine, controller: &Engine, attempts: usize) -> Vec<String> {
-    let events = controller.core.subscribe().expect("a subscription");
+fn rejected_connections(
+    host: &Engine,
+    controller: &Engine,
+    attempts: usize,
+) -> Result<Vec<String>, Error> {
     (0..attempts)
         .map(|_| {
-            std::thread::scope(|scope| {
-                let connecting = scope.spawn(|| controller.connect_services(host));
-                let _request = wait_request(&host.core, ASKING);
-                let shown = wait_control_check(&events, ASKING);
-                host.core.reject_control_request().expect("the rejection");
-                assert!(matches!(
-                    connecting.join().expect("the connecting thread"),
-                    Err(Error::Unauthorized)
-                ));
-                shown
-            })
+            let rejected = ask(host, controller, Answer::Reject)?;
+            rejected.answered?;
+            assert!(
+                matches!(rejected.connected, Err(Error::Unauthorized)),
+                "a rejected controller is turned away: {:?}",
+                rejected.connected
+            );
+            Ok(rejected.shown)
         })
         .collect()
 }
@@ -431,11 +384,15 @@ fn the_digits_follow_the_connection_not_the_controllers_key() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true);
+    exchange(&host.core, &controller.core, true)?;
     host.core.start_hosting()?;
-    let shown = rejected_connections(&host, &controller, 2);
+    let shown = rejected_connections(&host, &controller, 2)?;
     assert_eq!(shown[0].len(), 6, "six digits");
-    assert!(shown[0].bytes().all(|byte| byte.is_ascii_digit()));
+    assert!(
+        shown[0].bytes().all(|byte| byte.is_ascii_digit()),
+        "the controller shows digits: {}",
+        shown[0]
+    );
     assert_ne!(
         shown[0], shown[1],
         "another connection of the same computers shows other digits"
@@ -451,23 +408,19 @@ fn three_wrong_answers_close_the_window() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true);
+    exchange(&host.core, &controller.core, true)?;
     host.core.start_hosting()?;
-    let events = controller.core.subscribe()?;
     for _ in 0..3 {
-        std::thread::scope(|scope| {
-            let connecting = scope.spawn(|| controller.connect_services(&host));
-            let _request = wait_request(&host.core, ASKING);
-            let wrong = other_check(&wait_control_check(&events, ASKING));
-            assert!(matches!(
-                host.core.confirm_control_request(&wrong),
-                Err(Error::PairingCheckMismatch)
-            ));
-            assert!(matches!(
-                connecting.join().expect("the connecting thread"),
-                Err(Error::Unauthorized)
-            ));
-        });
+        let denied = ask(&host, &controller, Answer::WrongDigits)?;
+        assert!(
+            matches!(denied.answered, Err(Error::PairingCheckMismatch)),
+            "wrong digits are refused"
+        );
+        assert!(
+            matches!(denied.connected, Err(Error::Unauthorized)),
+            "wrong digits turn the controller away: {:?}",
+            denied.connected
+        );
     }
     let denied = controller.connect_services(&host);
     assert!(
@@ -476,9 +429,12 @@ fn three_wrong_answers_close_the_window() -> TestResult {
     );
     assert!(
         host.core.control_request()?.is_none(),
-        "no request waits and nothing is remembered"
+        "no request waits once the window closed"
     );
-    assert!(host.core.snapshot()?.devices.is_empty());
+    assert!(
+        host.core.snapshot()?.devices.is_empty(),
+        "wrong digits remember nobody"
+    );
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
@@ -503,10 +459,10 @@ fn a_window_shows_a_bounded_number_of_requests() -> TestResult {
     let _trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true);
+    exchange(&host.core, &controller.core, true)?;
     host.core.start_hosting()?;
-    let shown = rejected_connections(&host, &controller, 5);
-    assert_eq!(shown.len(), 5);
+    let shown = rejected_connections(&host, &controller, 5)?;
+    assert_eq!(shown.len(), 5, "the owner is shown five requests");
     let denied = controller.connect_services(&host);
     assert!(
         matches!(denied, Err(Error::Unauthorized)),

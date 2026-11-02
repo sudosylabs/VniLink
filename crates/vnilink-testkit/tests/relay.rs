@@ -14,28 +14,24 @@ use std::time::Duration;
 use vnilink::JobState;
 use vnilink_testkit::files::{self, drive, finished, received, tree, write_files};
 use vnilink_testkit::relay::LocalRelay;
-use vnilink_testkit::{traced, Pair, FILES};
+use vnilink_testkit::{traced, Pair, TestResult, FILES};
 
 /// A connection between engines without a direct route goes through the
 /// relay, says so in its paths, and the binding is recorded.
 #[test]
-fn a_connection_without_a_direct_route_goes_through_the_relay() {
+fn a_connection_without_a_direct_route_goes_through_the_relay() -> TestResult {
     let trace = traced();
     let relay = LocalRelay::start();
     let (host, controller) = FILES;
     let pair = Pair::relayed(relay.url(), host, controller);
-    let session = pair.connect_services();
-    let paths = pair
-        .controller
-        .core
-        .controller_session_paths(session.id)
-        .unwrap();
-    assert!(!paths.is_empty(), "no path");
+    let session = pair.controller.connect_services(&pair.host)?;
+    let paths = pair.controller.core.controller_session_paths(session.id)?;
+    assert!(!paths.is_empty(), "a live connection has a path");
     assert!(
         paths.iter().all(|path| path.relay),
-        "a direct path: {paths:?}"
+        "without a direct route every path crosses the relay: {paths:?}"
     );
-    assert!(relay.carried() > 0, "the relay carried nothing");
+    assert!(relay.carried() > 0, "the relay carries the connection");
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
@@ -45,11 +41,12 @@ fn a_connection_without_a_direct_route_goes_through_the_relay() {
     "#]],
         || trace.story(&["relay"]),
     );
+    Ok(())
 }
 
 /// Files cross the relay exactly.
 #[test]
-fn files_cross_the_relay_exactly() {
+fn files_cross_the_relay_exactly() -> TestResult {
     let _trace = traced();
     let relay = LocalRelay::start();
     let (host, controller) = FILES;
@@ -59,14 +56,21 @@ fn files_cross_the_relay_exactly() {
         &pair.controller.folder().join("set"),
         &[("a.txt", 1024), ("b/c.bin", 3 * 1024 * 1024 + 11)],
     );
-    std::fs::create_dir_all(pair.host.folder().join("inbox")).unwrap();
-    let service = pair.open_files();
-    files::upload(&pair, &service, "set", "inbox").unwrap();
+    std::fs::create_dir_all(pair.host.folder().join("inbox"))?;
+    let service = pair.controller.files_on(&pair.host)?;
+    files::upload(&pair, &service, "set", "inbox")?;
     let job = received(&pair.host.core);
     let done = finished(&pair.host.core, job, Duration::from_secs(120));
-    assert_eq!(done.state, JobState::Complete, "{done:?}");
+    assert_eq!(
+        done.state,
+        JobState::Complete,
+        "an upload across the relay completes: {done:?}"
+    );
     assert_eq!(
         tree(&pair.host.folder().join("inbox/set")),
-        tree(&pair.controller.folder().join("set"))
+        tree(&pair.controller.folder().join("set")),
+        "the folder arrives byte for byte"
     );
+    assert!(relay.carried() > 0, "the files crossed the relay");
+    Ok(())
 }

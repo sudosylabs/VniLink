@@ -19,20 +19,20 @@ use vnilink_testkit::desktop::MonitorCapture;
 use vnilink_testkit::events::drain;
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult};
 
-use super::support::device;
+use super::support::{device, Failure};
 
 /// How long presence takes to follow the host, at most.
 const FOLLOWING: Duration = Duration::from_secs(20);
 
-fn presence(core: &Core, peer: &str) -> DevicePresence {
-    device(core, peer).presence
+fn presence(core: &Core, peer: &str) -> Result<DevicePresence, Failure> {
+    Ok(device(core, peer)?.presence)
 }
 
-fn status(core: &Core, peer: &str, capability: Capability) -> Option<RemoteStatus> {
-    core.peer_availability(peer)
-        .expect("a paired computer's availability")
+fn status(core: &Core, peer: &str, capability: Capability) -> Result<Option<RemoteStatus>, Error> {
+    Ok(core
+        .peer_availability(peer)?
         .and_then(|report| report.into_iter().find(|(c, _)| *c == capability))
-        .map(|(_, status)| status)
+        .map(|(_, status)| status))
 }
 
 /// Waits until `controller` sees `host` as `wanted`.
@@ -40,7 +40,7 @@ fn wait_presence(controller: &Core, host: &Engine, wanted: DevicePresence) {
     wait_for(
         &format!("the host to show as {wanted:?}"),
         FOLLOWING,
-        || (presence(controller, &host.endpoint()) == wanted).then_some(()),
+        || (presence(controller, &host.endpoint()).ok()? == wanted).then_some(()),
     );
 }
 
@@ -54,7 +54,7 @@ fn a_paired_computer_is_connected_without_opening_anything() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let events = controller.subscribe()?;
     assert_eq!(
-        presence(controller, &pair.host.endpoint()),
+        presence(controller, &pair.host.endpoint())?,
         DevicePresence::Disconnected,
         "a host is disconnected before any link"
     );
@@ -163,7 +163,11 @@ fn links_that_failed_do_not_pile_up_in_the_controllers_sessions() -> TestResult 
         1,
         "only the live link is listed: {sessions:?}"
     );
-    assert_eq!(sessions[0].phase, SessionPhase::Active);
+    assert_eq!(
+        sessions[0].phase,
+        SessionPhase::Active,
+        "the listed link is live"
+    );
     Ok(())
 }
 
@@ -177,9 +181,7 @@ fn the_host_reports_what_it_allows_and_follows_policy_changes() -> TestResult {
     controller.set_presence_links(true)?;
     let peer = pair.host.endpoint();
     let report = wait_for("the host's first report", FOLLOWING, || {
-        controller
-            .peer_availability(&peer)
-            .expect("a paired computer's availability")
+        controller.peer_availability(&peer).ok().flatten()
     });
     assert_eq!(
         report.len(),
@@ -188,13 +190,13 @@ fn the_host_reports_what_it_allows_and_follows_policy_changes() -> TestResult {
     );
     // Pairing granted view and control but not files.
     assert_eq!(
-        status(controller, &peer, Capability::Files),
+        status(controller, &peer, Capability::Files)?,
         Some(RemoteStatus::TurnedOff),
         "Files the host does not share is off"
     );
     // No camera backend is installed on the host.
     assert_eq!(
-        status(controller, &peer, Capability::Camera),
+        status(controller, &peer, Capability::Camera)?,
         Some(RemoteStatus::Unsupported),
         "a camera the host has not is unsupported"
     );
@@ -206,7 +208,7 @@ fn the_host_reports_what_it_allows_and_follows_policy_changes() -> TestResult {
         transfer: true,
     })?;
     wait_for("Files to turn on", FOLLOWING, || {
-        (status(controller, &peer, Capability::Files) == Some(RemoteStatus::Available))
+        (status(controller, &peer, Capability::Files).ok()? == Some(RemoteStatus::Available))
             .then_some(())
     });
     assert!(
@@ -247,8 +249,9 @@ fn a_host_that_refuses_the_link_is_not_dialled_again() -> TestResult {
         },
     );
     assert_eq!(
-        presence(controller, &pair.host.endpoint()),
-        DevicePresence::Disconnected
+        presence(controller, &pair.host.endpoint())?,
+        DevicePresence::Disconnected,
+        "a host that stopped shows as disconnected"
     );
     Ok(())
 }
