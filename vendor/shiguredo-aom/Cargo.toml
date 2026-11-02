@@ -36,6 +36,11 @@ repository = "https://github.com/shiguredo/aom-rs"
 [package.metadata.external-dependencies.aom]
 url = "https://aomedia.googlesource.com/aom"
 version = "v3.13.2"
+# VniLink: the commit the tag must name, and each prebuilt archive's SHA-256 (VNILINK.md).
+commit = "ad44980d7f3c7a2605c25d51ea96946949000841"
+
+[package.metadata.external-dependencies.aom.prebuilt-sha256]
+macos_arm64 = "deaf35b4feefa0e7d32cb316f7b323a1f1d8d48c1a746649b5977c8ce70b515b"
 
 [features]
 source-build = []

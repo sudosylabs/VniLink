@@ -36,6 +36,12 @@ repository = "https://github.com/shiguredo/libvpx-rs"
 [package.metadata.external-dependencies.libvpx]
 url = "https://github.com/webmproject/libvpx"
 version = "v1.16.0"
+# VniLink: the commit the tag must name, and each prebuilt archive's SHA-256 (VNILINK.md).
+commit = "1024874c5919305883187e2953de8fcb4c3d7fa6"
+
+[package.metadata.external-dependencies.libvpx.prebuilt-sha256]
+macos_arm64 = "ec6e669b7e39261ae2ed56a33d04dff744ee35119183cd7dbe4e8e37255b2b0a"
+windows_x86_64 = "883a873264ea132dfbc8da2645ce1fd96a76fa5bc1b3116e4207f01e6c78b76f"
 
 [features]
 source-build = []

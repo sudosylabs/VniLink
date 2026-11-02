@@ -10,3 +10,11 @@ stream's colour (VP9E_SET_COLOR_SPACE, VP9E_SET_COLOR_RANGE), and
 `DecodedFrame::color_space` and `full_range` read back what a bitstream declares.
 VniLink's software VP9 encoder declares the session's matrix (BT.709 or BT.601) in studio range, and its software
 decoder converts with what the stream declares.
+
+The build checks what it fetches against values recorded in Cargo.toml, under
+`[package.metadata.external-dependencies]`, rather than trusting the source:
+a source build stops unless the tag it clones names the recorded `commit`, and
+a prebuilt archive is checked against the SHA-256 recorded for its target in
+`prebuilt-sha256`, where upstream downloaded the expected hash from the same
+release as the archive. A target with no recorded hash is refused. Updating
+the crate means recording the new tag's commit and each archive's hash.
