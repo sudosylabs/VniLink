@@ -320,7 +320,18 @@ fn closing_a_terminal_does_not_wait_for_unread_output() -> TestResult {
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
     "#]],
-        || trace.tell(&["terminal"]).to_string(),
+        // How much unread output the host drops before the close depends on
+        // the machine's speed, so the story is the terminal's opening and ends.
+        || {
+            trace
+                .tell(&["terminal"])
+                .only(&[
+                    "terminal opened",
+                    "terminal stream ended",
+                    "terminal pipe ended",
+                ])
+                .to_string()
+        },
     );
     trace.assert_unrecorded("terminal content", &["VNI_STREAM"]);
     Ok(())
