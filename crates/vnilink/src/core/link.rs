@@ -461,8 +461,8 @@ mod address_refresh_tests {
             .expect("paired device")
     }
 
-    fn wait_until(what: &str, ready: impl FnMut() -> bool) {
-        crate::test_support::wait_until(what, Duration::from_secs(5), ready);
+    fn wait(what: &str, mut ready: impl FnMut() -> bool) {
+        crate::test_support::wait_for(what, Duration::from_secs(5), || ready().then_some(()));
     }
 
     #[test]
@@ -474,11 +474,11 @@ mod address_refresh_tests {
             .direct
             .contains(&stale()));
         crate::test_support::connect_link(&controller, &host);
-        wait_until("the controller to save the host's addresses", || {
+        wait("the controller to save the host's addresses", || {
             let saved = device(&controller, &host.endpoint_id());
             !saved.direct.contains(&stale()) && saved.direct == host_direct
         });
-        wait_until("the host to drop the stale address", || {
+        wait("the host to drop the stale address", || {
             !device(&host, &controller.endpoint_id())
                 .direct
                 .contains(&stale())
@@ -503,16 +503,21 @@ mod address_refresh_tests {
         pair(&host, &controller, Some(stale()));
         controller_store.fail_next_save(Error::StoreLocked);
         crate::test_support::connect_link(&controller, &host);
-        wait_until("the host to drop the stale address", || {
+        wait("the host to drop the stale address", || {
             !device(&host, &controller.endpoint_id())
                 .direct
                 .contains(&stale())
         });
-        // A real timer: the window in which a wrongly applied save would show.
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(device(&controller, &host.endpoint_id())
-            .direct
-            .contains(&stale()));
+        // The window in which a wrongly applied save would show.
+        crate::test_support::holds(
+            "the controller keeping the addresses it failed to replace",
+            Duration::from_millis(300),
+            || {
+                device(&controller, &host.endpoint_id())
+                    .direct
+                    .contains(&stale())
+            },
+        );
         assert_eq!(
             controller.snapshot().unwrap().outgoing.unwrap().phase,
             SessionPhase::Active
@@ -527,11 +532,11 @@ mod address_refresh_tests {
         let controller = open_stored(&controller_store);
         let host_direct = pair(&host, &controller, Some(stale()));
         crate::test_support::connect_link(&controller, &host);
-        wait_until("the controller to save the host's addresses", || {
+        wait("the controller to save the host's addresses", || {
             let saved = device(&controller, &host.endpoint_id());
             !saved.direct.contains(&stale()) && saved.direct == host_direct
         });
-        wait_until("the host to drop the stale address", || {
+        wait("the host to drop the stale address", || {
             !device(&host, &controller.endpoint_id())
                 .direct
                 .contains(&stale())

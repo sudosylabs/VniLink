@@ -791,8 +791,8 @@ mod tests {
         rows: 24,
         columns: 80,
     };
-    fn wait(what: &str, ready: impl FnMut() -> bool) {
-        crate::test_support::wait_until(what, Duration::from_secs(8), ready);
+    fn wait(what: &str, mut ready: impl FnMut() -> bool) {
+        crate::test_support::wait_for(what, Duration::from_secs(8), || ready().then_some(()));
     }
     fn native() -> Arc<NativeTerminalFactory> {
         Arc::new(NativeTerminalFactory::new("/bin/sh".into(), std::env::temp_dir()).unwrap())

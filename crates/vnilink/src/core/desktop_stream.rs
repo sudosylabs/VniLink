@@ -1991,10 +1991,13 @@ mod v8_native_input_lock_probe {
         );
         let shared = host.shared.clone();
         let worker = if stream {
-            crate::test_support::wait_until(
+            crate::test_support::wait_for(
                 "the desktop owner to control",
                 Duration::from_secs(5),
-                || _handle.control_state().unwrap() == DesktopControlState::Controlling,
+                || {
+                    (_handle.control_state().unwrap() == DesktopControlState::Controlling)
+                        .then_some(())
+                },
             );
             _handle
                 .submit_input(crate::InputEvent::key_down(crate::input::usage::A))
@@ -2211,7 +2214,7 @@ mod v10_cleanup_churn_probe {
                 .unwrap();
             drop(handle);
             peer.forget_controller_service(owner.id).unwrap();
-            crate::test_support::wait_until(
+            crate::test_support::wait_for(
                 &format!("cleanup to retire owner {index}"),
                 Duration::from_secs(5),
                 || {
@@ -2219,13 +2222,14 @@ mod v10_cleanup_churn_probe {
                         .unwrap()
                         .iter()
                         .all(|service| service.kind != ServiceKind::Desktop)
+                        .then_some(())
                 },
             );
             peak = peak.max(host.shared.input_cleanup.load(Ordering::Acquire));
         }
         drop(adapter);
-        crate::test_support::wait_until("input_cleanup to drain", Duration::from_secs(5), || {
-            host.shared.input_cleanup.load(Ordering::Acquire) == 0
+        crate::test_support::wait_for("input_cleanup to drain", Duration::from_secs(5), || {
+            (host.shared.input_cleanup.load(Ordering::Acquire) == 0).then_some(())
         });
         host.shutdown();
         peer.shutdown();
@@ -2275,7 +2279,7 @@ mod v10_cleanup_churn_probe {
                 .unwrap();
             drop(handle);
             peer.forget_controller_service(owner.id).unwrap();
-            crate::test_support::wait_until(
+            crate::test_support::wait_for(
                 &format!("cleanup to retire owner {index}"),
                 Duration::from_secs(5),
                 || {
@@ -2283,6 +2287,7 @@ mod v10_cleanup_churn_probe {
                         .unwrap()
                         .iter()
                         .all(|service| service.kind != ServiceKind::Desktop)
+                        .then_some(())
                 },
             );
             peak = peak.max(host.shared.input_cleanup.load(Ordering::Acquire));
@@ -2296,11 +2301,11 @@ mod v10_cleanup_churn_probe {
             .open_desktop_service(rejected.id, rejected.generation)
             .is_err());
         drop(adapter);
-        crate::test_support::wait_until("input_cleanup to drain", Duration::from_secs(5), || {
-            host.shared.input_cleanup.load(Ordering::Acquire) == 0
+        crate::test_support::wait_for("input_cleanup to drain", Duration::from_secs(5), || {
+            (host.shared.input_cleanup.load(Ordering::Acquire) == 0).then_some(())
         });
-        crate::test_support::wait_until("desktop_owners to drain", Duration::from_secs(5), || {
-            host.shared.desktop_owners.load(Ordering::Acquire) == 0
+        crate::test_support::wait_for("desktop_owners to drain", Duration::from_secs(5), || {
+            (host.shared.desktop_owners.load(Ordering::Acquire) == 0).then_some(())
         });
         let calls = lock(&calls);
         assert_eq!(calls.len(), 16);

@@ -5,10 +5,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! Fixtures shared by the unit tests of more than one module.
+//! Fixtures shared by the unit tests of more than one module, for tests
+//! that reach this crate's internals. A test that needs only the public
+//! API belongs in the service's `vnilink-testkit` suite instead.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+// The kit's bounded waits, one copy shared by inclusion: the file uses only
+// `std`, and this crate cannot depend on the kit, which enables this
+// crate's `test-probes` feature for its own build.
+// Wait on an event, a join handle or a channel wherever one exists.
+#[path = "../../vnilink-testkit/src/wait.rs"]
+mod wait;
+pub(crate) use wait::{holds, wait_for, DEFAULT_WAIT};
 
 /// An engine on loopback with relays off, for a module's test that needs a
 /// whole engine and an internal the kit cannot reach.
@@ -182,7 +192,7 @@ pub(crate) fn wait_active(controller: &crate::core::Core, id: u64) -> crate::Ses
     wait_for_event(
         controller,
         "the link to become active",
-        ACTIVE_WITHIN,
+        DEFAULT_WAIT,
         || {
             let session = controller.controller_session(id).unwrap();
             match session.phase {
@@ -195,8 +205,6 @@ pub(crate) fn wait_active(controller: &crate::core::Core, id: u64) -> crate::Ses
         },
     )
 }
-
-const ACTIVE_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Returns what `ready` finds once it holds, re-evaluating it after each
 /// event the engine publishes. The subscription opens before the first
@@ -216,21 +224,6 @@ pub(crate) fn wait_for_event<T>(
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         assert!(!left.is_zero(), "timed out waiting for {what}");
         let _ = events.recv_timeout(left);
-    }
-}
-
-/// Polls `ready` until it holds, and panics naming `what` if it does not
-/// within `within`. For a state the engine publishes no event for; wait on
-/// an event, a join handle or a channel wherever one exists.
-pub(crate) fn wait_until(what: &str, within: std::time::Duration, mut ready: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + within;
-    while !ready() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        // The interval between looks; there is no event to block on.
-        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
 
