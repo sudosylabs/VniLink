@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use vnilink::{Error, PrivacyState, ServiceKind, SessionPhase, SystemAction, SystemPolicy};
 use vnilink_testkit::store::{Fault, Installed};
-use vnilink_testkit::system::{FakeSystem, SystemSession};
+use vnilink_testkit::system::{check_giving_back, FakeSystem, Giving, GivingBack, SystemSession};
 use vnilink_testkit::{pair_cores_for_control, traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 use super::PRIVACY;
@@ -100,35 +100,27 @@ fn privacy_is_one_controller_s_until_its_service_closes() -> TestResult {
 #[test]
 fn revoke_restores_privacy_and_fences_late_requests() -> TestResult {
     let trace = traced();
-    let fake = Arc::new(FakeSystem::full());
-    let SystemSession {
-        pair,
-        connection: _,
-        service: system,
-    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
-    let host = &pair.host.core;
-    system.set_privacy(false, true)?;
-    assert!(fake.calls().input.restricted, "the host's input is blocked");
-    host.set_service_sharing(ServiceKind::System, false)?;
-    wait_for("input to be given back", DEFAULT_WAIT, || {
-        (!fake.calls().input.restricted).then_some(())
-    });
-    assert!(
-        system.set_privacy(false, false).is_err(),
-        "a withdrawn service cannot change privacy"
-    );
-    assert!(
-        system.execute(SystemAction::Lock).is_err(),
-        "a withdrawn service cannot lock"
-    );
-    trace.wait_for_records("privacy restored", 1);
-    vnilink_testkit::assert_story(
+    let session = check_giving_back(
+        &trace,
+        Giving {
+            system: FakeSystem::full(),
+            display: false,
+            input: true,
+            back: GivingBack::Withdraw,
+        },
         expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=false input_blocked=true input_ok=true
           system: privacy restored connection=1 display=false input=true
     "#]],
-        || trace.story(&["system"]),
+    )?;
+    assert!(
+        session.service.set_privacy(false, false).is_err(),
+        "a withdrawn service cannot change privacy"
+    );
+    assert!(
+        session.service.execute(SystemAction::Lock).is_err(),
+        "a withdrawn service cannot lock"
     );
     Ok(())
 }
@@ -168,31 +160,20 @@ fn privacy_without_policy_is_unauthorized_and_local_state_is_pollable() -> TestR
 #[test]
 fn narrowing_the_policy_gives_privacy_back_at_once() -> TestResult {
     let trace = traced();
-    let fake = Arc::new(FakeSystem::full());
-    let SystemSession {
-        pair,
-        connection: _,
-        service: system,
-    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
-    let host = &pair.host.core;
-    system.set_privacy(true, true)?;
-    host.set_system_policy(SystemPolicy::default())?;
-    assert!(
-        !host.system_privacy()?.input_blocked,
-        "a narrowed policy keeps no input blocked"
-    );
-    assert!(
-        !fake.calls().display.restricted,
-        "a narrowed policy keeps no screen hidden"
-    );
-    vnilink_testkit::assert_story(
+    check_giving_back(
+        &trace,
+        Giving {
+            system: FakeSystem::full(),
+            display: true,
+            input: true,
+            back: GivingBack::Narrow,
+        },
         expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
     "#]],
-        || trace.story(&["system"]),
-    );
+    )?;
     Ok(())
 }
 
