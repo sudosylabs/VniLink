@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import ts from 'typescript';
+import { parseArgs } from 'node:util';
 import prettier from 'prettier';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, relative } from 'node:path';
@@ -101,16 +102,22 @@ async function collect(directory: string): Promise<string[]> {
 	return files;
 }
 
-/** Formats application and tooling files: `--write` to change them, `--files` to limit the set. */
+/** Formats application and tooling files: `--write` changes them, `--check` reports them; `--files` limits the set. */
 export async function formatFiles(args: readonly string[]): Promise<void> {
-	const write = args.includes('--write');
+	const { values, positionals } = parseArgs({ args: [...args], options: { write: { type: 'boolean' }, check: { type: 'boolean' }, files: { type: 'boolean' } }, allowPositionals: true, strict: true });
+	if (values.write === values.check) {
+		throw new Error('Give one of --write or --check');
+	}
+	if (positionals.length && !values.files) {
+		throw new Error(`Unexpected arguments: ${positionals.join(' ')}; list files after --files`);
+	}
+	const write = values.write === true;
 	const roots = ['src', 'build', 'scripts', 'test', '.vscode'];
 	let files = (await Promise.all(roots.map(path => collect(resolve(root, path))))).flat();
 	files.push(...['package.json', 'product.json', 'tsconfig.json', 'tsfmt.json', '.prettierrc.json', 'eslint.config.mjs', 'stylelint.config.mjs', '.lintstagedrc.mjs'].map(path => resolve(root, path)));
-	const selected = args.indexOf('--files');
-	if (selected !== -1) {
+	if (values.files) {
 		const allowed = new Set(files);
-		files = args.slice(selected + 1).map(filename => resolve(filename));
+		files = positionals.map(filename => resolve(filename));
 		for (const filename of files) {
 			if (!allowed.has(filename)) {
 				throw new Error(`File outside formatting scope: ${relative(root, filename)}`);
@@ -129,8 +136,8 @@ export async function formatFiles(args: readonly string[]): Promise<void> {
 			console.log(`${write ? 'Formatted' : 'Needs formatting'}: ${filename.slice(root.length)}`);
 		}
 	}
-	if (!write && changed) {
-		process.exitCode = 1;
-	}
 	console.log(`Formatting: ${String(files.length)} application/tooling files checked; ${String(changed)} ${write ? 'updated' : 'differ'}.`);
+	if (!write && changed) {
+		throw new Error(`${String(changed)} files need formatting; run \`npm run format\``);
+	}
 }
