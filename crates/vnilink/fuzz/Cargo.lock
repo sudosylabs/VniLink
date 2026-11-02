@@ -3604,6 +3604,7 @@ dependencies = [
  "enigo",
  "iroh",
  "jpeg-encoder",
+ "loom",
  "nix",
  "notify",
  "portable-pty",
