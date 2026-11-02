@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { suite, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { isWindows } from '../platform.ts';
 import { preLaunch, type PreLaunchOptions } from '../preLaunch.ts';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -60,7 +61,8 @@ suite('launchers', () => {
 		test(`scripts/${script}.sh is executable`, async () => {
 			await access(shell, constants.X_OK);
 		});
-		test(`scripts/${script}.sh parses under bash`, async () => {
+		// The shell launchers run on macOS and Linux; Windows runs the .bat ones and may have no bash.
+		test(`scripts/${script}.sh parses under bash`, { skip: isWindows && 'the .sh launchers do not run on Windows' }, async () => {
 			await promisify(execFile)('bash', ['-n', shell]);
 		});
 		test(`scripts/${script}.bat runs the ${task} task with its arguments`, async () => {
