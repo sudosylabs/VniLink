@@ -78,10 +78,24 @@ export default [
 		rules: {
 			'@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
 			'@typescript-eslint/explicit-member-accessibility': ['error', { accessibility: 'explicit', overrides: { constructors: 'no-public' } }],
-			'@typescript-eslint/no-floating-promises': 'error',
+			// node:test runs a suite or test from its call; it is awaited by the runner, not the test file.
+			'@typescript-eslint/no-floating-promises': ['error', { allowForKnownSafeCalls: [{ from: 'package', package: 'node:test', name: ['suite', 'test'] }] }],
 			'@typescript-eslint/switch-exhaustiveness-check': 'error',
 			'vnilink/build-classes': ['error', { allow: ['build/lib/processes.ts', 'build/lib/watch.ts', 'build/lib/development.ts'] }],
 		},
+	},
+	{
+		// These run before or without node_modules: the install, the launchers' checkout preparation and the prerequisite checks.
+		files: ['build/npm/preinstall.ts', 'build/npm/installState.ts'],
+		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\.\\./lib/prerequisites\\.ts$)', message: 'The install runs before node_modules exists: import only Node modules and prerequisites.ts.' }] }] },
+	},
+	{
+		files: ['build/lib/preLaunch.ts'],
+		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\./native\\.ts$)', message: 'preLaunch installs the dependencies: import only Node modules and native.ts.' }] }] },
+	},
+	{
+		files: ['build/lib/prerequisites.ts', 'build/lib/native.ts'],
+		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\./prerequisites\\.ts$)', message: 'The prerequisite checks run without node_modules and alone in the Linux image: import only Node modules and prerequisites.ts.' }] }] },
 	},
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
 	{
