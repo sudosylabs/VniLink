@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { app, net } from 'electron';
 import Mocha from 'mocha';
-import { contentSecurityPolicy } from '../../../../../src/code/electron-main/webContentsSecurity.js';
+import { contentSecurityPolicy } from '../../../../../src/platform/window/common/contentSecurityPolicy.js';
 import type { EngineReply } from '../../../../../src/platform/engine/common/engine.js';
 import { ENGINE_CHANNEL_NAME } from '../../../../../src/platform/engine/common/engineService.js';
 import type { Automation } from '../../../../automation/src/automation.js';

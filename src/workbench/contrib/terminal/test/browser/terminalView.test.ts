@@ -15,6 +15,7 @@ import { isMacintosh } from '../../../../../base/common/platform.js';
 import { animationFrames, until } from '../../../../../base/test/browser/waits.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IClipboardService } from '../../../../../platform/clipboard/common/clipboardService.js';
+import { allowedStyleHashes } from '../../../../../platform/window/common/contentSecurityPolicy.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import type { IProcessDataEvent, ITerminalChildProcess, ITerminalLaunchError, TerminalExit } from '../../../../../platform/terminal/common/terminal.js';
 import { IThemeService, type ITitlebarTheme } from '../../../../../platform/theme/common/themeService.js';
@@ -227,6 +228,17 @@ suite('TerminalView', () => {
 		assert.notStrictEqual(fixture.view.element.querySelector('.xterm-screen canvas'), null);
 		// The measured grid, not xterm's 80×24 default.
 		assert.ok(pty.cols !== 80 && pty.rows !== 24, `The shell started at ${String(pty.cols)}×${String(pty.rows)}`);
+	});
+	drawn('every style element xterm writes is one the window\'s policy admits, after a theme change too', async () => {
+		await fixture.start();
+		fixture.themeChanged.fire({ background: '#000000', foreground: '#ffffff', inactiveForeground: '#888888' });
+		const styles = [...fixture.view.element.querySelectorAll('style')];
+		assert.ok(styles.length > 0, 'xterm wrote no style element');
+		for (const style of styles) {
+			const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(style.textContent));
+			const hash = `sha256-${btoa(String.fromCharCode(...new Uint8Array(digest)))}`;
+			assert.ok(allowedStyleHashes.includes(hash), `The policy refuses this style element (${hash}): ${style.textContent}`);
+		}
 	});
 	drawn('the terminal says it is connecting to the computer', async () => {
 		await fixture.start();

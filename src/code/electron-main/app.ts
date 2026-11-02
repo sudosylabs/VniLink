@@ -62,10 +62,11 @@ import { IStateService } from '../../platform/state/node/state.js';
 import { SaveStrategy, StateService } from '../../platform/state/node/stateService.js';
 import { IRecordingMainService, RecordingMainService } from '../../platform/recording/electron-main/recordingMainService.js';
 import { CONFIGURATION_CHANNEL_NAME } from '../../platform/configuration/common/configurationSnapshot.js';
+import { contentSecurityPolicy } from '../../platform/window/common/contentSecurityPolicy.js';
 import { WINDOW_CONFIGURATION_CHANNEL, type INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration.js';
 import { IWindowsMainService, WindowsMainService } from '../../platform/windows/electron-main/windowsMainService.js';
 import { registerDevelopmentWindow } from './development.js';
-import { contentSecurityPolicy, secureWebContents } from './webContentsSecurity.js';
+import { secureWebContents } from './webContentsSecurity.js';
 
 interface ApplicationOptions {
 	readonly showWindow?: boolean;
