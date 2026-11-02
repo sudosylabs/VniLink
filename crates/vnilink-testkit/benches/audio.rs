@@ -21,7 +21,8 @@ const PACE: Duration = Duration::from_millis(20);
 
 fn main() {
     let mut report = Report::new("audio");
-    let host = AudioHost::start(&[ServiceKind::SystemAudio]);
+    let host =
+        AudioHost::start(&[ServiceKind::SystemAudio]).expect("a host sharing its system sound");
     let system = host.open(AudioKind::System).unwrap();
     let source = host.audio.latest(AudioKind::System);
     let mut encoding = encoder();

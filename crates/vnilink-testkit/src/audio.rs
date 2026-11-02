@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use vnilink::audio::{
     AudioBackend, AudioConfig, AudioDevice, AudioKind, AudioSource, HostAudioFactory,
 };
-use vnilink::{BackendStartup, Error, RemoteAudioService, ServiceKind};
+use vnilink::{BackendStartup, Error, RemoteAudioService, ServiceKind, SessionInfo, SessionPhase};
 use vnilink_audio::{AudioEncoder, AudioPacket};
 
 use crate::{wait_for, Pair, DEFAULT_WAIT};
@@ -103,27 +103,59 @@ impl HostAudioFactory for StandInAudio {
     }
 }
 
+/// A host offering `factory` as its sound sources and sharing `kinds` of
+/// sound, and the controller's services connection to it.
+pub fn connect(
+    kinds: &[ServiceKind],
+    factory: Arc<dyn HostAudioFactory>,
+) -> Result<(Pair, SessionInfo), Error> {
+    let pair = Pair::for_services(kinds);
+    pair.host.core.set_audio_factory(Some(factory))?;
+    let connection = pair.controller.connect_services(&pair.host)?;
+    Ok((pair, connection))
+}
+
 /// A host sharing `kinds` of sound, and a controller connected to it.
 pub struct AudioHost {
     pub pair: Pair,
     pub audio: Arc<StandInAudio>,
-    pub connection: vnilink::SessionInfo,
+    pub connection: SessionInfo,
 }
 
 impl AudioHost {
-    pub fn start(kinds: &[ServiceKind]) -> Self {
-        let pair = Pair::for_services(kinds);
+    pub fn start(kinds: &[ServiceKind]) -> Result<Self, Error> {
         let audio = Arc::new(StandInAudio::default());
-        pair.host
-            .core
-            .set_audio_factory(Some(Arc::clone(&audio) as Arc<dyn HostAudioFactory>))
-            .expect("an audio backend");
-        let connection = pair.connect_services();
-        Self {
+        let (pair, connection) = connect(kinds, Arc::clone(&audio) as _)?;
+        Ok(Self {
             pair,
             audio,
             connection,
-        }
+        })
+    }
+
+    /// Sends one packet from the host's sound of `kind` and asserts `audio`
+    /// receives it exactly as sent.
+    #[track_caller]
+    pub fn assert_arrives(
+        &self,
+        kind: AudioKind,
+        audio: &RemoteAudioService,
+        encoder: &mut AudioEncoder,
+    ) -> Result<(), Error> {
+        let sent = packet(encoder);
+        self.audio.latest(kind).publish(sent.clone())?;
+        let received = wait_for("a packet", DEFAULT_WAIT, || audio.try_recv());
+        assert_eq!(received, sent, "{kind:?} sound arrives exactly as sent");
+        Ok(())
+    }
+
+    /// Whether the controller's connection is still up.
+    pub fn connection_active(&self) -> bool {
+        self.pair
+            .controller
+            .core
+            .controller_session(self.connection.id)
+            .is_ok_and(|session| session.phase == SessionPhase::Active)
     }
 
     /// Opens the host's sound of `kind`, once a microphone's first packet

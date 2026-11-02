@@ -18,65 +18,29 @@ use expect_test::expect;
 use std::sync::Arc;
 use std::time::Duration;
 
-use vnilink::camera::{CameraConfig, CameraEnd, CameraSource, HostCameraFactory};
-use vnilink::{Error, ServiceKind, SessionPhase};
-use vnilink_testkit::camera::{config, CameraHost, StandInCameras};
+use vnilink::camera::{CameraConfig, CameraEnd, HostCameraFactory};
+use vnilink::{Error, ServiceKind};
+use vnilink_testkit::camera::{config, CameraHost};
 use vnilink_testkit::desktop::{delta, keyframe};
 use vnilink_testkit::session::service_ended;
-use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
 
 /// Why `camera` ended, once it says; it says it once, and its owner on the
 /// controller is finished by then.
-fn ended(controller: &vnilink::Core, camera: &vnilink::RemoteCameraService) -> CameraEnd {
+fn ended(
+    controller: &vnilink::Core,
+    camera: &vnilink::RemoteCameraService,
+) -> Result<CameraEnd, Error> {
     let end = wait_for("the camera to say why it ended", DEFAULT_WAIT, || {
         camera.take_end()
     });
     assert_eq!(camera.take_end(), None, "the reason is reported once");
-    let owner = controller
-        .controller_service(camera.info().id)
-        .expect("the camera's owner");
+    let owner = controller.controller_service(camera.info().id)?;
     assert!(
         service_ended(&owner.phase),
         "an ended camera still holds its owner: {owner:?}"
     );
-    end
-}
-
-/// A host whose stand-in camera is installed but not shared, and a
-/// controller connected to it.
-fn unshared() -> CameraHost {
-    let pair = Pair::for_services(&[]);
-    let cameras = Arc::new(StandInCameras::default());
-    pair.host
-        .core
-        .set_camera_factory(Some(Arc::clone(&cameras) as Arc<dyn HostCameraFactory>))
-        .expect("a camera backend");
-    let connection = pair.connect_services();
-    CameraHost {
-        pair,
-        cameras,
-        connection,
-    }
-}
-
-/// Whether the controller's connection is still up.
-fn connection_active(host: &CameraHost) -> bool {
-    host.pair
-        .controller
-        .core
-        .controller_session(host.connection.id)
-        .is_ok_and(|session| session.phase == SessionPhase::Active)
-}
-
-/// The latest source's first picture reaches `camera`.
-fn first_picture(host: &CameraHost, camera: &vnilink::RemoteCameraService) -> Arc<CameraSource> {
-    let source = host.cameras.latest();
-    source.publish(keyframe(1, vec![7; 64])).expect("a picture");
-    assert!(
-        camera.recv_timeout(Duration::from_secs(5)).is_some(),
-        "the camera's first picture arrives"
-    );
-    source
+    Ok(end)
 }
 
 /// A camera opens once per owner at the size asked, pictures start at the
@@ -85,7 +49,7 @@ fn first_picture(host: &CameraHost, camera: &vnilink::RemoteCameraService) -> Ar
 #[test]
 fn pictures_start_at_a_keyframe_and_arrive_whole() -> TestResult {
     let trace = traced();
-    let host = CameraHost::start();
+    let host = CameraHost::start()?;
     let controller = &host.pair.controller.core;
     let owner = host.pair.attach(&host.connection, ServiceKind::Camera);
     let camera = controller.open_camera_service(owner.id, owner.generation, config())?;
@@ -135,31 +99,47 @@ fn pictures_start_at_a_keyframe_and_arrive_whole() -> TestResult {
 #[test]
 fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
     let trace = traced();
-    let host = CameraHost::start();
+    let host = CameraHost::start()?;
     let (hosting, controller) = (&host.pair.host.core, &host.pair.controller.core);
     let cameras: Arc<dyn HostCameraFactory> = host.cameras.clone();
     let open = || -> Result<_, Error> {
         hosting.set_service_sharing(ServiceKind::Camera, true)?;
         hosting.set_camera_factory(Some(Arc::clone(&cameras)))?;
         let camera = host.open(config())?;
-        let source = first_picture(&host, &camera);
+        let source = host.first_picture(&camera)?;
         assert_eq!(camera.take_end(), None, "a camera that shows has not ended");
         Ok((camera, source))
     };
 
     let (camera, source) = open()?;
     source.fail();
-    assert_eq!(ended(controller, &camera), CameraEnd::Stopped);
+    assert_eq!(
+        ended(controller, &camera)?,
+        CameraEnd::Stopped,
+        "a failed capture stops the picture"
+    );
     let (camera, source) = open()?;
     source.close();
-    assert_eq!(ended(controller, &camera), CameraEnd::Stopped);
+    assert_eq!(
+        ended(controller, &camera)?,
+        CameraEnd::Stopped,
+        "a capture that stops delivering stops the picture"
+    );
 
     let (camera, _) = open()?;
     hosting.set_service_sharing(ServiceKind::Camera, false)?;
-    assert_eq!(ended(controller, &camera), CameraEnd::Withdrawn);
+    assert_eq!(
+        ended(controller, &camera)?,
+        CameraEnd::Withdrawn,
+        "a camera the host stops sharing is withdrawn"
+    );
     let (camera, _) = open()?;
     hosting.turn_off_camera()?;
-    assert_eq!(ended(controller, &camera), CameraEnd::Withdrawn);
+    assert_eq!(
+        ended(controller, &camera)?,
+        CameraEnd::Withdrawn,
+        "a camera the host turns off is withdrawn"
+    );
 
     // The host's side before it goes away; its last end follows below.
     trace.wait_for_records("camera stream ended", 4);
@@ -182,7 +162,11 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
 
     let (camera, _) = open()?;
     hosting.shutdown();
-    assert_eq!(ended(controller, &camera), CameraEnd::Lost);
+    assert_eq!(
+        ended(controller, &camera)?,
+        CameraEnd::Lost,
+        "a host that goes away loses the picture"
+    );
     trace.wait_for_records("camera picture ended", 5);
     vnilink_testkit::assert_story(
         expect![[r#"
@@ -223,7 +207,7 @@ fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
 #[test]
 fn an_unknown_camera_or_an_invalid_size_is_refused_and_nothing_starts() -> TestResult {
     let trace = traced();
-    let host = CameraHost::start();
+    let host = CameraHost::start()?;
     let controller = &host.pair.controller.core;
     let owner = host.pair.attach(&host.connection, ServiceKind::Camera);
     assert!(
@@ -252,11 +236,11 @@ fn an_unknown_camera_or_an_invalid_size_is_refused_and_nothing_starts() -> TestR
         "a camera the host does not have is refused as unsupported"
     );
     assert!(
-        host.cameras.sources.lock().unwrap().is_empty(),
+        host.cameras.opened() == 0,
         "a refused camera starts no capture"
     );
     assert!(
-        connection_active(&host),
+        host.connection_active(),
         "a refused camera keeps the connection"
     );
     trace.wait_for_records("camera not opened", 1);

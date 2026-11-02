@@ -17,14 +17,12 @@ use vnilink_testkit::camera::{config, CameraHost, StandInCameras};
 use vnilink_testkit::desktop::keyframe;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-use super::{connection_active, first_picture, unshared};
-
 /// A viewer that closes its camera stops the host's capture, and the
 /// connection and its other services stay.
 #[test]
 fn closing_the_camera_stops_capture_and_leaves_the_connection() -> TestResult {
     let trace = traced();
-    let host = unshared();
+    let host = CameraHost::unshared()?;
     host.pair
         .host
         .core
@@ -36,7 +34,7 @@ fn closing_the_camera_stops_capture_and_leaves_the_connection() -> TestResult {
         .core
         .service_lease(files.id, files.generation)?;
     let camera = host.open(config())?;
-    let source = first_picture(&host, &camera);
+    let source = host.first_picture(&camera)?;
     camera.close();
     wait_for("the host to stop capturing", DEFAULT_WAIT, || {
         source.is_cancelled().then_some(())
@@ -46,7 +44,7 @@ fn closing_the_camera_stops_capture_and_leaves_the_connection() -> TestResult {
         "closing the camera leaves Files open"
     );
     assert!(
-        connection_active(&host),
+        host.connection_active(),
         "closing the camera keeps the connection"
     );
     assert!(
@@ -76,7 +74,7 @@ fn closing_the_camera_stops_capture_and_leaves_the_connection() -> TestResult {
 #[test]
 fn withdrawing_the_camera_or_its_backend_stops_capture_and_keeps_the_connection() -> TestResult {
     let trace = traced();
-    let host = CameraHost::start();
+    let host = CameraHost::start()?;
     let hosting = &host.pair.host.core;
     for withdraw_sharing in [true, false] {
         hosting.set_service_sharing(ServiceKind::Camera, true)?;
@@ -93,7 +91,7 @@ fn withdrawing_the_camera_or_its_backend_stops_capture_and_keeps_the_connection(
             host.cameras.latest().is_cancelled().then_some(())
         });
         assert!(
-            connection_active(&host),
+            host.connection_active(),
             "a withdrawn camera keeps the connection"
         );
     }
@@ -128,7 +126,7 @@ fn withdrawing_the_camera_or_its_backend_stops_capture_and_keeps_the_connection(
 #[test]
 fn a_failed_capture_fails_the_camera_and_keeps_the_connection() -> TestResult {
     let trace = traced();
-    let host = CameraHost::start();
+    let host = CameraHost::start()?;
     let controller = &host.pair.controller.core;
     let camera = host.open(config())?;
     host.cameras.latest().fail();
@@ -144,7 +142,7 @@ fn a_failed_capture_fails_the_camera_and_keeps_the_connection() -> TestResult {
         "a failed camera service ends its camera"
     );
     assert!(
-        connection_active(&host),
+        host.connection_active(),
         "a failed camera keeps the connection"
     );
     trace.wait_for_records("camera picture ended", 1);

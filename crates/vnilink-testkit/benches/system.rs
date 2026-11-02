@@ -19,7 +19,8 @@ const TIMES: usize = 100;
 
 fn main() {
     let mut report = Report::new("system");
-    let session = SystemSession::open(Some(Arc::new(RecordingSystem::default())));
+    let session = SystemSession::open(Arc::new(RecordingSystem::default()), None)
+        .expect("a host sharing its system actions");
     session
         .pair
         .host

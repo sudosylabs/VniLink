@@ -14,10 +14,10 @@ use std::sync::Arc;
 
 use vnilink::{Error, PrivacyState, ServiceKind, SessionPhase, SystemAction, SystemPolicy};
 use vnilink_testkit::store::{Fault, Installed};
-use vnilink_testkit::system::FakeSystem;
+use vnilink_testkit::system::{FakeSystem, SystemSession};
 use vnilink_testkit::{pair_cores_for_control, traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
-use super::{sharing, PRIVACY};
+use super::PRIVACY;
 
 /// Privacy is one controller's at a time: while one holds it, another is
 /// refused; closing the holder's service gives the screen and input back,
@@ -26,12 +26,13 @@ use super::{sharing, PRIVACY};
 fn privacy_is_one_controller_s_until_its_service_closes() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
     let second = pair.add_viewer("other");
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     let other_connection = second.connect_services(&pair.host)?;
     let other = second.open_system(&other_connection)?;
     let held = system.set_privacy(true, true)?;
@@ -100,11 +101,12 @@ fn privacy_is_one_controller_s_until_its_service_closes() -> TestResult {
 fn revoke_restores_privacy_and_fences_late_requests() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(false, true)?;
     assert!(fake.calls().input.restricted, "the host's input is blocked");
     host.set_service_sharing(ServiceKind::System, false)?;
@@ -137,10 +139,12 @@ fn revoke_restores_privacy_and_fences_late_requests() -> TestResult {
 fn privacy_without_policy_is_unauthorized_and_local_state_is_pollable() -> TestResult {
     let _trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), None)?;
     let host = &pair.host.core;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     assert!(
         matches!(system.set_privacy(true, false), Err(Error::Unauthorized)),
         "privacy the policy does not allow is refused"
@@ -165,11 +169,12 @@ fn privacy_without_policy_is_unauthorized_and_local_state_is_pollable() -> TestR
 fn narrowing_the_policy_gives_privacy_back_at_once() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     host.set_system_policy(SystemPolicy::default())?;
     assert!(
@@ -257,10 +262,21 @@ fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() -> 
             (2, 2),
             "a saved narrowing restores each facility exactly once"
         );
-        assert!(!calls.display.restricted && !calls.input.restricted);
+        assert!(
+            !calls.display.restricted && !calls.input.restricted,
+            "a saved narrowing leaves nothing restricted"
+        );
     }
-    assert_eq!(system.privacy()?, PrivacyState::default());
-    assert_eq!(sibling_system.privacy()?, PrivacyState::default());
+    assert_eq!(
+        system.privacy()?,
+        PrivacyState::default(),
+        "the holder reads privacy given back"
+    );
+    assert_eq!(
+        sibling_system.privacy()?,
+        PrivacyState::default(),
+        "the sibling reads privacy given back"
+    );
     assert!(
         matches!(system.set_privacy(true, false), Err(Error::Unauthorized)),
         "privacy stays refused under the narrowed policy"
@@ -297,11 +313,12 @@ fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() -> 
 fn local_privacy_release_is_observed_and_reenable_reapplies_native_restrictions() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     {
         let mut calls = fake.calls();
@@ -345,10 +362,11 @@ fn local_privacy_release_is_observed_and_reenable_reapplies_native_restrictions(
 fn input_only_enable_skips_unsupported_display_facility() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::windows_like());
-    let pair = sharing(&fake)?;
-    pair.host.core.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
+    let SystemSession {
+        pair: _pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     assert!(
         system.set_privacy(true, false).is_err(),
         "display privacy the OS cannot give is refused"
@@ -363,7 +381,11 @@ fn input_only_enable_skips_unsupported_display_facility() -> TestResult {
         0,
         "the display facility is never asked"
     );
-    assert_eq!(fake.calls().input.asked(), vec![true]);
+    assert_eq!(
+        fake.calls().input.asked(),
+        vec![true],
+        "input is blocked exactly once"
+    );
     let state = system.set_privacy(false, false)?;
     assert_eq!(state, PrivacyState::default(), "input is given back");
     assert_eq!(

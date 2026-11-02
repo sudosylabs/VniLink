@@ -18,18 +18,16 @@ use vnilink::{
     AvailabilityReason, BackendStartup, Capability, Error, RemoteCameraService, ServiceKind,
     SessionInfo,
 };
-use vnilink_testkit::camera::{config, CameraHost, StandInCameras};
+use vnilink_testkit::camera::{self, config, CameraHost, StandInCameras};
 use vnilink_testkit::desktop::keyframe;
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
-
-use super::{first_picture, unshared};
+use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 /// The host's camera is offered before it is shared, but its cameras are
 /// listed only once the host shares it.
 #[test]
 fn the_hosts_cameras_are_listed_only_once_it_shares_them() -> TestResult {
     let _trace = traced();
-    let host = unshared();
+    let host = CameraHost::unshared()?;
     let controller = &host.pair.controller.core;
     let connection = &host.connection;
     assert!(
@@ -80,7 +78,7 @@ impl HostCameraFactory for TwoCameras {
     }
 }
 
-fn camera(id: &str) -> CameraConfig {
+fn device(id: &str) -> CameraConfig {
     CameraConfig {
         device_id: id.into(),
         ..config()
@@ -100,19 +98,19 @@ fn open(
         connection.generation,
         ServiceKind::Camera,
     )?;
-    controller
+    match controller
         .core
-        .open_camera_service(owner.id, owner.generation, camera(id))
-        .inspect_err(|_| {
+        .open_camera_service(owner.id, owner.generation, device(id))
+    {
+        Ok(camera) => Ok(camera),
+        Err(refused) => {
             controller
                 .core
-                .close_controller_service(owner.id, owner.generation)
-                .expect("the refused owner closes");
-            controller
-                .core
-                .forget_controller_service(owner.id)
-                .expect("the refused owner is forgotten");
-        })
+                .close_controller_service(owner.id, owner.generation)?;
+            controller.core.forget_controller_service(owner.id)?;
+            Err(refused)
+        }
+    }
 }
 
 /// A camera opens for one viewer at a time: another viewer's open of it is
@@ -121,15 +119,9 @@ fn open(
 #[test]
 fn a_camera_opens_for_one_viewer_at_a_time_and_frees_on_close() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_services(&[ServiceKind::Camera]);
-    pair.host
-        .core
-        .set_camera_factory(Some(Arc::new(TwoCameras)))?;
+    let (pair, to_first) = camera::connect(true, Arc::new(TwoCameras))?;
     let (first, second) = (&pair.controller, pair.add_viewer("second"));
-    let (to_first, to_second) = (
-        pair.connect_services(),
-        second.connect_services(&pair.host)?,
-    );
+    let to_second = second.connect_services(&pair.host)?;
     let one = open(first, &to_first, "one")?;
     assert!(
         matches!(open(&second, &to_second, "one"), Err(Error::Busy)),
@@ -205,10 +197,8 @@ impl HostCameraFactory for Failing {
 #[test]
 fn a_camera_that_failed_to_open_reads_as_failed_until_one_opens() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_services(&[ServiceKind::Camera]);
+    let (pair, connection) = camera::connect(true, Arc::new(Failing))?;
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    host.set_camera_factory(Some(Arc::new(Failing)))?;
-    let connection = pair.connect_services();
     let owner = pair.attach(&connection, ServiceKind::Camera);
     assert!(
         controller
@@ -264,10 +254,10 @@ fn a_camera_that_failed_to_open_reads_as_failed_until_one_opens() -> TestResult 
 #[test]
 fn recording_a_camera_follows_the_hosts_consent() -> TestResult {
     let trace = traced();
-    let host = CameraHost::start();
+    let host = CameraHost::start()?;
     let hosting = &host.pair.host.core;
     let camera = host.open(config())?;
-    let source = first_picture(&host, &camera);
+    let source = host.first_picture(&camera)?;
     assert!(!camera.recording_allowed(), "recording starts off");
     assert!(
         matches!(camera.recording_video_tap(), Err(Error::Unauthorized)),

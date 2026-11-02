@@ -15,7 +15,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use vnilink::{
     Error, HostSessionState, HostSystemActions, RemoteSystemService, ServiceKind, SessionInfo,
-    SystemSupport,
+    SystemPolicy, SystemSupport,
 };
 
 use crate::{Engine, Pair};
@@ -108,34 +108,41 @@ impl HostSystemActions for RecordingSystem {
     }
 }
 
-/// A host sharing its system actions, with `system` as its operating
-/// system when given, and a controller with the system service open.
+/// A host sharing its system actions, and a controller with the System
+/// service open on its services connection.
 pub struct SystemSession {
     pub pair: Pair,
+    pub connection: SessionInfo,
     pub service: RemoteSystemService,
-    pub system: Option<Arc<RecordingSystem>>,
 }
 
 impl SystemSession {
-    pub fn open(system: Option<Arc<RecordingSystem>>) -> Self {
-        let pair = Pair::for_services(&[ServiceKind::System]);
-        if let Some(system) = &system {
-            pair.host
-                .core
-                .set_system_actions(Some(Arc::clone(system) as Arc<dyn HostSystemActions>))
-                .expect("system actions");
+    /// The host's operating system is `system`, and its policy `policy`
+    /// when given, else the engine's own.
+    pub fn open(
+        system: Arc<dyn HostSystemActions>,
+        policy: Option<SystemPolicy>,
+    ) -> Result<Self, Error> {
+        let pair = sharing(system)?;
+        if let Some(policy) = policy {
+            pair.host.core.set_system_policy(policy)?;
         }
-        let connection = pair.connect_services();
-        let service = pair
-            .controller
-            .open_system(&connection)
-            .expect("the system service");
-        Self {
+        let connection = pair.controller.connect_services(&pair.host)?;
+        let service = pair.controller.open_system(&connection)?;
+        Ok(Self {
             pair,
+            connection,
             service,
-            system,
-        }
+        })
     }
+}
+
+/// A host sharing its system actions, with `system` as its operating
+/// system, and a controller paired with it.
+pub fn sharing(system: Arc<dyn HostSystemActions>) -> Result<Pair, Error> {
+    let pair = Pair::for_services(&[ServiceKind::System]);
+    pair.host.core.set_system_actions(Some(system))?;
+    Ok(pair)
 }
 
 /// One privacy facility of the host, the display or input: whether it is

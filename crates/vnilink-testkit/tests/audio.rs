@@ -11,38 +11,25 @@
 use expect_test::expect;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use vnilink::audio::{
     AudioBackend, AudioConfig, AudioDevice, AudioKind, AudioSource, HostAudioFactory,
 };
 use vnilink::{BackendStartup, Error, ServiceKind, SessionPhase};
-use vnilink_testkit::audio::{config, encoder, packet, AudioHost};
-use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
-
-fn next(audio: &vnilink::RemoteAudioService) -> vnilink::audio::AudioPacket {
-    wait_for("a packet", DEFAULT_WAIT, || audio.try_recv())
-}
+use vnilink_testkit::audio::{self, config, encoder, packet, AudioHost};
+use vnilink_testkit::{lock, traced, wait_for, TestResult, DEFAULT_WAIT};
 
 /// System sound and the microphone each arrive exactly as sent, and
 /// closing one leaves the other playing.
 #[test]
-fn each_source_arrives_as_sent_and_closes_alone() {
+fn each_source_arrives_as_sent_and_closes_alone() -> TestResult {
     let trace = traced();
-    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone]);
-    let system = host.open(AudioKind::System).unwrap();
-    let microphone = host.open(AudioKind::Microphone).unwrap();
+    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone])?;
+    let system = host.open(AudioKind::System)?;
+    let microphone = host.open(AudioKind::Microphone)?;
     let mut encoding = encoder();
-    for kind in [AudioKind::System, AudioKind::Microphone] {
-        let sent = packet(&mut encoding);
-        host.audio.latest(kind).publish(sent.clone()).unwrap();
-        let audio = if kind == AudioKind::System {
-            &system
-        } else {
-            &microphone
-        };
-        assert_eq!(next(audio), sent);
-    }
+    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
+    host.assert_arrives(AudioKind::Microphone, &microphone, &mut encoding)?;
     microphone.close();
     wait_for("the microphone to stop", DEFAULT_WAIT, || {
         host.audio
@@ -50,12 +37,7 @@ fn each_source_arrives_as_sent_and_closes_alone() {
             .is_cancelled()
             .then_some(())
     });
-    let sent = packet(&mut encoding);
-    host.audio
-        .latest(AudioKind::System)
-        .publish(sent.clone())
-        .unwrap();
-    assert_eq!(next(&system), sent);
+    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
@@ -67,6 +49,7 @@ fn each_source_arrives_as_sent_and_closes_alone() {
     "#]],
         || trace.story(&["audio"]),
     );
+    Ok(())
 }
 
 /// The host offers both sounds before it shares either, lists the devices
@@ -75,7 +58,7 @@ fn each_source_arrives_as_sent_and_closes_alone() {
 #[test]
 fn the_microphone_needs_its_own_grant() -> TestResult {
     let _trace = traced();
-    let host = AudioHost::start(&[]);
+    let host = AudioHost::start(&[])?;
     let (hosting, controller) = (&host.pair.host.core, &host.pair.controller.core);
     let connection = &host.connection;
     let support = controller.remote_service_support(connection.id, connection.generation)?;
@@ -132,7 +115,7 @@ fn the_microphone_needs_its_own_grant() -> TestResult {
 #[test]
 fn an_audio_service_opens_its_own_kind_once() -> TestResult {
     let trace = traced();
-    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone]);
+    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone])?;
     let controller = &host.pair.controller.core;
     let owner = host.pair.attach(&host.connection, ServiceKind::SystemAudio);
     assert!(
@@ -172,7 +155,7 @@ fn an_audio_service_opens_its_own_kind_once() -> TestResult {
 #[test]
 fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
     let trace = traced();
-    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone]);
+    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone])?;
     let files = host.pair.attach(&host.connection, ServiceKind::Files);
     let files = host
         .pair
@@ -186,9 +169,7 @@ fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
         host.audio.latest(AudioKind::Microphone),
     );
     let mut encoding = encoder();
-    let sent = packet(&mut encoding);
-    system_source.publish(sent.clone())?;
-    assert_eq!(next(&system), sent, "system sound arrives as sent");
+    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
 
     host.pair
         .host
@@ -205,13 +186,7 @@ fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
         !files.is_cancelled(),
         "withdrawing the microphone leaves Files"
     );
-    let sent = packet(&mut encoding);
-    system_source.publish(sent.clone())?;
-    assert_eq!(
-        next(&system),
-        sent,
-        "system sound still arrives as sent once the microphone is withdrawn"
-    );
+    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
 
     system.close();
     wait_for("the host to stop system sound", DEFAULT_WAIT, || {
@@ -219,11 +194,7 @@ fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
     });
     assert!(!files.is_cancelled(), "closing system sound leaves Files");
     assert!(
-        host.pair
-            .controller
-            .core
-            .controller_session(host.connection.id)
-            .is_ok_and(|session| session.phase == SessionPhase::Active),
+        host.connection_active(),
         "closing system sound keeps the connection"
     );
     trace.wait_for_records("audio ended", 2);
@@ -268,10 +239,8 @@ impl HostAudioFactory for OpensLate {
         self.entered
             .send(startup)
             .expect("the test waits for the open");
-        self.release
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .recv_timeout(Duration::from_secs(8))
+        lock(&self.release)
+            .recv_timeout(DEFAULT_WAIT)
             .expect("the test releases the open");
         AudioBackend::new(config, Arc::clone(&self.source))
     }
@@ -282,18 +251,19 @@ impl HostAudioFactory for OpensLate {
 /// open fails, and Files and the connection stay.
 #[test]
 fn a_microphone_withdrawn_while_it_starts_is_released_unused() -> TestResult {
-    let _trace = traced();
-    let pair = Pair::for_services(&[ServiceKind::Microphone]);
+    let trace = traced();
     let (entered, entering) = sync_channel(1);
     let (release, released) = sync_channel(1);
     let source = AudioSource::new();
     source.publish(packet(&mut encoder()))?;
-    pair.host.core.set_audio_factory(Some(Arc::new(OpensLate {
-        entered,
-        release: Mutex::new(released),
-        source: Arc::clone(&source),
-    })))?;
-    let connection = pair.connect_services();
+    let (pair, connection) = audio::connect(
+        &[ServiceKind::Microphone],
+        Arc::new(OpensLate {
+            entered,
+            release: Mutex::new(released),
+            source: Arc::clone(&source),
+        }),
+    )?;
     let files = pair.attach(&connection, ServiceKind::Files);
     let files = pair
         .controller
@@ -308,7 +278,7 @@ fn a_microphone_withdrawn_while_it_starts_is_released_unused() -> TestResult {
                 config(AudioKind::Microphone),
             )
         });
-        let startup = entering.recv_timeout(Duration::from_secs(8))?;
+        let startup = entering.recv_timeout(DEFAULT_WAIT)?;
         pair.host
             .core
             .set_service_sharing(ServiceKind::Microphone, false)?;
@@ -319,7 +289,7 @@ fn a_microphone_withdrawn_while_it_starts_is_released_unused() -> TestResult {
         );
         release.send(())?;
         assert!(
-            opening.join().expect("the open returns").is_err(),
+            opening.join().map_err(|_| "the open panicked")?.is_err(),
             "a microphone that opened after its grant was withdrawn is not admitted"
         );
         Ok(())
@@ -335,21 +305,28 @@ fn a_microphone_withdrawn_while_it_starts_is_released_unused() -> TestResult {
             .is_ok_and(|session| session.phase == SessionPhase::Active),
         "a released microphone keeps the connection"
     );
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        host:
+          audio: audio stream ended ended=service closed kind=Microphone service=1
+    "#]],
+        || trace.story(&["audio"]),
+    );
     Ok(())
 }
 
 /// A viewer that does not keep up loses the oldest packets, and the loss
 /// is counted where it happened rather than hidden.
 #[test]
-fn packets_a_slow_viewer_misses_are_counted() {
+fn packets_a_slow_viewer_misses_are_counted() -> TestResult {
     let trace = traced();
-    let host = AudioHost::start(&[ServiceKind::SystemAudio]);
-    let system = host.open(AudioKind::System).unwrap();
+    let host = AudioHost::start(&[ServiceKind::SystemAudio])?;
+    let system = host.open(AudioKind::System)?;
     let mut encoding = encoder();
     let source = host.audio.latest(AudioKind::System);
     // Far more than any queue on the way holds, sent at once and never read.
     for _ in 0..200 {
-        source.publish(packet(&mut encoding)).unwrap();
+        source.publish(packet(&mut encoding))?;
     }
     // Every packet that was kept has gone to the viewer, who reads none.
     wait_for("the host to send what it kept", DEFAULT_WAIT, || {
@@ -365,4 +342,5 @@ fn packets_a_slow_viewer_misses_are_counted() {
         dropped > 0,
         "200 unread packets were dropped without a count: {ended:?}"
     );
+    Ok(())
 }
