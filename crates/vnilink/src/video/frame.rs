@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(decode(&encode(&unknown)).unwrap().timing.host_us, 0);
 
         let mut queue = VideoQueue::new();
-        queue.push_at(sent, Instant::now() - Duration::from_millis(25));
+        queue.push(sent, Instant::now() - Duration::from_millis(25));
         let popped = queue.pop().unwrap();
         assert!(
             popped.timing.queued_us >= 25_000,

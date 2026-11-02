@@ -332,7 +332,7 @@ pub(crate) fn stream_of(bytes: &[u8], segment: u64, squeezed: bool) -> Vec<u8> {
 /// `data` and `journal`, cut into segments of `segment`, as [`receive`]
 /// does with what arrives. Ok(true) when the file landed whole, Ok(false)
 /// when a segment failed its check.
-#[cfg(feature = "fuzzing")]
+#[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn land<'a>(
     data: &std::path::Path,
     journal: &std::path::Path,
@@ -488,25 +488,30 @@ mod tests {
         (received, partial, started.elapsed())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_value_split_across_writes_checks() {
+    /// However the stream is cut into reads, the segment and the value
+    /// after it come out the same.
+    #[test]
+    fn a_stream_cut_anywhere_checks_its_value() {
         let scratch = Scratch::new("split");
-        let bytes = b"segment bytes".to_vec();
-        let value = value_of(&bytes);
-        let sent = bytes.clone();
-        let (received, _) =
-            receive_from(&scratch, bytes.len() as u64, move |mut send| async move {
-                send.write_all(&[MODE_RAW]).await.unwrap();
-                send.write_all(&sent).await.unwrap();
-                send.write_all(&value[..7]).await.unwrap();
-                // A real timer: the gap that splits the value across two reads.
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                send.write_all(&value[7..]).await.unwrap();
-                send.finish().unwrap();
-            })
-            .await;
-        assert_eq!(received.unwrap(), Received::Done { downloaded: 13 });
-        assert_eq!(scratch.data(), bytes);
+        let bytes = b"segment bytes";
+        let mut stream = vec![MODE_RAW];
+        stream.extend_from_slice(bytes);
+        stream.extend_from_slice(&value_of(bytes));
+        for cut in 1..stream.len() {
+            let (head, tail) = stream.split_at(cut);
+            let landed = land(
+                &scratch.0.join("data"),
+                &scratch.0.join("journal"),
+                bytes.len() as u64,
+                crate::transfer::SEGMENT_LEN,
+                [head, tail],
+            );
+            assert!(
+                landed.unwrap(),
+                "a read that ends after byte {cut} still checks"
+            );
+            assert_eq!(scratch.data(), bytes);
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

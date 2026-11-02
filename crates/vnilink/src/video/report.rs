@@ -442,6 +442,32 @@ mod tests {
     }
 
     #[test]
+    fn reported_loss_counts_until_the_report_is_stale() {
+        let heard = Instant::now();
+        let mut loss = ViewerLoss::default();
+        loss.observe(
+            &VideoReport {
+                fragments_received: 98,
+                fragments_missing: 2,
+                ..VideoReport::default()
+            },
+            heard,
+        );
+        let protection = loss.protection(false, false, heard);
+        assert!(protection > BASE_PROTECTION);
+        assert_eq!(
+            loss.protection(false, false, heard + REPORT_FRESH),
+            protection,
+            "a report exactly the freshness old still counts"
+        );
+        assert_eq!(
+            loss.protection(false, false, heard + REPORT_FRESH + Duration::from_nanos(1)),
+            BASE_PROTECTION,
+            "past it the loss is unknown"
+        );
+    }
+
+    #[test]
     fn a_congested_link_gets_no_more_parity_for_its_loss() {
         let now = Instant::now();
         let mut loss = ViewerLoss::default();

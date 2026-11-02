@@ -43,7 +43,7 @@
 //! releasing held keys, and a newer Hello from the same peer signals the
 //! older session to stop before the new one is registered.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::{ApplicationClose, Connection, ConnectionError};
 
@@ -72,6 +72,39 @@ pub(crate) fn retries(error: &Error) -> bool {
     matches!(error, Error::Busy | Error::Timeout | Error::Network(_))
 }
 
+/// Whether a link up from `started` until `ended` lasted long enough to
+/// restart the count of redials.
+pub(crate) fn lasted(started: Instant, ended: Instant) -> bool {
+    ended.saturating_duration_since(started) > PAUSE
+}
+
+/// The consecutive redials of one session, counted against [`ATTEMPTS`].
+#[derive(Debug, Default)]
+pub(crate) struct Redials {
+    drops: u32,
+}
+
+impl Redials {
+    /// Whether the next dial redials, and so waits [`PAUSE`] first.
+    pub(crate) fn pending(&self) -> bool {
+        self.drops > 0
+    }
+
+    /// The link dropped; [`lasted`] says whether it stayed up long enough
+    /// to restart the count. Whether another dial is allowed.
+    pub(crate) fn dropped(&mut self, lasted: bool) -> bool {
+        self.drops = if lasted { 1 } else { self.drops + 1 };
+        self.drops <= ATTEMPTS
+    }
+
+    /// A redial failed with an error [`retries`] admits. Whether another
+    /// dial is allowed.
+    pub(crate) fn failed(&mut self) -> bool {
+        self.drops += 1;
+        self.drops <= ATTEMPTS
+    }
+}
+
 /// Whether the peer closed `connection` because its engine shut down
 /// ([`CLOSE_SHUT_DOWN`]).
 pub(crate) fn peer_shut_down(connection: &Connection) -> bool {
@@ -80,4 +113,77 @@ pub(crate) fn peer_shut_down(connection: &Connection) -> bool {
         Some(ConnectionError::ApplicationClosed(ApplicationClose { error_code, .. }))
             if error_code == CLOSE_SHUT_DOWN.into()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_link_that_outlasts_the_pause_restarts_the_count() {
+        let start = Instant::now();
+        assert!(!lasted(start, start + PAUSE - Duration::from_nanos(1)));
+        assert!(
+            !lasted(start, start + PAUSE),
+            "exactly the pause is not longer"
+        );
+        assert!(lasted(start, start + PAUSE + Duration::from_nanos(1)));
+        assert!(
+            !lasted(start + PAUSE * 2, start),
+            "a clock read backwards lasted nothing"
+        );
+    }
+
+    #[test]
+    fn a_session_redials_a_bounded_number_of_quick_drops() {
+        let mut redials = Redials::default();
+        assert!(!redials.pending(), "the first dial does not wait");
+        for drop in 1..=ATTEMPTS {
+            assert!(redials.dropped(false), "drop {drop} of {ATTEMPTS} redials");
+            assert!(redials.pending());
+        }
+        assert!(
+            !redials.dropped(false),
+            "one more quick drop than the attempts fails the session"
+        );
+    }
+
+    #[test]
+    fn a_lasting_link_between_drops_never_runs_out_of_redials() {
+        let mut redials = Redials::default();
+        for _ in 0..ATTEMPTS * 10 {
+            assert!(
+                redials.dropped(true),
+                "a link that lasted counts as the first drop"
+            );
+        }
+        for _ in 1..ATTEMPTS {
+            assert!(redials.dropped(false));
+        }
+        assert!(
+            !redials.dropped(false),
+            "quick drops after it still run out"
+        );
+    }
+
+    #[test]
+    fn failed_redials_and_drops_share_one_count() {
+        let mut redials = Redials::default();
+        assert!(redials.dropped(false));
+        for _ in 1..ATTEMPTS {
+            assert!(redials.failed());
+        }
+        assert!(
+            !redials.failed(),
+            "a retriable failure past the attempts fails the session"
+        );
+    }
+
+    #[test]
+    fn only_failures_that_can_clear_are_retried() {
+        assert!(retries(&Error::Busy));
+        assert!(retries(&Error::Timeout));
+        assert!(!retries(&Error::Unauthorized));
+        assert!(!retries(&Error::NotPaired));
+    }
 }

@@ -56,6 +56,28 @@ const MEDIA_FEEDBACK: u8 = 9;
 
 const RECORDING_STATE: u8 = 10;
 
+/// How long a duration or feedback one side reports stays current: an
+/// older one is unknown, and the next sample starts a fresh average.
+const MEASUREMENT_FRESH: Duration = Duration::from_secs(3);
+
+/// Whether a measurement taken `at` is still current at `now`.
+fn still_current(at: std::time::Instant, now: std::time::Instant) -> bool {
+    now.saturating_duration_since(at) <= MEASUREMENT_FRESH
+}
+
+/// The running average after `sample` arrives at `now`: seven parts the
+/// current average to one part the sample, or the sample alone when the
+/// average `before` is missing or no longer current.
+fn averaged(
+    before: Option<(u64, std::time::Instant)>,
+    sample: u64,
+    now: std::time::Instant,
+) -> u64 {
+    before
+        .filter(|(_, at)| still_current(*at, now))
+        .map_or(sample, |(before, _)| (before * 7 + sample) / 8)
+}
+
 /// The host's last message before it finishes the stream: one byte of
 /// [`crate::StreamEnd`]. A stream finished without it ended for no reason
 /// the host could give.
@@ -734,12 +756,16 @@ impl Core {
         let desktop = runtime(&*self.alive_state()?, id, generation, true)?;
         let mut measured = lock(&desktop.producer_duration);
         let now = std::time::Instant::now();
-        let average = measured
-            .filter(|(_, _, at)| now.saturating_duration_since(*at) <= Duration::from_secs(3))
-            .map_or((capture_us, encode_us), |(capture, encode, _)| {
-                ((capture * 7 + capture_us) / 8, (encode * 7 + encode_us) / 8)
-            });
-        *measured = Some((average.0, average.1, now));
+        let before = *measured;
+        *measured = Some((
+            averaged(
+                before.map(|(capture, _, at)| (capture, at)),
+                capture_us,
+                now,
+            ),
+            averaged(before.map(|(_, encode, at)| (encode, at)), encode_us, now),
+            now,
+        ));
         Ok(())
     }
     /// The encoder the producer opened for this viewer, at open and at every
@@ -927,10 +953,7 @@ impl RemoteDesktopService {
         let desktop = self.active_desktop()?;
         let mut measured = lock(&desktop.decode_duration);
         let now = std::time::Instant::now();
-        let average = measured
-            .filter(|(_, at)| now.saturating_duration_since(*at) <= Duration::from_secs(3))
-            .map_or(microseconds, |(before, _)| (before * 7 + microseconds) / 8);
-        *measured = Some((average, now));
+        *measured = Some((averaged(*measured, microseconds, now), now));
         Ok(())
     }
     /// The window's decoder reports whether it decodes in software and how
@@ -1478,6 +1501,62 @@ mod send;
 use send::*;
 mod serve;
 pub(super) use serve::*;
+
+#[cfg(test)]
+mod measurement_tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn a_measurement_is_current_for_three_seconds_and_unknown_after() {
+        let start = Instant::now();
+        assert!(still_current(start, start));
+        assert!(
+            still_current(start, start + MEASUREMENT_FRESH),
+            "the last instant still counts"
+        );
+        assert!(!still_current(
+            start,
+            start + MEASUREMENT_FRESH + Duration::from_nanos(1)
+        ));
+        assert!(
+            still_current(start + Duration::from_secs(1), start),
+            "a clock read before the sample does not make it stale"
+        );
+    }
+
+    #[test]
+    fn a_current_average_takes_an_eighth_of_each_sample_and_a_stale_one_restarts() {
+        let start = Instant::now();
+        assert_eq!(
+            averaged(None, 800, start),
+            800,
+            "the first sample is the average"
+        );
+        let before = Some((800, start));
+        assert_eq!(averaged(before, 1600, start + MEASUREMENT_FRESH), 900);
+        assert_eq!(
+            averaged(
+                before,
+                1600,
+                start + MEASUREMENT_FRESH + Duration::from_nanos(1)
+            ),
+            1600,
+            "a stale average is forgotten"
+        );
+    }
+
+    #[test]
+    fn a_pointer_resting_for_the_settle_time_is_repeated_on_the_stream() {
+        let start = Instant::now();
+        assert!(!pointer_settled(
+            start,
+            start + POINTER_SETTLE - Duration::from_nanos(1)
+        ));
+        assert!(pointer_settled(start, start + POINTER_SETTLE));
+        assert!(pointer_settled(start, start + POINTER_SETTLE * 2));
+    }
+}
 
 #[cfg(test)]
 mod tests {

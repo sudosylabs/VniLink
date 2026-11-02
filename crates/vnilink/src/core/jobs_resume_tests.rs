@@ -46,6 +46,7 @@ fn drive_to_end(
     let mut last_sender = sender.job_snapshot(sender_id).unwrap();
     let mut last_receiver = receiver.job_snapshot(receiver_id).unwrap();
     while std::time::Instant::now() < deadline {
+        let seen = receiver.job_revision();
         let before = (last_sender.clone(), last_receiver.clone());
         if !last_receiver.state.is_terminal() {
             last_receiver = receiver.job_poll(receiver_id).unwrap();
@@ -60,8 +61,9 @@ fn drive_to_end(
             break;
         }
         if (&last_sender, &last_receiver) == (&before.0, &before.1) {
-            // A real timer: the pause between the polls that drive both jobs.
-            std::thread::sleep(Duration::from_millis(1));
+            // Nothing moved: poll again once the receiver's job changes,
+            // on the signal the engine's own workers wait on.
+            super::driver::wait_for_job_change(&receiver.shared, seen, Duration::from_millis(5));
         }
     }
     (last_sender, last_receiver)

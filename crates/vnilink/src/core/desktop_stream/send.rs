@@ -399,7 +399,7 @@ impl<'a> PictureSender<'a> {
         let queue = desktop.video.telemetry();
         let timing = lock(&desktop.producer_duration)
             .as_ref()
-            .filter(|(_, _, at)| at.elapsed() <= Duration::from_secs(3))
+            .filter(|(_, _, at)| still_current(*at, std::time::Instant::now()))
             .map(|(capture, encode, _)| (*capture, *encode))
             .unwrap_or_default();
         // Read before the feedback is built: a guard held through its

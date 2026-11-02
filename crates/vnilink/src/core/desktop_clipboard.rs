@@ -53,6 +53,12 @@ struct Request {
     deadline: tokio::time::Instant,
     reply: std::sync::mpsc::SyncSender<Result<(), Error>>,
 }
+impl Request {
+    /// Whether the caller stopped waiting for this text's answer by `now`.
+    fn expired(&self, now: tokio::time::Instant) -> bool {
+        self.deadline <= now
+    }
+}
 pub(super) struct ClipboardState {
     tx: tokio::sync::mpsc::Sender<Request>,
     rx: Mutex<Option<tokio::sync::mpsc::Receiver<Request>>>,
@@ -360,7 +366,7 @@ async fn exchange(
             }
             request = requests.recv(), if pending.is_none() => {
                 let Some(request) = request else { return Err(Error::NoSession); };
-                if request.deadline <= tokio::time::Instant::now() { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout))); continue; }
+                if request.expired(tokio::time::Instant::now()) { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout))); continue; }
                 if let Err(error) = validate(&shared, &desktop, hosted) { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(error))); continue; }
                 let result = tokio::time::timeout_at(request.deadline, write(&mut send, Frame::Text(request.text.clone()))).await.map_err(|_| Error::Timeout).and_then(|r| r);
                 if let Err(error) = result { crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(error))); return Err(Error::NoSession); }
@@ -391,7 +397,7 @@ async fn exchange(
                 }
                 Frame::Status(status) => {
                     let request = pending.take().ok_or(Error::Malformed)?;
-                    if request.deadline <= tokio::time::Instant::now() {
+                    if request.expired(tokio::time::Instant::now()) {
                         crate::ignored!(crate::trace::CLIPBOARD, "the caller stopped waiting for its answer", request.reply.send(Err(Error::Timeout)));
                         return Err(Error::Timeout);
                     }
@@ -399,5 +405,28 @@ async fn exchange(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_text_answered_at_or_after_its_deadline_has_expired() {
+        let start = tokio::time::Instant::now();
+        let (reply, _answer) = std::sync::mpsc::sync_channel(1);
+        let request = Request {
+            text: String::new(),
+            deadline: start + TIMEOUT,
+            reply,
+        };
+        assert!(!request.expired(start));
+        assert!(!request.expired(request.deadline - Duration::from_nanos(1)));
+        assert!(
+            request.expired(request.deadline),
+            "the caller's wait ends at the deadline itself"
+        );
+        assert!(request.expired(request.deadline + Duration::from_millis(1)));
     }
 }

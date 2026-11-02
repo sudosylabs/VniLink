@@ -385,6 +385,7 @@ impl Core {
     pub fn scheduled_system_actions(&self) -> Result<Vec<ScheduledSystemAction>, Error> {
         let _engine = self.engine();
         let state = self.alive_state()?;
+        let now = std::time::Instant::now();
         let mut scheduled: Vec<_> = state
             .system_operations
             .values()
@@ -394,7 +395,7 @@ impl Core {
                     operation_id: record.operation.id,
                     action: record.operation.action,
                     endpoint_id: PublicKey::from_bytes(&record.peer).ok()?.to_string(),
-                    remaining_ms: with_remaining(record).notice_remaining_ms,
+                    remaining_ms: with_remaining(record, now).notice_remaining_ms,
                 })
             })
             .collect();
@@ -724,8 +725,9 @@ async fn execute(
             "system action admitted"
         );
         // A restart or shutdown waits out its notice first; a lock runs now.
+        let now = std::time::Instant::now();
         let notice = scheduled.then(|| Notice {
-            deadline: std::time::Instant::now() + *lock(&shared.system_notice),
+            deadline: now + *lock(&shared.system_notice),
             run_now: false,
             wake: Arc::new(tokio::sync::Notify::new()),
         });
@@ -753,7 +755,7 @@ async fn execute(
         prune(&mut state);
         if scheduled {
             let record = &state.system_operations[&id];
-            let operation = with_remaining(record);
+            let operation = with_remaining(record, now);
             shared.events.publish(CoreEvent::SystemActionScheduled {
                 operation_id: id,
                 action,
@@ -781,7 +783,7 @@ async fn run_scheduled(
     id: u64,
 ) {
     loop {
-        let (wake, deadline, run_now) = {
+        let (wake, notice) = {
             let state = lock(&shared.state);
             let Some(record) = state.system_operations.get(&id) else {
                 return;
@@ -802,14 +804,12 @@ async fn run_scheduled(
                 );
                 return;
             }
-            (notice.wake.clone(), notice.deadline, notice.run_now)
+            (notice.wake.clone(), notice.clone())
         };
-        let now = std::time::Instant::now();
-        if run_now || now >= deadline {
-            break;
-        }
         // Short waits notice a departed asker during the countdown.
-        let wait = (deadline - now).min(Duration::from_millis(500));
+        let Some(wait) = notice.wait(std::time::Instant::now()) else {
+            break;
+        };
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
             _ = wake.notified() => {}
@@ -988,7 +988,7 @@ fn finish(
     );
     record.operation.state = next;
     record.operation.detail = truncate_detail(detail);
-    let operation = with_remaining(record);
+    let operation = with_remaining(record, std::time::Instant::now());
     if scheduled {
         shared.events.publish(CoreEvent::SystemActionEnded {
             operation_id: id,
@@ -1047,21 +1047,19 @@ fn query(shared: &Shared, admission: &Admission, id: u64) -> Result<Vec<u8>, u8>
     {
         return Err(7);
     }
-    Ok(encode_operation(&with_remaining(record)))
+    Ok(encode_operation(&with_remaining(
+        record,
+        std::time::Instant::now(),
+    )))
 }
 
 /// The operation as it reads now: a scheduled one with the notice left.
-fn with_remaining(record: &SystemOperationRecord) -> SystemOperation {
+fn with_remaining(record: &SystemOperationRecord, now: std::time::Instant) -> SystemOperation {
     let mut operation = record.operation.clone();
-    operation.notice_remaining_ms = record.notice.as_ref().map_or(0, |notice| {
-        u32::try_from(
-            notice
-                .deadline
-                .saturating_duration_since(std::time::Instant::now())
-                .as_millis(),
-        )
-        .unwrap_or(u32::MAX)
-    });
+    operation.notice_remaining_ms = record
+        .notice
+        .as_ref()
+        .map_or(0, |notice| notice.remaining_ms(now));
     operation
 }
 
@@ -1081,7 +1079,7 @@ fn cancel(
         return Err(7);
     }
     if record.operation.state != OperationState::Scheduled {
-        return Ok(with_remaining(record));
+        return Ok(with_remaining(record, std::time::Instant::now()));
     }
     record.operation.state = OperationState::Cancelled;
     record.operation.detail = truncate_detail(detail.into());
@@ -1096,7 +1094,7 @@ fn cancel(
         detail,
         "system action cancelled"
     );
-    let operation = with_remaining(record);
+    let operation = with_remaining(record, std::time::Instant::now());
     shared.events.publish(CoreEvent::SystemActionEnded {
         operation_id: id,
         state: OperationState::Cancelled,

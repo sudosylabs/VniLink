@@ -310,8 +310,8 @@ pub(super) fn start_outgoing(
     Ok(pending)
 }
 
-/// Dials until the session ends. `drops` counts consecutive redials against
-/// [`reconnect::ATTEMPTS`]; a link that lasted resets it. A refusal before the
+/// Dials until the session ends. [`reconnect::Redials`] counts consecutive
+/// redials against [`reconnect::ATTEMPTS`]; a link that lasted resets it. A refusal before the
 /// host first admitted this session, or any error [`reconnect::retries`]
 /// rejects, fails the session instead of dialing again.
 pub(super) async fn run_controller(
@@ -323,13 +323,13 @@ pub(super) async fn run_controller(
     // Until the host first admits the link a refusal is final; after, a
     // dropped link dials again.
     let mut admitted = false;
-    let mut drops = 0u32;
+    let mut redials = reconnect::Redials::default();
     loop {
         if *stop_rx.borrow() || lock(&shared.state).shut_down {
             finish_outgoing(&shared, local_id);
             return;
         }
-        if drops > 0 {
+        if redials.pending() {
             mark_reconnecting(&shared, local_id);
             tokio::select! {
                 _ = tokio::time::sleep(reconnect::PAUSE) => {}
@@ -358,12 +358,7 @@ pub(super) async fn run_controller(
         }
         match attempt {
             Ok((lasted, LinkEnd::Dropped)) => {
-                if lasted {
-                    drops = 1;
-                } else {
-                    drops += 1;
-                }
-                if drops > reconnect::ATTEMPTS {
+                if !redials.dropped(lasted) {
                     fail_outgoing(&shared, local_id, &Error::Timeout);
                     return;
                 }
@@ -373,8 +368,7 @@ pub(super) async fn run_controller(
                 return;
             }
             Err(error) if admitted && reconnect::retries(&error) => {
-                drops += 1;
-                if drops > reconnect::ATTEMPTS {
+                if !redials.failed() {
                     fail_outgoing(&shared, local_id, &error);
                     return;
                 }
@@ -562,7 +556,7 @@ pub(super) async fn establish(
     )
     .await;
     aux.abort();
-    Ok((started.elapsed() > reconnect::PAUSE, end))
+    Ok((reconnect::lasted(started, std::time::Instant::now()), end))
 }
 
 /// The controller's side of a session's control stream: what the host

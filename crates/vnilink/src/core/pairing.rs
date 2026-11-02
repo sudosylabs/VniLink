@@ -209,7 +209,7 @@ impl Core {
         check_from_other_screen: &str,
     ) -> Result<DeviceInfo, Error> {
         let _engine = self.engine();
-        self.finish_control_request(check_from_other_screen)
+        self.finish_control_request(check_from_other_screen, SystemTime::now())
     }
 
     /// Rejects the waiting controller. The pairing file stays open until it expires.
@@ -233,7 +233,7 @@ impl Core {
     /// Saves the device an invitation names; records how it went.
     pub fn accept_invitation(&self, token: &str) -> Result<DeviceInfo, Error> {
         let _engine = self.engine();
-        let accepted = self.accept(token);
+        let accepted = self.accept(token, SystemTime::now());
         tracing::info!(
             target: crate::trace::PAIRING,
             refused = accepted.as_ref().err().map(Error::name),
@@ -248,17 +248,14 @@ impl Core {
         accepted
     }
 
-    fn accept(&self, token: &str) -> Result<DeviceInfo, Error> {
-        let (opened, nonce) = invitation::open(token, SystemTime::now())?;
+    fn accept(&self, token: &str, now: SystemTime) -> Result<DeviceInfo, Error> {
+        let (opened, nonce) = invitation::open(token, now)?;
         if opened.endpoint_id == *self.shared.secret.public().as_bytes() {
             return Err(Error::InvalidInvitation(
                 "an installation cannot pair with itself",
             ));
         }
-        let now_ms = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| Error::InvalidInvitation("system clock is before the unix epoch"))?
-            .as_millis() as u64;
+        let now_ms = invitation::unix_ms(now)?;
         let display = PublicKey::from_bytes(&opened.endpoint_id)
             .map_err(|_| Error::InvalidInvitation("endpoint id is not a valid key"))?
             .to_string();
@@ -319,9 +316,13 @@ impl Core {
         Ok(info)
     }
 
-    pub(super) fn finish_control_request(&self, check: &str) -> Result<DeviceInfo, Error> {
+    pub(super) fn finish_control_request(
+        &self,
+        check: &str,
+        now: SystemTime,
+    ) -> Result<DeviceInfo, Error> {
         let _engine = self.engine();
-        let answered = self.answer_control_request(check);
+        let answered = self.answer_control_request(check, now);
         tracing::info!(
             target: crate::trace::PAIRING,
             refused = answered.as_ref().err().map(Error::name),
@@ -330,7 +331,7 @@ impl Core {
         answered
     }
 
-    fn answer_control_request(&self, check: &str) -> Result<DeviceInfo, Error> {
+    fn answer_control_request(&self, check: &str, now: SystemTime) -> Result<DeviceInfo, Error> {
         let mut state = self.alive_state()?;
         let pending = state
             .control_request
@@ -361,7 +362,7 @@ impl Core {
         let previous_window = state.pairing_window.take();
         // The Hello parked up to a minute. A switch that expired while the
         // owner hesitated no longer grants.
-        let now_ms = match invitation::unix_ms(SystemTime::now()) {
+        let now_ms = match invitation::unix_ms(now) {
             Ok(now_ms) => now_ms,
             Err(error) => {
                 state.pairing_window = previous_window;
@@ -375,7 +376,7 @@ impl Core {
         };
         if previous_window
             .as_ref()
-            .is_some_and(|window| now_ms >= window.expires_at_ms)
+            .is_some_and(|window| window.expired(now_ms))
         {
             crate::ignored!(
                 crate::trace::PAIRING,
@@ -479,18 +480,7 @@ pub(super) async fn wait_for_control_approval(
             Ok(now_ms) => now_ms,
             Err(error) => return ControlAnswer::Rejected(error),
         };
-        let window_open = state
-            .pairing_window
-            .as_ref()
-            .is_some_and(|window| window.admits_control(now_ms));
-        if !window_open {
-            if state
-                .pairing_window
-                .as_ref()
-                .is_some_and(|window| window.expired(now_ms))
-            {
-                state.pairing_window = None;
-            }
+        if !PairingWindow::admit_control(&mut state.pairing_window, now_ms) {
             return ControlAnswer::Rejected(Error::Unauthorized);
         }
         let Some(secret) = crate::pairing::control_secret(
@@ -560,8 +550,63 @@ pub(super) async fn wait_for_control_approval(
 mod tests {
     use std::time::{Duration, SystemTime};
 
+    use super::{PairingWindow, MAX_CONTROL_FAILURES, MAX_CONTROL_REQUESTS};
     use crate::error::Error;
     use crate::test_support::loopback_core;
+
+    const EXPIRES_MS: u64 = 1_800_000_000_000;
+
+    #[test]
+    fn a_pairing_window_admits_control_until_the_moment_it_expires() {
+        let mut slot = Some(PairingWindow::new(EXPIRES_MS, true));
+        assert!(PairingWindow::admit_control(&mut slot, EXPIRES_MS - 1));
+        assert!(
+            !PairingWindow::admit_control(&mut slot, EXPIRES_MS),
+            "the expiry instant itself is past the window"
+        );
+        assert!(slot.is_none(), "an expired window closes");
+    }
+
+    #[test]
+    fn a_window_without_control_admits_no_request_and_stays_open_until_it_expires() {
+        let mut slot = Some(PairingWindow::new(EXPIRES_MS, false));
+        assert!(!PairingWindow::admit_control(&mut slot, EXPIRES_MS - 1));
+        assert!(
+            slot.is_some(),
+            "refusing a request does not close an unexpired window"
+        );
+        assert!(!PairingWindow::admit_control(&mut slot, EXPIRES_MS + 1));
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn a_pairing_window_shows_its_owner_a_bounded_number_of_requests() {
+        let mut slot = Some(PairingWindow::new(EXPIRES_MS, true));
+        for request in 0..MAX_CONTROL_REQUESTS {
+            assert!(
+                PairingWindow::admit_control(&mut slot, EXPIRES_MS - 1),
+                "request {request} reaches the prompt"
+            );
+            slot.as_mut().unwrap().count_request();
+        }
+        assert!(
+            !PairingWindow::admit_control(&mut slot, EXPIRES_MS - 1),
+            "a peer that keeps connecting cannot keep the prompt on screen"
+        );
+        assert!(slot.is_some(), "the cap refuses without closing the window");
+    }
+
+    #[test]
+    fn the_last_forgiven_wrong_answer_closes_the_window() {
+        let mut window = PairingWindow::new(EXPIRES_MS, true);
+        for _ in 1..MAX_CONTROL_FAILURES {
+            assert!(
+                !window.spend_failure(),
+                "an earlier wrong answer is forgiven"
+            );
+        }
+        assert!(window.spend_failure());
+    }
 
     #[test]
     fn an_expired_file_is_rejected() {
