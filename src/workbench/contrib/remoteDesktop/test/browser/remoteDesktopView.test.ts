@@ -265,9 +265,12 @@ suite('RemoteDesktopView', () => {
 			const { session } = await live();
 			assert.deepStrictEqual(session.sent.slice(0, 2), [{ type: 'releaseSessionInput' }, { type: 'swapSessionModifiers', enabled: isMacintosh }]);
 		});
-		test('the shown display is selected before anything else is sent', async () => {
+		test('the shown display is selected before any input is sent', async () => {
 			const { session } = await live();
-			assert.deepStrictEqual(session.sent[2], { type: 'selectDisplays', ids: ['7'] });
+			// A focused window also asks to capture system keys, in an order of its own.
+			const selected = session.sent.findIndex(input => input.type === 'selectDisplays');
+			assert.deepStrictEqual(session.sent[selected], { type: 'selectDisplays', ids: ['7'] });
+			assert.ok(!session.sent.slice(0, selected).some(input => input.type.startsWith('submit')), 'input was sent before the display was selected');
 		});
 		test('keys go by where they are with what they type; a held key repeats, a shortcut types nothing, a dead key composes', async () => {
 			const { tab, session } = await live();
@@ -501,8 +504,12 @@ suite('RemoteDesktopView', () => {
 		test('a picture of the old display does not take the choice back', async () => {
 			const { tab, session } = await live();
 			tab.pick(tab.control('Display'), 'Display 2 · 2560 × 1440');
+			const picked = session.sent.length;
 			await show(session);
-			assert.ok(!session.sent.some((input, index) => index > 2 && input.type === 'selectDisplays' && input.ids[0] === '7'));
+			assert.ok(
+				!session.sent.slice(picked).some(input => input.type === 'selectDisplays' && input.ids[0] === '7'),
+				'a picture of display 7 selected it again',
+			);
 		});
 		test('the new display is named once its picture shows', async () => {
 			const { tab, session } = await live();
