@@ -9,8 +9,12 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { colourTolerance, hardwareMatrix, pictureColour, showsMatrix, shownColour, type StreamMatrix } from '../../decoderColour.js';
 
-/** One codec string per family with an embedded picture, as the window asks about them. */
-const codecs = ['avc1.640028', 'hev1.1.6.L153.B0', 'vp8', 'vp09.00.40.08', 'av01.0.08M.08'];
+/**
+ * One codec string per family with an embedded picture, as the window asks
+ * about them. HEVC is left out: Chromium decodes it only in hardware, so it
+ * has no software decoder to test.
+ */
+const codecs = ['avc1.640028', 'vp8', 'vp09.00.40.08', 'av01.0.08M.08'];
 
 function software(codec: string): VideoDecoderConfig {
 	return { codec, hardwareAcceleration: 'prefer-software', optimizeForLatency: true };
