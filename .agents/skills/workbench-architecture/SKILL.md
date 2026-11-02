@@ -59,7 +59,7 @@ export class DeviceDetails extends Disposable {
 ## Services and processes
 
 - **Renderer services** inject other services. They never touch Electron or the preload. Engine work goes through `IEngineService`, and window and OS work through `INativeHostService`.
-- **Main-process services** live in `platform/<area>/electron-main`. Each is exposed through a channel facade registered in `VniLinkApplication.initChannels` (`src/code/electron-main/app.ts`). The facade validates arguments with the `common` guards and takes window identity from the IPC context (`windowIdFromContext`). See `engine-bridge` for engine commands.
+- **Main-process services** live in `platform/<area>/electron-main`. Each is exposed through a channel facade registered in `VniLinkApplication.initChannels` (`src/code/electron-main/app.ts`). The facade validates arguments with the `common` guards and takes window identity from the IPC context (`windowIdFromContext`); a copied channel that trusts its caller is wrapped by one (`WindowLoggerChannel`), not trusted. Raw Electron channels carry the `vnilink:` prefix, which the preload and `validatedIpcMain` both require, and the renderer reaches the preload only through `window.vnilink` (`base/parts/sandbox/electron-browser/globals.ts`). See `engine-bridge` for engine commands.
 - **Remote stubs:** a renderer service that is only a main-process proxy uses `registerMainProcessRemoteService` (`platform/recording/electron-browser/recordingService.ts`).
 
 ## Commands, menus and startup

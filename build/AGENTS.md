@@ -1,6 +1,6 @@
 # Build Infrastructure
 
-Build, packaging, verification and test tasks are TypeScript functions run by `node build/run.ts <task>`; `build-test-infrastructure` describes the layout, how to write a task and the contracts each task keeps. Read it before changing anything here or in `package.json` scripts.
+Build, packaging, verification and test tasks are TypeScript functions run by `node build/run.ts <task>`, the only place tasks are defined: every `package.json` script is the task of its name, and `node build/run.ts --help` lists them. `build-test-infrastructure` describes the layout, how to write a task and the contracts each task keeps. Read it before changing anything here or in `package.json` scripts.
 
 `prerequisites.json` declares what every task needs on each OS; `npm run doctor` reports it and each task checks its own entry before it runs.
 
