@@ -320,7 +320,7 @@ Every task runs on one computer. The measurements
 run on this computer by default; `--peer` adds a second computer, running the
 test agent, to the latency run and is never required. `npm run doctor`
 reports the OS permissions a task needs, as granted, missing, or unknown until
-the run asks for them. The documentation at the top of `build/lib/latency.ts`
+the run asks for them. The documentation at the top of `build/lib/measure/latency.ts`
 describes the latency run and what it proves.
 
 A service's suites (`node build/run.ts test:service <service>` and

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ACROSS_SHARING, assertSeenOnly, readRequest } from '../../../test/latency/across.ts';
 import { assertBundleFresh, bundleOptions } from '../bundles.ts';
-import { agentLatencyVariables, agentSideTakes, invitationKey, rendezvousFile } from '../latency.ts';
+import { agentLatencyVariables, agentSideTakes, invitationKey, rendezvousFile } from '../measure/latencyAgent.ts';
 import { BRIDGE_PROTOCOL, openAgentSession, type AgentSession, type AgentSessionOptions } from '../remote.ts';
 
 const root = join(import.meta.dirname, '../../..');

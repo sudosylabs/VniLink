@@ -10,10 +10,12 @@ import { join, resolve } from 'node:path';
 import { suite, test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { CELLS, cells, stimulusPage } from '../../../test/latency/stimulus.ts';
+import { agentLatencyEnvironment } from '../measure/latencyAgent.ts';
+import { latencyOptions } from '../measure/latencyOptions.ts';
+import { readerBuild } from '../measure/latencySides.ts';
 import {
-	agentLatencyEnvironment, latencyOptions, readerBuild, renderAcrossSummary, renderHoldSummary, renderLatencySummary, summariseHolds, summariseLatency,
-	summarisePipeline, summariseViewerStatus
-} from '../latency.ts';
+	renderAcrossSummary, renderHoldSummary, renderLatencySummary, summariseHolds, summariseLatency, summarisePipeline, summariseViewerStatus
+} from '../measure/latencySummary.ts';
 
 /** The strip `crates/vnilink-media/src/tests/timecode.rs` expects from the reader's layout. */
 const EXPECTED = '1010101001011100001111100101101000111100000111';

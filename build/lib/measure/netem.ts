@@ -54,7 +54,7 @@
  * relay on `127.0.0.1:9`, where nothing listens.
  */
 import { chmod, writeFile } from 'node:fs/promises';
-import { processOutput } from './processes.ts';
+import { processOutput } from '../processes.ts';
 
 export type Loss =
 	| { readonly kind: 'random'; readonly percent: number }

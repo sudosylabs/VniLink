@@ -7,14 +7,14 @@
 
 import assert from 'assert';
 import { suite, test } from 'node:test';
-import {
-	conditionMismatch, DEFAULT_OPTIONS, expectedConditions, observeRelay, parseImpairedArguments, parseSize, parseSocketSample, pathMismatch, relayUrl,
-	renderSummary, resolveOptions, scenarioEnvironment, type ConditionExpectation, type ImpairedOptions, type RelayCounters, type ScenarioName, type ScenarioRun
-} from '../impaired.ts';
+import { DEFAULT_OPTIONS, parseImpairedArguments, parseSize, resolveOptions, type ImpairedOptions, type ScenarioName } from '../measure/impairedOptions.ts';
+import { observeRelay, parseSocketSample, relayUrl, type RelayCounters } from '../measure/impairedRelay.ts';
+import { renderSummary, type ScenarioRun } from '../measure/impairedReport.ts';
+import { conditionMismatch, expectedConditions, pathMismatch, scenarioEnvironment, type ConditionExpectation } from '../measure/impairedScenarios.ts';
 import {
 	blackoutArguments, creationCommands, NETEM_PROFILES, netemArguments, profileCommands, qdiscCommands, RELAY_PATH, relayPathCommands, selectProfiles,
 	shellScript, statisticsDelta, topology, type LinkPath, type NetemProfile
-} from '../netem.ts';
+} from '../measure/netem.ts';
 
 function named(name: string): NetemProfile {
 	const found = NETEM_PROFILES.find(item => item.name === name);

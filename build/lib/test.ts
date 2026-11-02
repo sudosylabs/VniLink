@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/src/scenarios.ts';
 import { runContainer } from './containers.ts';
 import { electronExecutable } from './electron.ts';
-import { launchLatencySide } from './latency.ts';
+import { launchLatencySide } from './measure/latencyAgent.ts';
 import { assertNativeFresh, defaultNativeOptions, nativeCargo, nativeEnvironment } from './native.ts';
 import { agentPeer } from './remote.ts';
 import { ProcessRunner } from './processes.ts';

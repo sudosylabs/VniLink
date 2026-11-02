@@ -86,9 +86,9 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'test:linux': async (root, signal) => (await import('./lib/test.ts')).validateLinux(root, signal),
 	'test:windows': async (root, signal, args) => (await import('./lib/tools.ts')).runTool(root, signal, 'powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/test-windows.ps1', ...args]),
 	'sandbox:linux': async (root, signal) => (await import('./lib/electron.ts')).allowLinuxSandbox(root, signal),
-	'measure:impaired': async (root, signal, args) => (await import('./lib/impaired.ts')).measureImpairedInContainer(root, signal, args),
-	'measure:impaired:linux': async (root, signal, args) => (await import('./lib/impaired.ts')).measureImpaired(root, signal, args),
-	'measure:latency': async (root, signal, args) => (await import('./lib/latency.ts')).measureLatency(root, signal, args),
+	'measure:impaired': async (root, signal, args) => (await import('./lib/measure/impaired.ts')).measureImpairedInContainer(root, signal, args),
+	'measure:impaired:linux': async (root, signal, args) => (await import('./lib/measure/impaired.ts')).measureImpaired(root, signal, args),
+	'measure:latency': async (root, signal, args) => (await import('./lib/measure/latency.ts')).measureLatency(root, signal, args),
 	'check': async () => {
 		for (const name of ['check:product', 'check:hygiene', 'check:license', 'check:upstream', 'check:unused', 'format:check', 'lint', 'typecheck', 'test:tooling', 'test:unit']) {
 			await step(name);
