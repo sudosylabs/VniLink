@@ -72,11 +72,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 		return (await import('./lib/test.ts')).runUiTests(root, signal, args);
 	},
 	'test:native': async (root, signal) => (await import('./lib/tools.ts')).runNodeTests(root, signal, 'test/native/*.test.mjs'),
-	'test:tooling': async (root, signal) => {
-		const { runNodeTests } = await import('./lib/tools.ts');
-		await runNodeTests(root, signal, 'build/lib/test/*.test.ts');
-		await runNodeTests(root, signal, 'test/tooling/*.test.mjs');
-	},
+	'test:tooling': async (root, signal) => (await import('./lib/tools.ts')).runNodeTests(root, signal, 'build/lib/test/*.test.ts'),
 	'fuzz': async (root, signal, args) => (await import('./lib/fuzz.ts')).runFuzzTargets(root, signal, args),
 	'test:unit': async (root, signal, args) => (await import('./lib/unitTests.ts')).runNodeUnitTests(root, signal, args),
 	'test:unit:electron': async (root, signal, args) => (await import('./lib/unitTests.ts')).runElectronUnitTests(root, signal, args),

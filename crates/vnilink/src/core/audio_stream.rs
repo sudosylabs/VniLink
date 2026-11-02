@@ -107,7 +107,7 @@ impl Core {
                 let devices:Vec<AudioDevice>=serde_json::from_slice(&read(&mut recv).await?).map_err(|_|Error::Malformed)?;
                 validate_devices(&devices)?;
                 if devices.iter().any(|d|d.kind!=kind){return Err(Error::Malformed);}
-                let _=send.finish();Ok(devices)
+                crate::ignored!(crate::trace::AUDIO,"a stream that cannot finish is closed with its link",send.finish());Ok(devices)
             });
             if *stop.borrow(){return Err(Error::NoSession);}
             tokio::select!{biased;_=stop.changed()=>Err(Error::NoSession),result=operation=>result.map_err(|_|Error::Timeout)?}
