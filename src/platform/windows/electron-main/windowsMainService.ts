@@ -24,6 +24,10 @@ export class WindowsMainService extends Disposable {
 	private readonly windowOpened = this._register(new Emitter<BrowserWindow>());
 	public readonly onDidOpenWindow = this.windowOpened.event;
 	private mainWindow: BrowserWindow | undefined;
+	/** Whether the main window's page has loaded; until then it stays hidden. */
+	private loaded = false;
+	/** A request to show the window that arrived while its page loaded. */
+	private showWhenLoaded = false;
 
 	constructor(@ILogService private readonly logService: ILogService) {
 		super();
@@ -41,6 +45,8 @@ export class WindowsMainService extends Disposable {
 	public async openMainWindow(show: boolean): Promise<BrowserWindow> {
 		const window = this.createWindow();
 		this.mainWindow = window;
+		this.loaded = false;
+		this.showWhenLoaded = false;
 		window.once('closed', () => {
 			if (this.mainWindow === window) {
 				this.mainWindow = undefined;
@@ -49,7 +55,10 @@ export class WindowsMainService extends Disposable {
 		this.windowOpened.fire(window);
 		try {
 			await window.loadURL(WORKBENCH_URL);
-			if (show) {
+			if (this.mainWindow === window) {
+				this.loaded = true;
+			}
+			if (show || this.takeShowRequest()) {
 				window.show();
 			}
 			return window;
@@ -61,8 +70,20 @@ export class WindowsMainService extends Disposable {
 		}
 	}
 
+	/** Whether someone asked for the window while it loaded; asking once is answered once. */
+	private takeShowRequest(): boolean {
+		const requested = this.showWhenLoaded;
+		this.showWhenLoaded = false;
+		return requested;
+	}
+
 	public focusMainWindow(): void {
 		const window = this.getMainWindow();
+		if (window && !this.loaded) {
+			// Shown before its page, the window would flash blank.
+			this.showWhenLoaded = true;
+			return;
+		}
 		if (window?.isMinimized()) {
 			window.restore();
 		}
