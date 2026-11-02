@@ -43,7 +43,7 @@ export { SyncDescriptor } from './src/platform/instantiation/common/descriptors.
 			resolveDir: root, loader: 'ts',
 		},
 		bundle: true, write: false, format: 'esm', platform: 'node', target: 'node22',
-		tsconfig: `${root}src/tsconfig.json`,
+		tsconfig: `${root}tsconfig.json`,
 	});
 	const { ProbeId: id, Consumer, InstantiationService, ServiceCollection, SyncDescriptor } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 	let created = 0;
@@ -77,7 +77,7 @@ test('native-host proxy sends its window as context, forwards window events and 
  export { ServiceCollection } from './src/platform/instantiation/common/serviceCollection.js';
  export { SyncDescriptor } from './src/platform/instantiation/common/descriptors.js';`, resolveDir: root, loader: 'ts'
 		},
-		bundle: true, write: false, format: 'esm', platform: 'node', target: 'node22', tsconfig: `${root}src/tsconfig.json`,
+		bundle: true, write: false, format: 'esm', platform: 'node', target: 'node22', tsconfig: `${root}tsconfig.json`,
 	});
 	const { NativeHostService, IMainProcessService, INativeHostService, InstantiationService, ServiceCollection, SyncDescriptor, isNativeHostRequest } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 	let receive;

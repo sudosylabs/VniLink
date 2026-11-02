@@ -21,7 +21,7 @@ async function sourceFingerprint(root: string): Promise<string> {
 			files.push({ ...entry, path: `${directory}/${entry.path}` });
 		}
 	}
-	for (const path of ['package.json', 'package-lock.json', 'product.json', 'tsconfig.json', 'src/tsconfig.json', 'LICENSE', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
+	for (const path of ['package.json', 'package-lock.json', 'product.json', 'tsconfig.json', 'LICENSE', 'LICENSE.vscode.txt', 'ThirdPartyNotices.vscode.txt']) {
 		files.push({ path, sha256: createHash('sha256').update(await readFile(join(root, path))).digest('hex') });
 	}
 	return createHash('sha256').update(JSON.stringify(files)).digest('hex');

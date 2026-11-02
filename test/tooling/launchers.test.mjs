@@ -42,18 +42,19 @@ test('preLaunch installs when node_modules is missing and builds only when the a
 test('the launchers prepare the checkout, then run their task with the arguments', async () => {
 	for (const [script, task] of [['code', 'dev'], ['test', 'test:ui']]) {
 		const shell = await readFile(join(root, `scripts/${script}.sh`), 'utf8');
-		assert.match(shell, new RegExp(`node build/lib/preLaunch\\.ts\\nexec node build/run\\.ts ${task} "\\$@"\\n$`));
+		assert.match(shell, new RegExp(`\\nexec node build/run\\.ts ${task} "\\$@"\\n$`));
 		await access(join(root, `scripts/${script}.sh`), constants.X_OK);
 		await promisify(execFile)('bash', ['-n', join(root, `scripts/${script}.sh`)]);
 		const batch = await readFile(join(root, `scripts/${script}.bat`), 'utf8');
-		assert.match(batch, /node build\/lib\/preLaunch\.ts \|\| \(/);
 		assert.match(batch, new RegExp(`node build/run\\.ts ${task} %\\*`));
 	}
 	const scripts = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).scripts;
-	assert.equal(scripts.dev, 'node build/lib/preLaunch.ts && node build/run.ts dev');
-	assert.equal(scripts['test:ui'], 'node build/lib/preLaunch.ts && node build/run.ts test:ui');
-	assert.equal(scripts['sandbox:linux'], 'node build/run.ts sandbox:linux');
-	assert.equal(scripts.doctor, 'node build/run.ts doctor');
+	// Each script is the build task of its name; npm's own lifecycle scripts prepare the install.
+	for (const [name, command] of Object.entries(scripts)) {
+		if (!['preinstall', 'postinstall', 'prepare'].includes(name)) {
+			assert.equal(command, `node build/run.ts ${name}`, `${name} is not its build task`);
+		}
+	}
 });
 
 test('preLaunch imports only Node modules: it installs the dependencies', async () => {

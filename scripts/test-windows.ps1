@@ -31,7 +31,7 @@ try {
     if (-not $SkipInstall) { Invoke-Check $Npm @('ci') }
     Invoke-Check $Npm @('run', 'doctor', '--', '--require', 'build,test:rust,test:ui')
     Invoke-Check $Npm @('run', 'check')
-    Invoke-Check 'cargo' @('fmt', '--all', '--', '--check')
+    Invoke-Check $Npm @('run', 'check:rust')
     $Failures = @()
     foreach ($Arguments in @(@('run', 'test:rust'), @('test'))) {
         try {

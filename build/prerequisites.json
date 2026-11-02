@@ -617,6 +617,10 @@
         "liquid-glass"
       ]
     },
+    "typecheck": {
+      "description": "Typecheck the application, the tests and the build",
+      "requires": ["node"]
+    },
     "build:release": {
       "description": "Build the release payload",
       "same": "build"
@@ -625,8 +629,16 @@
       "description": "Assemble the unsigned application",
       "same": "build"
     },
+    "package:dir": {
+      "description": "Build the release payload and assemble the unsigned application from it",
+      "same": "build"
+    },
     "package:installers": {
-      "description": "Build the installers",
+      "description": "Assemble the application and build its installers",
+      "same": "package:installers:staged"
+    },
+    "package:installers:staged": {
+      "description": "Build the installers from the assembled application",
       "same": "build",
       "requires": ["rpmbuild"]
     },
@@ -665,6 +677,24 @@
     "test:ui": {
       "description": "Run the UI scenarios in Electron",
       "requires": ["platform", "node", "linux-runtime-libraries", "test-display", "linux-sandbox"]
+    },
+    "test": {
+      "description": "Build, then run the native bridge tests and the UI scenarios",
+      "same": "build",
+      "requires": ["linux-runtime-libraries", "test-display", "linux-sandbox"]
+    },
+    "test:native": {
+      "description": "Run the native bridge tests against the staged addon",
+      "requires": ["platform", "node"]
+    },
+    "test:tooling": {
+      "description": "Run the build and application unit tests",
+      "requires": ["node"]
+    },
+    "test:windows": {
+      "description": "Run the full Windows suite",
+      "platforms": ["win32"],
+      "requires": ["platform", "node"]
     },
     "test:rust": {
       "description": "Run the Rust tests",
@@ -747,6 +777,35 @@
       "description": "Check the license notice of every source file",
       "requires": ["node", "git"]
     },
+    "check": {
+      "description": "Run every check that needs no build: metadata, hygiene, licenses, copies, unused code, formatting, lint, types and unit tests",
+      "requires": ["node", "git"]
+    },
+    "check:rust": {
+      "description": "Check the Rust workspace's formatting and lints",
+      "requires": ["rust"]
+    },
+    "validate": {
+      "description": "Run what CI runs on this computer: the checks, the Rust checks and tests, the build and every test",
+      "same": "test",
+      "requires": ["process-tools", "ffprobe"]
+    },
+    "lint": {
+      "description": "Lint the TypeScript and the stylesheets",
+      "requires": ["node"]
+    },
+    "lint:ts": {
+      "description": "Lint the TypeScript",
+      "requires": ["node"]
+    },
+    "lint:css": {
+      "description": "Lint the stylesheets",
+      "requires": ["node"]
+    },
+    "lint:fix": {
+      "description": "Fix what the linters can",
+      "requires": ["node"]
+    },
     "license:apply": {
       "description": "Add the license notice to source files that lack it",
       "requires": ["node", "git"]
@@ -757,6 +816,10 @@
     },
     "format": {
       "description": "Format the sources",
+      "requires": ["node"]
+    },
+    "format:check": {
+      "description": "Check that the sources are formatted",
       "requires": ["node"]
     },
     "vscode": {

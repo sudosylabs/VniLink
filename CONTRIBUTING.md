@@ -72,7 +72,7 @@ Some tasks need more:
 | `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:latency` | Screen Recording for the development VniLink: Run the task; on its first run macOS asks and the run stops. Allow VniLink in System Settings > Privacy & Security > Screen & System Audio Recording, then run it again; A second computer (optional) |
-| `npm run assets:tray` | rsvg-convert: `brew install librsvg` |
+| `node build/run.ts assets:tray` | rsvg-convert: `brew install librsvg` |
 
 ### Windows
 
@@ -95,7 +95,7 @@ Some tasks need more:
 | `npm run test:linux` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:latency` | Signed-in desktop: Run the task from a terminal on the signed-in desktop; A second computer (optional) |
-| `npm run assets:tray` | rsvg-convert: `pacman -S mingw-w64-x86_64-librsvg` in the MSYS2 shell |
+| `node build/run.ts assets:tray` | rsvg-convert: `pacman -S mingw-w64-x86_64-librsvg` in the MSYS2 shell |
 
 ### Linux
 
@@ -124,10 +124,10 @@ Some tasks need more:
 | --- | --- |
 | `npm run test:linux` | Docker: Ubuntu and Debian: `sudo apt-get install docker.io && sudo usermod -aG docker $USER`, then log in again; Fedora: `sudo dnf install moby-engine && sudo systemctl enable --now docker && sudo usermod -aG docker $USER`, then log in again |
 | `npm run measure:impaired` | Docker: Ubuntu and Debian: `sudo apt-get install docker.io && sudo usermod -aG docker $USER`, then log in again; Fedora: `sudo dnf install moby-engine && sudo systemctl enable --now docker && sudo usermod -aG docker $USER`, then log in again |
-| `npm run measure:impaired:linux` | ip and tc: Ubuntu and Debian: `iproute2`; Fedora: `iproute iproute-tc`; Root: Run it as root (`sudo node build/run.ts measure:impaired:linux`), or run `npm run measure:impaired`, which runs it in a container |
+| `node build/run.ts measure:impaired:linux` | ip and tc: Ubuntu and Debian: `iproute2`; Fedora: `iproute iproute-tc`; Root: Run it as root (`sudo node build/run.ts measure:impaired:linux`), or run `npm run measure:impaired`, which runs it in a container |
 | `npm run measure:latency` | Screen sharing through the desktop portal: Run the task in the graphical session and choose the display in both portal dialogs; the answers are kept in `.build/latency` for later runs; A second computer (optional) |
-| `npm run package:installers` | rpmbuild: Ubuntu and Debian: `rpm`; Fedora: `rpm-build` |
-| `npm run assets:tray` | rsvg-convert: Ubuntu and Debian: `librsvg2-bin`; Fedora: `librsvg2-tools` |
+| `npm run package:installers:staged` | rpmbuild: Ubuntu and Debian: `rpm`; Fedora: `rpm-build` |
+| `node build/run.ts assets:tray` | rsvg-convert: Ubuntu and Debian: `librsvg2-bin`; Fedora: `librsvg2-tools` |
 | `npm run sandbox:linux` | AppArmor |
 
 The first native build downloads, once:
@@ -263,10 +263,10 @@ When intentionally changing an adapted module, update its reviewed hash and
 regenerate dependency edges in the manifest. New application dependencies must
 be explicitly listed rather than silently excluded from the graph.
 
-Both TypeScript projects use legacy parameter decorators and compatible compiler
-settings. `src/tsconfig.json` checks every retained upstream and adapted module;
-the root configuration checks the application entry points and tests. CSS imports
-are declared in `src/assets.d.ts`. `npm run typecheck` checks both projects.
+The root TypeScript configuration checks the application from its entry points,
+every copied module they reach included, and the tests; `build/tsconfig.json`
+checks the build. Both use legacy parameter decorators. CSS imports are declared
+in `src/assets.d.ts`. `npm run typecheck` checks both projects.
 The Electron smoke test exercises native controls, window-state IPC, theme
 updates, fullscreen layout, tab overflow and request validation on the current platform.
 

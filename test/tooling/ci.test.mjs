@@ -26,9 +26,10 @@ test('CI installs from the prerequisites manifest, reports the doctor first and 
 		assert.match(ci, new RegExp(`^  ${job}$`, 'm'), `CI has no ${job} job`);
 	}
 	const scripts = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).scripts;
-	assert.match(scripts['test:windows'], /scripts\/test-windows\.ps1/);
+	assert.match(await readFile(join(root, 'build/run.ts'), 'utf8'), /'test:windows':.*scripts\/test-windows\.ps1/);
 	assert.equal(scripts.precommit, undefined);
-	assert.match(scripts.validate, /npm run check && cargo fmt --all -- --check && npm run test:rust && npm test/);
+	assert.match(ci, /npm run validate/, 'macOS runs the same sequence as validate');
+	assert.equal((ci.match(/npm run check:rust/g) ?? []).length, 2, 'the Linux jobs check the Rust workspace through the task');
 });
 
 test('the pre-commit hook checks staged files only; the full suite is opt-in before a push', async () => {

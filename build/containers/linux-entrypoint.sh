@@ -42,7 +42,7 @@ cd /work
 } > /evidence/environment.txt
 trap 'cp -a .build/test-runs /evidence/ 2>/dev/null || true' EXIT
 npm run check
-cargo fmt --all -- --check
+npm run check:rust
 npm run test:rust
 # Real secret-service smoke is separate from unavailable-store fixtures.
 dbus-run-session -- bash -c 'printf "\n" | gnome-keyring-daemon --daemonize --unlock --components=secrets; xvfb-run -a /usr/local/bin/vnilink-tests --desktop npm test'

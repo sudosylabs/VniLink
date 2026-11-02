@@ -46,11 +46,8 @@ jobs:
         with:
           key: macos
       - run: npm run doctor -- --require build,test:rust,test:ui
-      - run: npm run check
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: npm run test:rust
-      - run: npm test
+      # The checks, the Rust checks and tests, the build and every test.
+      - run: npm run validate
       - name: Upload scenario evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -85,8 +82,7 @@ jobs:
       - run: npm run sandbox:linux
       - run: npm run doctor -- --require build,test:rust,test:ui
       - run: npm run check
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: npm run check:rust
       - run: npm run test:rust
       - run: npm run build
       - run: npm run test:native
@@ -136,8 +132,7 @@ jobs:
           key: fedora
       - run: npm run doctor -- --require build,test:rust,test:ui
       - run: npm run check
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: npm run check:rust
       - run: npm run test:rust
       - run: npm run build
       - run: npm run test:native
@@ -199,10 +194,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: windows
-      - name: Clippy
-        shell: pwsh
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      # npm ci, the doctor, the checks, Rust tests and UI tests.
+      # npm ci, the doctor, the checks, the Rust checks and tests, and UI tests.
       - name: Test (native Windows environment)
         shell: pwsh
         run: ./scripts/test-windows.ps1 -MsysRoot $env:VNILINK_MSYS_ROOT
