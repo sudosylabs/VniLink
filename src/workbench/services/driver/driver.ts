@@ -15,7 +15,6 @@ import { mainWindow } from '../../../base/browser/window.js';
 import { coalesce } from '../../../base/common/arrays.js';
 import { DeferredPromise } from '../../../base/common/async.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
-import { context, ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { ICommandService } from '../../../platform/commands/common/commands.js';
 import { IDataChannelService } from '../../../platform/engine/common/dataChannelService.js';
 import type { EngineCommand, EngineReply } from '../../../platform/engine/common/engine.js';
@@ -268,6 +267,8 @@ export class BrowserWindowDriver implements IWindowDriver {
 	}
 
 	public async rendererExposure(): Promise<IRendererExposure> {
+		// The preload's bridge is read only here, so the workbench loads without one, as in its unit tests.
+		const { context, ipcRenderer } = await import('../../../base/parts/sandbox/electron-browser/globals.js');
 		// The preload sends only on `vnilink:` channels and refuses any other.
 		let unprefixedRejected = false;
 		try {

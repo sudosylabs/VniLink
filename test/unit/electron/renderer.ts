@@ -24,7 +24,7 @@ interface BrowserMocha {
 }
 
 interface MochaRunner {
-	on(event: 'pass' | 'pending', listener: (test: MochaTest) => void): void;
+	on(event: 'test' | 'pass' | 'pending', listener: (test: MochaTest) => void): void;
 	on(event: 'fail', listener: (test: MochaTest, error: Error) => void): void;
 	on(event: 'end', listener: () => void): void;
 	readonly stats?: { passes: number; failures: number; pending: number };
@@ -41,6 +41,53 @@ const files = JSON.parse(process.env.VNILINK_UNIT_FILES ?? '[]') as string[];
 
 const grep = process.env.VNILINK_UNIT_GREP;
 
+/** What was running when an error no test's promise carried arrived. */
+let running = 'loading the unit tests';
+
+/** Errors no test's promise carried, each already reported as a failure. */
+let unexpectedErrors = 0;
+
+function send(channel: 'vnilink:unit:result' | 'vnilink:unit:end', message: object): void {
+	ipcRenderer.send(channel, message);
+}
+
+/**
+ * Reports an error no test's promise carried (a window error, as Chromium
+ * reports a ResizeObserver loop, a rejection nobody handled, or a bundle
+ * that throws while it loads) as a failure of what was running. As in VS
+ * Code's runner it fails the run; unlike mocha's own handler, it does not
+ * stop the tests after it.
+ */
+function unexpected(error: unknown, fallback: string): void {
+	unexpectedErrors++;
+	const stack = error instanceof Error ? error.stack ?? error.message : fallback;
+	send('vnilink:unit:result', { title: `${running}: an error outside its promise`, state: 'failed', error: stack });
+}
+
+window.addEventListener('error', event => {
+	// A script or stylesheet that fails to load reaches the window here too, on its way to the element.
+	if (!(event instanceof ErrorEvent)) {
+		return;
+	}
+	event.preventDefault();
+	event.stopImmediatePropagation();
+	// Chromium's report that observers resized within one frame; it delivers the rest on the next frame, losing nothing.
+	if (event.message.startsWith('ResizeObserver loop')) {
+		return;
+	}
+	unexpected(event.error, event.message);
+}, { capture: true });
+
+window.addEventListener('unhandledrejection', event => {
+	event.preventDefault();
+	const reason: unknown = event.reason;
+	// A cancelled operation is how disposal ends work; upstream ignores it too.
+	if (reason instanceof Error && reason.name === 'Canceled') {
+		return;
+	}
+	unexpected(reason, String(reason));
+});
+
 function load(element: HTMLScriptElement | HTMLLinkElement): Promise<boolean> {
 	return new Promise(resolve => {
 		element.addEventListener('load', () => {
@@ -51,10 +98,6 @@ function load(element: HTMLScriptElement | HTMLLinkElement): Promise<boolean> {
 		}, { once: true });
 		document.head.append(element);
 	});
-}
-
-function send(channel: 'vnilink:unit:result' | 'vnilink:unit:end', message: object): void {
-	ipcRenderer.send(channel, message);
 }
 
 async function run(): Promise<void> {
@@ -73,6 +116,9 @@ async function run(): Promise<void> {
 		}
 	}
 	const runner = mocha.run();
+	runner.on('test', test => {
+		running = test.fullTitle();
+	});
 	runner.on('pass', test => {
 		send('vnilink:unit:result', { title: test.fullTitle(), state: 'passed', duration: test.duration });
 	});
@@ -83,7 +129,8 @@ async function run(): Promise<void> {
 		send('vnilink:unit:result', { title: test.fullTitle(), state: 'failed', error: error.stack ?? String(error) });
 	});
 	runner.on('end', () => {
-		send('vnilink:unit:end', runner.stats ?? { passes: 0, failures: 1, pending: 0 });
+		const stats = runner.stats ?? { passes: 0, failures: 1, pending: 0 };
+		send('vnilink:unit:end', { ...stats, failures: stats.failures + unexpectedErrors });
 	});
 }
 
