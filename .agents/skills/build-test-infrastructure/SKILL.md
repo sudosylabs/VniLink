@@ -70,7 +70,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 ## Test contracts
 
 - Unit tests follow VS Code's: beside the module in `test/<layer>/`, mocha's TDD interface, VS Code's test infrastructure copied through the importer (`base/test/common/utils.ts`, `virtualScheduling`, `instantiationServiceMock.ts`), and the copied lint rules that require the leak check, forbid `.only` and keep suite callbacks synchronous. `test:unit` bundles the tests with esbuild code splitting, so a module has one instance across suites; `test:unit:electron` gives each test file its own script. `check` runs `test:unit`; `test:ui` without a scenario selection runs `test:unit:electron` first. `check:unused` and `check:upstream` treat test folders as test code and copied tests as entry points.
-- Browser scenarios live in `test/browser`, are listed in `test/automation/scenarios.ts`, and run with `npm run test:ui -- --scenario <name>`. A scenario builds its subject through an `InstantiationService` with fake services (`test/browser/settingsFixture.ts`).
+- A view's behaviour is a unit suite in its area's `test/browser/` (`contrib/devices/test/browser/devicesPage.test.ts`), built through `TestInstantiationService` with typed doubles. Smoke uses the same fixture classes for its pictures through `test/smoke/fixtures/`, listed in `test/automation/scenarios.ts` and selected with `npm run test:ui -- --scenario <name>`.
 - Smoke scenarios (`test/smoke/main.ts`) drive the real app through `window.driver`, wait for explicit readiness, and keep logs and screenshots in `.build/test-runs`.
 - Build tests (`build/lib/test/*.test.ts`, `node:test`, as VS Code's) import build modules directly and are type-checked by `build/tsconfig.json`; `test:tooling` runs them. Waits have a condition, a bound and a useful timeout message; a rule about source text is a lint rule, not a test.
 - Temporary profiles and work directories are removed on success, failure and interruption.
@@ -79,6 +79,6 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 
 - A fixture builds the real view through `ServiceCollection` with fake services, never a global mock or a procedural page factory; production code never imports fixture data.
 - It exposes the states worth testing (loading, empty, populated, unavailable, error, recovery) and controls async completion and failure explicitly.
-- Shared mounting, services and cleanup live in one fixture per area (`test/browser/settingsFixture.ts`, `DevicePageFixture`); screenshots are taken after explicit settlement with a controlled viewport and theme.
+- Shared mounting, services and cleanup live in one fixture per area (`contrib/settings/test/browser/settingsFixture.ts`, `contrib/devices/test/browser/devicePageFixture.ts`); screenshots are taken after explicit settlement with a controlled viewport and theme.
 
 Validate infrastructure changes with the tooling tests, one representative build (`npm run build`) and one UI scenario. `unit-tests` owns check selection; `cross-platform-validation` owns platform prerequisites.

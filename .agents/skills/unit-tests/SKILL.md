@@ -25,7 +25,7 @@ Run the smallest checks that actually cover the change, plus format/lint/type ch
 
 Assert complete behavior or non-obvious invariants. Prefer observable success, failure/recovery, isolation and teardown, and the story a service records, over snapshots of internal structure. Test changed limits/authorization and stale/disposed work where relevant. Avoid tests added solely to raise counts; reversible low-impact edits may be covered by existing checks.
 
-In `vnilink`, a test that starts an engine belongs in `vnilink-testkit` (see below); one that needs an engine internal the kit cannot reach, and every engine-free test, sits beside its module in `#[cfg(test)] mod tests` or a sibling test file. Other crates keep their own organization, including registered `src/tests` modules. Node validators test exact fields, bounds and rejected extras. TypeScript unit tests are written as `test/AGENTS.md` describes: one behaviour per `test`, named for it, with a generated `test` per case rather than a loop of cases inside one; the leak check in every suite; time moved by `runWithFakedTimers` rather than waited for. Browser scenarios are independent and selectable through maintained infrastructure (`build-test-infrastructure`), not selected by editing a runner or invoking unrelated areas under a tabs test.
+In `vnilink`, a test that starts an engine belongs in `vnilink-testkit` (see below); one that needs an engine internal the kit cannot reach, and every engine-free test, sits beside its module in `#[cfg(test)] mod tests` or a sibling test file. Other crates keep their own organization, including registered `src/tests` modules. Node validators test exact fields, bounds and rejected extras. TypeScript unit tests are written as `test/AGENTS.md` describes: one behaviour per `test`, named for it, with a generated `test` per case rather than a loop of cases inside one; the leak check in every suite; time moved by `runWithFakedTimers` rather than waited for. Smoke and browser scenarios are independent and selectable through maintained infrastructure (`build-test-infrastructure`), not selected by editing a runner or by running unrelated areas inside another scenario.
 
 ## Writing a Rust test
 
@@ -36,6 +36,9 @@ A test is one scenario, named as the behaviour it proves (`a_key_after_control_i
 - Wait with bounded `wait_for` on state, then `trace.wait_for_records` for the story's last record: a service records just after it acts.
 - Each assert's message names the contract it guards. Values that vary between runs, as drop counts, are bounded outside the story.
 - Where a service handles user content, assert that `trace.events()` holds none of it.
+- Decision code takes `now` from its caller; test expiry, deadlines, rate limits and backoff beside the module with explicit instants just before, at and after each boundary, never by waiting.
+- Lock-free or lock-ordered state shared across threads (the event hub, the input queue, the video counters) is modelled with loom: such a module takes `Mutex` and atomics from `crate::sync`, and its `#[cfg(all(test, vnilink_loom))] mod loom_*` models run with `node build/run.ts test:loom`. The cfg is `vnilink_loom`, not `loom`, because tokio drops its networking under `cfg(loom)`.
+- Parsers of what a peer or a file sends have a fuzz target (`vnilink::fuzzing`, `node build/run.ts fuzz`); an input the fuzzer finds becomes a unit test beside the parser.
 - New tests return `Result` and use `?` for setup.
 
 ## Binary freshness and outcomes

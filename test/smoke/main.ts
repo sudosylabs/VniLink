@@ -739,7 +739,7 @@ class SmokeSuite {
         strip: region('.tabs-scrollable'), container: region('.tabs-container'), tab: region('.tab'),
         close: tab.querySelector('.tab-close') !== null, action: document.querySelector('.view-action') ? region('.view-action') : null };
     })()`);
-		// Home has no titlebar actions now that pairing is on the Devices page; the tabs scenario checks an action's drag region.
+		// Home has no titlebar actions now that pairing is on the Devices page; the titlebar tabs unit suite checks an action's drag region.
 		assert.deepEqual(tabs, { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: null });
 		const surfaces: unknown = await window.webContents.executeJavaScript(`(() => {
       const color = selector => getComputedStyle(document.querySelector(selector)).backgroundColor;

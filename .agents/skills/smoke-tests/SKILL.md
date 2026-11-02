@@ -11,7 +11,7 @@ Confirm current scripts in `package.json`. `npm test` builds, runs native tests 
 
 Use `unit-tests` to choose coverage and `cross-platform-validation` to prepare the environment. Ensure the native addon and renderer resources came from the intended revision/target. Isolate the profile and engine fixture from the user's active app, keychain and grants. Lifecycle/readiness/teardown belong to shared automation (`build-test-infrastructure`).
 
-Run area/name selectors supported by the maintained runner. Do not prescribe editing `main.ts` or hiding unrelated scenarios under `verifyTabs`. If the required selector does not exist, name that infrastructure gap; implement it when in scope or report the limits of the broader available run. Temporary diagnostic drivers must not masquerade as maintained end-to-end coverage.
+Run area/name selectors supported by the maintained runner. Do not prescribe editing `main.ts` or hiding unrelated checks inside another scenario. If the required selector does not exist, name that infrastructure gap; implement it when in scope or report the limits of the broader available run. Temporary diagnostic drivers must not masquerade as maintained end-to-end coverage.
 
 Collect scenario-specific logs and useful failure screenshots/traces. Wait on observable state with bounded deadlines; timeouts do not prove a leak or environment issue without diagnosis. Restore window state and release engines/channels/profiles on every exit path.
 
