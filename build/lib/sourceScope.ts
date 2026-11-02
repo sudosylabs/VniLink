@@ -8,9 +8,9 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { posix, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { manifestPath, type VsCodeManifest } from './lib/vscode/manifest.ts';
+import { manifestPath, type VsCodeManifest } from './vscode/manifest.ts';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = fileURLToPath(new URL('../../', import.meta.url));
 
 // Read synchronously: the lint and format configurations import this module.
 const manifest = JSON.parse(readFileSync(resolve(root, manifestPath), 'utf8')) as VsCodeManifest;

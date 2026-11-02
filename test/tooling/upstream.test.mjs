@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { isApplicationFile } from '../../build/sourceScope.ts';
+import { isApplicationFile } from '../../build/lib/sourceScope.ts';
 import staged from '../../.lintstagedrc.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));

@@ -14,7 +14,7 @@ import imports from './build/lint/imports.ts';
 import synchronousFs from './build/lint/synchronousFs.ts';
 import workbenchDom from './build/lint/workbenchDom.ts';
 import buildClasses from './build/lint/buildClasses.ts';
-import { upstreamIgnores } from './build/sourceScope.ts';
+import { upstreamIgnores } from './build/lib/sourceScope.ts';
 import mustUseSuperDispose from './build/lint/vscode/code-must-use-super-dispose.ts';
 import declareServiceBrand from './build/lint/vscode/code-declare-service-brand.ts';
 import noDangerousTypeAssertions from './build/lint/vscode/code-no-dangerous-type-assertions.ts';

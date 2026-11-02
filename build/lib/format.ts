@@ -13,9 +13,9 @@ import { resolve, extname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isApplicationFile } from './sourceScope.ts';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = fileURLToPath(new URL('../../', import.meta.url));
 
-const settings = JSON.parse(await readFile(new URL('../tsfmt.json', import.meta.url), 'utf8')) as ts.FormatCodeSettings;
+const settings = JSON.parse(await readFile(new URL('../../tsfmt.json', import.meta.url), 'utf8')) as ts.FormatCodeSettings;
 
 function expandStructure(filename: string, text: string): string {
 	const source = ts.createSourceFile(filename, text, ts.ScriptTarget.Latest, true);

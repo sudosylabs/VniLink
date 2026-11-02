@@ -109,8 +109,8 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 		await lintTypeScript(root, signal, true);
 		await lintStyles(root, signal, true);
 	},
-	'format': async (_root, _signal, args) => (await import('./format.ts')).formatFiles(['--write', ...args]),
-	'format:check': async (_root, _signal, args) => (await import('./format.ts')).formatFiles(['--check', ...args]),
+	'format': async (_root, _signal, args) => (await import('./lib/format.ts')).formatFiles(['--write', ...args]),
+	'format:check': async (_root, _signal, args) => (await import('./lib/format.ts')).formatFiles(['--check', ...args]),
 	'license:apply': async (root, _signal, args) => (await import('./lib/license.ts')).applyLicenseCommand(root, args),
 	'assets:tray': async (root, signal) => (await import('./lib/trayAssets.ts')).renderTrayAssets(root, signal),
 	'vscode': async (root, _signal, args) => (await import('./lib/vscode/import.ts')).vscodeCommand(root, args),
