@@ -6,3 +6,7 @@ linker = "x86_64-w64-mingw32-gcc"
 # the mode argument before umask, so those files are never group-readable.
 [env]
 LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_FILE_PERMISSIONS=0600"
+# This checkout's root, for `UPDATE_EXPECT=1`. Without it expect-test takes
+# the outermost folder with a Cargo.toml as the workspace, so a run in a
+# checkout inside another (a worktree) rewrites the outer checkout's stories.
+CARGO_WORKSPACE_DIR = { value = "", relative = true }
