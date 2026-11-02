@@ -9,8 +9,10 @@
  * The unit tests: every `*.test.ts` under a `test/<layer>/` folder in `src`,
  * as VS Code places them, run with mocha's TDD interface (`suite`, `test`,
  * `setup`, `teardown`). `test:unit` runs the `common` and `node` layers in
- * Node; `test:unit:electron` runs the `browser` and `electron-browser` layers
- * in a hidden Electron window, the environment the workbench renders in.
+ * Node; `test:unit:electron` runs the `browser`, `electron-browser`,
+ * `electron-main` and `electron-utility` layers in a hidden Electron window
+ * with Node integration, as VS Code's Electron runner does: the workbench's
+ * environment, and Electron's modules for the process layers.
  *
  * VS Code transpiles each file and loads it through its module loader; this
  * build bundles instead, as the application does, so a test imports styles
@@ -23,16 +25,17 @@
  */
 import { build, type BuildOptions } from 'esbuild';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { builtinModules } from 'node:module';
 import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { electronExecutable } from './electron.ts';
 import { isLinux } from './platform.ts';
 import { ProcessRunner } from './processes.ts';
 
-/** The layers each environment runs, after VS Code's `test/{common,node,browser,electron-browser}`. */
+/** The layers each environment runs, after VS Code's runners: Node's excludes every Electron and browser layer. */
 const nodeLayers = ['common', 'node'];
 
-const rendererLayers = ['browser', 'electron-browser'];
+const rendererLayers = ['browser', 'electron-browser', 'electron-main', 'electron-utility'];
 
 /** Fails a test that runs longer than this, as VS Code's runners do: 5 s locally, 30 s in CI. */
 const timeout = process.env.CI ? 30_000 : 5_000;
@@ -162,7 +165,7 @@ export async function runElectronUnitTests(root: string, signal: AbortSignal, ar
 		await build({
 			...bundleOptions(root, ['test/unit/electron/renderer.ts', ...files], output),
 			// Each test file is one script; Node's modules come from the window's `require`.
-			platform: 'browser', format: 'iife', target: 'chrome144', external: ['assert', 'node:*', 'electron'],
+			platform: 'browser', format: 'iife', target: 'chrome144', external: [...builtinModules, 'node:*', 'electron'],
 			loader: { '.svg': 'text', '.css': 'css' },
 		});
 		// mocha's browser build defines `suite` and `test` before the runner loads the test bundles.
