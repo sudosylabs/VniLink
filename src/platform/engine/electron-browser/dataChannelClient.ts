@@ -73,21 +73,20 @@ export class DataChannelClient implements IDataChannel {
 
 	/**
 	 * Asks the engine for a channel and waits for main to transfer its port
-	 * through `messagePort`, the preload's port bridge unless one is given.
-	 * The preload's bridge is read only here, so loading this module needs no preload.
+	 * through `messagePort`: the preload's port bridge, which
+	 * `DataChannelService` passes, or a test's.
 	 */
 	public static async open(
 		engine: IEngineService,
 		request: Omit<DataChannelRequest, 'requestId'>,
 		consume: (packet: DataPacket) => void | Promise<void>,
 		onError: (error: Error) => void,
-		messagePort?: IpcMessagePort,
+		messagePort: IpcMessagePort,
 	): Promise<DataChannelClient> {
 		const target = { ...request, requestId: crypto.randomUUID() };
 		if (!isChannelRequest(target)) {
 			throw new Error('Invalid data channel request');
 		}
-		const ipcMessagePort = messagePort ?? (await import('../../../base/parts/sandbox/electron-browser/globals.js')).ipcMessagePort;
 		return await new Promise<DataChannelClient>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				cleanup();
@@ -127,7 +126,7 @@ export class DataChannelClient implements IDataChannel {
 			};
 			window.addEventListener('message', receive);
 			try {
-				ipcMessagePort.acquire(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
+				messagePort.acquire(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
 			} catch (error) {
 				cleanup();
 				reject(error instanceof Error ? error : new Error('Channel unavailable'));
@@ -135,7 +134,7 @@ export class DataChannelClient implements IDataChannel {
 			}
 			void engine.openDataChannel(target).catch((error: unknown) => {
 				// Refused: no port will come, so its slot is free for the next attempt now.
-				ipcMessagePort.release(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
+				messagePort.release(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
 				cleanup();
 				reject(error instanceof Error ? error : new Error('Channel unavailable'));
 			});
