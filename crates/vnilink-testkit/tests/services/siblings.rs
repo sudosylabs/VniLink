@@ -21,8 +21,8 @@ use vnilink_testkit::camera::{config, StandInCameras};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::service_changes;
 use vnilink_testkit::terminal::{read_until, shell, ENTER, SIZE};
-use vnilink_testkit::DEFAULT_WAIT;
 use vnilink_testkit::{traced, Pair, TestResult};
+use vnilink_testkit::{wait_for, DEFAULT_WAIT};
 
 /// Work a backend owns, which says when it was dropped.
 struct Resource(Arc<AtomicBool>);
@@ -271,6 +271,18 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
         "a Camera owner opens once"
     );
 
+    // The controller records a service's close when its own end of it
+    // finishes, which can come after the host's release: each close is
+    // waited for there too, so the next one follows it in the story.
+    let closed_by_owner = |id: u64| {
+        wait_for("the controller to record its close", DEFAULT_WAIT, || {
+            controller
+                .controller_service(id)
+                .ok()
+                .filter(|service| service.phase == ServicePhase::Closed(CloseCause::OwnerClose))
+        });
+    };
+
     desktop.close();
     pair.host.wait_released(Some(ServiceKind::Desktop));
     assert_eq!(
@@ -299,6 +311,7 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
 
     files.close();
     pair.host.wait_released(Some(ServiceKind::Files));
+    closed_by_owner(files_owner.id);
     assert_eq!(
         pair.host.hosted(None).len(),
         2,
@@ -316,6 +329,7 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
 
     terminal.close();
     pair.host.wait_released(Some(ServiceKind::Terminal));
+    closed_by_owner(terminal_owner.id);
     assert_eq!(
         pair.host.hosted(None).len(),
         1,

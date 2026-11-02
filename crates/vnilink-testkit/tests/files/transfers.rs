@@ -568,14 +568,19 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
     "#]],
         || story("host", &["job state"]),
     );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        host:
-          files: file served ended=sent from=0 sent=2048 size=2048
-          files: file served ended=the receiver left from=… sent=… size=12582912
-          files: file served ended=sent from=… sent=… size=12582912
-    "#]],
-        || story("host", &["file served"]),
+    // The host may have written all of the large file before the cancel
+    // reached it, so that serve ends either way; the resumed one is whole.
+    let served = trace.named("file served");
+    let ended = |index: usize| served[index]["ended"].as_str().unwrap_or_default();
+    assert_eq!(served.len(), 3, "each fetch is served once: {served:?}");
+    assert_eq!(
+        (ended(0), ended(2)),
+        ("sent", "sent"),
+        "the small file and the resumed large one are sent whole: {served:?}"
+    );
+    assert!(
+        matches!(ended(1), "the receiver left" | "sent"),
+        "the cancelled serve ends as its receiver leaves, or sent if it was already written: {served:?}"
     );
     Ok(())
 }
