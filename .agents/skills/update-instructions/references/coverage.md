@@ -6,8 +6,8 @@ This map records the accepted October 2026 instruction scope. It is not a runtim
 |---|---|---|
 | Workbench composition versus upstream `src/vs/workbench/browser/workbench.ts`; main bootstrap versus CodeApplication/DesktopMain | `workbench-architecture`; `src/AGENTS.md` placement | Done: `VniLinkApplication`, `DesktopMain`/`Workbench`, registries, contributions and schema-driven settings. |
 | Build, packaging and test tasks in `build/lib`, run by `build/run.ts` | `build-test-infrastructure`; `build/AGENTS.md` | Done: TypeScript functions composed with `define`/`series`/`parallel`; classes only for OS-resource owners, enforced by `vnilink/build-classes`. |
-| Smoke's monolithic orchestration in `test/smoke/main.ts` | `build-test-infrastructure`; `test/AGENTS.md` | Selectable independent scenarios, shared automation and fixtures. Selector/driver implementation remains required. |
-| Windows-control and removed-sidebar assumptions in `test/smoke/main.ts` | `smoke-tests` | Platform-aware behavioral expectations; stale tests need separate implementation fixes. |
+| Smoke orchestration in `test/smoke/src` | `build-test-infrastructure`; `smoke-tests`; `test/AGENTS.md` | Done: mocha areas per scenario, page objects over a typed window driver, no fixed sleeps. |
+| Windows-control and removed-sidebar assumptions in the smoke areas | `smoke-tests` | Platform-aware behavioral expectations; stale tests need separate implementation fixes. |
 | CI matrix/dependencies and missing project Linux image/runner | `cross-platform-validation` | Explicit Docker/native Windows/hardware prerequisites and evidence; provision a maintained runner in scoped work. |
 | CI has no explicit core/facade suite entry | `unit-tests`; `cross-platform-validation` | Select all affected test owners and satisfy integration gates; workflow remediation is not performed by this rewrite. |
 | Rust/Electron facade, native adapter and media dependency boundaries | `crates/AGENTS.md`; `engine-bridge`; `ffi-boundary` | Ownership-based placement and complete caller contracts, no accidental wrapper proliferation. |

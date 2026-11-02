@@ -7,7 +7,7 @@
 
 import assert from 'assert';
 import { suite, test } from 'node:test';
-import { ScenarioSelection } from '../../../test/automation/scenarios.ts';
+import { ScenarioSelection } from '../../../test/automation/src/scenarios.ts';
 
 suite('ScenarioSelection', () => {
 	test('takes each scenario once, in the order first named, in both selector forms', () => {

@@ -56,15 +56,9 @@ export class BrowserScenarios {
 		this.deviceFixture = undefined;
 	}
 
-	/** Opens the themed restart confirmation; `closeDialogFixture` answers it with Escape. */
+	/** Opens the themed restart confirmation, which Escape answers. */
 	public showDialogFixture(): void {
 		void showThemedDialog();
-	}
-
-	public closeDialogFixture(): void {
-		for (const type of ['keydown', 'keyup']) {
-			window.dispatchEvent(new KeyboardEvent(type, { key: 'Escape', code: 'Escape', keyCode: 27 }));
-		}
 	}
 
 	/** Opens a context menu; `closeContextMenuFixture` cancels it with Escape. */

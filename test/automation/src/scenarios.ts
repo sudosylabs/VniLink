@@ -51,4 +51,12 @@ export class ScenarioSelection {
 	public includes(name: string) {
 		return this.names.includes(name);
 	}
+
+	/**
+	 * The smoke suite's areas to run, as a mocha `grep`: each selected
+	 * scenario is the area of that name, and every run checks the renderer.
+	 */
+	public get pattern(): RegExp {
+		return new RegExp(`^(?:${['renderer', ...this.names].join('|')}) `);
+	}
 }

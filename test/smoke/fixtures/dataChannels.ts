@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { DataChannelClient } from '../../../src/platform/engine/electron-browser/dataChannelClient.js';
 import type { BrowserWindowDriver } from '../../../src/workbench/services/driver/driver.js';
 
 /** The workbench's smoke-test driver; present only in isolated test launches. */
@@ -26,7 +25,7 @@ export async function verifyDataChannels(): Promise<void> {
 	for (const kind of ['video', 'input', 'files', 'terminal'] as const) {
 		let accepted = false;
 		try {
-			const channel = await DataChannelClient.open(windowDriver().engine, { kind, sessionId: '18446744073709551615', generation: '1', ...(kind === 'terminal' ? { rows: 24, columns: 80 } : {}) }, () => {
+			const channel = await windowDriver().dataChannels.open({ kind, sessionId: '18446744073709551615', generation: '1', ...(kind === 'terminal' ? { rows: 24, columns: 80 } : {}) }, () => {
 				throw new Error('Unknown session delivered data');
 			}, () => {
 				throw new Error('Startup failure escaped its promise');

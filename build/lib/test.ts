@@ -9,7 +9,7 @@
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
+import { ScenarioSelection, scenarioNames } from '../../test/automation/src/scenarios.ts';
 import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
 import { launchLatencySide } from './latency.ts';

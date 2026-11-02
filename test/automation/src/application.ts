@@ -10,9 +10,9 @@ import { app, session, type BrowserWindow } from 'electron';
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isLinux } from '../../src/base/common/platform.js';
-import { VniLinkApplication } from '../../src/code/electron-main/app.js';
-import { product } from '../../src/platform/product/common/product.js';
+import { isLinux } from '../../../src/base/common/platform.js';
+import { VniLinkApplication } from '../../../src/code/electron-main/app.js';
+import { product } from '../../../src/platform/product/common/product.js';
 import { WindowDriver } from './driver.js';
 
 export interface TestApplicationOptions {
