@@ -128,14 +128,15 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 	}
 	const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
 	const checker = program.getTypeChecker();
-	const src = join(root, 'src') + sep;
-	const test = join(root, 'test') + sep;
+	// TypeScript names files with forward slashes on every OS; compare in that form.
+	const src = `${slash(join(root, 'src'))}/`;
+	const test = `${slash(join(root, 'test'))}/`;
 	const files = program.getSourceFiles().filter(file => file.fileName.startsWith(src) || file.fileName.startsWith(test));
 
 	// Verbatim and pruned copies; adapted and derived files are application code.
 	const manifest = JSON.parse(readFileSync(join(root, 'build/vscode-source.json'), 'utf8')) as { files: { path: string; adapted?: boolean }[] };
-	const verbatim = new Set(manifest.files.filter(file => !file.adapted).map(file => join(root, file.path)));
-	const copied = (file: ts.SourceFile): boolean => verbatim.has(file.fileName);
+	const verbatim = new Set(manifest.files.filter(file => !file.adapted).map(file => slash(join(root, file.path))));
+	const copied = (file: ts.SourceFile): boolean => verbatim.has(slash(file.fileName));
 	const candidates: Candidate[] = [];
 	const byDeclaration = new Map<ts.Node, Candidate>();
 	const position = (node: ts.Node): { path: string; line: number } => {
