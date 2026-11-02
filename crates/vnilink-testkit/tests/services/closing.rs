@@ -350,26 +350,42 @@ enum DesktopClose {
     HandleDropped,
 }
 
-/// Every way a Desktop service ends stops its pictures, names who closed
-/// it, and leaves the connection and its Files service; a redial after it
-/// keeps the first close's cause. (What the close releases is
-/// [`a_desktop_close_releases_what_it_held_for_every_close`].)
 #[test]
-fn a_desktop_close_keeps_files_for_every_close() -> TestResult {
-    for close in [
-        DesktopClose::HandleClose,
-        DesktopClose::OwnerClose,
-        DesktopClose::HostClose,
-        DesktopClose::HostStopsSharing,
-        DesktopClose::HandleDropped,
-    ] {
-        close_desktop_beside_files(close)?;
-    }
-    Ok(())
+fn a_desktop_closed_by_its_handle_keeps_files() -> TestResult {
+    let _trace = traced();
+    keeps_files(DesktopClose::HandleClose)
 }
 
-fn close_desktop_beside_files(close: DesktopClose) -> TestResult {
+#[test]
+fn a_desktop_closed_by_its_owner_keeps_files() -> TestResult {
     let _trace = traced();
+    keeps_files(DesktopClose::OwnerClose)
+}
+
+#[test]
+fn a_desktop_closed_by_the_host_keeps_files() -> TestResult {
+    let _trace = traced();
+    keeps_files(DesktopClose::HostClose)
+}
+
+#[test]
+fn a_desktop_the_host_stops_sharing_keeps_files() -> TestResult {
+    let _trace = traced();
+    keeps_files(DesktopClose::HostStopsSharing)
+}
+
+#[test]
+fn a_desktop_whose_handle_is_dropped_keeps_files() -> TestResult {
+    let _trace = traced();
+    keeps_files(DesktopClose::HandleDropped)
+}
+
+/// A Desktop service ended by `close` stops its pictures, names who closed
+/// it, and leaves the connection and its Files service; a redial after it
+/// keeps the first close's cause. (What the close releases is
+/// [`releases_what_it_held`].)
+#[track_caller]
+fn keeps_files(close: DesktopClose) -> TestResult {
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let here = pair.host.location();
@@ -473,79 +489,100 @@ fn close_desktop_beside_files(close: DesktopClose) -> TestResult {
     Ok(())
 }
 
-/// Every way a Desktop service ends releases the keys and buttons it held
-/// on the host, latest first, and the ended desktop takes no input.
 #[test]
-fn a_desktop_close_releases_what_it_held_for_every_close() -> TestResult {
+fn a_desktop_closed_by_its_handle_releases_what_it_held() -> TestResult {
     let _trace = traced();
-    for close in [
-        DesktopClose::HandleClose,
-        DesktopClose::OwnerClose,
-        DesktopClose::HostClose,
-        DesktopClose::HostStopsSharing,
-        DesktopClose::HandleDropped,
-    ] {
-        let pair = Pair::for_desktop();
-        let (host, controller) = (&pair.host.core, &pair.controller.core);
-        let applied = InputLog::install(&pair.host, (1920, 1080))?;
-        let connection = pair.connect_services();
-        let owner = pair.attach(&connection, ServiceKind::Desktop);
-        let handle = controller.open_desktop_service(owner.id, owner.generation)?;
-        let key = InputEvent::key_down(usage::A);
-        let button = InputEvent::button_down(PointerButton::Left);
-        handle.submit_input(key)?;
-        handle.submit_input(button)?;
-        applied.exactly(2);
-        let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
-        let ended = match close {
-            DesktopClose::HandleClose => {
-                handle.close();
-                Some(handle)
-            }
-            DesktopClose::OwnerClose => {
-                controller.close_controller_service(owner.id, owner.generation)?;
-                Some(handle)
-            }
-            DesktopClose::HostClose => {
-                host.close_hosted_service(remote.id, remote.generation)?;
-                Some(handle)
-            }
-            DesktopClose::HostStopsSharing => {
-                host.set_service_sharing(ServiceKind::Desktop, false)?;
-                Some(handle)
-            }
-            DesktopClose::HandleDropped => {
-                drop(handle);
-                None
-            }
-        };
-        assert_eq!(
-            applied.wait_for(4),
-            vec![
-                key,
-                button,
-                InputEvent::button_up(PointerButton::Left),
-                InputEvent::key_up(usage::A)
-            ],
-            "{close:?}: the close releases what the Desktop held, latest first"
-        );
-        if let Some(handle) = ended {
-            wait_for(
-                &format!("{close:?}: the desktop to end"),
-                DEFAULT_WAIT,
-                || handle.is_cancelled().then_some(()),
-            );
-            assert!(
-                handle.submit_input(key).is_err(),
-                "{close:?}: a closed Desktop takes no input"
-            );
+    releases_what_it_held(DesktopClose::HandleClose)
+}
+
+#[test]
+fn a_desktop_closed_by_its_owner_releases_what_it_held() -> TestResult {
+    let _trace = traced();
+    releases_what_it_held(DesktopClose::OwnerClose)
+}
+
+#[test]
+fn a_desktop_closed_by_the_host_releases_what_it_held() -> TestResult {
+    let _trace = traced();
+    releases_what_it_held(DesktopClose::HostClose)
+}
+
+#[test]
+fn a_desktop_the_host_stops_sharing_releases_what_it_held() -> TestResult {
+    let _trace = traced();
+    releases_what_it_held(DesktopClose::HostStopsSharing)
+}
+
+#[test]
+fn a_desktop_whose_handle_is_dropped_releases_what_it_held() -> TestResult {
+    let _trace = traced();
+    releases_what_it_held(DesktopClose::HandleDropped)
+}
+
+/// A Desktop service ended by `close` releases the keys and buttons it
+/// held on the host, latest first, and the ended desktop takes no input.
+#[track_caller]
+fn releases_what_it_held(close: DesktopClose) -> TestResult {
+    let pair = Pair::for_desktop();
+    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    let applied = InputLog::install(&pair.host, (1920, 1080))?;
+    let connection = pair.connect_services();
+    let owner = pair.attach(&connection, ServiceKind::Desktop);
+    let handle = controller.open_desktop_service(owner.id, owner.generation)?;
+    let key = InputEvent::key_down(usage::A);
+    let button = InputEvent::button_down(PointerButton::Left);
+    handle.submit_input(key)?;
+    handle.submit_input(button)?;
+    applied.exactly(2);
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    let ended = match close {
+        DesktopClose::HandleClose => {
+            handle.close();
+            Some(handle)
         }
-        pair.host.wait_released(Some(ServiceKind::Desktop));
-        assert_eq!(
-            applied.events().len(),
-            4,
-            "{close:?}: the close releases each held key and button once"
+        DesktopClose::OwnerClose => {
+            controller.close_controller_service(owner.id, owner.generation)?;
+            Some(handle)
+        }
+        DesktopClose::HostClose => {
+            host.close_hosted_service(remote.id, remote.generation)?;
+            Some(handle)
+        }
+        DesktopClose::HostStopsSharing => {
+            host.set_service_sharing(ServiceKind::Desktop, false)?;
+            Some(handle)
+        }
+        DesktopClose::HandleDropped => {
+            drop(handle);
+            None
+        }
+    };
+    assert_eq!(
+        applied.wait_for(4),
+        vec![
+            key,
+            button,
+            InputEvent::button_up(PointerButton::Left),
+            InputEvent::key_up(usage::A)
+        ],
+        "{close:?}: the close releases what the Desktop held, latest first"
+    );
+    if let Some(handle) = ended {
+        wait_for(
+            &format!("{close:?}: the desktop to end"),
+            DEFAULT_WAIT,
+            || handle.is_cancelled().then_some(()),
+        );
+        assert!(
+            handle.submit_input(key).is_err(),
+            "{close:?}: a closed Desktop takes no input"
         );
     }
+    pair.host.wait_released(Some(ServiceKind::Desktop));
+    assert_eq!(
+        applied.events().len(),
+        4,
+        "{close:?}: the close releases each held key and button once"
+    );
     Ok(())
 }

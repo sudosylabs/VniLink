@@ -14,6 +14,9 @@
 //! - `engine_spans`: every public `&self` method of `impl Core` starts in
 //!   the engine's span (`let _engine = self.engine();`), so what it records
 //!   says which engine recorded it.
+//! - `test_style`: every test of the kit's suites returns a `Result` and
+//!   starts by holding `traced()`, so its setup fails with `?` and a
+//!   failure prints what the engines recorded.
 //!
 //! Each check has tests on literal source beside the one that reads the
 //! workspace.
@@ -295,6 +298,81 @@ fn unnamed_methods(file: &syn::File) -> Vec<String> {
     found
 }
 
+/// The tests in `file` that do not return a `Result` or do not start by
+/// holding `traced()`, each with what it lacks.
+fn unstyled_tests(file: &syn::File) -> Vec<String> {
+    fn is_test(attrs: &[Attribute]) -> bool {
+        attrs.iter().any(|attr| attr.path().is_ident("test"))
+    }
+
+    fn returns_result(output: &syn::ReturnType) -> bool {
+        let syn::ReturnType::Type(_, ty) = output else {
+            return false;
+        };
+        let syn::Type::Path(ty) = &**ty else {
+            return false;
+        };
+        ty.path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "TestResult" || segment.ident == "Result")
+    }
+
+    /// The first statement that runs, after the `use`s, constants and
+    /// types a test declares, is `let <name> = traced();`.
+    fn holds_trace_first(block: &Block) -> bool {
+        let first = block
+            .stmts
+            .iter()
+            .find(|stmt| !matches!(stmt, Stmt::Item(_)));
+        let Some(Stmt::Local(local)) = first else {
+            return false;
+        };
+        let Some(init) = &local.init else {
+            return false;
+        };
+        let Expr::Call(call) = &*init.expr else {
+            return false;
+        };
+        let Expr::Path(function) = &*call.func else {
+            return false;
+        };
+        matches!(local.pat, Pat::Ident(_))
+            && call.args.is_empty()
+            && function
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "traced")
+    }
+
+    fn visit_items(items: &[Item], found: &mut Vec<String>) {
+        for item in items {
+            match item {
+                Item::Mod(module) => {
+                    if let Some((_, items)) = &module.content {
+                        visit_items(items, found);
+                    }
+                }
+                Item::Fn(function) if is_test(&function.attrs) => {
+                    let name = function.sig.ident.to_string();
+                    if !returns_result(&function.sig.output) {
+                        found.push(format!("fn {name}: returns no Result"));
+                    }
+                    if !holds_trace_first(&function.block) {
+                        found.push(format!("fn {name}: does not start by holding traced()"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    visit_items(&file.items, &mut found);
+    found
+}
+
 fn parse(source: &str) -> syn::File {
     syn::parse_file(source).expect("the snippet is Rust")
 }
@@ -481,6 +559,85 @@ fn every_public_core_method_records_under_its_engine() -> TestResult {
     assert!(
         offending.is_empty(),
         "start these with `let _engine = self.engine();`:\n{}",
+        offending.join("\n")
+    );
+    Ok(())
+}
+
+#[test]
+fn a_test_without_a_result_or_a_trace_first_is_found() {
+    let file = parse(
+        r#"
+        #[test]
+        fn styled() -> TestResult {
+            let trace = traced();
+            Ok(())
+        }
+        #[test]
+        fn quiet() -> Result<(), Error> {
+            let _trace = vnilink_testkit::traced();
+            Ok(())
+        }
+        #[test]
+        fn declares_first() -> TestResult {
+            use std::time::Duration;
+            const WAIT: Duration = Duration::from_secs(1);
+            struct Fake;
+            let _trace = traced();
+            Ok(())
+        }
+        #[test]
+        fn returns_nothing() {
+            let trace = traced();
+        }
+        #[test]
+        fn traced_late() -> TestResult {
+            let pair = Pair::new()?;
+            let trace = traced();
+            Ok(())
+        }
+        #[test]
+        fn neither() {}
+        fn helper() {}
+        mod nested {
+            #[test]
+            fn inner() {}
+        }
+        "#,
+    );
+    assert_eq!(
+        unstyled_tests(&file),
+        [
+            "fn returns_nothing: returns no Result",
+            "fn traced_late: does not start by holding traced()",
+            "fn neither: returns no Result",
+            "fn neither: does not start by holding traced()",
+            "fn inner: returns no Result",
+            "fn inner: does not start by holding traced()",
+        ],
+        "a test returns a Result and holds traced() first; helpers are not tests"
+    );
+}
+
+/// The kit's suites, but this one: it reads source and starts no engine.
+#[test]
+fn every_kit_test_returns_a_result_and_holds_its_trace() -> TestResult {
+    let tests = workspace().join("crates/vnilink-testkit/tests");
+    let mut offending = Vec::new();
+    for path in rust_files(&tests)? {
+        if path == tests.join("tidy.rs") {
+            continue;
+        }
+        let source = fs::read_to_string(&path)?;
+        let file =
+            syn::parse_file(&source).map_err(|error| format!("{}: {error}", relative(&path)))?;
+        for test in unstyled_tests(&file) {
+            offending.push(format!("{}: {test}", relative(&path)));
+        }
+    }
+    assert!(
+        offending.is_empty(),
+        "return TestResult and start with `let trace = traced();`:\n{}",
         offending.join("\n")
     );
     Ok(())
