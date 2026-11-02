@@ -54,7 +54,7 @@ function sourceWatches(): string[] {
 
 suite('watch', () => {
 	suite('ApplicationWatcher', { timeout: 30_000 }, () => {
-		const entries = ['src/main.ts', 'src/preload.ts', 'src/noticePreload.ts', 'src/notice.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/main.ts', 'test/latency/main.ts', 'test/browser/index.ts'];
+		const entries = ['src/main.ts', 'src/preload.ts', 'src/noticePreload.ts', 'src/notice.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/main.ts', 'test/latency/main.ts', 'test/smoke/fixtures/index.ts'];
 		let root: string;
 		let watcher: ApplicationWatcher;
 		async function put(path: string, text: string): Promise<void> {

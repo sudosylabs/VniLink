@@ -4269,7 +4269,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "0d5eafebda97177009237ae60724e2cdcb77d97f94a6171597781d6abfa0d372",
+      "sha256": "0ea6795699690108180ca2cec936f4a13ce703338f36a2d4ecf4536a9b5e5ac0",
       "adapted": true
     },
     {
@@ -4550,6 +4550,7 @@
     }
   ],
   "roots": [
+    "src/base/browser/contextmenu.ts",
     "src/base/browser/dnd.ts",
     "src/base/browser/dom.ts",
     "src/base/browser/keyboardEvent.ts",
@@ -4594,6 +4595,7 @@
     "src/base/parts/ipc/electron-main/ipc.mp.ts",
     "src/base/parts/ipc/electron-main/ipcMain.ts",
     "src/base/parts/ipc/node/ipc.mp.ts",
+    "src/base/parts/sandbox/common/electronTypes.ts",
     "src/base/parts/sandbox/electron-browser/globals.ts",
     "src/base/parts/sandbox/node/electronTypes.ts",
     "src/base/test/common/mock.ts",
@@ -4610,6 +4612,7 @@
     "src/platform/configuration/common/configurationRegistry.ts",
     "src/platform/contextkey/browser/contextKeyService.ts",
     "src/platform/contextkey/common/contextkey.ts",
+    "src/platform/contextview/browser/contextMenuService.ts",
     "src/platform/contextview/browser/contextView.ts",
     "src/platform/contextview/browser/contextViewService.ts",
     "src/platform/instantiation/common/descriptors.ts",
@@ -4642,12 +4645,15 @@
     "src/typings/vscode-globals-product.d.ts",
     "src/workbench/contributions.ts",
     "src/workbench/desktop.main.ts",
+    "src/workbench/parts/titlebar/media/modernTabs.css",
+    "src/workbench/parts/titlebar/media/titlebarpart.css",
     "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
     "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
     "src/workbench/services/host/nativeHostService.ts",
     "src/workbench/services/lifecycle/lifecycle.ts"
   ],
   "entryPoints": [
+    "src/base/browser/contextmenu.ts",
     "src/base/browser/dnd.ts",
     "src/base/browser/dom.ts",
     "src/base/browser/keyboardEvent.ts",
@@ -4692,6 +4698,7 @@
     "src/base/parts/ipc/electron-main/ipc.mp.ts",
     "src/base/parts/ipc/electron-main/ipcMain.ts",
     "src/base/parts/ipc/node/ipc.mp.ts",
+    "src/base/parts/sandbox/common/electronTypes.ts",
     "src/base/parts/sandbox/electron-browser/globals.ts",
     "src/base/parts/sandbox/node/electronTypes.ts",
     "src/base/test/common/mock.ts",
@@ -4708,6 +4715,7 @@
     "src/platform/configuration/common/configurationRegistry.ts",
     "src/platform/contextkey/browser/contextKeyService.ts",
     "src/platform/contextkey/common/contextkey.ts",
+    "src/platform/contextview/browser/contextMenuService.ts",
     "src/platform/contextview/browser/contextView.ts",
     "src/platform/contextview/browser/contextViewService.ts",
     "src/platform/instantiation/common/descriptors.ts",
@@ -4735,6 +4743,8 @@
     "src/platform/windows/electron-main/windows.ts",
     "src/workbench/contributions.ts",
     "src/workbench/desktop.main.ts",
+    "src/workbench/parts/titlebar/media/modernTabs.css",
+    "src/workbench/parts/titlebar/media/titlebarpart.css",
     "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
     "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
     "src/workbench/services/host/nativeHostService.ts",
@@ -4969,11 +4979,6 @@
     {
       "from": "src/platform/native/common/native.ts",
       "to": "src/platform/window/common/windowMaterial.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/platform/native/common/native.ts",
-      "to": "src/platform/engine/common/engine.ts",
       "kind": "import"
     },
     {

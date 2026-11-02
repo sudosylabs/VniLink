@@ -10,12 +10,11 @@ import { IConfigurationService } from '../../../platform/configuration/common/co
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { IRecordingService } from '../../../platform/recording/common/recording.js';
-import type { NativeDevice, PowerStatus, EngineCommand, NativeScreenSource, NativeSharingStatus, RecordingStatus } from '../../../platform/engine/common/engine.js';
-import { INativeRuntimeService, type NativeRuntime, type RecordingOptions, type RecordingTarget } from './nativeRuntimeService.js';
+import type { NativeDevice, PowerStatus, EngineCommand, RecordingStatus } from '../../../platform/engine/common/engine.js';
+import { INativeRuntimeService, type RecordingOptions, type RecordingTarget } from './nativeRuntimeService.js';
 /** Native backend facts and explicitly requested media operations. Peer grants remain separate. */
 export class NativeRuntimeService implements INativeRuntimeService {
 	declare public readonly _serviceBrand: undefined;
-	private pending: Promise<unknown> = Promise.resolve();
 
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
@@ -26,43 +25,6 @@ export class NativeRuntimeService implements INativeRuntimeService {
 
 	public get available(): boolean {
 		return this.engine.available;
-	}
-
-	public async load(): Promise<NativeRuntime> {
-		if (!this.available) {
-			throw new Error('Native runtime unavailable');
-		}
-		const reply = await this.engine.execute({ type: 'nativeRuntime' });
-		if (reply.type !== 'nativeRuntime') {
-			throw new Error('Invalid native runtime reply');
-		}
-		return Object.freeze({
-			backends: Object.freeze(reply.backends.map(backend => Object.freeze({ ...backend }))),
-			capabilities: Object.freeze(reply.capabilities.map(capability => Object.freeze({ ...capability }))),
-		});
-	}
-
-	public async captureDisplays(): Promise<readonly NativeScreenSource[]> {
-		const displays = await this.nativeHostService.getCaptureDisplays();
-		return Object.freeze(displays.map(display => Object.freeze({ ...display })));
-	}
-
-	public async startSharing(source: NativeScreenSource): Promise<readonly NativeSharingStatus[]> {
-		await this.update({ type: 'startNativeScreenSharing', ...source });
-		return this.sharingStatus();
-	}
-
-	public async stopSharing(): Promise<readonly NativeSharingStatus[]> {
-		await this.update({ type: 'stopNativeScreenSharing' });
-		return this.sharingStatus();
-	}
-
-	public async sharingStatus(): Promise<readonly NativeSharingStatus[]> {
-		const reply = await this.engine.execute({ type: 'nativeSharingStatus' });
-		if (reply.type !== 'nativeSharingStatus') {
-			throw new Error('Invalid screen sharing reply');
-		}
-		return Object.freeze(reply.displays.map(display => Object.freeze({ ...display })));
 	}
 
 	public async remoteDevices(target: { readonly id: string; readonly generation: string }, kind: 'camera' | 'microphone' | 'system'): Promise<readonly NativeDevice[]> {
@@ -123,21 +85,6 @@ export class NativeRuntimeService implements INativeRuntimeService {
 			throw new Error('Invalid native device reply');
 		}
 		return Object.freeze(reply.devices.map(device => Object.freeze({ ...device })));
-	}
-
-	private update(command: EngineCommand): Promise<NativeRuntime> {
-		const result = this.pending.then(async () => {
-			if (!this.available) {
-				throw new Error('Native runtime unavailable');
-			}
-			const reply = await this.engine.execute(command);
-			if (reply.type !== 'done') {
-				throw new Error('Native backend update refused');
-			}
-			return this.load();
-		});
-		this.pending = result.catch(() => undefined);
-		return result;
 	}
 
 	public async powerStatus(): Promise<readonly PowerStatus[]> {

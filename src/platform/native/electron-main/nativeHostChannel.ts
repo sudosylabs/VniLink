@@ -61,7 +61,6 @@ export class NativeHostChannel implements IServerChannel {
 					return this.nativeHost.writeClipboardPicture(windowId, args[1]);
 				}
 				break;
-			case 'getCaptureDisplays': return this.nativeHost.getCaptureDisplays(windowId);
 			case 'openExternal': return this.nativeHost.openExternal(windowId, String(args[1]));
 			case 'readClipboardText': return this.nativeHost.readClipboardText(windowId, args[1] as 'selection' | 'clipboard' | undefined);
 			case 'writeClipboardText': return this.nativeHost.writeClipboardText(windowId, String(args[1]), args[2] as 'selection' | 'clipboard' | undefined);

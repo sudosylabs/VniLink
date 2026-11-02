@@ -5,8 +5,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-/** Validated selectors shared by the CLI launcher and Electron suite. */
-export const browserScenarioNames = ['workbench', 'access', 'camera', 'connection', 'context-menu', 'data-channels', 'decoder-colour', 'devices', 'dialogs', 'files', 'device-pairing', 'device-screenshot', 'home', 'icons', 'media-settings', 'remote-desktop', 'remote-desktop-session', 'remote-desktop-still', 'settings', 'tabs', 'terminal'];
+/**
+ * Validated selectors shared by the CLI launcher and Electron suite. The
+ * browser scenarios load the window's smoke fixtures (`test/smoke/fixtures`):
+ * `data-channels` checks the real engine's channels, and the others lay out
+ * and photograph a fixture. Renderer behaviour is tested by the unit suites.
+ */
+export const browserScenarioNames = ['context-menu', 'data-channels', 'devices', 'dialogs', 'files', 'remote-desktop-session'];
 
 export const integrationScenarioNames = ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload', 'notice', 'engine-restart'];
 

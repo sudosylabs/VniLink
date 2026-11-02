@@ -36,7 +36,7 @@ export function bundleOptions(root: string, { production = false, outputDirector
 		...(!production ? [node('test/smoke/main.ts', 'smoke.cjs'), node('test/latency/main.ts', 'latency.cjs')] : []),
 		browser('src/renderer.ts', 'renderer/renderer.js'),
 		browser('src/notice.ts', 'renderer/notice.js'),
-		...(!production ? [browser('test/browser/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' })] : []),
+		...(!production ? [browser('test/smoke/fixtures/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' })] : []),
 	];
 }
 

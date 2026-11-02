@@ -27,7 +27,7 @@
   {
     "path": "src/platform/log/common/log.ts",
     "name": "NullLogService",
-    "reason": "the logger fake that browser scenarios give the services they build"
+    "reason": "the logger fake that unit tests give the services they build"
   },
   {
     "path": "src/platform/log/common/log.ts",
@@ -128,5 +128,25 @@
     "path": "src/base/common/types.ts",
     "name": "DeepPartial",
     "reason": "base/test/common/mock.ts types upcastDeepPartial with it"
+  },
+  {
+    "path": "src/platform/commands/common/commands.ts",
+    "name": "ICommandService.onWillExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
+  },
+  {
+    "path": "src/platform/commands/common/commands.ts",
+    "name": "ICommandService.onDidExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
+  },
+  {
+    "path": "src/workbench/services/commands/commandService.ts",
+    "name": "CommandService.onWillExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
+  },
+  {
+    "path": "src/workbench/services/commands/commandService.ts",
+    "name": "CommandService.onDidExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
   }
 ]

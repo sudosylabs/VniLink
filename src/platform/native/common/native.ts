@@ -11,7 +11,6 @@
 // ---------------------------------------------------------------------------------------------
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
-import type { NativeScreenSource } from '../../engine/common/engine.js';
 import type { Event } from '../../../base/common/event.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import type { MessageBoxOptions, MessageBoxReturnValue } from '../../../base/parts/sandbox/common/electronTypes.js';
@@ -60,7 +59,6 @@ export interface INativeHostService {
 	pickFolder(defaultPath: string): Promise<string | null>;
 	/** A native message box over the window. */
 	showMessageBox(options: MessageBoxOptions & ITargetWindowOptions): Promise<MessageBoxReturnValue>;
-	getCaptureDisplays(): Promise<NativeScreenSource[]>;
 	openExternal(url: string): Promise<void>;
 
 	// Clipboard
@@ -109,7 +107,6 @@ export type NativeHostMethod =
 	| 'updateWindowControls'
 	| 'pickFolder'
 	| 'showMessageBox'
-	| 'getCaptureDisplays'
 	| 'openExternal'
 	| 'readClipboardText'
 	| 'writeClipboardText'
@@ -163,7 +160,7 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	if (typeof method !== 'string' || !Array.isArray(args) || !Number.isSafeInteger(args[0]) || args[0] <= 0) {
 		return false;
 	}
-	if (method === 'getWindowState' || method === 'getCaptureDisplays' || method === 'relaunch' || method === 'openLogsFolder' || method === 'readLogTails') {
+	if (method === 'getWindowState' || method === 'relaunch' || method === 'openLogsFolder' || method === 'readLogTails') {
 		return args.length === 1;
 	}
 	if (method === 'readClipboardText') {

@@ -15,8 +15,8 @@ import { DomScrollableElement } from '../../../base/browser/ui/scrollbar/scrolla
 import { ListDragOverEffectType, type IListDragAndDrop, type IListDragOverReaction, type IListRenderer, type IListVirtualDelegate } from '../../../base/browser/ui/list/list.js';
 import { List, type IStyleController } from '../../../base/browser/ui/list/listWidget.js';
 import { NativeDragAndDropData } from '../../../base/browser/ui/list/listView.js';
-import { webUtils } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { Separator, toAction, type IAction } from '../../../base/common/actions.js';
+import { onUnexpectedError } from '../../../base/common/errors.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Icons, type IconId } from '../../../base/common/icons.js';
 import { KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
@@ -320,10 +320,14 @@ class PaneDragAndDrop implements IListDragAndDrop<PaneRow> {
 			return;
 		}
 		if (data instanceof NativeDragAndDropData && this.pane.side === 'remote') {
-			const paths = [...event.dataTransfer?.files ?? []].map(file => webUtils.getPathForFile(file)).filter(path => path !== '');
-			if (paths.length) {
-				this.pane.droppedFromSystem(paths, into);
-			}
+			const files = [...event.dataTransfer?.files ?? []];
+			// The preload's bridge is reached when files are dropped, so the pane is built without it.
+			import('../../../base/parts/sandbox/electron-browser/globals.js').then(({ webUtils }) => {
+				const paths = files.map(file => webUtils.getPathForFile(file)).filter(path => path !== '');
+				if (paths.length) {
+					this.pane.droppedFromSystem(paths, into);
+				}
+			}).catch(onUnexpectedError);
 		} else if (source && source.pane !== this.pane) {
 			this.pane.dropped(source.items, into);
 		}
@@ -697,6 +701,10 @@ export class FilesPaneView extends Disposable {
 		}, 150);
 		try {
 			const listing = await disk.list(folder);
+			// A pane closed while the folder was read watches nothing.
+			if (this._store.isDisposed) {
+				return false;
+			}
 			if (revision !== this.revision) {
 				return true;
 			}

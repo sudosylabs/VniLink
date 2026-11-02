@@ -11,7 +11,7 @@ import { ScenarioSelection } from '../../../test/automation/scenarios.ts';
 
 suite('ScenarioSelection', () => {
 	test('takes each scenario once, in the order first named, in both selector forms', () => {
-		assert.deepStrictEqual(new ScenarioSelection(['--scenario', 'tabs', '--scenario=settings', '--scenario', 'tabs']).names, ['tabs', 'settings']);
+		assert.deepStrictEqual(new ScenarioSelection(['--scenario', 'devices', '--scenario=notice', '--scenario', 'devices']).names, ['devices', 'notice']);
 	});
 	test('refuses --scenario without a name', () => {
 		assert.throws(() => new ScenarioSelection(['--scenario']), /requires/);
