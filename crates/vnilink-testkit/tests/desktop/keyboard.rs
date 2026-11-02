@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use vnilink::{
     usage, Error, EventSubscription, InputEvent, KeyboardMode, LocalKey, PointerSettings,
-    RemoteDesktopService, ServiceKind, ServicePhase, MAX_KEY_TEXT,
+    ServiceKind, ServicePhase, MAX_KEY_TEXT,
 };
 use vnilink_testkit::desktop::{input_failed, Scripted, Step, Typed, Typing};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, Traced, DEFAULT_WAIT};
@@ -55,12 +55,6 @@ fn local(usage: u16, down: bool, text: &str) -> LocalKey<'_> {
     LocalKey::new(usage, down, text)
 }
 
-/// A Desktop on the controller's services connection to the host, as a
-/// window opens one.
-fn open_desktop(pair: &Pair) -> Result<RemoteDesktopService, Error> {
-    pair.controller.open_desktop(&pair.connect_services())
-}
-
 /// Whether the host still serves the controller's Desktop.
 fn desktop_active(pair: &Pair) -> bool {
     pair.host
@@ -75,7 +69,7 @@ fn the_swap_waits_for_held_keys_like_the_mode_switch() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     Typing::install(&pair.host, SCREEN, false, false)?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     desktop.submit_local_key(local(usage::A, true, "a"))?;
     assert!(
         matches!(
@@ -105,7 +99,7 @@ fn a_swapped_command_is_the_key_the_host_releases() -> TestResult {
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
     controller.set_swap_control_and_command(true)?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     desktop.submit_input(InputEvent::key_down(usage::LEFT_META))?;
     desktop.submit_input(InputEvent::key_down(usage::LEFT_SHIFT))?;
     let pressed = [
@@ -137,7 +131,7 @@ fn finished_text_is_typed_in_order_and_is_not_logged() -> TestResult {
     let pair = Pair::for_desktop();
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     let events = controller.subscribe()?;
     let host_events = host.subscribe()?;
     assert!(
@@ -188,7 +182,7 @@ fn a_refused_text_leaves_the_keys_working() -> TestResult {
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     let typed = Typing::install(&pair.host, SCREEN, true, false)?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     let events = host.subscribe()?;
     desktop.submit_text("nope")?;
     assert_eq!(
@@ -229,7 +223,7 @@ fn text_the_host_cannot_type_is_refused_and_the_desktop_stays() -> TestResult {
         SCREEN,
         &[(1, Step::Unavailable("typed text is not available"))],
     )?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     let events = host.subscribe()?;
     desktop.submit_text("unseen")?;
     assert_eq!(
@@ -266,8 +260,7 @@ fn a_dropped_connection_does_not_replay_finished_text() -> TestResult {
     let pair = Pair::for_desktop();
     let controller = &pair.controller.core;
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
-    let connection = pair.connect_services();
-    let desktop = pair.controller.open_desktop(&connection)?;
+    let (connection, desktop) = pair.open_desktop()?;
     desktop.submit_text("first words")?;
     typed.wait(
         &[Typed::Text("first words".to_owned())],
@@ -317,7 +310,7 @@ fn the_default_mode_inserts_at_from_either_keyboard() -> TestResult {
         KeyboardMode::Character,
         "Character is the default mode"
     );
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     assert_eq!(
         desktop.keyboard_mode()?,
         KeyboardMode::Character,
@@ -354,7 +347,7 @@ fn map_and_translate_are_optional_and_a_held_key_blocks_the_change() -> TestResu
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     let typed = Typing::install(&pair.host, SCREEN, false, false)?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     desktop.submit_local_key(local(usage::LEFT_SHIFT, true, ""))?;
     assert!(
         matches!(
@@ -398,7 +391,7 @@ fn a_refused_chord_leaves_the_keys_working() -> TestResult {
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     let typed = Typing::install(&pair.host, SCREEN, false, true)?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     desktop.set_keyboard_mode(KeyboardMode::Translate)?;
     let events = host.subscribe()?;
     desktop.submit_local_key(local(usage::GRAVE, true, "@"))?;

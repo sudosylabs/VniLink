@@ -11,13 +11,11 @@
 #[path = "clipboard/desktops.rs"]
 mod desktops;
 
-use std::sync::{Arc, Mutex};
-
 use expect_test::expect;
 
 use vnilink::{Error, Grants, MAX_CLIPBOARD_TEXT};
-use vnilink_testkit::desktop::{DesktopSession, RecordingClipboard, Script, ScriptedScreen};
-use vnilink_testkit::{traced, Engine};
+use vnilink_testkit::desktop::{Copied, DesktopSession, Script, ScriptedScreen};
+use vnilink_testkit::{traced, TestResult};
 
 /// What the host shares: it may be seen and controlled, and its clipboard
 /// shared when `clipboard`.
@@ -27,28 +25,6 @@ fn sharing(clipboard: bool) -> Grants {
         control: true,
         clipboard,
         transfer: false,
-    }
-}
-
-/// The text a host's clipboard was given, in order.
-#[derive(Clone)]
-struct Copied(Arc<Mutex<Vec<String>>>);
-
-impl Copied {
-    /// Installs a clipboard on `host` that records the text it is given.
-    fn install(host: &Engine) -> Result<Self, Error> {
-        let texts = Arc::new(Mutex::new(Vec::new()));
-        host.core.set_clipboard(Box::new(RecordingClipboard {
-            texts: Arc::clone(&texts),
-        }))?;
-        Ok(Self(texts))
-    }
-
-    fn texts(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone()
     }
 }
 
@@ -78,40 +54,42 @@ fn unordered(story: &str) -> String {
     told
 }
 
-fn session() -> (DesktopSession, Arc<Mutex<Vec<String>>>) {
-    let texts = Arc::new(Mutex::new(Vec::new()));
+/// A viewer's Desktop on the host's scripted screen, the host's clipboard
+/// recording what it is given, installed before the viewer connects.
+fn session() -> Result<(DesktopSession, Copied), Box<dyn std::error::Error>> {
+    let mut installed = None;
     let session = DesktopSession::prepared(ScriptedScreen::new(Script::Still), false, |pair| {
-        pair.host
-            .core
-            .set_clipboard(Box::new(RecordingClipboard {
-                texts: Arc::clone(&texts),
-            }))
-            .unwrap();
+        installed = Some(Copied::install(&pair.host.core));
     });
-    (session, texts)
+    let copied = installed.ok_or("the session prepares its host")??;
+    Ok((session, copied))
 }
 
 /// Text copied on the controller reaches the host's clipboard, and text
 /// copied on the host reaches the controller; what is recorded says how
 /// much and how it went, never the text itself.
 #[test]
-fn text_crosses_both_ways_and_is_never_recorded() {
+fn text_crosses_both_ways_and_is_never_recorded() -> TestResult {
     let trace = traced();
-    let (session, texts) = session();
+    let (session, copied) = session()?;
     session.share_clipboard(true);
     let secret = "correct horse battery staple";
-    session.service.submit_clipboard(secret).unwrap();
-    assert_eq!(*texts.lock().unwrap(), vec![secret]);
+    session.service.submit_clipboard(secret)?;
+    assert_eq!(
+        copied.texts(),
+        [secret],
+        "the controller's text reaches the host's clipboard"
+    );
     let (hosted, generation) = session.hosted();
     session
         .pair
         .host
         .core
-        .publish_desktop_clipboard(hosted, generation, "from the host")
-        .unwrap();
+        .publish_desktop_clipboard(hosted, generation, "from the host")?;
     assert_eq!(
-        session.service.clipboard_text().unwrap().as_deref(),
-        Some("from the host")
+        session.service.clipboard_text()?.as_deref(),
+        Some("from the host"),
+        "the host's text reaches the controller"
     );
 
     vnilink_testkit::assert_story(
@@ -127,34 +105,45 @@ fn text_crosses_both_ways_and_is_never_recorded() {
         || trace.story(&["clipboard"]),
     );
     trace.assert_unrecorded("copied content", &["horse", "from the host"]);
+    Ok(())
 }
 
 /// Without the grant nothing crosses either way, the host records why,
 /// and the Desktop service carries on; granting it again works at once.
 #[test]
-fn without_the_grant_nothing_crosses_and_the_desktop_lives() {
+fn without_the_grant_nothing_crosses_and_the_desktop_lives() -> TestResult {
     let trace = traced();
-    let (session, texts) = session();
-    assert!(matches!(
-        session.service.submit_clipboard("denied"),
-        Err(Error::ClipboardDenied)
-    ));
+    let (session, copied) = session()?;
+    assert!(
+        matches!(
+            session.service.submit_clipboard("denied"),
+            Err(Error::ClipboardDenied)
+        ),
+        "a paste without the grant is refused"
+    );
     let (hosted, generation) = session.hosted();
-    assert!(matches!(
-        session
-            .pair
-            .host
-            .core
-            .publish_desktop_clipboard(hosted, generation, "denied"),
-        Err(Error::ClipboardDenied)
-    ));
-    assert!(texts.lock().unwrap().is_empty());
-    assert!(!session.service.is_cancelled());
+    assert!(
+        matches!(
+            session
+                .pair
+                .host
+                .core
+                .publish_desktop_clipboard(hosted, generation, "denied"),
+            Err(Error::ClipboardDenied)
+        ),
+        "the host publishes nothing without the grant"
+    );
+    assert!(copied.texts().is_empty(), "a refused paste is not applied");
+    assert!(
+        !session.service.is_cancelled(),
+        "a refused paste leaves the desktop open"
+    );
     session.share_clipboard(true);
-    session.service.submit_clipboard("granted").unwrap();
+    session.service.submit_clipboard("granted")?;
     assert_eq!(
-        texts.lock().unwrap().last().map(String::as_str),
-        Some("granted")
+        copied.texts().last().map(String::as_str),
+        Some("granted"),
+        "once granted, text crosses at once"
     );
     vnilink_testkit::assert_story(
         expect![[r#"
@@ -168,18 +157,42 @@ fn without_the_grant_nothing_crosses_and_the_desktop_lives() {
     "#]],
         || trace.story(&["clipboard"]),
     );
+    Ok(())
 }
 
 /// The largest text crosses whole; one byte more is refused before it is
 /// sent.
 #[test]
-fn the_largest_text_crosses_and_more_is_refused() {
-    let _trace = traced();
-    let (session, texts) = session();
+fn the_largest_text_crosses_and_more_is_refused() -> TestResult {
+    let trace = traced();
+    let (session, copied) = session()?;
     session.share_clipboard(true);
     let largest = "é".repeat(MAX_CLIPBOARD_TEXT / 2);
-    session.service.submit_clipboard(&largest).unwrap();
-    assert_eq!(texts.lock().unwrap().last(), Some(&largest));
-    assert!(session.service.submit_clipboard(&(largest + "a")).is_err());
-    assert_eq!(texts.lock().unwrap().len(), 1);
+    session.service.submit_clipboard(&largest)?;
+    assert_eq!(
+        copied.texts().last(),
+        Some(&largest),
+        "the largest text crosses whole"
+    );
+    assert!(
+        session.service.submit_clipboard(&(largest + "a")).is_err(),
+        "one byte more than the largest text is refused"
+    );
+    assert_eq!(
+        copied.texts().len(),
+        1,
+        "the refused text never reaches the host"
+    );
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        controller:
+          clipboard: clipboard sent bytes=262144 service=1
+          clipboard: clipboard sent bytes=262145 ended=invalid setting service=1
+        host:
+          clipboard: clipboard adapter installed
+          clipboard: clipboard received bytes=262144 hosted=true service=1
+    "#]],
+        || trace.story(&["clipboard"]),
+    );
+    Ok(())
 }

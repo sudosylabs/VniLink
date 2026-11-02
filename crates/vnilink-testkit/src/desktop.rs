@@ -846,3 +846,105 @@ pub fn next_picture(video: &vnilink::VideoSubscription, what: &str) -> EncodedFr
         video.recv_timeout(Duration::from_millis(20))
     })
 }
+
+/// The text a host's clipboard was given, in order: the log of a
+/// [`RecordingClipboard`] that [`Copied::install`] puts on an engine.
+#[derive(Clone, Default)]
+pub struct Copied(Arc<Mutex<Vec<String>>>);
+
+impl Copied {
+    /// Installs on `host` a clipboard that records the text it is given,
+    /// before a viewer connects, and gives its log.
+    pub fn install(host: &vnilink::Core) -> Result<Self, vnilink::Error> {
+        let copied = Self::default();
+        host.set_clipboard(Box::new(RecordingClipboard {
+            texts: Arc::clone(&copied.0),
+        }))?;
+        Ok(copied)
+    }
+
+    /// Every text applied so far.
+    pub fn texts(&self) -> Vec<String> {
+        crate::lock(&self.0).clone()
+    }
+}
+
+/// Opening a Desktop as a window does: on the pair's services connection.
+impl Pair {
+    /// The controller's services connection to the host and a Desktop
+    /// opened on it, as the application opens them.
+    pub fn open_desktop(
+        &self,
+    ) -> Result<(vnilink::SessionInfo, vnilink::RemoteDesktopService), vnilink::Error> {
+        let connection = self.controller.connect_services(&self.host)?;
+        let desktop = self.controller.open_desktop(&connection)?;
+        Ok((connection, desktop))
+    }
+}
+
+/// How a viewer's picture ends in [`check_ending`].
+#[derive(Clone, Copy, Debug)]
+pub enum Ending {
+    /// The host closes the Desktop it serves.
+    HostCloses,
+    /// The host's stream fails for this reason.
+    HostFails(vnilink::StreamFailure),
+    /// The host stops sharing its desktop.
+    HostStopsSharing,
+    /// The viewer closes its Desktop.
+    ViewerCloses,
+}
+
+/// Opens a viewer's Desktop on a host with a 1080p monitor, ends its
+/// picture by `ending`, and waits until the viewer has ended it and, unless
+/// it closed the picture itself, learned why; then states `expect`: the end
+/// the viewer learned, and the story of the engines' sessions and
+/// services. A picture the viewer closed has no end from the host for as
+/// long as a mistaken end from the host would take to arrive.
+#[track_caller]
+pub fn check_ending(
+    trace: &crate::Traced,
+    ending: Ending,
+    expect: expect_test::Expect,
+) -> crate::TestResult {
+    let pair = Pair::for_desktop();
+    let host = &pair.host.core;
+    InputLog::install(&pair.host, (1920, 1080))?;
+    let (_, viewer) = pair.open_desktop()?;
+    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
+    assert_eq!(viewer.end(), None, "a live picture has no end");
+    match ending {
+        Ending::HostCloses => host.close_hosted_service(remote.id, remote.generation)?,
+        Ending::HostFails(failure) => {
+            host.fail_hosted_service(remote.id, remote.generation, failure)?
+        }
+        Ending::HostStopsSharing => host.set_service_sharing(ServiceKind::Desktop, false)?,
+        Ending::ViewerCloses => viewer.close(),
+    }
+    crate::wait_for("the viewer's picture to end", crate::DEFAULT_WAIT, || {
+        viewer.is_cancelled().then_some(())
+    });
+    match ending {
+        // The host has let the service go, and an end it sent by mistake
+        // has the original's 300 ms to reach the viewer.
+        Ending::ViewerCloses => {
+            pair.host.wait_released(Some(ServiceKind::Desktop));
+            crate::holds(
+                "the viewer's closed picture having no end",
+                Duration::from_millis(300),
+                || viewer.end().is_none(),
+            );
+        }
+        _ => crate::wait_for("the viewer to learn why", crate::DEFAULT_WAIT, || {
+            viewer.end().is_some().then_some(())
+        }),
+    }
+    let learned = viewer.end();
+    crate::assert_story(expect, || {
+        format!(
+            "viewer learned: {learned:?}\n{}",
+            trace.story(&["session", "service"])
+        )
+    });
+    Ok(())
+}

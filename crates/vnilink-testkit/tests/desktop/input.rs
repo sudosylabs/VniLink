@@ -12,10 +12,7 @@
 
 use expect_test::expect;
 
-use vnilink::{
-    usage, DisplayInfo, Error, InputEvent, PointerButton, RemoteDesktopService, ServiceKind,
-    ServicePhase, SessionInfo,
-};
+use vnilink::{usage, DisplayInfo, Error, InputEvent, PointerButton, ServiceKind, ServicePhase};
 use vnilink_testkit::desktop::{input_failed, releases_settled, InputLog, Scripted, Step, Typed};
 use vnilink_testkit::drops::{DropPoint, SeededDrops};
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
@@ -48,14 +45,6 @@ fn publish_display(pair: &Pair) -> Result<(), Error> {
     )
 }
 
-/// The controller's services connection to the host and a Desktop on it,
-/// as the application opens them.
-fn open_desktop(pair: &Pair) -> Result<(SessionInfo, RemoteDesktopService), Error> {
-    let connection = pair.connect_services();
-    let desktop = pair.controller.open_desktop(&connection)?;
-    Ok((connection, desktop))
-}
-
 /// The id the host knows the controller's connection by, which its input
 /// failures name.
 fn hosted_connection(pair: &Pair) -> u64 {
@@ -79,7 +68,7 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
     );
     assert_eq!(capabilities.monitors, 1, "the host offers its one monitor");
     publish_display(&pair)?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     let info = desktop.desktop_info()?;
     assert_eq!(
         (info.monitor_width, info.monitor_height),
@@ -176,7 +165,7 @@ fn a_dragged_pointer_lands_on_its_last_position_and_a_click_not_short_of_where_i
     let pair = Pair::for_desktop();
     let applied = InputLog::install(&pair.host, SCREEN)?;
     publish_display(&pair)?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     desktop.select_displays(&[DISPLAY])?;
     let last = 400;
     let pressed = last / 2;
@@ -230,7 +219,7 @@ fn key_up_and_each_button_are_applied_and_not_released_again() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let applied = InputLog::install(&pair.host, SCREEN)?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     let expected = [
         InputEvent::key_down(usage::A),
         InputEvent::key_up(usage::A),
@@ -270,7 +259,7 @@ fn an_apply_failure_is_reported_and_the_desktop_stays_open() -> TestResult {
     let scripted = Scripted::install(&pair.host, (640, 480), &[(1, Step::Fail(REFUSED))])?;
     let events = host.subscribe()?;
     publish_display(&pair)?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     assert_eq!(
         {
             let info = desktop.desktop_info()?;
@@ -331,7 +320,7 @@ fn a_failed_release_is_reported_on_the_connection() -> TestResult {
         &[(3, Step::Fail(REFUSED)), (4, Step::Fail(REFUSED))],
     )?;
     let events = host.subscribe()?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     let held = [
         InputEvent::key_down(usage::A),
         InputEvent::button_down(PointerButton::Left),
@@ -371,7 +360,7 @@ fn a_key_the_backend_applies_as_control_is_withdrawn_is_released_at_once() -> Te
     let trace = traced();
     let pair = Pair::for_desktop();
     let scripted = Scripted::install(&pair.host, SCREEN, &[(1, Step::Park)])?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     desktop.submit_input(InputEvent::key_down(usage::A))?;
     scripted.wait_parked();
     pair.host.core.set_desktop_sharing(vnilink::Grants {
@@ -412,7 +401,7 @@ fn a_slow_backend_keeps_the_order_and_what_it_holds() -> TestResult {
     let trace = traced();
     let pair = Pair::for_desktop();
     let scripted = Scripted::install(&pair.host, SCREEN, &[(1, Step::Park)])?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     desktop.submit_input(InputEvent::key_down(usage::A))?;
     scripted.wait_parked();
     desktop.submit_input(InputEvent::key_down(usage::B))?;
@@ -460,7 +449,7 @@ fn a_fault_is_reported_once_until_an_input_applies() -> TestResult {
     script.push((10, missing));
     let scripted = Scripted::install(&pair.host, SCREEN, &script)?;
     let events = pair.host.core.subscribe()?;
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     for _ in 0..4 {
         desktop.submit_input(InputEvent::key_down(usage::A))?;
         desktop.submit_input(InputEvent::key_up(usage::A))?;
@@ -519,7 +508,7 @@ fn input_lost_on_the_way_leaves_nothing_held_once_released() -> TestResult {
         .nth(DropPoint::BeforeAdmission, &[2])
         .nth(DropPoint::AfterAdmission, &[2])
         .install(&pair.host);
-    let (_, desktop) = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     // A's release is lost leaving the viewer, B before the host admits it,
     // C once admitted; D applies.
     for event in [

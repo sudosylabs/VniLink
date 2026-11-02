@@ -11,8 +11,7 @@
 use expect_test::expect;
 
 use vnilink::{
-    CodecSupport, EncodedFrame, Error, Quality, RemoteDesktopService, ServiceKind, VideoCodec,
-    VideoCodecCaps,
+    CodecSupport, EncodedFrame, Error, Quality, ServiceKind, VideoCodec, VideoCodecCaps,
 };
 use vnilink_testkit::desktop::{next_picture, MonitorCapture};
 use vnilink_testkit::{traced, Engine, Pair, TestResult};
@@ -32,13 +31,6 @@ fn pair_with_screen(monitor: (u16, u16)) -> Result<Pair, Error> {
     Ok(pair)
 }
 
-/// A viewer's Desktop service on a new services connection to the
-/// pair's host.
-fn open_desktop(pair: &Pair) -> Result<RemoteDesktopService, Error> {
-    let connection = pair.connect_services();
-    pair.controller.open_desktop(&connection)
-}
-
 /// A 1080p monitor with 640x480 codec limits admits the Desktop, and both
 /// sides record the quality clamped to them.
 #[test]
@@ -47,7 +39,7 @@ fn admission_clamps_quality_to_host_codec_caps() -> TestResult {
     let pair = pair_with_screen(SCREEN)?;
     let host = &pair.host.core;
     host.set_video_codecs(VideoCodecCaps::h264_full(640, 480, "test"))?;
-    let desktop = open_desktop(&pair)?;
+    let (_, desktop) = pair.open_desktop()?;
     // The Desktop starts at the dialled rate, held to what the picture can
     // use: the 1080p monitor's proportions inside 640x480 are 640x360,
     // which at 30 fps is 1,105 kb/s as H.264. It is not the viewer's limit.
@@ -182,8 +174,7 @@ fn auto_and_explicit_codec_survive_owned_desktop_transport_and_reject_mismatched
             host.set_video_codecs(caps.clone())?;
             viewer.set_video_codecs(caps)?;
             host.set_service_sharing(ServiceKind::Desktop, true)?;
-            let connection = pair.connect_services();
-            let desktop = pair.controller.open_desktop(&connection)?;
+            let (_, desktop) = pair.open_desktop()?;
             assert_eq!(
                 desktop.desktop_info()?.codec,
                 codec.wire_id(),
@@ -274,7 +265,7 @@ fn explicit_codec_controls_the_desktop_and_one_the_host_cannot_encode_refuses_it
         host.set_video_codecs(caps.clone())?;
         viewer.set_video_codecs(caps)?;
         viewer.set_desktop_codec_default(Some(codec))?;
-        let desktop = open_desktop(&pair)?;
+        let (_, desktop) = pair.open_desktop()?;
         assert_eq!(
             host.video_targets()?
                 .first()
@@ -297,7 +288,7 @@ fn explicit_codec_controls_the_desktop_and_one_the_host_cannot_encode_refuses_it
     viewer.set_video_codecs(caps)?;
     viewer.set_desktop_codec_default(Some(VideoCodec::Vp9))?;
     assert!(
-        open_desktop(&pair).is_err(),
+        pair.open_desktop().is_err(),
         "a codec the host cannot encode refuses the Desktop"
     );
     assert!(

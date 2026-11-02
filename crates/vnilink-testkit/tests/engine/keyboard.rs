@@ -12,6 +12,8 @@
 use vnilink::{Error, KeyboardMode};
 use vnilink_testkit::{traced, Engine, TestResult};
 
+/// A new engine sends characters, the mode set is the mode read, and a
+/// shut down engine takes none.
 #[test]
 fn the_keyboard_mode_is_process_local_and_character_by_default() -> TestResult {
     let _trace = traced();
@@ -44,6 +46,8 @@ fn the_keyboard_mode_is_process_local_and_character_by_default() -> TestResult {
     Ok(())
 }
 
+/// A new engine does not swap Control and Command, the swap set is the
+/// swap read, and a shut down engine takes none.
 #[test]
 fn the_command_swap_is_process_local_and_off_by_default() -> TestResult {
     let _trace = traced();

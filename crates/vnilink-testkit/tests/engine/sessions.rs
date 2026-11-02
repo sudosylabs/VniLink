@@ -10,6 +10,7 @@
 use vnilink::Error;
 use vnilink_testkit::{traced, Engine, TestResult};
 
+/// A session the engine never had has no paths, and asking says so.
 #[test]
 fn an_unknown_session_has_no_paths() -> TestResult {
     let _trace = traced();

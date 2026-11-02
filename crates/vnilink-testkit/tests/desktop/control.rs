@@ -162,8 +162,7 @@ fn pointer_settings_belong_to_one_desktop_and_a_swapped_drag_releases_the_button
     let trace = traced();
     let pair = Pair::for_desktop();
     let applied = InputLog::install(&pair.host, SCREEN)?;
-    let connection = pair.connect_services();
-    let desktop = pair.controller.open_desktop(&connection)?;
+    let (connection, desktop) = pair.open_desktop()?;
     let policy = PointerSettings {
         sensitivity_percent: 50,
         reverse_wheel: true,
@@ -452,8 +451,7 @@ fn a_view_only_viewer_cannot_take_control_and_losing_control_keeps_its_pictures(
         transfer: false,
     };
     host.set_desktop_sharing(view_only)?;
-    let connection = pair.connect_services();
-    let desktop = pair.controller.open_desktop(&connection)?;
+    let (connection, desktop) = pair.open_desktop()?;
     let remote = pair
         .host
         .hosted_for(ServiceKind::Desktop, &pair.controller)

@@ -53,8 +53,7 @@ impl Opened {
         pair.controller
             .core
             .set_window_decoders(window_decoders(viewer_shows))?;
-        let connection = pair.connect_services();
-        let desktop = pair.controller.open_desktop(&connection)?;
+        let (_, desktop) = pair.open_desktop()?;
         let remote = pair
             .host
             .hosted_for(ServiceKind::Desktop, &pair.controller)
