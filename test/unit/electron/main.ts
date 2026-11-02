@@ -60,6 +60,13 @@ app.on('window-all-closed', () => {
 	}
 });
 
+// The tests wait on animation frames and timers. Chromium slows both for a window that is not
+// seen, as this one never is: on Windows to one frame a second. It renders as if seen, as the
+// smoke launcher's window does (`test/automation/src/application.ts`).
+for (const flag of ['disable-backgrounding-occluded-windows', 'disable-renderer-backgrounding', 'disable-background-timer-throttling']) {
+	app.commandLine.appendSwitch(flag);
+}
+
 void app.whenReady().then(async () => {
 	const window = new BrowserWindow({
 		show: false,
