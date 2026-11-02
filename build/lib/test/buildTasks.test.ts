@@ -250,11 +250,14 @@ suite('build tasks', () => {
 		test('selectServices refuses a service without a suite and names those with one', () => {
 			assert.throws(() => selectServices(['desktop', 'files'], ['files', 'fax']), /No suite for fax\. Services: .*files/);
 		});
-		test('selectRuns stresses a suite 25 times by default', () => {
-			assert.deepStrictEqual(selectRuns(['files']), { times: 25, services: ['files'] });
+		test('selectRuns stresses a suite 25 times by default, without load', () => {
+			assert.deepStrictEqual(selectRuns(['files']), { times: 25, load: false, services: ['files'] });
 		});
 		test('selectRuns takes --times and leaves the services', () => {
-			assert.deepStrictEqual(selectRuns(['--times', '3', 'files']), { times: 3, services: ['files'] });
+			assert.deepStrictEqual(selectRuns(['--times', '3', 'files']), { times: 3, load: false, services: ['files'] });
+		});
+		test('selectRuns takes --load wherever it stands', () => {
+			assert.deepStrictEqual(selectRuns(['files', '--load', '--times', '3', 'camera']), { times: 3, load: true, services: ['files', 'camera'] });
 		});
 		for (const args of [['files', '--times'], ['--times', '0']]) {
 			test(`selectRuns refuses ${args.join(' ')}`, () => {

@@ -729,7 +729,7 @@
       "requires": ["process-tools"]
     },
     "test:stress": {
-      "description": "Run a service's functional suite again and again to find an order the engines do not guarantee",
+      "description": "Run a service's functional suite again and again to find an order the engines do not guarantee; --load keeps every core busy meanwhile",
       "same": "build",
       "requires": ["process-tools"]
     },

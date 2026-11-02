@@ -7,7 +7,7 @@
 
 /** Test runners that own processes: the Electron UI suite, Rust tests and the Linux validation container. */
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/src/scenarios.ts';
 import { linuxValidationVolumes } from './containers.ts';
@@ -141,31 +141,56 @@ export async function testService(root: string, signal: AbortSignal, args: reado
 /** How many times `test:stress` runs a suite when `--times` does not say. */
 const defaultStressRuns = 25;
 
-/** Takes `--times <n>` out of `args`: a positive whole number of runs, the rest names services. */
-export function selectRuns(args: readonly string[]): { readonly times: number; readonly services: string[] } {
-	const index = args.indexOf('--times');
+/**
+ * Takes `--times <n>`, a positive whole number of runs, and `--load` out of
+ * `args`; the rest names services.
+ */
+export function selectRuns(args: readonly string[]): { readonly times: number; readonly load: boolean; readonly services: string[] } {
+	const load = args.includes('--load');
+	const rest = args.filter(arg => arg !== '--load');
+	const index = rest.indexOf('--times');
 	if (index < 0) {
-		return { times: defaultStressRuns, services: [...args] };
+		return { times: defaultStressRuns, load, services: rest };
 	}
-	const value = args.at(index + 1);
+	const value = rest.at(index + 1);
 	if (value === undefined || !/^[1-9]\d*$/.test(value)) {
 		throw new Error('--times needs a positive whole number of runs');
 	}
-	return { times: Number(value), services: args.filter((_, position) => position !== index && position !== index + 1) };
+	return { times: Number(value), load, services: rest.filter((_, position) => position !== index && position !== index + 1) };
+}
+
+/**
+ * Keeps every core of this computer busy until the returned runner stops:
+ * twice as many spinning processes as cores, so an engine's threads wait
+ * for one and the moments between its steps stretch, as on a loaded machine.
+ */
+function loadCores(signal: AbortSignal): ProcessRunner {
+	const load = new ProcessRunner(signal);
+	for (let core = 0; core < availableParallelism() * 2; core++) {
+		load.start(process.execPath, ['-e', 'for (;;) {}'], { stdio: 'ignore' });
+	}
+	return load;
 }
 
 /**
  * Runs the functional suites of the named services again and again, each run
  * alone, and stops at the first failure: an order the engines do not
- * guarantee shows in a few runs where one run passes by luck.
+ * guarantee shows in a few runs where one run passes by luck. `--load` runs
+ * them with every core kept busy, where those orders show far sooner: a
+ * cancel lands mid-step, a sender finishes before its receiver's cancel.
  */
 export async function stressService(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
-	const { times, services: named } = selectRuns(args);
+	const { times, load, services: named } = selectRuns(args);
 	const services = selectServices(await testkitServices(root, 'tests'), named);
-	for (let run = 1; run <= times; run++) {
-		signal.throwIfAborted();
-		console.log(`Stress run ${String(run)} of ${String(times)}: ${services.join(', ')}`);
-		await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])]);
+	const busy = load ? loadCores(signal) : undefined;
+	try {
+		for (let run = 1; run <= times; run++) {
+			signal.throwIfAborted();
+			console.log(`Stress run ${String(run)} of ${String(times)}${load ? ' under load' : ''}: ${services.join(', ')}`);
+			await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])]);
+		}
+	} finally {
+		await busy?.stop();
 	}
 }
 
