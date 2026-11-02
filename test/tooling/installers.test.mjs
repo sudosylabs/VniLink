@@ -151,13 +151,15 @@ test('the builder packages a copy, so what it adds there leaves the verified app
 test('installer generation respects an active assembly lock and cancellation prevents publication', async () => {
 	const f = await fixture();
 	try {
+		// An assembly still running holds the lock: this process stands in for it.
 		await mkdir(`${f.application}.lock`);
+		await writeFile(join(`${f.application}.lock`, 'owner.json'), JSON.stringify({ pid: process.pid }));
 		let calls = 0;
 		await assert.rejects(buildInstallers(f.root, new AbortController().signal, {
 			runBuilder: async () => {
 				calls++;
 			},
-		}), /EEXIST/);
+		}), /is publishing here/);
 		assert.equal(calls, 0);
 		await rm(`${f.application}.lock`, { recursive: true });
 		await mkdir(f.output, { recursive: true });

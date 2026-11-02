@@ -13,6 +13,7 @@ import * as darwin from './package.darwin.ts';
 import * as linux from './package.linux.ts';
 import { builderPlatformFlag, packageConfiguration, runElectronBuilder, type BuilderConfiguration } from './package.ts';
 import * as win32 from './package.win32.ts';
+import { acquireLock } from './lock.ts';
 import { ProcessRunner } from './processes.ts';
 import { readProduct, type Product } from './product.ts';
 import { fileSha256, verifyPackageFiles, verifyReleaseFiles, type InstallerArtifact, type ReleaseManifest } from './verify.ts';
@@ -51,8 +52,7 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 	const output = join(root, 'dist/installers', target);
 	await mkdir(join(root, 'dist/installers'), { recursive: true });
 	// Both assembly and installer jobs own this lock while reading the application.
-	const lock = `${application}.lock`;
-	await mkdir(lock);
+	const releaseLock = await acquireLock(`${application}.lock`);
 	const processes = new ProcessRunner(signal);
 	let work: string | undefined;
 	try {
@@ -95,7 +95,7 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 			if (work) {
 				await rm(work, { recursive: true, force: true });
 			}
-			await rm(lock, { recursive: true, force: true });
+			await releaseLock();
 		}
 	}
 }

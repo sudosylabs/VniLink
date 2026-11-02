@@ -12,6 +12,7 @@ import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from
 import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import { assignExecutableUuids, darwinUsageDescriptions } from './macos/identity.ts';
+import { acquireLock } from './lock.ts';
 import { ProcessRunner } from './processes.ts';
 import { validateProduct, type Product, type ProductPlatform } from './product.ts';
 import { packageInventory, verifyReleaseFiles, type ReleaseManifest } from './verify.ts';
@@ -134,8 +135,7 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 	const parent = join(root, 'dist');
 	const output = join(parent, `${process.platform}-${process.arch}`);
 	await mkdir(parent, { recursive: true });
-	const lock = `${output}.lock`;
-	await mkdir(lock);
+	const releaseLock = await acquireLock(`${output}.lock`);
 	const processes = new ProcessRunner(signal);
 	let work: string | undefined;
 	try {
@@ -190,6 +190,6 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		if (work) {
 			await rm(work, { recursive: true, force: true });
 		}
-		await rm(lock, { recursive: true, force: true });
+		await releaseLock();
 	}
 }

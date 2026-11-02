@@ -254,10 +254,11 @@ test('release publication inventories only complete payloads, cleans failures an
 		await access(join(output, 'app/assets/tray/idleTemplate.png'));
 		await put(output, 'app/main.cjs', 'modified');
 		await assert.rejects(verifyReleaseFiles(output), /inventory differs/);
+		// A build still running holds the lock: this process stands in for it.
 		await mkdir(`${output}.lock`);
-		await put(`${output}.lock`, 'owner', 'another-build');
-		await assert.rejects(release(), /EEXIST/);
-		assert.equal(await readFile(join(`${output}.lock`, 'owner'), 'utf8'), 'another-build');
+		await put(`${output}.lock`, 'owner.json', JSON.stringify({ pid: process.pid }));
+		await assert.rejects(release(), /is publishing here/);
+		assert.equal(await readFile(join(`${output}.lock`, 'owner.json'), 'utf8'), JSON.stringify({ pid: process.pid }));
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -271,5 +272,24 @@ test('relink staging excludes generated objects and tooling metadata while retai
 	assert.equal(relinkSourceFilter('crates/core/src'), true);
 	for (const file of ['build.rs', 'Cargo.lock', 'LICENSE', 'COPYING', 'VNILINK.md', 'source.cpp']) {
 		assert.equal(releaseSourceFilter(file), true, file);
+	}
+});
+
+test('a publisher\'s lock refuses a running build and takes over one a stopped build left behind', async () => {
+	const { acquireLock } = await import('../../build/lib/lock.ts');
+	const directory = await mkdtemp(join(tmpdir(), 'vnilink-lock-'));
+	try {
+		const lock = join(directory, 'out.lock');
+		const release = await acquireLock(lock);
+		await assert.rejects(acquireLock(lock), new RegExp(`process ${String(process.pid)}\\) is publishing here`));
+		await release();
+		await mkdir(lock);
+		await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: 2 ** 22 + 12345 }));
+		const again = await acquireLock(lock);
+		await again();
+		await mkdir(lock);
+		await (await acquireLock(lock))();
+	} finally {
+		await rm(directory, { recursive: true, force: true });
 	}
 });

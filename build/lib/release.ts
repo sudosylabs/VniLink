@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { buildApplication, bundleOptions, type ApplicationBuildOptions } from './bundles.ts';
+import { acquireLock } from './lock.ts';
 import { assertNativeFresh, GLASS_DIRECTORY, type NativeOptions } from './native.ts';
 import { loadProduct } from './product.ts';
 import { releaseInventory, type ReleaseFile } from './verify.ts';
@@ -53,8 +54,8 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 	const parent = join(root, '.build/release');
 	const output = join(parent, `${process.platform}-${process.arch}`);
 	await mkdir(parent, { recursive: true });
-	const lock = `${output}.lock`;
-	await mkdir(lock); // Refuse overlapping publishers rather than deleting another build's files.
+	// Refuse overlapping publishers rather than deleting another build's files.
+	const releaseLock = await acquireLock(`${output}.lock`);
 	let work: string | undefined;
 	try {
 		const stage = await mkdtemp(join(parent, '.stage-'));
@@ -102,6 +103,6 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		if (work) {
 			await rm(work, { recursive: true, force: true });
 		}
-		await rm(lock, { recursive: true, force: true });
+		await releaseLock();
 	}
 }
