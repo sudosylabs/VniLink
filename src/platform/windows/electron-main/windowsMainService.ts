@@ -91,7 +91,8 @@ export class WindowsMainService extends Disposable {
 		window?.focus();
 	}
 
-	private createWindow(): BrowserWindow {
+	/** Creates the main window, hidden until `openMainWindow` has loaded its page. */
+	protected createWindow(): BrowserWindow {
 		const options = defaultBrowserWindowOptions();
 		// Packaged builds and the development Electron (`build/lib/electron.ts`) both ship this resource.
 		const icon = isLinux ? { icon: join(process.resourcesPath, 'app-icon.png') } : {};

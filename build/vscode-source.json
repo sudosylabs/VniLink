@@ -3109,13 +3109,12 @@
     {
       "path": "src/base/common/types.ts",
       "upstreamPath": "src/vs/base/common/types.ts",
-      "sha256": "3a26d747b088a617fdb337a8b47782764f7b0d2c66bc53869f3cdc8600f90c8d",
+      "sha256": "db9f593c4bb0566034ae34018694dc860f50c090e5aa0e8bb5f3807d13b24b19",
       "pruned": [
         "AddFirstParameterToFunction",
         "AddFirstParameterToFunctions",
         "AtLeastOne",
         "DeepImmutable",
-        "DeepPartial",
         "DeepRequiredNonNullable",
         "FilterType",
         "KeysOfUnionType",
@@ -3221,7 +3220,7 @@
     {
       "path": "src/base/parts/ipc/electron-main/ipc.electron.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipc.electron.ts",
-      "sha256": "cdce429d4a202e37fad7fd6381b784aae54ed524f84c0d136311fbb4c60055d1",
+      "sha256": "882caed1ac55ebe7e33d3c0825dbf9e05dceeeb0397e78036cfd40900e1e2ff6",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -3236,7 +3235,7 @@
     {
       "path": "src/base/parts/ipc/electron-main/ipcMain.ts",
       "upstreamPath": "src/vs/base/parts/ipc/electron-main/ipcMain.ts",
-      "sha256": "932eaf9873d730d1935303c77583271cf811136c10a742d4c0def54ac1339df7",
+      "sha256": "f554aa4fd4f99cc2761f3125e6706cf0bc8b2441a86bfe8e21533239b0c4c9b3",
       "adapted": true,
       "upstreamStyle": true
     },
@@ -3311,6 +3310,11 @@
       "path": "src/base/test/common/executionGraph.ts",
       "upstreamPath": "src/vs/base/test/common/executionGraph.ts",
       "sha256": "c5767857e9c3d943ea5e3d0815a5c1ea8b4de749a884eece584eecae636cca8b"
+    },
+    {
+      "path": "src/base/test/common/mock.ts",
+      "upstreamPath": "src/vs/base/test/common/mock.ts",
+      "sha256": "5acec889e9e311f2419d416a34af6dea68b67f442cea2c48f78aacf0fc88dcd3"
     },
     {
       "path": "src/base/test/common/utils.ts",
@@ -4278,7 +4282,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "fe12e4abf0a09f923e2ffe016e976a369eb1019a327f63e891ebe40ba60da456"
+      "sha256": "bd0173969c20a9ec18fb7e58f9198e24b0f2b86d2d3fb6f028fc63cd83a88b91"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -4592,7 +4596,10 @@
     "src/base/parts/ipc/node/ipc.mp.ts",
     "src/base/parts/sandbox/electron-browser/globals.ts",
     "src/base/parts/sandbox/node/electronTypes.ts",
+    "src/base/test/common/mock.ts",
     "src/base/test/common/utils.ts",
+    "src/base/test/common/virtualScheduling/index.ts",
+    "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
     "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
     "src/nls.ts",
     "src/platform/actions/common/actions.ts",
@@ -4618,6 +4625,7 @@
     "src/platform/log/electron-main/logIpc.ts",
     "src/platform/log/electron-main/loggerService.ts",
     "src/platform/native/common/native.ts",
+    "src/platform/native/common/nativeHostService.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
     "src/platform/state/node/state.ts",
@@ -4686,7 +4694,10 @@
     "src/base/parts/ipc/node/ipc.mp.ts",
     "src/base/parts/sandbox/electron-browser/globals.ts",
     "src/base/parts/sandbox/node/electronTypes.ts",
+    "src/base/test/common/mock.ts",
     "src/base/test/common/utils.ts",
+    "src/base/test/common/virtualScheduling/index.ts",
+    "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
     "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
     "src/nls.ts",
     "src/platform/actions/common/actions.ts",
@@ -4712,6 +4723,7 @@
     "src/platform/log/electron-main/logIpc.ts",
     "src/platform/log/electron-main/loggerService.ts",
     "src/platform/native/common/native.ts",
+    "src/platform/native/common/nativeHostService.ts",
     "src/platform/native/electron-main/nativeHostMainService.ts",
     "src/platform/registry/common/platform.ts",
     "src/platform/state/node/state.ts",
@@ -7817,6 +7829,11 @@
     {
       "from": "src/base/test/common/virtualScheduling/loggingTimeApi.ts",
       "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/mock.ts",
+      "to": "src/base/common/types.ts",
       "kind": "import"
     },
     {

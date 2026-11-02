@@ -123,5 +123,10 @@
     "path": "src/platform/instantiation/common/strictServiceCollection.ts",
     "name": "StrictServiceCollection",
     "reason": "VS Code's instantiation service tests construct it"
+  },
+  {
+    "path": "src/base/common/types.ts",
+    "name": "DeepPartial",
+    "reason": "base/test/common/mock.ts types upcastDeepPartial with it"
   }
 ]

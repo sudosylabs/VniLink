@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: senders must be the main frame of an application window showing the exact workbench URL.
+ *  Adapted for VniLink: senders must be the main frame of an application window showing the exact workbench URL,
+ *  and the Electron `ipcMain` and window lookup it validates against are given to it.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -19,12 +20,37 @@ export const WORKBENCH_URL = 'vnilink://app/index.html';
 
 type ipcMainListener = (event: electron.IpcMainEvent, ...args: any[]) => void;
 
-class ValidatedIpcMain implements Event.NodeEventEmitter {
+/** The part of Electron's `ipcMain` the validation sits on. */
+export interface IIpcMain {
+	on(channel: string, listener: ipcMainListener): unknown;
+	handle(channel: string, listener: (event: electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown): void;
+	removeHandler(channel: string): void;
+	removeListener(channel: string, listener: ipcMainListener): unknown;
+}
+
+/** The Electron pieces messages are validated against. */
+export interface IValidatedIpcMainHost {
+	readonly ipcMain: IIpcMain;
+	/** Whether `contents` shows an application window, rather than some other web contents. */
+	isApplicationWindow(contents: electron.WebContents): boolean;
+}
+
+/** Electron's own `ipcMain` and windows, read when first used. */
+const electronHost: IValidatedIpcMainHost = {
+	get ipcMain() {
+		return electron.ipcMain;
+	},
+	isApplicationWindow: contents => electron.BrowserWindow.fromWebContents(contents) !== null,
+};
+
+export class ValidatedIpcMain implements Event.NodeEventEmitter {
 
 	// We need to keep a map of original listener to the wrapped variant in order
 	// to properly implement `removeListener`. We use a `WeakMap` because we do
 	// not want to prevent the `key` of the map to get garbage collected.
 	private readonly mapListenerToWrapper = new WeakMap<ipcMainListener, ipcMainListener>();
+
+	constructor(private readonly host: IValidatedIpcMainHost = electronHost) { }
 
 	/**
 	 * Listens to `channel`, when a new message arrives `listener` would be called with
@@ -42,7 +68,7 @@ class ValidatedIpcMain implements Event.NodeEventEmitter {
 
 		this.mapListenerToWrapper.set(listener, wrappedListener);
 
-		electron.ipcMain.on(channel, wrappedListener);
+		this.host.ipcMain.on(channel, wrappedListener);
 
 		return this;
 	}
@@ -64,7 +90,7 @@ class ValidatedIpcMain implements Event.NodeEventEmitter {
 	 * provided to the renderer process. Please refer to #24427 for details.
 	 */
 	handle(channel: string, listener: (event: electron.IpcMainInvokeEvent, ...args: any[]) => Promise<unknown>): this {
-		electron.ipcMain.handle(channel, (event: electron.IpcMainInvokeEvent, ...args: unknown[]) => {
+		this.host.ipcMain.handle(channel, (event: electron.IpcMainInvokeEvent, ...args: unknown[]) => {
 			if (this.validateEvent(channel, event)) {
 				return listener(event, ...args);
 			}
@@ -79,7 +105,7 @@ class ValidatedIpcMain implements Event.NodeEventEmitter {
 	 * Removes any handler for `channel`, if present.
 	 */
 	removeHandler(channel: string): this {
-		electron.ipcMain.removeHandler(channel);
+		this.host.ipcMain.removeHandler(channel);
 
 		return this;
 	}
@@ -91,7 +117,7 @@ class ValidatedIpcMain implements Event.NodeEventEmitter {
 	removeListener(channel: string, listener: ipcMainListener): this {
 		const wrappedListener = this.mapListenerToWrapper.get(listener);
 		if (wrappedListener) {
-			electron.ipcMain.removeListener(channel, wrappedListener);
+			this.host.ipcMain.removeListener(channel, wrappedListener);
 			this.mapListenerToWrapper.delete(listener);
 		}
 
@@ -118,7 +144,7 @@ class ValidatedIpcMain implements Event.NodeEventEmitter {
 			return false; // unexpected frame
 		}
 
-		if (!electron.BrowserWindow.fromWebContents(event.sender)) {
+		if (!this.host.isApplicationWindow(event.sender)) {
 			onUnexpectedError(`Refused to handle ipcMain event for channel '${channel}' because the sender is not an application window.`);
 			return false; // unexpected web contents
 		}

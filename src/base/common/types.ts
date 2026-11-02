@@ -116,3 +116,10 @@ export type OmitOptional<T> = { [K in keyof T as T[K] extends Required<T>[K] ? K
 export type Mutable<T> = {
 	-readonly [P in keyof T]: T[P]
 };
+
+/**
+ * Represents a type that is a partial version of a given type `T`, where all properties are optional and can be deeply nested.
+ */
+export type DeepPartial<T> = {
+	[P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : Partial<T[P]>;
+};

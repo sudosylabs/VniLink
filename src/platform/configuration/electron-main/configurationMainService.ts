@@ -106,15 +106,17 @@ export class ConfigurationMainService extends Disposable {
 	private revision = 0;
 	private pending: Promise<unknown> = Promise.resolve();
 
+	/** `systemSettings` reads the operating system's own; a test gives one that does not. */
 	constructor(
 		path: string,
 		@IEngineMainService private readonly engine: EngineMainService,
 		@ILogService private readonly logService: ILogService,
+		systemSettings = new SystemSettings(),
 	) {
 		super();
 		this.user = this._register(new UserSettings(path));
 		this.engineSettings = this._register(new EngineSettings(engine));
-		this.systemSettings = this._register(new SystemSettings());
+		this.systemSettings = this._register(systemSettings);
 		this._register(Event.any(this.user.onDidChange, this.engineSettings.onDidChange, this.systemSettings.onDidChange)(() => {
 			this.current = undefined;
 			this.changed.fire(this.snapshot);

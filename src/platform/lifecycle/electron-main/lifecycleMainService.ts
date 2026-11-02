@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { app, powerMonitor } from 'electron';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { isLinux } from '../../../base/common/platform.js';
@@ -15,7 +14,7 @@ import { ILogService } from '../../log/common/log.js';
 
 export const ILifecycleMainService = createDecorator<LifecycleMainService>('lifecycleMainService');
 
-interface ShutdownEvent {
+export interface ShutdownEvent {
 	/** Delays quitting until `promise` settles. Failures are logged, never block shutdown. */
 	join(id: string, promise: Promise<unknown>): void;
 }
@@ -25,6 +24,9 @@ const shutdownDeadline = 20_000;
 
 /** Exit code that asks the development runner to start the application again. */
 const DEVELOPMENT_RELAUNCH_EXIT_CODE = 42;
+
+/** Electron's `app` as quitting uses it: its quit events, `quit`, `relaunch` and `exit`. */
+export type LifecycleApplication = Event.NodeEventEmitter & Pick<Electron.App, 'quit' | 'relaunch' | 'exit'>;
 
 /**
  * Owns quitting and relaunching. Services that hold external resources join
@@ -39,7 +41,15 @@ export class LifecycleMainService extends Disposable {
 	private relaunching = false;
 	private shutdown: Promise<void> | undefined;
 
-	constructor(@ILogService private readonly logService: ILogService) {
+	/**
+	 * @param app Electron's `app`.
+	 * @param powerMonitor Electron's `powerMonitor`, which announces a Linux shutdown.
+	 */
+	constructor(
+		private readonly app: LifecycleApplication,
+		private readonly powerMonitor: Event.NodeEventEmitter,
+		@ILogService private readonly logService: ILogService,
+	) {
 		super();
 		this._register(Event.fromNodeEventEmitter<Electron.Event>(app, 'before-quit')(event => {
 			this.onBeforeQuit(event);
@@ -59,9 +69,9 @@ export class LifecycleMainService extends Disposable {
 		if (!isLinux) {
 			return;
 		}
-		this._register(Event.fromNodeEventEmitter<Electron.Event>(powerMonitor, 'shutdown')(event => {
+		this._register(Event.fromNodeEventEmitter<Electron.Event>(this.powerMonitor, 'shutdown')(event => {
 			event.preventDefault();
-			app.quit();
+			this.app.quit();
 		}));
 	}
 
@@ -76,9 +86,9 @@ export class LifecycleMainService extends Disposable {
 		}
 		this.relaunching = true;
 		if (!this.isDevelopmentRunner()) {
-			app.relaunch();
+			this.app.relaunch();
 		}
-		app.quit();
+		this.app.quit();
 	}
 
 	/** Runs shutdown participants once; used directly when startup fails. */
@@ -99,9 +109,9 @@ export class LifecycleMainService extends Disposable {
 		void this.runShutdown().finally(() => {
 			this.shutdownComplete = true;
 			if (this.relaunching && this.isDevelopmentRunner()) {
-				app.exit(DEVELOPMENT_RELAUNCH_EXIT_CODE);
+				this.app.exit(DEVELOPMENT_RELAUNCH_EXIT_CODE);
 			} else {
-				app.quit();
+				this.app.quit();
 			}
 		});
 	}

@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { app, BrowserWindow, nativeTheme, net, protocol, session } from 'electron';
+import { app, BrowserWindow, nativeTheme, net, powerMonitor, protocol, session } from 'electron';
 import type { BrowserWindow as BrowserWindowType, WebContents } from 'electron';
 import { release } from 'node:os';
 import { rm } from 'node:fs/promises';
@@ -27,8 +27,8 @@ import { ENGINE_CHANNEL_NAME } from '../../platform/engine/common/engineService.
 import { EngineChannel } from '../../platform/engine/electron-main/engineChannel.js';
 import { EngineMainService, IEngineMainService } from '../../platform/engine/electron-main/engineMainService.js';
 import { HostingMainService, IHostingMainService } from '../../platform/hosting/electron-main/hostingMainService.js';
-import { IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
-import { ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
+import { electronScreenHostingEnvironment, IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
+import { electronTrayEnvironment, ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
 import { ISystemActionNoticeMainService, SystemActionNoticeMainService } from '../../platform/systemActions/electron-main/systemActionNotice.js';
 import { traySupported } from '../../platform/tray/electron-main/traySupport.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
@@ -44,6 +44,7 @@ import { LoggerChannel } from '../../platform/log/electron-main/logIpc.js';
 import { LOGGER_CHANNEL_NAME } from '../../platform/log/common/loggerChannel.js';
 import { WindowLoggerChannel } from '../../platform/log/electron-main/windowLoggerChannel.js';
 import { runSelfCheck } from './selfCheck.js';
+import { joinShutdown, MainWindowRequests, runsInBackground, sharesScreen, startsWithoutWindow } from './applicationStartup.js';
 import { ILoggerMainService, LoggerMainService } from '../../platform/log/electron-main/loggerService.js';
 import { logsFolderName, pruneLogs } from '../../platform/log/electron-main/logsFolder.js';
 import { installApplicationMenu, registerEditingShortcuts } from '../../platform/menubar/electron-main/menubar.js';
@@ -96,10 +97,6 @@ export class VniLinkApplication extends Disposable {
 	private readonly stateService: StateService;
 	private readonly instantiationService: InstantiationService;
 	private started: Promise<void> | undefined;
-	private restored = false;
-	/** A launch or activation that arrived before startup could open a window. */
-	private windowRequested = false;
-	private opening: Promise<void> | undefined;
 
 	constructor(private readonly options: ApplicationOptions = {}) {
 		super();
@@ -130,13 +127,13 @@ export class VniLinkApplication extends Disposable {
 		return new ServiceCollection(
 			[ILogService, this.logService],
 			[ILoggerMainService, this.loggerService],
-			[ILifecycleMainService, new SyncDescriptor(LifecycleMainService)],
+			[ILifecycleMainService, new SyncDescriptor(LifecycleMainService, [app, powerMonitor])],
 			[IWindowsMainService, new SyncDescriptor(WindowsMainService)],
 			[INativeHostMainService, new SyncDescriptor(NativeHostMainService, [this.logsHome])],
 			[IEngineMainService, new SyncDescriptor(EngineMainService)],
 			[IHostingMainService, new SyncDescriptor(HostingMainService)],
-			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService)],
-			[ITrayMainService, new SyncDescriptor(TrayMainService)],
+			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService, [electronScreenHostingEnvironment])],
+			[ITrayMainService, new SyncDescriptor(TrayMainService, [electronTrayEnvironment])],
 			[ISystemActionNoticeMainService, new SyncDescriptor(SystemActionNoticeMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
@@ -163,9 +160,7 @@ export class VniLinkApplication extends Disposable {
 			this.logService.warn('Older logs could not be removed', error);
 		});
 		protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
-		this.instantiationService.invokeFunction(accessor => {
-			this.registerListeners(accessor);
-		});
+		const windowRequests = this.instantiationService.invokeFunction(accessor => this.registerListeners(accessor));
 		try {
 			await app.whenReady();
 			this.checkRunning();
@@ -189,9 +184,7 @@ export class VniLinkApplication extends Disposable {
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
 				accessor.get(IHostingMainService).start();
-				// A temporary engine shares the screen only when it may
-				// capture; on Linux asking shows the desktop portal's dialog.
-				if (!this.options.temporaryEngine || this.options.temporaryEngineCaptures === true) {
+				if (sharesScreen(this.options)) {
 					void accessor.get(IScreenHostingMainService).start();
 				}
 				// A paired computer may ask this one to restart or shut down; its user sees and answers it.
@@ -200,21 +193,16 @@ export class VniLinkApplication extends Disposable {
 			if (await traySupported()) {
 				this.checkRunning();
 				this.instantiationService.invokeFunction(accessor => {
-					this.createTray(accessor);
+					this.createTray(accessor, windowRequests);
 				});
 			}
-			if (!this.options.temporaryEngine && this.runsInBackground() && launchedAtLogin()) {
+			if (startsWithoutWindow(this.options.temporaryEngine ?? false, this.runsInBackground(), () => launchedAtLogin())) {
 				// Started by the login item: accept paired devices without a window until the user opens one.
-				this.restored = true;
-				if (this.windowRequested) {
-					this.instantiationService.invokeFunction(accessor => {
-						this.showWindow(accessor.get(IWindowsMainService), accessor.get(ILifecycleMainService));
-					});
-				}
+				windowRequests.startedWithoutWindow();
 				return;
 			}
 			const window = await this.openWindow();
-			this.restored = true;
+			windowRequests.openedAtStartup();
 			mark('vnilink/windowReady');
 			if (this.options.selfCheck) {
 				await this.runSelfCheck(window, this.options.selfCheck);
@@ -251,68 +239,44 @@ export class VniLinkApplication extends Disposable {
 		}
 	}
 
-	private registerListeners(accessor: ServicesAccessor): void {
+	/** Registers the application's listeners and returns what answers requests to see the window. */
+	private registerListeners(accessor: ServicesAccessor): MainWindowRequests {
 		const lifecycle = accessor.get(ILifecycleMainService);
 		const windows = accessor.get(IWindowsMainService);
 		const engine = accessor.get(IEngineMainService);
 		const configuration = accessor.get(IConfigurationMainService);
 		const state = accessor.get(IStateService);
-		this._register(lifecycle.onWillShutdown(event => {
-			event.join('engine', engine.stop());
-			event.join('configuration', configuration.flush());
-			event.join('state', state.close());
-		}));
+		const windowRequests = new MainWindowRequests(windows, lifecycle, () => this.openWindow(), this.logService);
+		this._register(joinShutdown(lifecycle.onWillShutdown, { engine, configuration, state }));
 		this._register(Event.fromNodeEventEmitter<WebContents>(app, 'web-contents-created', (_event: unknown, contents: WebContents) => contents)(secureWebContents));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
 			this.dispose();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'second-instance')(() => {
-			this.showWindow(windows, lifecycle);
+			windowRequests.request();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'activate')(() => {
-			this.showWindow(windows, lifecycle);
+			windowRequests.request();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'window-all-closed')(() => {
 			if (!this.runsInBackground()) {
 				app.quit();
 			}
 		}));
+		return windowRequests;
 	}
 
-	/** Whether closing the window leaves the application running; see `application.runInBackground`, restricted where no tray icon shows. */
 	private runsInBackground(): boolean {
 		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
-		return !configuration.snapshot.restricted.includes('application.runInBackground') && configuration.getValue('application.runInBackground') !== false;
+		return runsInBackground(configuration.snapshot.restricted, configuration.getValue('application.runInBackground'));
 	}
 
-	private createTray(accessor: ServicesAccessor): void {
+	private createTray(accessor: ServicesAccessor, windowRequests: MainWindowRequests): void {
 		const tray = accessor.get(ITrayMainService);
-		const windows = accessor.get(IWindowsMainService);
-		const lifecycle = accessor.get(ILifecycleMainService);
 		this._register(tray.onDidRequestWindow(() => {
-			this.showWindow(windows, lifecycle);
+			windowRequests.request();
 		}));
 		tray.create();
-	}
-
-	/** Focuses the window, or opens it when the application runs without one. */
-	private showWindow(windows: WindowsMainService, lifecycle: LifecycleMainService): void {
-		if (lifecycle.quitting) {
-			return;
-		}
-		if (!this.restored) {
-			this.windowRequested = true;
-			return;
-		}
-		if (windows.getMainWindow()) {
-			windows.focusMainWindow();
-			return;
-		}
-		this.opening ??= this.openWindow().then(() => undefined, (error: unknown) => {
-			this.logService.error(error instanceof Error ? error : new Error(String(error)));
-		}).finally(() => {
-			this.opening = undefined;
-		});
 	}
 
 	private applyAppearance(accessor: ServicesAccessor): void {

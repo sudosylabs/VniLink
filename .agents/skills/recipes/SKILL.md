@@ -35,7 +35,7 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 2. Main service in `platform/<area>/electron-main/<area>MainService.ts`, registered in `VniLinkApplication.createServices`.
 3. Channel facade in `platform/<area>/electron-main/<area>Channel.ts`. It validates every argument and reads the window from `windowIdFromContext(context)`. Imitate `platform/permissions/electron-main/permissionsChannel.ts`. Register it in `initChannels`.
 4. Renderer side: `registerMainProcessRemoteService` for plain proxies, or a small service over `IMainProcessService.getChannel` when results need validation (`workbench/services/configuration/configurationServiceImpl.ts`).
-5. Channel-level tests in `test/tooling/applicationIpc.test.mjs`, including refused input.
+5. Channel-level tests in `platform/<area>/test/electron-main/<area>Channel.test.ts`, including refused input; imitate `platform/native/test/electron-main/nativeHostChannel.test.ts`.
 
 ## Add a toolbar action
 

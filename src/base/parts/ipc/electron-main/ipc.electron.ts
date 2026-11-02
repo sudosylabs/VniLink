@@ -2,7 +2,7 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *  Adapted for VniLink: the connection context is assigned from the sender's window, never read from the renderer,
- *  and a window's connection ends when its contents are destroyed.
+ *  a window's connection ends when its contents are destroyed, and the validated `ipcMain` and window lookup are given to it.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -24,8 +24,11 @@ interface IIPCEvent {
 	message: Buffer | null;
 }
 
-function createScopedOnMessageEvent(senderId: number, eventName: string): Event<VSBuffer | null> {
-	const onMessage = Event.fromNodeEventEmitter<IIPCEvent>(validatedIpcMain, eventName, (event, message) => ({ event, message }));
+/** The window that shows `contents`, or `null` for any other web contents. */
+type WindowLookup = (contents: WebContents) => { readonly id: number } | null;
+
+function createScopedOnMessageEvent(ipc: Event.NodeEventEmitter, senderId: number, eventName: string): Event<VSBuffer | null> {
+	const onMessage = Event.fromNodeEventEmitter<IIPCEvent>(ipc, eventName, (event, message) => ({ event, message }));
 	const onMessageFromSender = Event.filter(onMessage, ({ event }) => event.sender.id === senderId);
 
 	return Event.map(onMessageFromSender, ({ message }) => message ? VSBuffer.wrap(message) : message);
@@ -55,14 +58,14 @@ export class Server extends IPCServer {
 
 	private static readonly Clients = new Map<number, IDisposable>();
 
-	private static getOnDidClientConnect(): Event<ClientConnectionEvent> {
-		const onHello = Event.fromNodeEventEmitter<WebContents>(validatedIpcMain, 'vnilink:hello', ({ sender }) => sender);
+	private static getOnDidClientConnect(ipc: Event.NodeEventEmitter, windowOf: WindowLookup): Event<ClientConnectionEvent> {
+		const onHello = Event.fromNodeEventEmitter<WebContents>(ipc, 'vnilink:hello', ({ sender }) => sender);
 
-		const onHelloFromWindow = Event.filter(onHello, webContents => BrowserWindow.fromWebContents(webContents) !== null);
+		const onHelloFromWindow = Event.filter(onHello, webContents => windowOf(webContents) !== null);
 
 		return Event.map(onHelloFromWindow, webContents => {
 			const id = webContents.id;
-			const windowId = BrowserWindow.fromWebContents(webContents)?.id;
+			const windowId = windowOf(webContents)?.id;
 			const client = Server.Clients.get(id);
 
 			client?.dispose();
@@ -73,16 +76,18 @@ export class Server extends IPCServer {
 			});
 			Server.Clients.set(id, reconnectDisposable);
 
-			const onMessage = withTrustedContext(createScopedOnMessageEvent(id, 'vnilink:message') as Event<VSBuffer>, `window:${windowId}`);
+			const onMessage = withTrustedContext(createScopedOnMessageEvent(ipc, id, 'vnilink:message') as Event<VSBuffer>, `window:${windowId}`);
 			// A window that closes never says goodbye; its contents' destruction ends the connection.
 			const onDestroyed = Event.fromNodeEventEmitter<void>(webContents, 'destroyed');
-			const onDidClientDisconnect = Event.any(Event.signal(createScopedOnMessageEvent(id, 'vnilink:disconnect')), onDidClientReconnect.event, onDestroyed);
+			const onDidClientDisconnect = Event.any(Event.signal(createScopedOnMessageEvent(ipc, id, 'vnilink:disconnect')), onDidClientReconnect.event, onDestroyed);
 			Event.once(onDidClientDisconnect)(() => {
 				if (Server.Clients.get(id) === reconnectDisposable) {
 					Server.Clients.delete(id);
 				}
 
 				onDidClientReconnect.dispose();
+				// Its emitter is disposed above, so this signals nothing.
+				reconnectDisposable.dispose();
 			});
 			const protocol = new ElectronProtocol(webContents, onMessage);
 
@@ -90,7 +95,10 @@ export class Server extends IPCServer {
 		});
 	}
 
-	constructor() {
-		super(Server.getOnDidClientConnect());
+	constructor(
+		ipc: Event.NodeEventEmitter = validatedIpcMain,
+		windowOf: WindowLookup = contents => BrowserWindow.fromWebContents(contents),
+	) {
+		super(Server.getOnDidClientConnect(ipc, windowOf));
 	}
 }

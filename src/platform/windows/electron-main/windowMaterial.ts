@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import { nativeTheme } from 'electron';
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, NativeTheme } from 'electron';
 import { release } from 'node:os';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
@@ -20,11 +20,14 @@ import { createLiquidGlass, type GlassOptions, type LiquidGlassOwner } from './l
  * Over the desktop itself, glass took on the wallpaper's colour, and no tint
  * could lighten it over a dark one.
  */
-function glassOptions(): GlassOptions {
-	return { opaque: true, tintColor: nativeTheme.shouldUseDarkColors ? '#26272BB8' : '#F1F1F3CC' };
+function glassOptions(dark: boolean): GlassOptions {
+	return { opaque: true, tintColor: dark ? '#26272BB8' : '#F1F1F3CC' };
 }
 
 type MaterialWindow = Pick<BrowserWindow, 'isDestroyed' | 'setVibrancy' | 'setBackgroundMaterial' | 'setBackgroundColor' | 'getNativeWindowHandle'>;
+
+/** The theme and accessibility preferences a backdrop follows; Electron's `nativeTheme`, which emits `updated`. */
+type MaterialTheme = Event.NodeEventEmitter & Pick<NativeTheme, 'shouldUseDarkColors' | 'prefersReducedTransparency' | 'shouldUseHighContrastColors'>;
 
 /**
  * Owns the native backdrop and its theme/accessibility subscription for one
@@ -45,6 +48,7 @@ export class WindowMaterial extends Disposable {
 		private readonly platform: string = windowPlatform,
 		private readonly osRelease = release(),
 		private readonly createGlass: () => LiquidGlassOwner | undefined = createLiquidGlass,
+		private readonly theme: MaterialTheme = nativeTheme,
 	) {
 		super();
 		this._register({
@@ -54,7 +58,7 @@ export class WindowMaterial extends Disposable {
 			},
 		});
 		this.update();
-		this._register(Event.fromNodeEventEmitter<unknown>(nativeTheme, 'updated')(() => {
+		this._register(Event.fromNodeEventEmitter<unknown>(theme, 'updated')(() => {
 			this.update();
 			this.changed.fire();
 		}));
@@ -64,8 +68,8 @@ export class WindowMaterial extends Disposable {
 		if (this.window.isDestroyed()) {
 			return;
 		}
-		let material = resolveWindowMaterial(this.platform, this.osRelease, nativeTheme.prefersReducedTransparency, nativeTheme.shouldUseHighContrastColors);
-		const fallback = nativeTheme.shouldUseDarkColors ? '#202124' : '#fafafa';
+		let material = resolveWindowMaterial(this.platform, this.osRelease, this.theme.prefersReducedTransparency, this.theme.shouldUseHighContrastColors);
+		const fallback = this.theme.shouldUseDarkColors ? '#202124' : '#fafafa';
 		try {
 			if (material === 'glass' && !this.attachGlass()) {
 				material = 'vibrancy';
@@ -100,7 +104,7 @@ export class WindowMaterial extends Disposable {
 		if (!this.glass?.isGlassSupported()) {
 			return false;
 		}
-		this.glassView = this.glass.addView(this.window.getNativeWindowHandle(), glassOptions());
+		this.glassView = this.glass.addView(this.window.getNativeWindowHandle(), glassOptions(this.theme.shouldUseDarkColors));
 		return this.glassView >= 0;
 	}
 

@@ -9,7 +9,7 @@ import { app, Menu, nativeImage, nativeTheme, Tray } from 'electron';
 import type { MenuItemConstructorOptions } from 'electron';
 import { join } from 'node:path';
 import { Emitter, Event } from '../../../base/common/event.js';
-import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { Disposable, toDisposable, type IDisposable } from '../../../base/common/lifecycle.js';
 import { isMacintosh, isWindows } from '../../../base/common/platform.js';
 import * as nls from '../../../nls.js';
 import { IHostingMainService, type HostingMainService, type HostingStatus } from '../../hosting/electron-main/hostingMainService.js';
@@ -22,10 +22,10 @@ export const ITrayMainService = createDecorator<TrayMainService>('trayMainServic
 /** Matches the artwork rendered by `build/lib/trayAssets.ts`. */
 type TrayState = 'idle' | 'active' | 'paused';
 
-type TrayAction = { readonly kind: 'open' | 'quit' | 'pause' | 'resume' } | { readonly kind: 'disconnect'; readonly sessionId: string };
+export type TrayAction = { readonly kind: 'open' | 'quit' | 'pause' | 'resume' } | { readonly kind: 'disconnect'; readonly sessionId: string };
 
 /** A menu row before Electron sees it, so the menu can be compared and tested. */
-type TrayMenuEntry = { readonly type: 'separator' } | { readonly label: string; readonly enabled: boolean; readonly action?: TrayAction };
+export type TrayMenuEntry = { readonly type: 'separator' } | { readonly label: string; readonly enabled: boolean; readonly action?: TrayAction };
 
 /** Someone connected outranks everything; anything that stops devices reaching this computer shows as paused. */
 export function trayState(status: HostingStatus): TrayState {
@@ -88,6 +88,90 @@ export function trayImageName(state: TrayState, platform: 'darwin' | 'win32' | '
 	return `${state}-${platform === 'linux' || darkPanel ? 'dark' : 'light'}.png`;
 }
 
+/** One tray icon; `image` names its artwork in `assets/tray` (see {@link trayImageName}). */
+export interface TrayIcon {
+	isDestroyed(): boolean;
+	setImage(image: string): void;
+	setToolTip(text: string): void;
+	/** Replaces the menu; choosing an entry runs its action through `run`. */
+	setMenu(entries: readonly TrayMenuEntry[], run: (action: TrayAction) => void): void;
+	onDidClick(listener: () => void): IDisposable;
+	destroy(): void;
+}
+
+/** What the tray needs from the system: its platform, the panel's theme, icons and quitting. */
+export interface TrayEnvironment {
+	readonly platform: 'darwin' | 'win32' | 'linux';
+	/** Whether the panel the icon sits on is dark; Windows reports its taskbar's theme. */
+	readonly darkPanel: boolean;
+	onDidChangeTheme(listener: () => void): IDisposable;
+	createIcon(image: string): TrayIcon;
+	quit(): void;
+}
+
+/** Electron loads the @1.5x and @2x representations beside this file. */
+function trayImage(image: string): Electron.NativeImage {
+	return nativeImage.createFromPath(join(__dirname, 'assets', 'tray', image));
+}
+
+class ElectronTrayIcon implements TrayIcon {
+	private readonly tray: Tray;
+
+	constructor(image: string) {
+		this.tray = new Tray(trayImage(image));
+	}
+
+	public isDestroyed(): boolean {
+		return this.tray.isDestroyed();
+	}
+
+	public setImage(image: string): void {
+		this.tray.setImage(trayImage(image));
+	}
+
+	public setToolTip(text: string): void {
+		this.tray.setToolTip(text);
+	}
+
+	public setMenu(entries: readonly TrayMenuEntry[], run: (action: TrayAction) => void): void {
+		this.tray.setContextMenu(Menu.buildFromTemplate(entries.map((entry): MenuItemConstructorOptions => {
+			if ('type' in entry) {
+				return { type: 'separator' };
+			}
+			const action = entry.action;
+			if (!action) {
+				return { label: entry.label, enabled: entry.enabled };
+			}
+			return {
+				label: entry.label, enabled: entry.enabled, click: () => {
+					run(action);
+				},
+			};
+		})));
+	}
+
+	public onDidClick(listener: () => void): IDisposable {
+		return Event.fromNodeEventEmitter<unknown>(this.tray, 'click')(listener);
+	}
+
+	public destroy(): void {
+		this.tray.destroy();
+	}
+}
+
+/** Electron's tray, its theme and `app`. */
+export const electronTrayEnvironment: TrayEnvironment = {
+	platform: isMacintosh ? 'darwin' : isWindows ? 'win32' : 'linux',
+	get darkPanel() {
+		return nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
+	},
+	onDidChangeTheme: listener => Event.fromNodeEventEmitter<unknown>(nativeTheme, 'updated')(listener),
+	createIcon: image => new ElectronTrayIcon(image),
+	quit: () => {
+		app.quit();
+	},
+};
+
 /**
  * The menu bar extra or notification-area icon. It shows whether paired
  * devices can reach this computer, lets the owner disconnect each one or stop
@@ -99,11 +183,12 @@ export class TrayMainService extends Disposable {
 	private readonly windowRequested = this._register(new Emitter<void>());
 	/** The owner asked to see the window. */
 	public readonly onDidRequestWindow = this.windowRequested.event;
-	private tray: Tray | undefined;
+	private icon: TrayIcon | undefined;
 	private shownImage: string | undefined;
 	private shownMenu: string | undefined;
 
 	constructor(
+		private readonly environment: TrayEnvironment,
 		@IHostingMainService private readonly hosting: HostingMainService,
 		@ILogService private readonly logService: ILogService,
 	) {
@@ -111,61 +196,51 @@ export class TrayMainService extends Disposable {
 	}
 
 	public create(): void {
-		if (this.tray || this._store.isDisposed) {
+		if (this.icon || this._store.isDisposed) {
 			return;
 		}
-		const tray = new Tray(this.image(trayState(this.hosting.status)));
-		this.tray = tray;
+		const image = this.imageName();
+		const icon = this.environment.createIcon(image);
+		this.icon = icon;
+		this.shownImage = image;
 		this._register(toDisposable(() => {
-			tray.destroy();
+			icon.destroy();
 		}));
-		if (!isMacintosh) {
+		if (this.environment.platform !== 'darwin') {
 			// macOS opens the menu on click; Windows and Linux keep the menu for the secondary button.
-			this._register(Event.fromNodeEventEmitter<unknown>(tray, 'click')(() => {
+			this._register(icon.onDidClick(() => {
 				this.windowRequested.fire();
 			}));
 		}
 		this._register(this.hosting.onDidChangeStatus(() => {
 			this.render();
 		}));
-		this._register(Event.fromNodeEventEmitter<unknown>(nativeTheme, 'updated')(() => {
+		this._register(this.environment.onDidChangeTheme(() => {
 			this.render();
 		}));
 		this.render();
 	}
 
 	private render(): void {
-		const tray = this.tray;
-		if (!tray || tray.isDestroyed()) {
+		const icon = this.icon;
+		if (!icon || icon.isDestroyed()) {
 			return;
 		}
 		const status = this.hosting.status;
-		const name = this.imageName(trayState(status));
-		if (name !== this.shownImage) {
-			tray.setImage(this.image(trayState(status)));
+		const image = this.imageName();
+		if (image !== this.shownImage) {
+			this.shownImage = image;
+			icon.setImage(image);
 		}
-		tray.setToolTip(`${product.name} – ${trayStatusLine(status)}`);
+		icon.setToolTip(`${product.name} – ${trayStatusLine(status)}`);
 		const entries = trayMenu(status);
 		const key = JSON.stringify(entries);
 		if (key !== this.shownMenu) {
 			this.shownMenu = key;
-			tray.setContextMenu(Menu.buildFromTemplate(entries.map(entry => this.item(entry))));
-		}
-	}
-
-	private item(entry: TrayMenuEntry): MenuItemConstructorOptions {
-		if ('type' in entry) {
-			return { type: 'separator' };
-		}
-		const action = entry.action;
-		if (!action) {
-			return { label: entry.label, enabled: entry.enabled };
-		}
-		return {
-			label: entry.label, enabled: entry.enabled, click: () => {
+			icon.setMenu(entries, action => {
 				this.run(action);
-			},
-		};
+			});
+		}
 	}
 
 	private run(action: TrayAction): void {
@@ -174,7 +249,7 @@ export class TrayMainService extends Disposable {
 				this.windowRequested.fire();
 				return;
 			case 'quit':
-				app.quit();
+				this.environment.quit();
 				return;
 			case 'pause':
 			case 'resume':
@@ -190,14 +265,7 @@ export class TrayMainService extends Disposable {
 		}
 	}
 
-	private imageName(state: TrayState): string {
-		return trayImageName(state, isMacintosh ? 'darwin' : isWindows ? 'win32' : 'linux', nativeTheme.shouldUseDarkColorsForSystemIntegratedUI);
-	}
-
-	private image(state: TrayState): Electron.NativeImage {
-		const name = this.imageName(state);
-		this.shownImage = name;
-		// Electron loads the @1.5x and @2x representations beside this file.
-		return nativeImage.createFromPath(join(__dirname, 'assets', 'tray', name));
+	private imageName(): string {
+		return trayImageName(trayState(this.hosting.status), this.environment.platform, this.environment.darkPanel);
 	}
 }
