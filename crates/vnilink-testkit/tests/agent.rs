@@ -11,6 +11,9 @@
 //! computer that opens the same file, and stops on its own when nothing is
 //! asked of it. A build script drives it through `vnilink-testkit bridge`.
 
+#[path = "agent/channel.rs"]
+mod channel;
+
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
