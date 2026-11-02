@@ -633,16 +633,22 @@ pub(super) async fn serve(
             Ok::<_, Error>(backend)
         };
         let opened = tokio::time::timeout(TIMEOUT, startup).await;
-        if let Ok(Err(error)) = &opened {
-            tracing::info!(
+        // A startup its connection or service cancelled was not refused: the
+        // stream's end says what cancelled it.
+        let cancelled = *startup_parent.borrow() || *startup_stop.borrow();
+        match &opened {
+            _ if cancelled => {}
+            Ok(Err(error)) => tracing::info!(
                 target: crate::trace::CAMERA,
                 service = id,
                 error = error.name(),
                 reason = error.reason(),
                 "camera not opened"
-            );
-        } else if opened.is_err() {
-            tracing::info!(target: crate::trace::CAMERA, service = id, error = "timeout", "camera not opened");
+            ),
+            Err(_) => {
+                tracing::info!(target: crate::trace::CAMERA, service = id, error = "timeout", "camera not opened")
+            }
+            Ok(Ok(_)) => {}
         }
         let backend = match opened {
             Ok(Ok(backend)) => backend,
@@ -650,9 +656,7 @@ pub(super) async fn serve(
                 ending.why(HostedEnd::ViewerClosed);
                 return Err(Error::NoSession);
             }
-            Ok(Err(Error::NoSession)) | Err(_)
-                if *startup_parent.borrow() || *startup_stop.borrow() =>
-            {
+            Ok(Err(Error::NoSession)) | Err(_) if cancelled => {
                 // Cancellation won before Open completed: release without
                 // admitting; backend (if any) was already dropped.
                 return Err(Error::NoSession);
@@ -795,6 +799,9 @@ pub(super) async fn serve(
         }
         result = run => result,
     };
+    if result.is_err() {
+        ending.why_cancelled(*parent.borrow(), *stop.borrow());
+    }
     // The service closed under the stream, for a reason other than its viewer's
     // close: the viewer hears it was withdrawn.
     let withdrawn =

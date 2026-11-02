@@ -773,6 +773,9 @@ pub(super) async fn serve(
         explicit_close.store(true, std::sync::atomic::Ordering::Release);
         ending.why(HostedEnd::Malformed);
     }
+    if result.is_err() {
+        ending.why_cancelled(*parent.borrow(), *stop.borrow());
+    }
     ending.close(result.as_ref().err().map(Error::name));
     drop(attached);
     crate::ignored!(
