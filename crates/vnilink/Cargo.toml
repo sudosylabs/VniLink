@@ -61,6 +61,12 @@ libc = "=0.2.189"
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11rb = "=0.14.0"
 
+# The `loom_*` models of the event hub, the input queue and the video
+# counters (`node build/run.ts test:loom`), which build with
+# `--cfg vnilink_loom`; see `src/sync.rs`. Other builds leave this out.
+[target.'cfg(vnilink_loom)'.dependencies]
+loom = "=0.7.2"
+
 [target.'cfg(unix)'.dependencies]
 portable-pty = "=0.9.0"
 nix = { version = "=0.28.0", features = ["fs", "poll", "signal", "process", "user"] }

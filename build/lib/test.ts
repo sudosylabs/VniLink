@@ -13,7 +13,7 @@ import { ScenarioSelection, scenarioNames } from '../../test/automation/scenario
 import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
 import { launchLatencySide } from './latency.ts';
-import { assertNativeFresh, nativeCargo } from './native.ts';
+import { assertNativeFresh, defaultNativeOptions, nativeCargo, nativeEnvironment } from './native.ts';
 import { agentPeer } from './remote.ts';
 import { ProcessRunner } from './processes.ts';
 import { isLinux } from './platform.ts';
@@ -52,6 +52,31 @@ export async function testRust(root: string, signal: AbortSignal): Promise<void>
 		// The addon's target and toolchain: on Windows, the GNU target with MSYS2's MinGW tools.
 		const test = nativeCargo('test', ['--no-fail-fast', ...packages.flatMap(name => ['-p', name])]);
 		await processes.run('cargo', test.args, { cwd: root, env: test.env });
+	} finally {
+		await processes.stop();
+	}
+}
+
+/**
+ * Where the loom build lands. Its `--cfg vnilink_loom` applies to every crate
+ * it compiles, so sharing the addon's target directory would rebuild the
+ * addon's release dependencies on each switch.
+ */
+const loomTargetDirectory = 'target/loom';
+
+/**
+ * The `loom_*` models of `vnilink`'s concurrent pieces, with the addon's
+ * target and environment. Optimised, as loom runs each model once per
+ * interleaving.
+ */
+export async function testLoom(root: string, signal: AbortSignal): Promise<void> {
+	const options = defaultNativeOptions();
+	const target = options.target ? ['--target', options.target] : [];
+	const env = nativeEnvironment(options);
+	env.RUSTFLAGS = [env.RUSTFLAGS, '--cfg vnilink_loom'].filter(Boolean).join(' ');
+	const processes = new ProcessRunner(signal);
+	try {
+		await processes.run('cargo', ['test', '--locked', '--target-dir', loomTargetDirectory, ...target, '--release', '-p', 'vnilink', 'loom_'], { cwd: root, env });
 	} finally {
 		await processes.stop();
 	}

@@ -77,6 +77,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'test:unit': async (root, signal, args) => (await import('./lib/unitTests.ts')).runNodeUnitTests(root, signal, args),
 	'test:unit:electron': async (root, signal, args) => (await import('./lib/unitTests.ts')).runElectronUnitTests(root, signal, args),
 	'test:rust': async (root, signal) => (await import('./lib/test.ts')).testRust(root, signal),
+	'test:loom': async (root, signal) => (await import('./lib/test.ts')).testLoom(root, signal),
 	'test:service': async (root, signal, args) => (await import('./lib/test.ts')).testService(root, signal, args),
 	'test:stress': async (root, signal, args) => (await import('./lib/test.ts')).stressService(root, signal, args),
 	'bench:service': async (root, signal, args) => (await import('./lib/test.ts')).benchService(root, signal, args),

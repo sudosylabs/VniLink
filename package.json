@@ -34,6 +34,7 @@
     "test:unit": "node build/run.ts test:unit",
     "test:unit:electron": "node build/run.ts test:unit:electron",
     "test:rust": "node build/run.ts test:rust",
+    "test:loom": "node build/run.ts test:loom",
     "test:stress": "node build/run.ts test:stress",
     "test:linux": "node build/run.ts test:linux",
     "test:windows": "node build/run.ts test:windows",

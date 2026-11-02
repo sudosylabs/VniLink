@@ -723,6 +723,11 @@
       "same": "build",
       "requires": ["process-tools", "ffprobe"]
     },
+    "test:loom": {
+      "description": "Run the loom models of the core's concurrent pieces",
+      "same": "build",
+      "requires": ["process-tools"]
+    },
     "test:stress": {
       "description": "Run a service's functional suite again and again to find an order the engines do not guarantee",
       "same": "build",

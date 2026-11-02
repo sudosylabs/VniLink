@@ -9,9 +9,8 @@
 //! frames were lost, how often a keyframe was asked for and sent, and how
 //! often the encoder was opened again. Counts only, never picture bytes.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use super::datagram::Losses;
+use crate::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Default)]
 pub(crate) struct VideoCounters {
@@ -106,5 +105,46 @@ impl VideoCounters {
             still_bytes: read(&self.still_bytes),
             stills_dropped: read(&self.stills_dropped),
         }
+    }
+}
+
+#[cfg(all(test, vnilink_loom))]
+mod loom_counters {
+    use super::*;
+    use crate::sync::Arc;
+
+    #[test]
+    fn counts_recorded_on_two_threads_all_arrive_and_a_reading_meanwhile_sees_whole_ones() {
+        loom::model(|| {
+            let counters = Arc::new(VideoCounters::default());
+            let writer = {
+                let counters = Arc::clone(&counters);
+                loom::thread::spawn(move || {
+                    counters.keyframe_sent(10);
+                    counters.send_dropped();
+                })
+            };
+            counters.keyframe_sent(5);
+            let during = counters.read();
+            assert!(
+                (1..=2).contains(&during.keyframes_sent),
+                "a reading sees this thread's keyframe, and none twice: {during:?}"
+            );
+            assert!(
+                [5, 15].contains(&during.keyframe_bytes),
+                "a reading sees each recording's bytes whole: {during:?}"
+            );
+            writer.join().unwrap();
+            assert_eq!(
+                counters.read(),
+                VideoCounts {
+                    keyframes_sent: 2,
+                    keyframe_bytes: 15,
+                    send_dropped: 1,
+                    ..VideoCounts::default()
+                },
+                "no count is lost to the other thread"
+            );
+        });
     }
 }

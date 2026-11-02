@@ -5738,6 +5738,7 @@ dependencies = [
  "jpeg-decoder",
  "jpeg-encoder",
  "libc",
+ "loom",
  "nix 0.28.0",
  "notify",
  "portable-pty",
