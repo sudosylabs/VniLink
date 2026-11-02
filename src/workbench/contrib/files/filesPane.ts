@@ -805,7 +805,9 @@ export class FilesPaneView extends Disposable {
 		});
 		let done = false;
 		const finish = (commit: boolean): void => {
-			if (done) {
+			// A pane closed mid-rename takes its box with it, which blurs it: there is
+			// no list left to show the folder in, and the rename is dropped with it.
+			if (done || this._store.isDisposed) {
 				return;
 			}
 			done = true;
