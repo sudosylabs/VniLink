@@ -9,7 +9,7 @@ import { isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDeskt
 import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus, DesktopCursor, DesktopDecoderReport, DesktopMediaStatus } from '../common/dataChannel.js';
 import { Emitter } from '../../../base/common/event.js';
 import { isFileAnswer, type FileAnswer, type FileOperation } from '../common/files.js';
-import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
+import type { IpcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { record } from '../common/engine.js';
 import type { DesktopInputCommand } from '../common/engine.js';
 import { DATA_CHANNEL_PORT_RESPONSE, type IEngineService } from '../common/engineService.js';
@@ -71,16 +71,23 @@ export class DataChannelClient implements IDataChannel {
 		}, 2000);
 	}
 
+	/**
+	 * Asks the engine for a channel and waits for main to transfer its port
+	 * through `messagePort`, the preload's port bridge unless one is given.
+	 * The preload's bridge is read only here, so loading this module needs no preload.
+	 */
 	public static async open(
 		engine: IEngineService,
 		request: Omit<DataChannelRequest, 'requestId'>,
 		consume: (packet: DataPacket) => void | Promise<void>,
 		onError: (error: Error) => void,
+		messagePort?: IpcMessagePort,
 	): Promise<DataChannelClient> {
 		const target = { ...request, requestId: crypto.randomUUID() };
 		if (!isChannelRequest(target)) {
 			throw new Error('Invalid data channel request');
 		}
+		const ipcMessagePort = messagePort ?? (await import('../../../base/parts/sandbox/electron-browser/globals.js')).ipcMessagePort;
 		return await new Promise<DataChannelClient>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				cleanup();

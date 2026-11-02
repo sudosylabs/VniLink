@@ -7,7 +7,7 @@
 
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
+import { IDataChannelService, type IDataChannel } from '../../../platform/engine/common/dataChannelService.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import type { EngineReply, SessionInfo } from '../../../platform/engine/common/engine.js';
 import { parseScreenAccess, parseScreenSnapshot } from './screenSnapshot.js';
@@ -23,7 +23,10 @@ interface SnapshotMedia { readonly type: 'snapshot'; readonly prompt: boolean; r
 class ScreenSnapshotService extends Disposable implements IScreenSnapshotService {
 	declare public readonly _serviceBrand: undefined;
 
-	constructor(@IEngineService private readonly engine: IEngineService) {
+	constructor(
+		@IEngineService private readonly engine: IEngineService,
+		@IDataChannelService private readonly dataChannels: IDataChannelService,
+	) {
 		super();
 	}
 
@@ -101,7 +104,7 @@ class ScreenSnapshotService extends Disposable implements IScreenSnapshotService
 	private packet(session: SessionInfo, signal: AbortSignal, media: SnapshotMedia): Promise<{ metadata: string; data?: Uint8Array } | 'cancelled' | 'failed'> {
 		return new Promise(resolve => {
 			let settled = false;
-			let client: DataChannelClient | undefined;
+			let client: IDataChannel | undefined;
 			const finish = (result: { metadata: string; data?: Uint8Array } | 'cancelled' | 'failed'): void => {
 				if (settled) {
 					return;
@@ -119,7 +122,7 @@ class ScreenSnapshotService extends Disposable implements IScreenSnapshotService
 				finish('cancelled');
 				return;
 			}
-			void DataChannelClient.open(this.engine, {
+			void this.dataChannels.open({
 				kind: 'snapshot',
 				sessionId: session.id,
 				generation: session.generation,

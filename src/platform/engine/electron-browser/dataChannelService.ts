@@ -5,13 +5,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
+import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { InstantiationType, registerSingleton } from '../../instantiation/common/extensions.js';
 import type { DataChannelRequest, DataPacket } from '../common/dataChannel.js';
 import { IDataChannelService, type IDataChannel } from '../common/dataChannelService.js';
 import { IEngineService } from '../common/engineService.js';
 import { DataChannelClient } from './dataChannelClient.js';
 
-/** Opens each channel as a {@link DataChannelClient} on the port main transfers to this window. */
+/**
+ * Opens each channel as a {@link DataChannelClient} on the port main transfers
+ * to this window through the preload's port bridge.
+ */
 export class DataChannelService implements IDataChannelService {
 	declare public readonly _serviceBrand: undefined;
 
@@ -22,7 +26,7 @@ export class DataChannelService implements IDataChannelService {
 		consume: (packet: DataPacket) => void | Promise<void>,
 		onError: (error: Error) => void,
 	): Promise<IDataChannel> {
-		return DataChannelClient.open(this.engine, request, consume, onError);
+		return DataChannelClient.open(this.engine, request, consume, onError, ipcMessagePort);
 	}
 }
 

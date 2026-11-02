@@ -8,26 +8,14 @@
 import * as nls from '../../../nls.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
+import type { DataPacket } from '../../../platform/engine/common/dataChannel.js';
 import type { RemoteStatus } from '../../../platform/engine/common/engine.js';
+import { IDataChannelService, type IDataChannel } from '../../../platform/engine/common/dataChannelService.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, type IProcessDataEvent, type ITerminalChildProcess, type ITerminalLaunchError, type TerminalExit, type TerminalLaunchFailure } from '../../../platform/terminal/common/terminal.js';
 import { formatMessageForTerminal } from '../../../platform/terminal/common/terminalStrings.js';
 import { activeControllerSession, type ControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
-
-/** The renderer end of a terminal data channel (`DataChannelClient`). */
-interface TerminalChannel {
-	write(data: Uint8Array): Promise<void>;
-	resize(rows: number, columns: number): void;
-	close(): void;
-}
-
-export type TerminalChannelOpener = (
-	request: Omit<DataChannelRequest, 'requestId'>,
-	consume: (packet: DataPacket) => Promise<void>,
-	onError: (error: Error) => void,
-) => Promise<TerminalChannel>;
 
 /** Largest write the data channel accepts. */
 const chunkBytes = 16384;
@@ -78,7 +66,7 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 	private readonly exitEmitter = this._register(new Emitter<TerminalExit>());
 	public readonly onProcessExit = this.exitEmitter.event;
 	private state: 'idle' | 'starting' | 'running' | 'ended' = 'idle';
-	private channel: TerminalChannel | undefined;
+	private channel: IDataChannel | undefined;
 	private cols: number;
 	private rows: number;
 	private readonly pending: Uint8Array[] = [];
@@ -90,8 +78,8 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 		private readonly deviceId: string,
 		cols: number,
 		rows: number,
-		private readonly openChannel: TerminalChannelOpener,
 		@IEngineService private readonly engine: IEngineService,
+		@IDataChannelService private readonly dataChannels: IDataChannelService,
 		@IDeviceService private readonly devices: IDeviceService,
 	) {
 		super();
@@ -122,9 +110,9 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 		}
 		const size = { cols: this.cols, rows: this.rows };
 		const opening = { lost: false };
-		let channel: TerminalChannel;
+		let channel: IDataChannel;
 		try {
-			channel = await this.openChannel(
+			channel = await this.dataChannels.open(
 				{ kind: 'terminal', sessionId: session.id, generation: session.generation, rows: size.rows, columns: size.cols },
 				packet => this.consume(packet),
 				() => {

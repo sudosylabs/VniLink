@@ -17,13 +17,15 @@ export type TestDataChannelRequest = Omit<DataChannelRequest, 'requestId'>;
 /**
  * One channel a {@link TestDataChannelService} opened. A test delivers
  * packets through `consume` and failures through `onError`, as the engine
- * host would; what the subject sent is kept in `inputs`, `fileOperations`
- * and `closed`.
+ * host would; what the subject sent is kept in `inputs`, `writes`,
+ * `resizes`, `fileOperations` and `closed`.
  */
 export class TestDataChannel implements IDataChannel {
 	/** The other computer's pointer never moves on a test channel. */
 	public readonly onCursor: Event<DesktopCursor> = () => Disposable.None;
 	public readonly inputs: DesktopInputCommand[] = [];
+	public readonly writes: Uint8Array[] = [];
+	public readonly resizes: [rows: number, columns: number][] = [];
 	public readonly fileOperations: FileOperation[] = [];
 	public keyframeRequests = 0;
 	public closed = false;
@@ -34,14 +36,16 @@ export class TestDataChannel implements IDataChannel {
 		public readonly onError: (error: Error) => void,
 		private readonly answer: (operation: FileOperation) => FileAnswer | Promise<FileAnswer>,
 		private readonly onClose: (channel: TestDataChannel) => void,
+		private readonly written: (data: Uint8Array) => Promise<void> = () => Promise.resolve(),
 	) { }
 
 	public input(command: DesktopInputCommand): void {
 		this.inputs.push(command);
 	}
 
-	public write(): Promise<void> {
-		return Promise.resolve();
+	public write(data: Uint8Array): Promise<void> {
+		this.writes.push(data);
+		return this.written(data);
 	}
 
 	public async fileOperation(operation: FileOperation): Promise<FileAnswer> {
@@ -61,8 +65,8 @@ export class TestDataChannel implements IDataChannel {
 		this.keyframeRequests++;
 	}
 
-	public resize(): void {
-		// A test channel has no terminal to resize.
+	public resize(rows: number, columns: number): void {
+		this.resizes.push([rows, columns]);
 	}
 
 	public close(): void {
@@ -73,8 +77,9 @@ export class TestDataChannel implements IDataChannel {
 
 /**
  * An {@link IDataChannelService} whose channels a test scripts: `refuse`
- * names the error a request is refused with (none opens it) and
- * `fileAnswer` answers each file operation. Every request it was asked is
+ * names the error a request is refused with (none opens it),
+ * `fileAnswer` answers each file operation and `writeAnswer` settles each
+ * write. Every request it was asked is
  * kept in `requests`, every channel it opened in `opened`, and every
  * channel's close in `closes`, in order.
  */
@@ -85,6 +90,7 @@ export class TestDataChannelService implements IDataChannelService {
 	public readonly closes: TestDataChannelRequest[] = [];
 	public refuse: (request: TestDataChannelRequest) => Error | undefined = () => undefined;
 	public fileAnswer: (operation: FileOperation) => FileAnswer | Promise<FileAnswer> = () => ({ ok: null });
+	public writeAnswer: (data: Uint8Array) => Promise<void> = () => Promise.resolve();
 
 	public open(
 		request: TestDataChannelRequest,
@@ -96,7 +102,12 @@ export class TestDataChannelService implements IDataChannelService {
 		if (refusal) {
 			return Promise.reject(refusal);
 		}
-		const channel = new TestDataChannel(request, consume, onError, operation => this.fileAnswer(operation), closed => this.closes.push(closed.request));
+		const channel = new TestDataChannel(
+			request, consume, onError,
+			operation => this.fileAnswer(operation),
+			closed => this.closes.push(closed.request),
+			data => this.writeAnswer(data),
+		);
 		this.opened.push(channel);
 		return Promise.resolve(channel);
 	}

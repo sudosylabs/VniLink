@@ -9,14 +9,15 @@ import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import type { DataPacket } from '../../../../../platform/engine/common/dataChannel.js';
 import type { RemoteStatus, SessionInfo } from '../../../../../platform/engine/common/engine.js';
+import { IDataChannelService } from '../../../../../platform/engine/common/dataChannelService.js';
 import { IEngineService } from '../../../../../platform/engine/common/engineService.js';
+import { TestDataChannelService, type TestDataChannel } from '../../../../../platform/engine/test/common/testDataChannelService.js';
 import { TestEngineService } from '../../../../../platform/engine/test/common/testEngineService.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import type { IProcessDataEvent, TerminalExit, TerminalLaunchFailure } from '../../../../../platform/terminal/common/terminal.js';
 import { IDeviceService } from '../../../devices/deviceService.js';
-import { EnginePty, type TerminalChannelOpener } from '../../enginePty.js';
+import { EnginePty } from '../../enginePty.js';
 
 const deviceId = 'a'.repeat(64);
 
@@ -41,32 +42,22 @@ suite('EnginePty', () => {
 
 	/** A shell on `deviceId` at 100×30, with its channel, its engine and what it fired recorded. */
 	function shell({ status = 'available', sessions = [session], openFails = false, writeDelay = false }: ShellOptions = {}) {
-		const writes: string[] = [];
-		const bytes: number[][] = [];
-		const resizes: [number, number][] = [];
-		const requests: Parameters<TerminalChannelOpener>[0][] = [];
+		const dataChannels = new TestDataChannelService();
 		const pendingWrites: (() => void)[] = [];
-		let consume: (packet: DataPacket) => Promise<void> = () => Promise.reject(new Error('The channel is not open'));
-		let onError: (error: Error) => void = () => {
-			throw new Error('The channel is not open');
-		};
-		let closed = 0;
-		const opener: TerminalChannelOpener = (request, consumer, errorHandler) => {
-			requests.push(request);
-			if (openFails) {
-				return Promise.reject(new Error('Data channel unavailable'));
+		if (openFails) {
+			dataChannels.refuse = () => new Error('Data channel unavailable');
+		}
+		if (writeDelay) {
+			dataChannels.writeAnswer = () => new Promise<void>(resolve => pendingWrites.push(resolve));
+		}
+		/** The shell's channel, once it opened. */
+		const channel = (): TestDataChannel | undefined => dataChannels.openedFor('terminal').at(0);
+		const opened = (): TestDataChannel => {
+			const terminal = channel();
+			if (!terminal) {
+				throw new Error('The channel is not open');
 			}
-			consume = consumer;
-			onError = errorHandler;
-			return Promise.resolve({
-				write: data => {
-					writes.push(new TextDecoder().decode(data));
-					bytes.push([...data]);
-					return writeDelay ? new Promise<void>(resolve => pendingWrites.push(resolve)) : Promise.resolve();
-				},
-				resize: (rows, columns) => resizes.push([rows, columns]),
-				close: () => closed++,
-			});
+			return terminal;
 		};
 		const engine = disposables.add(new TestEngineService(command => {
 			assert.strictEqual(command.type, 'controllerSessions');
@@ -74,13 +65,14 @@ suite('EnginePty', () => {
 		}));
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(IEngineService, engine);
+		instantiationService.stub(IDataChannelService, dataChannels);
 		instantiationService.stub(IDeviceService, {
 			availability: (id: string) => {
 				assert.strictEqual(id, deviceId);
 				return Promise.resolve(status === null ? null : [{ capability: 'terminal', status }]);
 			},
 		});
-		const pty = disposables.add(instantiationService.createInstance(EnginePty, deviceId, 100, 30, opener));
+		const pty = disposables.add(instantiationService.createInstance(EnginePty, deviceId, 100, 30));
 		const data: IProcessDataEvent[] = [];
 		const exits: TerminalExit[] = [];
 		let ready = 0;
@@ -88,16 +80,30 @@ suite('EnginePty', () => {
 		disposables.add(pty.onProcessExit(exit => exits.push(exit)));
 		disposables.add(pty.onProcessReady(() => ready++));
 		return {
-			pty, writes, bytes, resizes, requests, data, exits, pendingWrites,
+			pty, data, exits, pendingWrites,
+			get requests() {
+				return dataChannels.requests;
+			},
+			get writes() {
+				return (channel()?.writes ?? []).map(write => new TextDecoder().decode(write));
+			},
+			get bytes() {
+				return (channel()?.writes ?? []).map(write => [...write]);
+			},
+			get resizes() {
+				return channel()?.resizes ?? [];
+			},
 			get ready() {
 				return ready;
 			},
 			get closed() {
-				return closed;
+				return dataChannels.closes.length;
 			},
-			packet: (kind: string, payload?: string, metadata = '{}') => consume({ type: 'data', sequence: 1, kind, data: payload === undefined ? undefined : new TextEncoder().encode(payload), metadata }),
+			packet: async (kind: string, payload?: string, metadata = '{}') => {
+				await opened().consume({ type: 'data', sequence: 1, kind, data: payload === undefined ? undefined : new TextEncoder().encode(payload), metadata });
+			},
 			lose: () => {
-				onError(new Error('Data channel disconnected'));
+				opened().onError(new Error('Data channel disconnected'));
 			},
 		};
 	}
