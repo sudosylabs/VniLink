@@ -698,7 +698,7 @@
       "requires": ["platform", "node"]
     },
     "test:tooling": {
-      "description": "Run the build and application unit tests",
+      "description": "Run the build's own tests",
       "requires": ["node"]
     },
     "fuzz": {

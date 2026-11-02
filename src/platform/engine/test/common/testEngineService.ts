@@ -40,7 +40,8 @@ export function snapshotReply(devices: readonly EngineDevice[]): EngineSnapshotR
 /**
  * An {@link IEngineService} whose replies a test scripts: `handler` answers
  * each command (a throw is a refusal), `fireEvents` delivers an event batch and `setAvailable`
- * changes availability, as main would report them. Every command it was
+ * changes availability and `setRestartRequired` the restart state, as main
+ * would report them. Every command it was
  * asked is kept in `commands`.
  */
 export class TestEngineService extends Disposable implements IEngineService {
@@ -49,8 +50,8 @@ export class TestEngineService extends Disposable implements IEngineService {
 	public readonly onDidChangeAvailability = this.availabilityChanged.event;
 	public readonly restarting = false;
 	public readonly onDidChangeRestarting = this._register(new Emitter<boolean>()).event;
-	public readonly restartRequired = false;
-	public readonly onDidChangeRestartRequired = this._register(new Emitter<boolean>()).event;
+	private readonly restartRequiredChanged = this._register(new Emitter<boolean>());
+	public readonly onDidChangeRestartRequired = this.restartRequiredChanged.event;
 	private readonly events = this._register(new Emitter<EngineEventBatch>());
 	public readonly onDidReceiveEvents = this.events.event;
 	public readonly commands: EngineCommand[] = [];
@@ -64,6 +65,12 @@ export class TestEngineService extends Disposable implements IEngineService {
 
 	public get available(): boolean {
 		return this._available;
+	}
+
+	private _restartRequired = false;
+
+	public get restartRequired(): boolean {
+		return this._restartRequired;
 	}
 
 	/** Whether anyone still listens for engine events. */
@@ -90,5 +97,10 @@ export class TestEngineService extends Disposable implements IEngineService {
 	public setAvailable(available: boolean): void {
 		this._available = available;
 		this.availabilityChanged.fire(available);
+	}
+
+	public setRestartRequired(restartRequired: boolean): void {
+		this._restartRequired = restartRequired;
+		this.restartRequiredChanged.fire(restartRequired);
 	}
 }

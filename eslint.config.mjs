@@ -99,6 +99,17 @@ export default [
 	},
 	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
 	{
+		// Application code reads the platform through base/common/platform.ts; the primitives below define it.
+		files: ['src/**/*.ts'],
+		ignores: ['src/base/common/path.ts', 'src/base/common/process.ts', 'src/base/parts/sandbox/electron-browser/globals.ts', 'src/base/parts/sandbox/electron-browser/preloadGlobals.ts'],
+		rules: {
+			'no-restricted-syntax': ['error',
+				{ selector: 'TSAsExpression > TSAsExpression', message: 'Avoid chained type assertions; validate unknown data with a type guard.' },
+				{ selector: "MemberExpression[object.name='process'][property.name='platform']", message: 'Read the platform through isLinux, isMacintosh and isWindows from src/base/common/platform.ts.' },
+			],
+		},
+	},
+	{
 		files: ['src/workbench/**/*.ts'],
 		rules: { 'vnilink/workbench-dom': 'error' },
 	},
