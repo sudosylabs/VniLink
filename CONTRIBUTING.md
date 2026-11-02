@@ -39,7 +39,8 @@ scripts of those names, they install and build what is missing first. Every
 command that installs anything missing; `VNILINK_SKIP_PREFLIGHT=1` skips that
 check for setups it misjudges. `build/prerequisites.json` lists each OS's needs
 per task; the doctor, `npm ci`, the Linux container, CI and the section below are
-all read from it.
+all read from it. `build/lib/environmentVariables.ts` lists every `VNILINK_*`
+variable with what it does, including the other settings a person may set.
 
 On Ubuntu 23.10 and later, AppArmor stops Chromium's sandbox until a profile
 allows it: run `npm run sandbox:linux` once per checkout (it asks for sudo).

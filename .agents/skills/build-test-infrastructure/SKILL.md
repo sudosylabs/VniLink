@@ -46,6 +46,8 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 
 - **Functions, not classes.** Steps are `async function (root, signal, ...)`. A task made of other tasks runs them with `step('name')` in `run.ts`, which checks each step's prerequisites; inside a task, name composite steps with `define('name', series(...))`; `parallel` waits for every task before reporting a failure. `vnilink/build-classes` rejects new classes outside the allowlist in `eslint.config.mjs`; add to it only for a new owner of OS resources.
 - **Cancellation** is the `AbortSignal` from `run.ts`. Pass it down, give every `ProcessRunner` the signal, and check `signal.throwIfAborted()` before publishing output.
+- **Processes** start through `ProcessRunner` (`processes.ts`): `run` for a tool whose output goes to the terminal, `output` or `processOutput` for one whose output the task reads. Only the preflight checks (`prerequisites.ts`), which run before the dependencies, start their own.
+- **Environment variables.** A new `VNILINK_*` name goes into `environmentVariables.ts` with who sets it and what it means; a tooling test fails on a name used but not listed, or listed but not used.
 - **Tests replace collaborators through options** (`ReleaseOptions.buildApplication`, `InstallerOptions.runBuilder`), never by subclassing or monkey-patching.
 - **Publication is atomic.** Build in a temporary sibling, verify, then rename over the output under `acquireLock` (`lock.ts`); never delete another build's files.
 - **Failures throw.** A task that cannot finish throws with a message naming the cause; it never sets `process.exitCode` and returns, which a composite would read as success.
