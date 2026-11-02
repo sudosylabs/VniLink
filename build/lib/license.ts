@@ -11,19 +11,13 @@
  * manifest decides which files were copied; a copy that is not in it is recognised
  * by the notice it already carries.
  */
-import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { recordAdaptations } from './vscode/import.ts';
 import { readManifest } from './vscode/manifest.ts';
 import { commentStyleOf, leadingMicrosoftNotice, modificationNotice, originalNotice, renderNotice, type CommentStyle } from './licenseNotice.ts';
+import { git, thirdPartyDirectories } from './git.ts';
 import { readProduct } from './product.ts';
-
-const run = promisify(execFile);
-
-/** Third-party sources keep their own license and notice. */
-const excludedDirectories = ['vendor/'];
 
 /**
  * - `original`: written for this project.
@@ -59,7 +53,7 @@ function isGenerated(text: string): boolean {
  */
 export function noticeKindOf(path: string, text: string, copies: ReadonlyMap<string, ManifestEntry>): NoticeKind | undefined {
 	const style = commentStyleOf(path);
-	if (style === undefined || excludedDirectories.some(directory => path.startsWith(directory)) || text.length === 0 || isGenerated(text)) {
+	if (style === undefined || thirdPartyDirectories.some(directory => path.startsWith(directory)) || text.length === 0 || isGenerated(text)) {
 		return undefined;
 	}
 	const copy = copies.get(path);
@@ -121,12 +115,6 @@ export function findNoticeProblem(path: string, text: string, kind: NoticeKind, 
 	} catch (error) {
 		return (error as Error).message;
 	}
-}
-
-// A git hook's GIT_DIR and GIT_INDEX_FILE name the repository committing, not necessarily `root`'s.
-async function git(root: string, args: readonly string[]): Promise<string> {
-	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-	return (await run('git', ['-C', root, ...args], { env, maxBuffer: 64 * 1024 * 1024 })).stdout;
 }
 
 async function noticeFiles(root: string): Promise<{ path: string; text: string; kind: NoticeKind }[]> {

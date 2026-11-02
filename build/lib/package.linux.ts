@@ -19,7 +19,7 @@ export function installerOptions(product: Product, base: BuilderConfiguration): 
 			maintainer: `${product.publisherName} <${product.supportEmail}>`,
 			vendor: product.publisherName,
 			synopsis: 'Connect your computers with VniLink',
-			description: 'Cross-platform remote access through paired computers.',
+			description: product.description,
 			syncDesktopName: true,
 			desktop: { entry: { Name: product.nameLong, StartupWMClass: product.platforms.linux.desktopFileName.replace(/\.desktop$/, '') } },
 		},

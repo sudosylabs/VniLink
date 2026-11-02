@@ -8,12 +8,13 @@
 /** Test runners that own processes: the Electron UI suite, Rust tests and the Linux validation container. */
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { ScenarioSelection, scenarioNames } from '../../test/automation/scenarios.ts';
 import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
 import { launchLatencySide } from './latency.ts';
 import { assertNativeFresh, nativeCargo } from './native.ts';
+import { agentPeer } from './remote.ts';
 import { ProcessRunner } from './processes.ts';
 
 /** Runs the selected browser and integration scenarios in Electron with a temporary profile. */
@@ -94,21 +95,14 @@ export function selectPeer(args: readonly string[], cwd = process.cwd()): PeerSe
 			throw new Error(`${arg} needs a value: --peer <the agent's .vnl file> --peer-check <the digits the agent printed>`);
 		}
 		if (arg === '--peer') {
-			file = resolve(cwd, value);
+			file = value;
 		} else {
 			check = value;
 		}
 	}
-	if (file === undefined && check === undefined) {
-		return { services, env: {} };
-	}
-	if (file === undefined || check === undefined) {
-		throw new Error('--peer and --peer-check go together: the agent\'s .vnl file and the digits it printed beside it');
-	}
-	if (!/^\d{6}$/.test(check)) {
-		throw new Error('--peer-check takes the six digits the agent printed');
-	}
-	return { services, env: { VNILINK_PEER: file, VNILINK_PEER_CHECK: check } };
+	// The same rules as the measurements' `--peer`.
+	const peer = agentPeer(file, check, cwd);
+	return { services, env: peer ? { VNILINK_PEER: peer.file, VNILINK_PEER_CHECK: peer.check } : {} };
 }
 
 /** Runs the functional suites of the named services, each alone with its engines on this computer, or against the agent named by `--peer`. */

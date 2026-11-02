@@ -8,11 +8,10 @@
 /** Installer generation: input integrity, cancellation and publication of the host's installers. */
 import assert from 'node:assert/strict';
 import { access, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { extname, join } from 'node:path';
 import * as darwin from './package.darwin.ts';
 import * as linux from './package.linux.ts';
-import { assemblyEnvironment, builderPlatformFlag, packageConfiguration, type BuilderConfiguration } from './package.ts';
+import { builderPlatformFlag, packageConfiguration, runElectronBuilder, type BuilderConfiguration } from './package.ts';
 import * as win32 from './package.win32.ts';
 import { ProcessRunner } from './processes.ts';
 import { readProduct, type Product } from './product.ts';
@@ -99,11 +98,6 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 			await rm(lock, { recursive: true, force: true });
 		}
 	}
-}
-
-function runElectronBuilder(processes: ProcessRunner, args: readonly string[], cwd: string): Promise<number> {
-	const cli = createRequire(import.meta.url).resolve('electron-builder/cli.js');
-	return processes.run(process.execPath, [cli, ...args], { cwd, env: assemblyEnvironment(process.env) });
 }
 
 /** Replaces `output` with `built`, restoring the last completed output if publication fails. */

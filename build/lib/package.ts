@@ -116,6 +116,12 @@ async function readJson(path: string): Promise<{ version: string }> {
 	return JSON.parse(await readFile(path, 'utf8')) as { version: string };
 }
 
+/** Runs electron-builder's command line with this Node, in `cwd`, with the assembly environment. */
+export function runElectronBuilder(processes: Pick<ProcessRunner, 'run'>, args: readonly string[], cwd: string): Promise<number> {
+	const cli = createRequire(import.meta.url).resolve('electron-builder/cli.js');
+	return processes.run(process.execPath, [cli, ...args], { cwd, env: assemblyEnvironment(process.env) });
+}
+
 /** Assembles `dist/<platform>-<arch>` from the staged release; refuses to overlap another assembly. */
 export async function packageApplication(root: string, signal: AbortSignal): Promise<string> {
 	const stage = join(root, '.build/release', `${process.platform}-${process.arch}`);
@@ -137,8 +143,7 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		const buildOutput = join(work, 'output');
 		const configPath = join(work, 'builder.json');
 		await writeFile(configPath, JSON.stringify(packageConfiguration(root, stage, buildOutput, product, manifest), null, 2));
-		const cli = createRequire(import.meta.url).resolve('electron-builder/cli.js');
-		await processes.run(process.execPath, [cli, '--config', configPath, '--dir', builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'], { cwd: root, env: assemblyEnvironment(process.env) });
+		await runElectronBuilder(processes, ['--config', configPath, '--dir', builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'], root);
 		const candidates: string[] = [];
 		for (const entry of await readdir(buildOutput, { withFileTypes: true })) {
 			if (entry.isDirectory()) {
