@@ -132,7 +132,9 @@ impl<'a> Bits<'a> {
     }
 }
 
-/// Removes emulation-prevention bytes (`00 00 03` to `00 00`).
+/// Removes emulation-prevention bytes: a `03` after two zero bytes, however
+/// many zeros run before it (`00 00 03` to `00 00`). Counted to two, since
+/// an encoder's frame may hold a longer run of zeros than a counter holds.
 pub(crate) fn rbsp(nal: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(nal.len());
     let mut zeros = 0u8;
@@ -142,7 +144,7 @@ pub(crate) fn rbsp(nal: &[u8]) -> Vec<u8> {
             continue;
         }
         out.push(byte);
-        zeros = if byte == 0 { zeros + 1 } else { 0 };
+        zeros = if byte == 0 { (zeros + 1).min(2) } else { 0 };
     }
     out
 }
