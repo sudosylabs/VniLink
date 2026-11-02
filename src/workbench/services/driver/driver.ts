@@ -51,8 +51,8 @@ function answer<T>(body: () => T): Promise<T> {
 }
 
 /**
- * Automation access to the window: its elements, as VS Code's driver gives,
- * and the real services the smoke suite checks. Only registered for
+ * Automation access to the window: its elements and the real services the
+ * smoke suite checks. Only registered for
  * isolated smoke-test launches.
  */
 export class BrowserWindowDriver implements IWindowDriver {
