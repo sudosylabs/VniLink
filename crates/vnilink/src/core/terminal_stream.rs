@@ -880,9 +880,9 @@ pub(super) async fn registry(
                         session
                             .closed_by_viewer
                             .store(true, std::sync::atomic::Ordering::Release);
-                        session
-                            .stop
-                            .store(true, std::sync::atomic::Ordering::Release);
+                        // Wakes the stream and the shell's thread too: a flag
+                        // alone waits for the next output to be noticed.
+                        session.request_stop();
                         Ok(Vec::new())
                     }
                     None => Err(Error::NoSession),
