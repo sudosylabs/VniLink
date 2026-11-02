@@ -8,7 +8,7 @@
 /** The application's bundles and resources, shared by the one-shot, release and watch builds. */
 import { build, type BuildOptions } from 'esbuild';
 import { cp, mkdir, readFile, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { compileNative, defaultNativeOptions, stageGlass, stageSpdlog, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 import { define, execute, parallel, series } from './task.ts';
@@ -57,6 +57,11 @@ export async function assertBundleFresh(root: string, output: string, outputDire
 	if (!built || !current || !Buffer.from(built.contents).equals(current)) {
 		throw new Error(`out/${output} is missing or was not built from these sources: run npm run build`);
 	}
+}
+
+/** Throws unless every bundle in `out/` is what building its sources now writes. */
+export async function assertBundlesFresh(root: string): Promise<void> {
+	await Promise.all(bundleOptions(root).map(options => assertBundleFresh(root, relative(join(root, 'out'), options.outfile ?? ''))));
 }
 
 /**

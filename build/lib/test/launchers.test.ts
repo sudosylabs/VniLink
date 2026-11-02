@@ -41,10 +41,13 @@ const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) 
 
 suite('launchers', () => {
 	test('preLaunch runs nothing when the dependencies are installed and the addon is fresh', async () => {
-		assert.deepStrictEqual(await commandsRun({ environment: {}, exists: present, assertNativeFresh: fresh }), []);
+		assert.deepStrictEqual(await commandsRun({ environment: {}, exists: present, assertNativeFresh: fresh, assertBundlesFresh: fresh }), []);
 	});
 	test('preLaunch installs the dependencies and builds when node_modules is missing and the addon is stale', async () => {
 		assert.deepStrictEqual(await commandsRun({ environment: {}, exists: absent, assertNativeFresh: stale }), ['npm ci', `${process.execPath} ${join('/repo', 'build/run.ts')} build`]);
+	});
+	test('preLaunch builds when the addon is fresh but a bundle is stale', async () => {
+		assert.deepStrictEqual(await commandsRun({ environment: {}, exists: present, assertNativeFresh: fresh, assertBundlesFresh: stale }), [`${process.execPath} ${join('/repo', 'build/run.ts')} build`]);
 	});
 	test('preLaunch runs nothing when VNILINK_SKIP_PRELAUNCH is set', async () => {
 		assert.deepStrictEqual(await commandsRun({ environment: { VNILINK_SKIP_PRELAUNCH: '1' }, exists: absent, assertNativeFresh: stale }), []);

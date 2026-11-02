@@ -8,14 +8,15 @@
 /**
  * Prepares a checkout in any state for a launch, after VS Code's
  * `build/lib/preLaunch.ts`: installs the dependencies when `node_modules` is
- * missing, and builds when the staged native addon is missing or older than
- * its sources. The task it precedes then checks what it needs and prepares
- * the branded Electron itself. `scripts/code.*`, `scripts/test.*`,
+ * missing, and builds when the staged native addon or a JavaScript bundle is
+ * missing or older than its sources. The task it precedes then checks what it
+ * needs and prepares the branded Electron itself. `scripts/code.*`, `scripts/test.*`,
  * `npm run dev` and `npm run test:ui` run it first; `VNILINK_SKIP_PRELAUNCH=1`
  * skips it.
  *
  * Imports only Node's own modules (`native.ts` does too): it runs before the
- * dependencies are installed.
+ * dependencies are installed, so the bundle check, which needs esbuild, is
+ * imported once they are.
  */
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
@@ -46,6 +47,8 @@ export interface PreLaunchOptions {
 	readonly exists?: (path: string) => Promise<boolean>;
 	/** Rejects when the staged addon is missing or stale; `native.ts`'s by default. */
 	readonly assertNativeFresh?: (root: string) => Promise<void>;
+	/** Rejects when a bundle in `out/` is missing or stale; `bundles.ts`'s by default. */
+	readonly assertBundlesFresh?: (root: string) => Promise<void>;
 	readonly run?: (command: string, args: readonly string[]) => Promise<void>;
 }
 
@@ -59,11 +62,13 @@ export async function preLaunch(options: PreLaunchOptions = {}): Promise<void> {
 		console.log('[preLaunch] Installing dependencies (npm ci)');
 		await run('npm', ['ci']);
 	}
+	const assertBundlesFresh = options.assertBundlesFresh ?? (async (path: string) => (await import('./bundles.ts')).assertBundlesFresh(path));
 	try {
 		await (options.assertNativeFresh ?? assertNativeFresh)(checkout);
+		await assertBundlesFresh(checkout);
 		return;
 	} catch {
-		console.log('[preLaunch] The native addon is missing or older than its sources; building (node build/run.ts build)');
+		console.log('[preLaunch] The native addon or a bundle is missing or older than its sources; building (node build/run.ts build)');
 	}
 	await run(process.execPath, [join(checkout, 'build/run.ts'), 'build']);
 }
