@@ -147,3 +147,10 @@ path = "fuzz_targets/relay_url.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sidestream_frame"
+path = "fuzz_targets/sidestream_frame.rs"
+test = false
+doc = false
+bench = false

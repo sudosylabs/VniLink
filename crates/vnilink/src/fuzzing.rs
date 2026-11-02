@@ -355,6 +355,49 @@ pub fn pairing_file(bytes: &[u8], now_ms: u64) {
     }
 }
 
+/// A side stream's frame as a peer sends it: a 4-byte length, then that
+/// many bytes, read within `limit`. A frame within it reads back exactly the
+/// bytes after its prefix; a longer one, or a stream that ends inside the
+/// frame, is refused.
+pub fn sidestream_frame(limit: u16, bytes: &[u8]) {
+    use std::future::Future;
+    let limit = usize::from(limit);
+    let mut stream = bytes;
+    let read = crate::sidestream::read_frame(
+        &mut stream,
+        |len| {
+            if len > limit {
+                Err(crate::Error::Malformed)
+            } else {
+                Ok(())
+            }
+        },
+        |frame| Ok(frame.to_vec()),
+    );
+    // Bytes in memory never make a read wait, so one poll finishes it.
+    let mut read = std::pin::pin!(read);
+    let std::task::Poll::Ready(result) = read
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    else {
+        panic!("a frame read from memory waited");
+    };
+    let declared = bytes
+        .first_chunk::<4>()
+        .map(|prefix| u32::from_be_bytes(*prefix) as usize);
+    match declared {
+        Some(len) if len <= limit && bytes.len() >= 4 + len => assert_eq!(
+            result.ok().as_deref(),
+            Some(&bytes[4..4 + len]),
+            "a whole frame within its limit reads back its bytes"
+        ),
+        _ => assert!(
+            result.is_err(),
+            "a frame over its limit, or cut short, is refused"
+        ),
+    }
+}
+
 /// A relay URL as a peer announces or a person types it. One that parses
 /// is canonical: parsing its own text gives it back.
 pub fn relay_url(text: &str) {

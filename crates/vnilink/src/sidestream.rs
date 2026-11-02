@@ -11,13 +11,16 @@
 //! shared.
 // trace: records every ignored failure
 
+use tokio::io::{AsyncRead, AsyncReadExt};
+
 use crate::error::Error;
 
 /// Length-prefixed frame read shared by the side streams. The caller supplies
 /// its own length limit and decoder; the 4-byte big-endian prefix is the same
-/// on both streams.
+/// on both streams. `recv` is a stream of the connection, or bytes in memory
+/// where a test or the fuzzer reads a frame (`fuzzing::sidestream_frame`).
 pub(crate) async fn read_frame<F>(
-    recv: &mut iroh::endpoint::RecvStream,
+    recv: &mut (impl AsyncRead + Unpin + ?Sized),
     check_len: impl FnOnce(usize) -> Result<(), Error>,
     decode: impl FnOnce(&[u8]) -> Result<F, Error>,
 ) -> Result<F, Error> {
@@ -56,4 +59,53 @@ pub(crate) async fn write_frame<F: ?Sized>(
         .await
         .map_err(|_| Error::network(did_not_write))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reads one frame of `bytes` within a limit of 8 bytes.
+    async fn frame(mut bytes: &[u8]) -> Result<Vec<u8>, Error> {
+        read_frame(
+            &mut bytes,
+            |len| {
+                if len > 8 {
+                    Err(Error::Malformed)
+                } else {
+                    Ok(())
+                }
+            },
+            |payload| Ok(payload.to_vec()),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_frame_within_its_limit_reads_back_the_bytes_after_its_prefix() {
+        assert_eq!(
+            frame(&[0, 0, 0, 3, 7, 8, 9, 10]).await.ok(),
+            Some(vec![7, 8, 9]),
+            "the frame is its three bytes, and the next frame's are left"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_frame_over_its_limit_is_refused_before_its_payload() {
+        assert!(
+            matches!(frame(&[0, 0, 0, 9]).await, Err(Error::Malformed)),
+            "a length over the limit is refused, though no payload follows"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_ends_inside_a_frame_is_a_network_failure() {
+        for cut in [&[0, 0][..], &[0, 0, 0, 3, 7][..]] {
+            assert!(
+                matches!(frame(cut).await, Err(Error::Network(_))),
+                "a stream cut after {} bytes ends the read",
+                cut.len()
+            );
+        }
+    }
 }
