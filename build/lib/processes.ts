@@ -18,11 +18,17 @@ function asError(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
 }
 
+/**
+ * Signals the process group `pid` leads. A group that is gone is not an error, nor one macOS
+ * refuses with EPERM: it does so when every member has exited and awaits reaping, and the
+ * group's members are this process's own descendants, which it may otherwise signal.
+ */
 function killGroup(pid: number, signal: NodeJS.Signals): void {
 	try {
 		process.kill(-pid, signal);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code !== 'ESRCH' && code !== 'EPERM') {
 			throw error;
 		}
 	}
