@@ -7,7 +7,6 @@
 
 import assert from 'assert';
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { access, constants, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { suite, test } from 'node:test';
@@ -37,6 +36,8 @@ const absent = (): Promise<boolean> => Promise.resolve(false);
 const fresh = (): Promise<void> => Promise.resolve();
 
 const stale = (): Promise<void> => Promise.reject(new Error('stale'));
+
+const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 
 suite('launchers', () => {
 	test('preLaunch runs nothing when the dependencies are installed and the addon is fresh', async () => {
@@ -70,7 +71,6 @@ suite('launchers', () => {
 		});
 	}
 	// npm's own lifecycle scripts prepare the install; every other script is the build task of its name.
-	const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 	for (const [name, command] of Object.entries(manifest.scripts).filter(([name]) => !['preinstall', 'postinstall', 'prepare'].includes(name))) {
 		test(`npm run ${name} is the build task ${name}`, () => {
 			assert.strictEqual(command, `node build/run.ts ${name}`);

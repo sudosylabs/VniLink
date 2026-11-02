@@ -64,7 +64,7 @@ suite('unused', () => {
 				'class Recursive { make(): Recursive { return new Recursive().helper(); } helper(): Recursive { return this; } }',
 			].join('\n'),
 		});
-		assert.deepStrictEqual(names(findUnused(root)), ['Recursive', 'Service.stop', 'helper', 'recursive', 'unused']);
+		assert.deepStrictEqual(names(await findUnused(root)), ['Recursive', 'Service.stop', 'helper', 'recursive', 'unused']);
 	});
 	test('a member is used through an interface it implements or structurally satisfies', async () => {
 		const root = await temporary({
@@ -80,7 +80,7 @@ suite('unused', () => {
 				'export class Explicit implements IDisposable { dispose(): void { } }',
 			].join('\n'),
 		});
-		assert.deepStrictEqual(names(findUnused(root)), []);
+		assert.deepStrictEqual(names(await findUnused(root)), []);
 	});
 	test('reads by key, by `in`, by `keyof` and by destructuring are uses', async () => {
 		const root = await temporary({
@@ -97,7 +97,7 @@ suite('unused', () => {
 				'export interface Destructured { name(): void; }',
 			].join('\n'),
 		});
-		assert.deepStrictEqual(names(findUnused(root)), ['Policy.unread']);
+		assert.deepStrictEqual(names(await findUnused(root)), ['Policy.unread']);
 	});
 	test('a copied interface\'s unread properties are unused; an application interface\'s are its contract', async () => {
 		const root = await temporary({
@@ -105,7 +105,7 @@ suite('unused', () => {
 			'src/copied.ts': 'export interface Copied { read: number; unread: number; }\n',
 			'src/contract.ts': 'export interface Contract { read: number; checkedByAGuard: number; }\n',
 		});
-		assert.deepStrictEqual(names(findUnused(root)), ['Copied.unread']);
+		assert.deepStrictEqual(names(await findUnused(root)), ['Copied.unread']);
 	});
 	test('a test folder under src is test code: its declarations are not candidates and its uses are by tests', async () => {
 		const root = await temporary({
@@ -114,7 +114,7 @@ suite('unused', () => {
 			'src/area/test/common/support.ts': `import { forTests } from '../../../lib.js';\nexport function unusedHelper(): void { }\nexport function helper(): void { forTests(); }\n`,
 			'src/area/test/common/area.test.ts': `import { helper } from './support.js';\nhelper();\n`,
 		});
-		assert.deepStrictEqual(names(findUnused(root)), ['forTests (tests)']);
+		assert.deepStrictEqual(names(await findUnused(root)), ['forTests (tests)']);
 	});
 	suite('declarations only tests reach', () => {
 		const files = {
@@ -123,7 +123,7 @@ suite('unused', () => {
 			'test/lib.test.ts': `import { forTests } from '../src/lib.js';\nforTests();\n`,
 		};
 		test('reports a declaration only tests reach as such', async () => {
-			assert.deepStrictEqual(names(findUnused(await temporary(files))), ['byString', 'forTests (tests)']);
+			assert.deepStrictEqual(names(await findUnused(await temporary(files))), ['byString', 'forTests (tests)']);
 		});
 		suite('with an allowlist', () => {
 			let root: string;
@@ -166,8 +166,8 @@ suite('unused', () => {
 		after(async () => {
 			await rm(root, { recursive: true, force: true });
 		});
-		test('covers the members only tests use', () => {
-			assert.deepStrictEqual(names(findUnused(root, new Set(['src/lib.ts#Tracker']))), ['Tracker.unused']);
+		test('covers the members only tests use', async () => {
+			assert.deepStrictEqual(names(await findUnused(root, new Set(['src/lib.ts#Tracker']))), ['Tracker.unused']);
 		});
 		test('leaves the check reporting its unused member', () => {
 			assert.match(failure.message, /Tracker\.unused is unused/);

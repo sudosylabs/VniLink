@@ -6,17 +6,29 @@
 // ---------------------------------------------------------------------------------------------
 
 /** Copies pinned VS Code sources with their dependency closure and records their provenance. */
-import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { companionsOf, derivedContent, provenanceGraph, sourceDependencies } from './dependencies.ts';
 import { assertCheckout, flattenSource, localPath, readManifest, sha256, writeManifestFile, type DependencyEdge, type VsCodeManifest } from './manifest.ts';
 import { pruneSource } from './prune.ts';
 
-function resolveUpstream(checkout: string, from: string, specifier: string): string | undefined {
+function exists(path: string): Promise<boolean> {
+	return access(path).then(() => true, () => false);
+}
+
+/** The first of `candidates` that exists under `directory`. */
+async function firstExisting(directory: string, candidates: readonly string[]): Promise<string | undefined> {
+	for (const candidate of candidates) {
+		if (await exists(join(directory, candidate))) {
+			return candidate;
+		}
+	}
+	return undefined;
+}
+
+function resolveUpstream(checkout: string, from: string, specifier: string): Promise<string | undefined> {
 	const base = posix.normalize(posix.join(posix.dirname(from), specifier.split(/[?#]/)[0]));
-	const candidates = base.endsWith('.js') ? [base.replace(/\.js$/, '.ts'), base, base.replace(/\.js$/, '.d.ts')] : [base, `${base}.ts`];
-	return candidates.find(candidate => existsSync(join(checkout, candidate)));
+	return firstExisting(checkout, base.endsWith('.js') ? [base.replace(/\.js$/, '.ts'), base, base.replace(/\.js$/, '.d.ts')] : [base, `${base}.ts`]);
 }
 
 async function checkedManifest(root: string, checkout: string): Promise<VsCodeManifest> {
@@ -26,12 +38,12 @@ async function checkedManifest(root: string, checkout: string): Promise<VsCodeMa
 }
 
 /** Resolves an import from a copied file to an existing application file, if there is one. */
-function applicationTarget(root: string, { from, specifier }: { readonly from: string; readonly specifier: string }): string | undefined {
+async function applicationTarget(root: string, { from, specifier }: { readonly from: string; readonly specifier: string }): Promise<string | undefined> {
 	if (!specifier.startsWith('.')) {
 		return undefined;
 	}
 	const base = posix.normalize(posix.join(posix.dirname(from), specifier));
-	return [base.replace(/\.js$/, '.ts'), base].find(candidate => existsSync(join(root, candidate)));
+	return firstExisting(root, [base.replace(/\.js$/, '.ts'), base]);
 }
 
 /** Copies that application code imports directly; they are the graph's entry points. */
@@ -45,7 +57,7 @@ async function applicationImports(root: string, copies: ReadonlySet<string>): Pr
 				pending.push(path);
 			} else if (path.endsWith('.ts') && !copies.has(path)) {
 				for (const { specifier } of sourceDependencies(path, await readFile(join(root, path), 'utf8'))) {
-					const target = applicationTarget(root, { from: path, specifier });
+					const target = await applicationTarget(root, { from: path, specifier });
 					if (target && copies.has(target)) {
 						imported.add(target);
 					}
@@ -68,7 +80,7 @@ async function writeManifest(root: string, manifest: VsCodeManifest): Promise<vo
 	manifest.applicationDependencies = manifest.applicationDependencies.filter(path => !copies.has(path));
 	let graph = await provenanceGraph(root, manifest);
 	// Adapted copies may import application modules; record those as the graph's boundary.
-	const application = graph.unresolved.map(dependency => applicationTarget(root, dependency)).filter(path => path !== undefined);
+	const application = (await Promise.all(graph.unresolved.map(dependency => applicationTarget(root, dependency)))).filter(path => path !== undefined);
 	if (application.length) {
 		manifest.applicationDependencies = [...new Set([...manifest.applicationDependencies, ...application])];
 		graph = await provenanceGraph(root, manifest);
@@ -106,7 +118,7 @@ export async function importSources(root: string, checkout: string, roots: reado
 		const content = await readFile(join(checkout, path), 'utf8');
 		if (!known.has(target)) {
 			const flattened = /\.(ts|js|css)$/.test(path) ? flattenSource(content) : content;
-			if (existsSync(join(root, target)) && await readFile(join(root, target), 'utf8') !== flattened) {
+			if (await exists(join(root, target)) && await readFile(join(root, target), 'utf8') !== flattened) {
 				if (roots.includes(path)) {
 					throw new Error(`${target} exists but is not a recorded upstream copy`);
 				}
@@ -120,13 +132,17 @@ export async function importSources(root: string, checkout: string, roots: reado
 			if (!specifier.startsWith('.')) {
 				continue;
 			}
-			const dependency = resolveUpstream(checkout, path, specifier);
+			const dependency = await resolveUpstream(checkout, path, specifier);
 			if (!dependency) {
 				throw new Error(`Unresolved upstream import ${specifier} from ${path}`);
 			}
 			pending.push(dependency);
 		}
-		pending.push(...companionsOf(path).filter(companion => existsSync(join(checkout, companion))));
+		for (const companion of companionsOf(path)) {
+			if (await exists(join(checkout, companion))) {
+				pending.push(companion);
+			}
+		}
 	}
 	// Write only after the whole closure resolved, so a failure copies nothing.
 	const copied = [...copies.keys()];

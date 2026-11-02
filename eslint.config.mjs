@@ -97,7 +97,13 @@ export default [
 		files: ['build/lib/prerequisites.ts', 'build/lib/native.ts'],
 		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\./prerequisites\\.ts$)', message: 'The prerequisite checks run without node_modules and alone in the Linux image: import only Node modules and prerequisites.ts.' }] }] },
 	},
-	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
+	{
+		files: ['src/**/*.ts', 'build/**/*.ts'],
+		// The preflight checks run before npm ci, alone in the Linux image, and compute Cargo's
+		// environment synchronously from the tools they find.
+		ignores: ['build/lib/prerequisites.ts', 'build/lib/native.ts'],
+		rules: { 'vnilink/no-sync-fs': 'error' },
+	},
 	{
 		// Application code reads the platform through base/common/platform.ts; the primitives below define it.
 		files: ['src/**/*.ts'],

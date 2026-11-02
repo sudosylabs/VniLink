@@ -26,9 +26,9 @@
  * names those, each with its reason; an entry that is no longer needed fails.
  */
 import ts from 'typescript';
-import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { readManifest } from './vscode/manifest.ts';
 
 export interface UnusedDeclaration {
 	/** `name`, or `Owner.member` for a member. */
@@ -119,7 +119,7 @@ function isShorthandBinding(node: ts.Identifier): boolean {
 }
 
 /** Computes the report for the program rooted at `root`'s `tsconfig.json`. */
-export function findUnused(root: string, allowed: ReadonlySet<string> = new Set()): UnusedReport {
+export async function findUnused(root: string, allowed: ReadonlySet<string> = new Set()): Promise<UnusedReport> {
 	const host: ts.ParseConfigFileHost = {
 		...ts.sys,
 		onUnRecoverableConfigFileDiagnostic: diagnostic => {
@@ -140,7 +140,7 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 		|| (file.fileName.startsWith(src) && slash(relative(src, file.fileName)).split('/').includes('test'));
 
 	// Verbatim and pruned copies; adapted and derived files are application code.
-	const manifest = JSON.parse(readFileSync(join(root, 'build/vscode-source.json'), 'utf8')) as { files: { path: string; adapted?: boolean }[] };
+	const manifest = await readManifest(root);
 	const verbatim = new Set(manifest.files.filter(file => !file.adapted).map(file => slash(join(root, file.path))));
 	const copied = (file: ts.SourceFile): boolean => verbatim.has(slash(file.fileName));
 	const candidates: Candidate[] = [];
@@ -560,14 +560,14 @@ export const allowlistPath = 'build/lint/unused-allowlist.json';
 export async function checkUnused(root: string, args: readonly string[] = []): Promise<void> {
 	const allowlist = JSON.parse(await readFile(join(root, allowlistPath), 'utf8')) as AllowlistEntry[];
 	const allowed = new Set(allowlist.map(entry => `${entry.path}#${entry.name}`));
-	const report = findUnused(root, allowed);
+	const report = await findUnused(root, allowed);
 	if (args.includes('--local-exports')) {
 		for (const entry of report.localExports) {
 			console.log(`${entry.path}:${String(entry.line)} ${entry.name}`);
 		}
 		return;
 	}
-	const strict = allowlist.length ? findUnused(root) : report;
+	const strict = allowlist.length ? await findUnused(root) : report;
 	const stillNeeded = new Set(strict.unused.map(entry => `${entry.path}#${entry.name}`));
 	const stale = allowlist.filter(entry => !stillNeeded.has(`${entry.path}#${entry.name}`));
 	const problems = [

@@ -5,15 +5,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
 import { posix, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { manifestPath, type VsCodeManifest } from './vscode/manifest.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
-// Read synchronously: the lint and format configurations import this module.
-const manifest = JSON.parse(readFileSync(resolve(root, manifestPath), 'utf8')) as VsCodeManifest;
+// Read as the module loads, with top-level await: the lint and format configurations import it.
+const manifest = JSON.parse(await readFile(resolve(root, manifestPath), 'utf8')) as VsCodeManifest;
 
 // Verbatim and pruned copies, and adapted infrastructure marked `upstreamStyle`, keep VS Code's
 // formatting and lint baseline. Other adaptations are VniLink code held to application rules.
@@ -23,11 +23,11 @@ const upstream = new Set(upstreamFiles);
 
 const applicationDirectories = new Set<string>();
 
-function findApplicationDirectories(directory: string): void {
-	for (const entry of readdirSync(resolve(root, directory), { withFileTypes: true })) {
+async function findApplicationDirectories(directory: string): Promise<void> {
+	for (const entry of await readdir(resolve(root, directory), { withFileTypes: true })) {
 		const path = `${directory}/${entry.name}`;
 		if (entry.isDirectory()) {
-			findApplicationDirectories(path);
+			await findApplicationDirectories(path);
 		} else if (!upstream.has(path)) {
 			let parent = posix.dirname(path);
 			while (parent !== '.') {
@@ -38,7 +38,7 @@ function findApplicationDirectories(directory: string): void {
 	}
 }
 
-findApplicationDirectories('src');
+await findApplicationDirectories('src');
 
 export const upstreamIgnores = [...new Set(upstreamFiles.map(path => {
 	const segments = path.split('/');

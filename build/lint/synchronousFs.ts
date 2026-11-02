@@ -9,7 +9,7 @@ import { AST_NODE_TYPES, type TSESLint } from '@typescript-eslint/utils';
 
 export const synchronousFsRule: TSESLint.RuleModule<'synchronous'> = {
 	defaultOptions: [],
-	meta: { type: 'problem', schema: [], messages: { synchronous: 'Use asynchronous filesystem APIs in application processes.' } },
+	meta: { type: 'problem', schema: [], messages: { synchronous: 'Use asynchronous filesystem APIs: a synchronous call stops everything else the process is doing.' } },
 	create(context) {
 		return {
 			ImportDeclaration(node) {

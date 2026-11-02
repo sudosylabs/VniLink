@@ -8,7 +8,7 @@
 /** Build identity couples source inputs, target/profile and the staged napi binary. */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, win32 } from 'node:path';
 import { glassPrebuild, mingwCandidates } from './prerequisites.ts';
 import type { ProcessRunner } from './processes.ts';
@@ -221,7 +221,7 @@ export const SPDLOG_DIRECTORY = 'native/spdlog';
 export async function stageSpdlog(root: string, outputDirectory: string): Promise<boolean> {
 	const source = join(root, 'node_modules/@vscode/spdlog');
 	const addon = join(source, 'build/Release/spdlog.node');
-	if (!existsSync(addon)) {
+	if (!await access(addon).then(() => true, () => false)) {
 		return false;
 	}
 	const target = join(outputDirectory, SPDLOG_DIRECTORY);

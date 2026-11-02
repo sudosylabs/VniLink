@@ -166,8 +166,7 @@
  *   detail that changes every frame, so the stream uses the bitrate it is
  *   given; without it the strip is nearly all that changes.
  */
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { closeSync, existsSync, openSync } from 'node:fs';
+import { access, mkdir, mkdtemp, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -619,7 +618,7 @@ async function publish(directory: string, name: string, value: unknown): Promise
 /** Waits for `name` in the rendezvous directory, or fails when either side has exited. */
 async function arrival(directory: string, name: string, timeoutMs: number, exited: () => boolean, signal: AbortSignal): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
-	while (!existsSync(join(directory, `${name}.json`))) {
+	while (!await access(join(directory, `${name}.json`)).then(() => true, () => false)) {
 		signal.throwIfAborted();
 		if (exited()) {
 			throw new Error(`A side exited before ${name}`);
@@ -655,7 +654,7 @@ interface LatencyPlatform {
 	/** How long someone at this computer may take to answer a consent dialog, for the host and for the reader. */
 	readonly consentMs: number;
 	/** Starts one side; its result settles when the side has quit. */
-	launch(role: 'host' | 'viewer', environment: Readonly<Record<string, string>>, log: string): LaunchedProcess;
+	launch(role: 'host' | 'viewer', environment: Readonly<Record<string, string>>, log: string): Promise<LaunchedProcess>;
 }
 
 /** `app`: on macOS, the `.app` that runs the sides; this checkout's development VniLink when undefined. */
@@ -672,24 +671,25 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 			// Launched through LaunchServices, each side is its own responsible
 			// application, so macOS asks Screen Recording of the development
 			// VniLink and not of whatever started this task. `open -W` waits for it.
-			launch: (_role, environment, log) => processes.start('open', [
+			launch: (_role, environment, log) => Promise.resolve(processes.start('open', [
 				'-n', '-W', '-g', '-a', bundle,
 				...Object.entries(environment).flatMap(([name, value]) => ['--env', `${name}=${value}`]),
 				'--stdout', log, '--stderr', log,
 				'--args', entry,
-			]),
+			])),
 		};
 	}
 	if (app !== undefined) {
 		throw new Error('--app names a macOS application');
 	}
 	const electron = await electronExecutable(root, signal);
-	const direct = (args: (role: 'host' | 'viewer', environment: Readonly<Record<string, string>>) => readonly string[]): LatencyPlatform['launch'] => (role, environment, log) => {
-		const output = openSync(log, 'a');
+	const direct = (args: (role: 'host' | 'viewer', environment: Readonly<Record<string, string>>) => readonly string[]): LatencyPlatform['launch'] => async (role, environment, log) => {
+		// The side writes to the log itself; the descriptor is closed here once it has its own.
+		const output = await open(log, 'a');
 		try {
-			return processes.start(electron, [...args(role, environment), entry], { env: { ...process.env, ...environment }, stdio: ['ignore', output, output] });
+			return processes.start(electron, [...args(role, environment), entry], { env: { ...process.env, ...environment }, stdio: ['ignore', output.fd, output.fd] });
 		} finally {
-			closeSync(output);
+			await output.close();
 		}
 	};
 	if (isWindows) {
@@ -829,7 +829,7 @@ async function measureAcross(root: string, signal: AbortSignal, options: Latency
 		const platform = await latencyPlatform(root, options.app, processes, signal);
 		const profile = join(work, here);
 		await mkdir(profile);
-		const local = platform.launch(here, {
+		const local = await platform.launch(here, {
 			...shared,
 			// Each side on its own computer, as a person uses them; the agent
 			// sets it for its side itself.
@@ -954,7 +954,7 @@ export async function launchLatencySide(root: string, signal: AbortSignal, role:
 	const processes = new ProcessRunner(signal);
 	try {
 		const platform = await latencyPlatform(root, undefined, processes, signal);
-		const side = platform.launch(role, environment, join(environment.VNILINK_LATENCY_OUTPUT, `${role}.log`));
+		const side = await platform.launch(role, environment, join(environment.VNILINK_LATENCY_OUTPUT, `${role}.log`));
 		await Promise.race([side.result, stopped]);
 		await settledWithin(side.result, 20000);
 	} finally {
@@ -1000,7 +1000,7 @@ export async function measureLatency(root: string, signal: AbortSignal, args: re
 				VNILINK_LATENCY_BUSY: options.busy ? '1' : '0',
 				VNILINK_LATENCY_SCREEN_GRANT: join(grants, 'host-screen-grant'),
 			};
-			const side = platform.launch(role, environment, join(options.output, `${role}.log`));
+			const side = await platform.launch(role, environment, join(options.output, `${role}.log`));
 			sides.push(side.result.catch(() => undefined).finally(() => {
 				exited = true;
 			}));
