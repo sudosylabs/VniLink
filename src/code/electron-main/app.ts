@@ -152,7 +152,6 @@ export class VniLinkApplication extends Disposable {
 
 	private async startup(): Promise<void> {
 		mark('vnilink/mainStart');
-		app.setName('VniLink');
 		if (!app.requestSingleInstanceLock()) {
 			// A second launch only wakes the first: it writes no logs and prunes none of the first's.
 			this.dispose();
@@ -327,9 +326,8 @@ export class VniLinkApplication extends Disposable {
 	}
 
 	/**
-	 * The application's own logs follow `diagnostics.applicationLog`, as VS
-	 * Code's Set Log Level does; `--verbose` keeps everything. The engine's
-	 * log has its own setting.
+	 * The application's own logs follow `diagnostics.applicationLog`;
+	 * `--verbose` keeps everything. The engine's log has its own setting.
 	 */
 	private applyLogLevel(accessor: ServicesAccessor): void {
 		if (process.argv.includes('--verbose')) {

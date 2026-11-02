@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isLinux } from '../../src/base/common/platform.js';
 import { VniLinkApplication } from '../../src/code/electron-main/app.js';
+import { product } from '../../src/platform/product/common/product.js';
 import { WindowDriver } from './driver.js';
 
 export interface TestApplicationOptions {
@@ -47,6 +48,8 @@ export class TestApplication {
 		for (const flag of ['disable-backgrounding-occluded-windows', 'disable-renderer-backgrounding', 'disable-background-timer-throttling']) {
 			app.commandLine.appendSwitch(flag);
 		}
+		// Identity as VniLinkMain sets it, which test launches bypass.
+		app.setName(product.name);
 		app.setPath('userData', this.profile);
 		mkdirSync(this.output, { recursive: true });
 		writeFileSync(join(this.output, 'environment.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, versions: process.versions, chromiumSandbox: !this.container }, null, 2));
