@@ -10,86 +10,39 @@
 //! per peer and in all.
 
 use expect_test::expect;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
-use vnilink::terminal::{
-    HostTerminalFactory, TerminalBackend, TerminalOptions, TerminalPolicy, TerminalSize,
+use vnilink::terminal::TerminalPolicy;
+use vnilink::{Error, ServiceKind, SessionPhase};
+use vnilink_testkit::terminal::{
+    open_shell, options, wait_shells_ended, Held, HeldStartup, Hosting,
 };
-use vnilink::{BackendStartup, Error, ServiceInfo, ServiceKind, SessionInfo, SessionPhase};
-use vnilink_testkit::terminal::{shell, SIZE};
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-use super::support::{host_ended_shells, phase};
-
-/// Within this a cancelled startup reaches the backend still starting.
-const CANCELLED_WITHIN: Duration = Duration::from_secs(1);
-
 /// Revoking Terminal while its shell is still starting cancels the startup
-/// without a release from the test: no terminal is admitted, the host
-/// keeps no attached shell, and the connection carries on.
+/// without a release from the test: it ends cancelled, not by its own
+/// deadline, no terminal is admitted, the host keeps no attached shell,
+/// and the connection carries on.
 #[test]
 fn revoking_terminal_cancels_a_shell_still_starting() -> TestResult {
-    /// A backend that waits for a release that never comes, so only
-    /// cancellation ends its startup.
-    struct Blocking {
-        entered: SyncSender<()>,
-        release: Mutex<Receiver<()>>,
-        opened: AtomicBool,
-        finished: SyncSender<()>,
-        shell: Arc<dyn HostTerminalFactory>,
-    }
-    impl HostTerminalFactory for Blocking {
-        fn open(
-            &self,
-            size: TerminalSize,
-            startup: BackendStartup,
-        ) -> Result<TerminalBackend, Error> {
-            self.opened.store(true, Ordering::SeqCst);
-            let _ = self.entered.try_send(());
-            let result = startup.receive(&self.release.lock().unwrap());
-            self.finished.send(()).unwrap();
-            result?;
-            self.shell.open(size, startup)
-        }
-    }
-
     let trace = traced();
-    let pair = Pair::for_services(&[ServiceKind::Terminal]);
-    let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let (entered, startup_entered) = sync_channel(1);
-    let (_release, released) = channel();
-    let (finished, startup_finished) = sync_channel(1);
-    let factory = Arc::new(Blocking {
-        entered,
-        release: Mutex::new(released),
-        opened: AtomicBool::new(false),
-        finished,
-        shell: shell(&pair.host.folder()),
-    });
-    host.set_terminal_factory(Some(factory.clone()))?;
-    let connection = pair.connect_services();
-    let owner = pair.attach(&connection, ServiceKind::Terminal);
+    let mut held = None;
+    let hosting = Hosting::offering(true, |host| {
+        let factory = HeldStartup::new(open_shell(&host.folder())?);
+        held = Some(factory.clone());
+        Ok(factory)
+    })?;
+    let held = held.ok_or("the host's backend")?;
+    let host = &hosting.pair.host.core;
     let opened = std::thread::scope(|scope| -> Result<_, Error> {
-        let opening =
-            scope.spawn(|| controller.open_terminal_service(owner.id, owner.generation, SIZE));
-        startup_entered
-            .recv_timeout(Duration::from_secs(8))
-            .expect("the shell to start");
-        assert!(
-            factory.opened.load(Ordering::SeqCst),
-            "the host started the shell"
-        );
-        let revoked = Instant::now();
+        let opening = scope.spawn(|| hosting.open());
+        held.wait_holding();
         host.set_service_sharing(ServiceKind::Terminal, false)?;
-        let left = CANCELLED_WITHIN.saturating_sub(revoked.elapsed());
-        assert!(
-            startup_finished.recv_timeout(left).is_ok(),
-            "cancellation reaches the starting shell within {CANCELLED_WITHIN:?}"
+        assert_eq!(
+            held.wait_finished(),
+            Held::Cancelled,
+            "revoking Terminal cancels the shell still starting"
         );
-        Ok(opening.join().expect("the opening thread"))
+        Ok(opening.join().expect("the opening thread returns"))
     })?;
     assert!(
         opened.is_err(),
@@ -105,7 +58,7 @@ fn revoking_terminal_cancels_a_shell_still_starting() -> TestResult {
         .then_some(())
     });
     assert_eq!(
-        phase(&pair.controller, &connection),
+        hosting.phase()?,
         SessionPhase::Active,
         "a cancelled startup leaves its connection open"
     );
@@ -129,27 +82,6 @@ fn revoking_terminal_cancels_a_shell_still_starting() -> TestResult {
 /// terminal before a shell starts.
 #[test]
 fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestResult {
-    /// A backend whose first startup waits for the test's release.
-    struct Gated {
-        calls: AtomicUsize,
-        entered: SyncSender<()>,
-        release: Mutex<Receiver<()>>,
-        shell: Arc<dyn HostTerminalFactory>,
-    }
-    impl HostTerminalFactory for Gated {
-        fn open(
-            &self,
-            size: TerminalSize,
-            startup: BackendStartup,
-        ) -> Result<TerminalBackend, Error> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                self.entered.send(()).unwrap();
-                startup.receive(&self.release.lock().unwrap())?;
-            }
-            self.shell.open(size, startup)
-        }
-    }
-
     let trace = traced();
     let pair = Pair::for_services(&[ServiceKind::Terminal]);
     let b = pair.add_viewer("b");
@@ -160,62 +92,36 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
         ..Default::default()
     };
     host.core.set_terminal_policy(policy)?;
-    let (entered, startup_entered) = sync_channel(1);
-    let (release, released) = channel();
-    let factory = Arc::new(Gated {
-        calls: AtomicUsize::new(0),
-        entered,
-        release: Mutex::new(released),
-        shell: shell(&host.folder()),
-    });
+    let factory = HeldStartup::new(open_shell(&host.folder())?);
     host.core.set_terminal_factory(Some(factory.clone()))?;
     let to_a = a.connect_services(host)?;
     let to_b = b.connect_services(host)?;
-    let attach = |peer: &Engine, connection: &SessionInfo| -> Result<ServiceInfo, Error> {
-        peer.core.attach_controller_service(
-            connection.id,
-            connection.generation,
-            ServiceKind::Terminal,
-        )
-    };
-    let first = attach(a, &to_a)?;
+    let open = |peer: &Engine, connection| peer.open_terminal(connection, options(false, None));
     let (ta, tb) = std::thread::scope(|scope| -> Result<_, Error> {
-        let opening = scope.spawn(|| {
-            a.core
-                .open_terminal_service(first.id, first.generation, SIZE)
-        });
-        startup_entered
-            .recv_timeout(Duration::from_secs(3))
-            .expect("the first shell to start");
+        let opening = scope.spawn(|| open(a, &to_a));
+        factory.wait_holding();
         assert!(
             matches!(host.core.set_terminal_policy(policy), Err(Error::Busy)),
             "the policy does not change while a shell starts"
         );
-        let duplicate = attach(a, &to_a)?;
         assert!(
-            matches!(
-                a.core
-                    .open_terminal_service(duplicate.id, duplicate.generation, SIZE),
-                Err(Error::Busy)
-            ),
+            matches!(open(a, &to_a), Err(Error::Busy)),
             "a peer's shell still starting counts against its limit"
         );
+        assert_eq!(factory.startups(), 1, "refusal must precede native startup");
+        let tb = open(&b, &to_b)?;
         assert_eq!(
-            factory.calls.load(Ordering::SeqCst),
-            1,
-            "refusal must precede native startup"
-        );
-        let sibling = attach(&b, &to_b)?;
-        let tb = b
-            .core
-            .open_terminal_service(sibling.id, sibling.generation, SIZE)?;
-        assert_eq!(
-            factory.calls.load(Ordering::SeqCst),
+            factory.startups(),
             2,
             "another peer's terminal opens under its own limit"
         );
-        release.send(()).expect("the first shell to wait");
-        Ok((opening.join().expect("the opening thread")?, tb))
+        factory.release();
+        assert_eq!(
+            factory.wait_finished(),
+            Held::Released,
+            "the held shell starts once released"
+        );
+        Ok((opening.join().expect("the opening thread returns")?, tb))
     })?;
     assert_eq!(
         host.core.hosted_terminal_sessions()?.len(),
@@ -233,33 +139,20 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
     // The shell ends before its stream records why; the other closes after.
     trace.wait_for_records("terminal stream ended", 2);
     tb.close();
-    host_ended_shells(host);
+    wait_shells_ended(host);
     let denied = TerminalPolicy {
         allow_persistence: false,
         ..policy
     };
     host.core.set_terminal_policy(denied)?;
-    let owner = attach(a, &to_a)?;
     assert!(
         matches!(
-            a.core.open_terminal_service_with_options(
-                owner.id,
-                owner.generation,
-                TerminalOptions {
-                    size: SIZE,
-                    persistent: true,
-                    resume_id: None,
-                }
-            ),
+            a.open_terminal(&to_a, options(true, None)),
             Err(Error::Unauthorized)
         ),
         "a policy without persistence refuses a persistent terminal"
     );
-    assert_eq!(
-        factory.calls.load(Ordering::SeqCst),
-        2,
-        "the refusal precedes native startup"
-    );
+    assert_eq!(factory.startups(), 2, "the refusal precedes native startup");
     trace.wait_for_records("terminal stream ended", 4);
     trace.wait_for_records("terminal pipe ended", 2);
     vnilink_testkit::assert_story(

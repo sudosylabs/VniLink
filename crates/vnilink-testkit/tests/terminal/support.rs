@@ -5,61 +5,35 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! What the terminal scenarios share: a terminal of the kit's size opened
-//! on a connection, how long its shell has to answer, and a shell read to
-//! its exit. Opening with options, reading output and the check that
-//! nothing typed was recorded are the kit's
-//! ([`vnilink_testkit::terminal`], [`vnilink_testkit::Traced`]).
+//! What the terminal scenarios share beyond the kit's
+//! ([`vnilink_testkit::terminal`]): a shell read to its exit, and the
+//! command lines each platform's shell takes for what a scenario types.
 
-use std::time::Duration;
-
-use vnilink::terminal::TerminalOptions;
-use vnilink::{Error, RemoteTerminalService, SessionInfo, SessionPhase};
-use vnilink_testkit::terminal::{read_until, SIZE};
-use vnilink_testkit::{wait_for, Engine, DEFAULT_WAIT};
-
-/// How long a shell has to answer what was typed.
-pub(super) const SHELL: Duration = Duration::from_secs(10);
-
-/// A terminal of [`SIZE`] on `connection`, its shell ending with it.
-pub(super) fn open(
-    controller: &Engine,
-    connection: &SessionInfo,
-) -> Result<RemoteTerminalService, Error> {
-    controller.open_terminal(connection, options(false, None))
-}
-
-pub(super) fn options(persistent: bool, resume_id: Option<String>) -> TerminalOptions {
-    TerminalOptions {
-        size: SIZE,
-        persistent,
-        resume_id,
-    }
-}
+use vnilink::{Error, RemoteTerminalService};
+use vnilink_testkit::terminal::read_until;
+use vnilink_testkit::DEFAULT_WAIT;
 
 /// `terminal`'s output until the shell exits, and its exit code.
-pub(super) fn read_to_exit(terminal: &RemoteTerminalService) -> (String, u32) {
+pub(super) fn read_to_exit(terminal: &RemoteTerminalService) -> Result<(String, u32), Error> {
     let mut output = Vec::new();
-    let exit = read_until(terminal, &mut output, "the shell to exit", SHELL, |_| false);
+    let exit = read_until(
+        terminal,
+        &mut output,
+        "the shell to exit",
+        DEFAULT_WAIT,
+        |_| false,
+    );
     let text = String::from_utf8_lossy(&output).into_owned();
-    (text, exit.expect("the shell exited"))
+    let exit = exit.ok_or(Error::InvalidSetting("the shell did not exit"))?;
+    Ok((text, exit))
 }
 
-/// Waits until `host` keeps no shells.
-pub(super) fn host_ended_shells(host: &Engine) {
-    wait_for("the host to end its shells", DEFAULT_WAIT, || {
-        host.core
-            .hosted_terminal_sessions()
-            .ok()?
-            .is_empty()
-            .then_some(())
-    });
-}
-
-pub(super) fn phase(controller: &Engine, connection: &SessionInfo) -> SessionPhase {
-    controller
-        .core
-        .controller_session(connection.id)
-        .expect("the connection")
-        .phase
+/// `unix` on Unix's `sh`, `windows` on Windows' `cmd`: the command line a
+/// scenario types, the rest of it the same on both.
+pub(super) fn command(unix: &'static str, windows: &'static str) -> &'static str {
+    if cfg!(windows) {
+        windows
+    } else {
+        unix
+    }
 }

@@ -8,124 +8,121 @@
 //! The Terminal service alone: the host's real shell, a terminal opened
 //! from the controller as the application opens one.
 
-#[cfg(unix)]
 #[path = "terminal/admission.rs"]
 mod admission;
-#[cfg(unix)]
 #[path = "terminal/lifecycle.rs"]
 mod lifecycle;
-#[cfg(unix)]
 #[path = "terminal/persistence.rs"]
 mod persistence;
-#[cfg(unix)]
 #[path = "terminal/support.rs"]
 mod support;
 
 use expect_test::expect;
-use std::time::Duration;
 
-use vnilink::{Error, ServiceKind};
-use vnilink_testkit::terminal::{contains, TerminalSession, ENTER};
-use vnilink_testkit::{traced, wait_for, Pair, DEFAULT_WAIT};
-
-const SHELL: Duration = Duration::from_secs(10);
+use vnilink::terminal::TerminalSize;
+use vnilink::{Error, SessionPhase};
+use vnilink_testkit::terminal::{check, contains, read_until, Hosting, Typed, ENTER};
+use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
 
 /// What is typed reaches the shell, its output comes back, and its exit
 /// code ends the terminal; the host records the shell opening and its exit.
 #[test]
-fn a_shell_runs_what_is_typed_and_ends_with_its_exit_code() {
+fn a_shell_runs_what_is_typed_and_ends_with_its_exit_code() -> TestResult {
     let trace = traced();
-    let session = TerminalSession::open();
-    session.input(&format!("echo VNI_READY{ENTER}")).unwrap();
-    let (output, exit) = session.read_until("the shell's echo", SHELL, |output| {
-        contains(output, "VNI_READY\r\n") || contains(output, "VNI_READY\n")
-    });
-    assert_eq!(exit, None, "{}", String::from_utf8_lossy(&output));
-    session.input(&format!("exit 7{ENTER}")).unwrap();
-    let (_, exit) = session.read_until("the shell to exit", SHELL, |_| false);
-    assert_eq!(exit, Some(7));
-    session.pair.host.wait_released(None);
-    vnilink_testkit::assert_story(
+    check(
+        &trace,
+        Typed {
+            size: None,
+            lines: if cfg!(windows) {
+                &["echo VNI_^READY", "exit 7"]
+            } else {
+                &["printf 'VNI_%s\\n' READY", "exit 7"]
+            },
+            shows: &["VNI_READY"],
+        },
         expect![[r#"
-        host:
-          terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
-          terminal: terminal shell exited code=7 service=1
-          terminal: terminal stream ended ended=shell exited explicit_close=true service=1
-    "#]],
-        || trace.story(&["terminal"]),
-    );
+            host:
+              terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
+              terminal: terminal shell exited code=7 service=1
+              terminal: terminal stream ended ended=shell exited explicit_close=true service=1
+        "#]],
+    )
 }
 
-/// A resize reaches the shell's terminal.
-#[cfg(unix)]
+/// A resize reaches the shell's terminal, applied in order with input,
+/// before the next command.
 #[test]
-fn a_resize_reaches_the_shell() {
-    let _trace = traced();
-    let session = TerminalSession::open();
-    session
-        .terminal
-        .resize(vnilink::terminal::TerminalSize {
-            rows: 39,
-            columns: 117,
-        })
-        .unwrap();
-    // The size is applied in order with input, before the next command.
-    session.input("stty size\n").unwrap();
-    let (output, _) =
-        session.read_until("the new size", SHELL, |output| contains(output, "39 117"));
-    assert!(
-        contains(&output, "39 117"),
-        "{}",
-        String::from_utf8_lossy(&output)
-    );
+fn a_resize_reaches_the_shell() -> TestResult {
+    let trace = traced();
+    check(
+        &trace,
+        Typed {
+            size: Some(TerminalSize {
+                rows: 39,
+                columns: 117,
+            }),
+            lines: if cfg!(windows) {
+                &["mode con", "exit 0"]
+            } else {
+                &["stty size", "exit 0"]
+            },
+            shows: if cfg!(windows) {
+                &["Lines:          39", "Columns:        117"]
+            } else {
+                &["39 117"]
+            },
+        },
+        expect![[r#"
+            host:
+              terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
+              terminal: terminal shell exited code=0 service=1
+              terminal: terminal stream ended ended=shell exited explicit_close=true service=1
+        "#]],
+    )
 }
 
 /// Text outside ASCII passes both ways intact.
-#[cfg(unix)]
 #[test]
-fn text_outside_ascii_passes_intact() {
-    let _trace = traced();
-    let session = TerminalSession::open();
-    session
-        .input("printf '\\316\\261\\342\\202\\254\\n'\n")
-        .unwrap();
-    let (output, _) = session.read_until("the characters", SHELL, |output| contains(output, "α€"));
-    assert!(
-        contains(&output, "α€"),
-        "{}",
-        String::from_utf8_lossy(&output)
-    );
+fn text_outside_ascii_passes_intact() -> TestResult {
+    let trace = traced();
+    check(
+        &trace,
+        Typed {
+            size: None,
+            lines: if cfg!(windows) {
+                &["chcp 65001 >nul", "echo VNI_^α€", "exit 0"]
+            } else {
+                &["printf 'VNI_\\316\\261\\342\\202\\254\\n'", "exit 0"]
+            },
+            shows: &["VNI_α€"],
+        },
+        expect![[r#"
+            host:
+              terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
+              terminal: terminal shell exited code=0 service=1
+              terminal: terminal stream ended ended=shell exited explicit_close=true service=1
+        "#]],
+    )
 }
 
 /// Without the host's Terminal grant no terminal opens, the refusal is
 /// recorded, and the connection carries on.
 #[test]
-fn without_the_grant_no_terminal_opens_and_the_connection_lives() {
+fn without_the_grant_no_terminal_opens_and_the_connection_lives() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_services(&[]);
-    pair.host
-        .core
-        .set_terminal_factory(Some(vnilink_testkit::terminal::shell(&pair.host.folder())))
-        .unwrap();
-    let connection = pair.connect_services();
-    let owner = pair.attach(&connection, ServiceKind::Terminal);
-    let opened = pair.controller.core.open_terminal_service(
-        owner.id,
-        owner.generation,
-        vnilink_testkit::terminal::SIZE,
-    );
+    let hosting = Hosting::offering(false, |host| {
+        vnilink_testkit::terminal::open_shell(&host.folder())
+    })?;
+    let opened = hosting.open();
     assert!(
         matches!(opened, Err(Error::Unauthorized)),
-        "{:?}",
+        "without the grant no terminal opens: {:?}",
         opened.err()
     );
     assert_eq!(
-        pair.controller
-            .core
-            .controller_session(connection.id)
-            .unwrap()
-            .phase,
-        vnilink::SessionPhase::Active
+        hosting.phase()?,
+        SessionPhase::Active,
+        "a refused terminal leaves its connection open"
     );
     trace.wait_for_records("service refused", 1);
     vnilink_testkit::assert_story(
@@ -137,20 +134,45 @@ fn without_the_grant_no_terminal_opens_and_the_connection_lives() {
     "#]],
         || trace.story(&["hosting", "service"]),
     );
+    Ok(())
 }
 
 /// Closing the terminal ends the shell on the host.
 #[test]
-fn closing_the_terminal_ends_the_shell() {
-    let _trace = traced();
-    let session = TerminalSession::open();
-    session.input(&format!("echo VNI_READY{ENTER}")).unwrap();
-    session.read_until("the shell", SHELL, |output| contains(output, "VNI_READY"));
-    session.terminal.close();
+fn closing_the_terminal_ends_the_shell() -> TestResult {
+    let trace = traced();
+    let hosting = Hosting::shell()?;
+    let terminal = hosting.open()?;
+    let ready = if cfg!(windows) {
+        "echo VNI_^READY"
+    } else {
+        "printf 'VNI_%s\\n' READY"
+    };
+    terminal.input(format!("{ready}{ENTER}").as_bytes())?;
+    let mut output = Vec::new();
+    let exit = read_until(
+        &terminal,
+        &mut output,
+        "the shell",
+        DEFAULT_WAIT,
+        |output| contains(output, "VNI_READY"),
+    );
+    assert_eq!(exit, None, "the shell runs until the terminal closes");
+    terminal.close();
     wait_for("the host to end the shell", DEFAULT_WAIT, || {
-        let host = &session.pair.host.core;
+        let host = &hosting.pair.host.core;
         (host.hosted_services().ok()?.is_empty()
             && host.hosted_terminal_sessions().ok()?.is_empty())
         .then_some(())
     });
+    trace.wait_for_records("terminal stream ended", 1);
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        host:
+          terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
+          terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
+    "#]],
+        || trace.engine_story("host", &["terminal"]),
+    );
+    Ok(())
 }
