@@ -23,16 +23,23 @@ export const layersRule: TSESLint.RuleModule<'boundary'> = {
 		const base = source.startsWith('src/base/');
 		const platform = source.startsWith('src/platform/');
 		const app = source.startsWith('src/code/');
+		// A module's tests sit in its `test/<layer>/` folder and keep that layer's boundaries.
+		const inTests = (path: string): boolean => path.startsWith('src/') && path.split('/').includes('test');
+		const test = inTests(source);
 		function check(node: TSESTree.Node, specifier: unknown): void {
 			if (typeof specifier !== 'string') {
 				return;
 			}
 			const native = specifier === 'electron' || specifier.startsWith('electron/') || specifier.startsWith('node:') || builtins.has(specifier);
 			const target = specifier.startsWith('.') ? relative(process.cwd(), resolve(dirname(filename), specifier.replace(/\.js$/, '.ts'))).split(sep).join('/') : specifier;
+			// Every test runner provides Node's `assert`, as VS Code's do.
+			const testAssert = test && (specifier === 'assert' || specifier === 'node:assert');
 			let reason: string | undefined;
 			if (specifier.startsWith('@phosphor-icons/') && source !== 'src/base/browser/ui/icon/iconAssets.ts') {
 				reason = 'Use product icons through the shared icon helper';
-			} else if ((browser || common) && native) {
+			} else if (source.startsWith('src/') && !test && (inTests(target) || specifier === 'sinon' || specifier === 'mocha')) {
+				reason = 'Application code cannot import tests or test libraries';
+			} else if ((browser || common) && native && !testAssert) {
 				reason = 'Browser/common code cannot import Node or Electron';
 			} else if ((browser || common) && (target.startsWith('src/code/') || target.includes('/electron-main/') || target.includes('/electron-utility/') || (target === 'src/preload' || target === 'src/preload.ts'))) {
 				reason = 'Browser/common code cannot import privileged implementation';

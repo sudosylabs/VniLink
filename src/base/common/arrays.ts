@@ -213,3 +213,47 @@ function getActualStartIndex<T>(array: T[], start: number): number {
 }
 
 
+
+/**
+ * When comparing two values,
+ * a negative number indicates that the first value is less than the second,
+ * a positive number indicates that the first value is greater than the second,
+ * and zero indicates that neither is the case.
+*/
+export type CompareResult = number;
+
+export namespace CompareResult {
+	export function isNeitherLessOrGreaterThan(result: CompareResult): boolean {
+		return result === 0;
+	}
+
+	export const neitherLessOrGreaterThan = 0;
+}
+
+/**
+ * A comparator `c` defines a total order `<=` on `T` as following:
+ * `c(a, b) <= 0` iff `a` <= `b`.
+ * We also have `c(a, b) == 0` iff `c(b, a) == 0`.
+*/
+export type Comparator<T> = (a: T, b: T) => CompareResult;
+
+export function compareBy<TItem, TCompareBy>(selector: (item: TItem) => TCompareBy, comparator: Comparator<TCompareBy>): Comparator<TItem> {
+	return (a, b) => comparator(selector(a), selector(b));
+}
+
+export function tieBreakComparators<TItem>(...comparators: Comparator<TItem>[]): Comparator<TItem> {
+	return (item1, item2) => {
+		for (const comparator of comparators) {
+			const result = comparator(item1, item2);
+			if (!CompareResult.isNeitherLessOrGreaterThan(result)) {
+				return result;
+			}
+		}
+		return CompareResult.neitherLessOrGreaterThan;
+	};
+}
+
+/**
+ * The natural order on numbers.
+*/
+export const numberComparator: Comparator<number> = (a, b) => a - b;

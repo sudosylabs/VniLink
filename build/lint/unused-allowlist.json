@@ -68,5 +68,60 @@
     "path": "src/base/common/codiconsLibrary.ts",
     "name": "codiconsLibrary.triangleUp",
     "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/lifecycle.ts",
+    "name": "DisposableTracker",
+    "reason": "VS Code's leak tracker: ensureNoDisposablesAreLeakedInTestSuite installs it around every test suite"
+  },
+  {
+    "path": "src/base/common/collections.ts",
+    "name": "groupBy",
+    "reason": "DisposableTracker groups leaked disposables by their creation stack with it"
+  },
+  {
+    "path": "src/base/common/map.ts",
+    "name": "SetMap",
+    "reason": "DisposableTracker indexes each disposable's children with it"
+  },
+  {
+    "path": "src/base/common/path.ts",
+    "name": "join",
+    "reason": "base/test/common/utils.ts toResource builds per-test resource paths with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "compareBy",
+    "reason": "the virtual clock in base/test/common/virtualScheduling orders scheduled tasks with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "tieBreakComparators",
+    "reason": "the virtual clock in base/test/common/virtualScheduling orders tasks due at the same time with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "numberComparator",
+    "reason": "the virtual clock in base/test/common/virtualScheduling compares task times with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "Comparator",
+    "reason": "the type of compareBy and tieBreakComparators, which the virtual clock uses"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "CompareResult",
+    "reason": "the result type of Comparator, which the virtual clock uses"
+  },
+  {
+    "path": "src/platform/instantiation/common/instantiationService.ts",
+    "name": "InstantiationService.createChild",
+    "reason": "TestInstantiationService overrides it so a child keeps the test's stubs"
+  },
+  {
+    "path": "src/platform/instantiation/common/strictServiceCollection.ts",
+    "name": "StrictServiceCollection",
+    "reason": "VS Code's instantiation service tests construct it"
   }
 ]

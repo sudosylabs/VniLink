@@ -691,6 +691,14 @@
       "description": "Run the build and application unit tests",
       "requires": ["node"]
     },
+    "test:unit": {
+      "description": "Run the common and node unit tests under src in Node",
+      "requires": ["node"]
+    },
+    "test:unit:electron": {
+      "description": "Run the browser and electron-browser unit tests under src in Electron",
+      "requires": ["platform", "node", "linux-runtime-libraries", "test-display", "linux-sandbox"]
+    },
     "test:windows": {
       "description": "Run the full Windows suite",
       "platforms": ["win32"],

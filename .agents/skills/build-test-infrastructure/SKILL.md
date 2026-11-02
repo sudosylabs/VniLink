@@ -24,6 +24,7 @@ The build is TypeScript run directly by Node (type stripping): `node build/run.t
 | `build/lib/package.{darwin,win32,linux}.ts` | Per-platform installer options and artifact extensions |
 | `build/lib/verify.ts` | Inventories and checks for every artifact |
 | `build/lib/test.ts` | UI suite, Rust tests, Linux container validation |
+| `build/lib/unitTests.ts`, `test/unit/electron` | `test:unit` (mocha in Node) and `test:unit:electron` (mocha in a hidden window) over `src/**/test/<layer>/*.test.ts` |
 | `build/lib/processes.ts`, `watch.ts`, `development.ts` | The only classes: owners of processes, watchers and the dev session |
 
 Read VS Code's `build/lib/gulp/task.ts` and its gulpfiles before changing composition; read `test/automation/src` before changing drivers.
@@ -68,6 +69,7 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 
 ## Test contracts
 
+- Unit tests follow VS Code's: beside the module in `test/<layer>/`, mocha's TDD interface, VS Code's test infrastructure copied through the importer (`base/test/common/utils.ts`, `virtualScheduling`, `instantiationServiceMock.ts`), and the copied lint rules that require the leak check, forbid `.only` and keep suite callbacks synchronous. `test:unit` bundles the tests with esbuild code splitting, so a module has one instance across suites; `test:unit:electron` gives each test file its own script. `check` runs `test:unit`; `test:ui` without a scenario selection runs `test:unit:electron` first. `check:unused` and `check:upstream` treat test folders as test code and copied tests as entry points.
 - Browser scenarios live in `test/browser`, are listed in `test/automation/scenarios.ts`, and run with `npm run test:ui -- --scenario <name>`. A scenario builds its subject through an `InstantiationService` with fake services (`test/browser/settingsFixture.ts`).
 - Smoke scenarios (`test/smoke/main.ts`) drive the real app through `window.driver`, wait for explicit readiness, and keep logs and screenshots in `.build/test-runs`.
 - Tooling tests (`test/tooling/*.test.mjs`) import build and source modules directly; polling has a condition, a bound and a useful timeout message.

@@ -17,6 +17,9 @@ tester.run('vnilink/layers', layersRule, {
 		{ filename: 'src/workbench/workbench.ts', code: "import type { INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration';" },
 		{ filename: 'src/code/electron-main/app.ts', code: "import { app } from 'electron';" },
 		{ filename: 'src/base/browser/ui/button.ts', code: "export const button = document.createElement('button');" },
+		{ filename: 'src/base/test/common/event.test.ts', code: "import assert from 'assert';" },
+		{ filename: 'src/workbench/services/devices/test/browser/deviceService.test.ts', code: "import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';" },
+		{ filename: 'src/platform/instantiation/test/common/instantiationServiceMock.ts', code: "import * as sinon from 'sinon';" },
 	],
 	invalid: [
 		{ filename: 'src/workbench/workbench.ts', code: "import svg from '@phosphor-icons/core/assets/regular/house.svg';", errors: [{ messageId: 'boundary' }] },
@@ -34,5 +37,11 @@ tester.run('vnilink/layers', layersRule, {
 		{ filename: 'src/platform/ipc/common/types.ts', code: "import { createSidebar } from '../../../workbench/browser/parts/sidebar/sidebar';", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/base/browser/ui/button.ts', code: "import { createSidebar } from '../../../workbench/browser/parts/sidebar/sidebar';", errors: [{ messageId: 'boundary' }] },
 		{ filename: 'src/platform/ipc/electron-main/windowContext.ts', code: "import { VniLinkApplication } from '../../../code/electron-main/app';", errors: [{ messageId: 'boundary' }] },
+		// Tests keep their layer's boundaries, apart from `assert`.
+		{ filename: 'src/base/test/common/event.test.ts', code: "import fs from 'node:fs';", errors: [{ messageId: 'boundary' }] },
+		{ filename: 'src/workbench/services/devices/test/browser/deviceService.test.ts', code: "import { EngineChannel } from '../../../../../platform/engine/electron-main/engineChannel.js';", errors: [{ messageId: 'boundary' }] },
+		// Application code never reaches tests or their libraries.
+		{ filename: 'src/base/common/lifecycle.ts', code: "import { ensureNoDisposablesAreLeakedInTestSuite } from '../test/common/utils.js';", errors: [{ messageId: 'boundary' }] },
+		{ filename: 'src/workbench/services/devices/deviceServiceImpl.ts', code: "import * as sinon from 'sinon';", errors: [{ messageId: 'boundary' }] },
 	],
 });

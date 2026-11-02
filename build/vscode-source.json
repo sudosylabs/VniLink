@@ -911,7 +911,7 @@
     {
       "path": "src/base/common/arrays.ts",
       "upstreamPath": "src/vs/base/common/arrays.ts",
-      "sha256": "4080ec5203aa2d7e6fcb9d374622a51f2a0592d6e4f1ebccfd1e6c95792f4ef5",
+      "sha256": "fd1864c76456ad9ba2ab2c16c06d46ea808c1b711311167ca1ba7905be0abb44",
       "pruned": [
         "ArrayQueue",
         "ArrayQueue.dequeue",
@@ -922,9 +922,12 @@
         "ArrayQueue.takeFromEndWhile",
         "ArrayQueue.takeWhile",
         "CallbackIterable",
-        "Comparator",
         "Compare",
-        "CompareResult",
+        "CompareResult.greaterThan",
+        "CompareResult.isGreaterThan",
+        "CompareResult.isLessThan",
+        "CompareResult.isLessThanOrEqual",
+        "CompareResult.lessThan",
         "IMutableSplice",
         "Permutation",
         "arrayInsert",
@@ -932,7 +935,6 @@
         "booleanComparator",
         "coalesceInPlace",
         "commonPrefixLength",
-        "compareBy",
         "compareUndefinedSmallest",
         "concatArrays",
         "delta",
@@ -948,7 +950,6 @@
         "mapArrayOrNot",
         "mapFilter",
         "move",
-        "numberComparator",
         "pushMany",
         "pushToEnd",
         "pushToStart",
@@ -960,7 +961,6 @@
         "sum",
         "sumBy",
         "tail",
-        "tieBreakComparators",
         "top",
         "topAsync",
         "topStep",
@@ -1975,14 +1975,13 @@
     {
       "path": "src/base/common/collections.ts",
       "upstreamPath": "src/vs/base/common/collections.ts",
-      "sha256": "70a770670b0b845da889a6a50ae8b188f30812793b747fc9ad2aec334f72d732",
+      "sha256": "3eba9bd872a6d32ffd5faa7025a585e7a75990a4d1d54cfd1c455f4ea5c7f979",
       "pruned": [
         "INumberDictionary",
         "SetWithKey",
         "diffMaps",
         "diffSets",
         "equalSets",
-        "groupBy",
         "groupByMap",
         "intersection"
       ]
@@ -2376,10 +2375,9 @@
     {
       "path": "src/base/common/lifecycle.ts",
       "upstreamPath": "src/vs/base/common/lifecycle.ts",
-      "sha256": "f1592d4c14c82cdb1158fa5e242467ff39a701579c131d3e8c654271ead7e1cc",
+      "sha256": "6276f6ffdce5358f3518bb4aee3b37fce8f0167dff2fc8488e5d575055699ee0",
       "pruned": [
         "AsyncReferenceCollection",
-        "DisposableInfo",
         "DisposableMap.deleteAndDispose",
         "DisposableMap.deleteAndLeak",
         "DisposableMap.get",
@@ -2393,9 +2391,6 @@
         "DisposableSet.values",
         "DisposableStore.assertNotDisposed",
         "DisposableStore.deleteAndLeak",
-        "DisposableTracker",
-        "DisposableTracker.computeLeakingDisposables",
-        "DisposableTracker.getRootParent",
         "DisposableTracker.getTrackedDisposables",
         "GCBasedDisposableTracker",
         "IReference",
@@ -2423,7 +2418,7 @@
     {
       "path": "src/base/common/map.ts",
       "upstreamPath": "src/vs/base/common/map.ts",
-      "sha256": "ee633b18606d8679e943fd84d07d420aed69cb5ba1de61befdbc90180d9e8568",
+      "sha256": "b5290444e954621846a44b3657a272d5efbbc23cc82da11537d9542a77ad7920",
       "pruned": [
         "BidirectionalMap",
         "BidirectionalMap.clear",
@@ -2462,7 +2457,8 @@
         "NKeyMap.set",
         "NKeyMap.values",
         "ResourceSet",
-        "SetMap",
+        "SetMap.delete",
+        "SetMap.forEach",
         "Touch",
         "mapToString",
         "mapsStrictEqualIgnoreOrder",
@@ -2841,13 +2837,12 @@
     {
       "path": "src/base/common/path.ts",
       "upstreamPath": "src/vs/base/common/path.ts",
-      "sha256": "62eeb368cdfe98c79b5f9cff6aeab718bdf6dae51df49b6fc07f3ce7aa3803a5",
+      "sha256": "42e6dda15af2c9033ce34354c9a159760402b39b5eaaf5b88812e999227afac8",
       "pruned": [
         "delimiter",
         "extname",
         "format",
         "isAbsolute",
-        "join",
         "normalize",
         "parse",
         "relative",
@@ -3311,6 +3306,81 @@
       "path": "src/base/parts/sandbox/node/electronTypes.ts",
       "upstreamPath": "src/vs/base/parts/sandbox/node/electronTypes.ts",
       "sha256": "7aff405e29233bf94a6d989c467e71f3bf10a738598b2930521085616d7f0949"
+    },
+    {
+      "path": "src/base/test/common/executionGraph.ts",
+      "upstreamPath": "src/vs/base/test/common/executionGraph.ts",
+      "sha256": "c5767857e9c3d943ea5e3d0815a5c1ea8b4de749a884eece584eecae636cca8b"
+    },
+    {
+      "path": "src/base/test/common/utils.ts",
+      "upstreamPath": "src/vs/base/test/common/utils.ts",
+      "sha256": "2cce99e3d31173e6658cdb28d8dd40c3c090f6042066cd1265cec92f66053a33"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/embedding.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/embedding.ts",
+      "sha256": "f4b67d5b4d3a0b0b0685078dff39f9475470c065f6749b893b991c6f0590323f"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/globalTimeApi.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/globalTimeApi.ts",
+      "sha256": "da1c144e4614391baa814ea0055458b085d87ee00634bbb88dd06a965c857d48"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/index.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/index.ts",
+      "sha256": "ef9db9b03e2ea312984400546eab3e40b10b96d218bd01e74e2098c3b1fa35ac"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/loggingTimeApi.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/loggingTimeApi.ts",
+      "sha256": "6e81ebf382a2809b5263cdc44e42a339789b235e956f8ac9756048804846ec5e"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/processor.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/processor.ts",
+      "sha256": "6a2c3386afc80eade5a27769cbe681eb23ee5ab06545271aeac9b73d46221f53"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "sha256": "79b75fb119ff8c2c17dbbb1a2f5e6a67b9d87141340a286d3d88ba667e0191c2"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "sha256": "c33887fe57fa4ff53ae57705e3ba423c8aeb5c7e738a4a63414f2bcfcf0310f4"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/timeApi.ts",
+      "sha256": "3528cc29281c33db613b75da72b95b57ff9410caf1bc48bd18b63ecb3a17b63c"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/trace.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/trace.ts",
+      "sha256": "c19e69470cc9243d0fdab7c8f08623e202b6a989850a0de7dc9fdbe687436f65"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/traceLogger.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/traceLogger.ts",
+      "sha256": "d663428b07fa7593b143610b38c3e02c6fcb655717f5f985d897cea92c9b7fab"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/virtualClock.ts",
+      "sha256": "a2743863578446db85876db37aed1edca9a3cf872f51bfb66d6ce2dd737adeb4"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/virtualScheduling.test.ts",
+      "sha256": "7b4039479b29e676d4dad8d3d6bbf8dca37d745dba2a123fc9e9d6735fa3b26f"
+    },
+    {
+      "path": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "upstreamPath": "src/vs/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "sha256": "a96b151ed410c565af1388b71813761167b6fc070564ec4ef673291e584a783d"
     },
     {
       "path": "src/nls.ts",
@@ -4038,15 +4108,27 @@
     {
       "path": "src/platform/instantiation/common/instantiationService.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/instantiationService.ts",
-      "sha256": "3c87259ea8b560ada24c4d684c278d6200080f0b05c0dcce7d1d7d3d990e17ff",
-      "pruned": [
-        "InstantiationService.createChild"
-      ]
+      "sha256": "a6cd70558d3c5078e58a0d64d757ce22cb03851b20aca6360080d8b77ab6976e"
     },
     {
       "path": "src/platform/instantiation/common/serviceCollection.ts",
       "upstreamPath": "src/vs/platform/instantiation/common/serviceCollection.ts",
       "sha256": "e8fdf30e208eac73712c88be56a3b6b459adcfc7c915f5557a4b65fb42516a2b"
+    },
+    {
+      "path": "src/platform/instantiation/common/strictServiceCollection.ts",
+      "upstreamPath": "src/vs/platform/instantiation/common/strictServiceCollection.ts",
+      "sha256": "b159ad6b83d9a5071f1c363207a222c80e3cbe8b399d750d84387276d7595c07"
+    },
+    {
+      "path": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "upstreamPath": "src/vs/platform/instantiation/test/common/instantiationService.test.ts",
+      "sha256": "2dd351e0082c6d624c542fe5ab88bf41c2415c2659e985f051e7ec3a2fa4c342"
+    },
+    {
+      "path": "src/platform/instantiation/test/common/instantiationServiceMock.ts",
+      "upstreamPath": "src/vs/platform/instantiation/test/common/instantiationServiceMock.ts",
+      "sha256": "23323fcf9780d60398adac5c76ccd13b7026dd12e6e69e831190d618f283dec8"
     },
     {
       "path": "src/platform/ipc/common/mainProcessService.ts",
@@ -4418,6 +4500,11 @@
       "sha256": "c1c70f7550a565893228b70710c2d7fb5409d39f8b57739175c6d3b2f83fa6c4"
     },
     {
+      "path": "build/lint/vscode/code-ensure-no-disposables-leak-in-test.ts",
+      "upstreamPath": ".eslint-plugin-local/code-ensure-no-disposables-leak-in-test.ts",
+      "sha256": "c4f686f124091620f44a54f942b591f39f59787e245ef7fcb1dd4014eb6d71f5"
+    },
+    {
       "path": "build/lint/vscode/code-must-use-super-dispose.ts",
       "upstreamPath": ".eslint-plugin-local/code-must-use-super-dispose.ts",
       "sha256": "7d770363d69cd1fbafd6e38e0142dafae6e0490745fd15e764d249fbbd04d459"
@@ -4441,6 +4528,16 @@
       "path": "build/lint/vscode/code-no-potentially-unsafe-disposables.ts",
       "upstreamPath": ".eslint-plugin-local/code-no-potentially-unsafe-disposables.ts",
       "sha256": "b9e7cdd15631ff71c33d2c0215a27291d1741d01bac6e6abe795c1098d6cf4bb"
+    },
+    {
+      "path": "build/lint/vscode/code-no-test-async-suite.ts",
+      "upstreamPath": ".eslint-plugin-local/code-no-test-async-suite.ts",
+      "sha256": "14d67721942df88138bef0c3ec9999ecf34f673d4a7989a2f2230ac5f66337c9"
+    },
+    {
+      "path": "build/lint/vscode/code-no-test-only.ts",
+      "upstreamPath": ".eslint-plugin-local/code-no-test-only.ts",
+      "sha256": "a2a7c4851edfba749c65ca06750fda77b39e3e1bb8b1309af6853cfa34e0306d"
     },
     {
       "path": "build/lint/vscode/code-parameter-properties-must-have-explicit-accessibility.ts",
@@ -4495,6 +4592,8 @@
     "src/base/parts/ipc/node/ipc.mp.ts",
     "src/base/parts/sandbox/electron-browser/globals.ts",
     "src/base/parts/sandbox/node/electronTypes.ts",
+    "src/base/test/common/utils.ts",
+    "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
     "src/nls.ts",
     "src/platform/actions/common/actions.ts",
     "src/platform/actions/common/menuService.ts",
@@ -4511,6 +4610,8 @@
     "src/platform/instantiation/common/instantiation.ts",
     "src/platform/instantiation/common/instantiationService.ts",
     "src/platform/instantiation/common/serviceCollection.ts",
+    "src/platform/instantiation/test/common/instantiationService.test.ts",
+    "src/platform/instantiation/test/common/instantiationServiceMock.ts",
     "src/platform/ipc/common/mainProcessService.ts",
     "src/platform/ipc/electron-browser/services.ts",
     "src/platform/layout/browser/layoutService.ts",
@@ -4585,6 +4686,8 @@
     "src/base/parts/ipc/node/ipc.mp.ts",
     "src/base/parts/sandbox/electron-browser/globals.ts",
     "src/base/parts/sandbox/node/electronTypes.ts",
+    "src/base/test/common/utils.ts",
+    "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
     "src/nls.ts",
     "src/platform/actions/common/actions.ts",
     "src/platform/actions/common/menuService.ts",
@@ -4601,6 +4704,8 @@
     "src/platform/instantiation/common/instantiation.ts",
     "src/platform/instantiation/common/instantiationService.ts",
     "src/platform/instantiation/common/serviceCollection.ts",
+    "src/platform/instantiation/test/common/instantiationService.test.ts",
+    "src/platform/instantiation/test/common/instantiationServiceMock.ts",
     "src/platform/ipc/common/mainProcessService.ts",
     "src/platform/ipc/electron-browser/services.ts",
     "src/platform/layout/browser/layoutService.ts",
@@ -4721,7 +4826,52 @@
     },
     {
       "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/collections.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
+      "to": "src/base/common/map.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/lifecycle.ts",
       "to": "src/base/common/iterator.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/map.ts",
+      "to": "src/base/common/uri.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/charCode.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/marshallingIds.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/uri.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/path.ts",
+      "to": "src/base/common/process.ts",
       "kind": "import"
     },
     {
@@ -5177,31 +5327,6 @@
     {
       "from": "src/base/common/codiconsUtil.ts",
       "to": "src/base/common/types.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/uri.ts",
-      "to": "src/base/common/charCode.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/uri.ts",
-      "to": "src/base/common/marshallingIds.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/uri.ts",
-      "to": "src/base/common/path.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/uri.ts",
-      "to": "src/base/common/platform.ts",
-      "kind": "import"
-    },
-    {
-      "from": "src/base/common/path.ts",
-      "to": "src/base/common/process.ts",
       "kind": "import"
     },
     {
@@ -6670,11 +6795,6 @@
       "kind": "import"
     },
     {
-      "from": "src/base/common/map.ts",
-      "to": "src/base/common/uri.ts",
-      "kind": "import"
-    },
-    {
       "from": "src/platform/windows/electron-main/windows.ts",
       "to": "src/base/common/platform.ts",
       "kind": "import"
@@ -6985,6 +7105,31 @@
       "kind": "import"
     },
     {
+      "from": "src/platform/instantiation/test/common/instantiationServiceMock.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationServiceMock.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationServiceMock.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationServiceMock.ts",
+      "to": "src/platform/instantiation/common/instantiationService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationServiceMock.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
       "from": "src/platform/instantiation/common/instantiationService.ts",
       "to": "src/base/common/async.ts",
       "kind": "import"
@@ -7027,6 +7172,81 @@
     {
       "from": "src/platform/instantiation/common/instantiationService.ts",
       "to": "src/base/common/linkedList.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/base/test/common/utils.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/platform/instantiation/common/instantiationService.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/test/common/instantiationService.test.ts",
+      "to": "src/platform/instantiation/common/strictServiceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/strictServiceCollection.ts",
+      "to": "src/platform/instantiation/common/descriptors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/strictServiceCollection.ts",
+      "to": "src/platform/instantiation/common/instantiation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/instantiation/common/strictServiceCollection.ts",
+      "to": "src/platform/instantiation/common/serviceCollection.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/utils.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/utils.ts",
+      "to": "src/base/common/path.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/utils.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/utils.ts",
+      "to": "src/base/common/uri.ts",
       "kind": "import"
     },
     {
@@ -7302,6 +7522,301 @@
     {
       "from": "src/platform/actions/common/menuService.ts",
       "to": "src/nls.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
+      "to": "src/base/test/common/utils.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualScheduling.test.ts",
+      "to": "src/base/test/common/virtualScheduling/index.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/trace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/trace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/embedding.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/embedding.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/processor.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/processor.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/globalTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/loggingTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/traceLogger.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/traceLogger.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/index.ts",
+      "to": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/test/common/virtualScheduling/embedding.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/test/common/virtualScheduling/globalTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/test/common/virtualScheduling/processor.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/runWithFakedTimers.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/trace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/globalTimeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/globalTimeApi.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/globalTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "to": "src/base/common/arrays.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "to": "src/base/common/event.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "to": "src/base/test/common/virtualScheduling/trace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/trace.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/trace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/recordingTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/processor.ts",
+      "to": "src/base/common/cancellation.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/processor.ts",
+      "to": "src/base/common/lifecycle.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/processor.ts",
+      "to": "src/base/test/common/virtualScheduling/embedding.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/processor.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/processor.ts",
+      "to": "src/base/test/common/virtualScheduling/trace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/processor.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/embedding.ts",
+      "to": "src/base/common/platform.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/embedding.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/embedding.ts",
+      "to": "src/base/test/common/virtualScheduling/virtualClock.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/traceLogger.ts",
+      "to": "src/base/test/common/executionGraph.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/traceLogger.ts",
+      "to": "src/base/test/common/virtualScheduling/trace.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/test/common/virtualScheduling/loggingTimeApi.ts",
+      "to": "src/base/test/common/virtualScheduling/timeApi.ts",
       "kind": "import"
     },
     {
@@ -8706,10 +9221,13 @@
     }
   ],
   "externalDependencies": [
+    "assert",
     "electron",
+    "mocha",
     "node:fs/promises",
     "node:os",
     "node:path",
+    "sinon",
     "trusted-types/lib/index.d.ts",
     "trusted-types/lib/index.js"
   ]

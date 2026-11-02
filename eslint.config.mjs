@@ -22,6 +22,9 @@ import noPotentiallyUnsafeDisposables from './build/lint/vscode/code-no-potentia
 import parameterPropertiesAccessibility from './build/lint/vscode/code-parameter-properties-must-have-explicit-accessibility.ts';
 import noAccessorAfterAwait from './build/lint/vscode/code-no-accessor-after-await.ts';
 import noLocalizationTemplateLiterals from './build/lint/vscode/code-no-localization-template-literals.ts';
+import ensureNoDisposablesLeakInTest from './build/lint/vscode/code-ensure-no-disposables-leak-in-test.ts';
+import noTestOnly from './build/lint/vscode/code-no-test-only.ts';
+import noTestAsyncSuite from './build/lint/vscode/code-no-test-async-suite.ts';
 
 // Rules ported verbatim from VS Code's `.eslint-plugin-local`; see build/lint/vscode.
 const vscodeRules = {
@@ -89,6 +92,17 @@ export default [
 		files: ['src/**/*.ts', 'test/**/*.ts'],
 		plugins: { local: { rules: vscodeRules } },
 		rules: Object.fromEntries(Object.keys(vscodeRules).map(name => [`local/${name}`, 'error'])),
+	},
+	{
+		// Unit tests, as VS Code checks them: every suite fails on a leaked disposable,
+		// none is left focused, and suite callbacks are synchronous.
+		files: ['src/**/test/**/*.ts'],
+		plugins: { 'local-test': { rules: { 'code-ensure-no-disposables-leak-in-test': ensureNoDisposablesLeakInTest, 'code-no-test-only': noTestOnly, 'code-no-test-async-suite': noTestAsyncSuite } } },
+		rules: {
+			'local-test/code-ensure-no-disposables-leak-in-test': ['error', { exclude: [] }],
+			'local-test/code-no-test-only': 'error',
+			'local-test/code-no-test-async-suite': 'error',
+		},
 	},
 	{
 		// Upstream-faithful adaptive copy: the async contract methods are

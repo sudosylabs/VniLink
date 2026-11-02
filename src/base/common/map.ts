@@ -131,3 +131,27 @@ export class ResourceMap<T> implements Map<URI, T> {
 		}
 	}
 }
+
+export class SetMap<K, V> {
+
+	private map = new Map<K, Set<V>>();
+
+	add(key: K, value: V): void {
+		let values = this.map.get(key);
+
+		if (!values) {
+			values = new Set<V>();
+			this.map.set(key, values);
+		}
+
+		values.add(value);
+	}
+
+	get(key: K): ReadonlySet<V> {
+		const values = this.map.get(key);
+		if (!values) {
+			return new Set<V>();
+		}
+		return values;
+	}
+}

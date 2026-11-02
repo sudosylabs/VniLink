@@ -65,10 +65,16 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	},
 	'test:ui': async (root, signal, args) => {
 		await (await import('./lib/preLaunch.ts')).preLaunch({ root });
+		// The whole UI suite starts with the renderer unit tests; a scenario selection runs only those scenarios.
+		if (!args.length) {
+			await step('test:unit:electron');
+		}
 		return (await import('./lib/test.ts')).runUiTests(root, signal, args);
 	},
 	'test:native': async (root, signal) => (await import('./lib/tools.ts')).runNodeTests(root, signal, 'test/native/*.test.mjs'),
 	'test:tooling': async (root, signal) => (await import('./lib/tools.ts')).runNodeTests(root, signal, 'test/tooling/*.test.mjs'),
+	'test:unit': async (root, signal, args) => (await import('./lib/unitTests.ts')).runNodeUnitTests(root, signal, args),
+	'test:unit:electron': async (root, signal, args) => (await import('./lib/unitTests.ts')).runElectronUnitTests(root, signal, args),
 	'test:rust': async (root, signal) => (await import('./lib/test.ts')).testRust(root, signal),
 	'test:service': async (root, signal, args) => (await import('./lib/test.ts')).testService(root, signal, args),
 	'test:stress': async (root, signal, args) => (await import('./lib/test.ts')).stressService(root, signal, args),
@@ -82,7 +88,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'measure:impaired:linux': async (root, signal, args) => (await import('./lib/impaired.ts')).measureImpaired(root, signal, args),
 	'measure:latency': async (root, signal, args) => (await import('./lib/latency.ts')).measureLatency(root, signal, args),
 	'check': async () => {
-		for (const name of ['check:product', 'check:hygiene', 'check:license', 'check:upstream', 'check:unused', 'format:check', 'lint', 'typecheck', 'test:tooling']) {
+		for (const name of ['check:product', 'check:hygiene', 'check:license', 'check:upstream', 'check:unused', 'format:check', 'lint', 'typecheck', 'test:tooling', 'test:unit']) {
 			await step(name);
 		}
 	},

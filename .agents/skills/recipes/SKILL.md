@@ -27,7 +27,7 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 1. Contract: `src/workbench/services/<area>/<area>Service.ts` with `export const IAreaService = createDecorator<IAreaService>('areaService')` and the interface.
 2. Implementation: `<area>ServiceImpl.ts`, constructor parameters `@IEngineService ...`, last line `registerSingleton(IAreaService, AreaService, InstantiationType.Delayed)`. Imitate `services/devices/deviceServiceImpl.ts`.
 3. Import the implementation from `workbench.desktop.main.ts`.
-4. Contract tests in `test/tooling/<area>.test.mjs` with `fakeEngine` from `test/tooling/fixtures.mjs`.
+4. Unit tests in `services/<area>/test/browser/<area>Service.test.ts`, built through `TestInstantiationService` with `TestEngineService` (`platform/engine/test/common/testEngineService.ts`). Imitate `services/devices/test/browser/deviceService.test.ts`.
 
 ## Add a main-process capability for windows
 
