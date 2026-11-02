@@ -13,9 +13,10 @@ import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/glo
 import { record } from '../common/engine.js';
 import type { DesktopInputCommand } from '../common/engine.js';
 import { DATA_CHANNEL_PORT_RESPONSE, type IEngineService } from '../common/engineService.js';
+import type { IDataChannel } from '../common/dataChannelService.js';
 
 /** Owns the renderer end; payloads arrive outside contextBridge's copied values. */
-export class DataChannelClient {
+export class DataChannelClient implements IDataChannel {
 	private closed = false;
 	private readonly inputQueue: DesktopInputCommand[] = [];
 	private inputFlight = false;

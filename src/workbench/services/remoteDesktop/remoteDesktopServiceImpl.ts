@@ -7,23 +7,17 @@
 
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
-import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
-import { engineErrorCategory, type DesktopInputCommand, type RemoteStatus, type VideoCodec, type VideoCodecCaps, type WindowDecoder } from '../../../platform/engine/common/engine.js';
-import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
-import { createWebCodecsDecoder, webCodecsSupport } from '../camera/webCodecsDecoder.js';
+import { IDataChannelService } from '../../../platform/engine/common/dataChannelService.js';
+import { engineErrorCategory, type RemoteStatus, type VideoCodec, type VideoCodecCaps, type WindowDecoder } from '../../../platform/engine/common/engine.js';
+import type { CameraDecoderFactory } from '../camera/engineCameraStream.js';
+import { IVideoDecoderService } from '../camera/videoDecoderService.js';
 import { activeControllerSession } from '../devices/controllerSession.js';
 import { IDeviceService } from '../devices/deviceService.js';
 import { INativeRuntimeService } from '../nativeRuntime/nativeRuntimeService.js';
 import { recordingStartFailure, type RecordingStartFailure } from '../recording/sessionRecording.js';
 import { EngineDesktopSession, type DesktopVideoChannel } from './engineDesktopSession.js';
-import { probeWindowDecoders, type DecoderSupport } from './windowDecoders.js';
+import { probeWindowDecoders } from './windowDecoders.js';
 import { type DesktopFailure, type IDesktopSession, IRemoteDesktopService } from './remoteDesktopService.js';
-
-type DesktopChannelOpener = (
-	request: Omit<DataChannelRequest, 'requestId'>,
-	consume: (packet: DataPacket) => Promise<void>,
-	onError: (error: Error) => void,
-) => Promise<DesktopVideoChannel & { input(command: DesktopInputCommand): void }>;
 
 /** What the other computer reports about its screen, as a reason it can't be opened. */
 function desktopRefusal(status: RemoteStatus | undefined): DesktopFailure | undefined {
@@ -51,8 +45,6 @@ function desktopOpenFailure(error: unknown): DesktopFailure {
 
 export class RemoteDesktopService implements IRemoteDesktopService {
 	declare public readonly _serviceBrand: undefined;
-	protected openChannel: DesktopChannelOpener;
-	protected decoderSupport: DecoderSupport = webCodecsSupport;
 	/** What this window decodes, asked once. */
 	private decoders: Promise<WindowDecoder[]> | undefined;
 	/** Codecs WebCodecs said it decodes, then couldn't show: offered no more. */
@@ -62,9 +54,9 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		@IEngineService private readonly engine: IEngineService,
 		@IDeviceService private readonly devices: IDeviceService,
 		@INativeRuntimeService private readonly nativeRuntime: INativeRuntimeService,
-	) {
-		this.openChannel = (request, consume, onError) => DataChannelClient.open(engine, request, consume, onError);
-	}
+		@IDataChannelService private readonly dataChannels: IDataChannelService,
+		@IVideoDecoderService private readonly videoDecoders: IVideoDecoderService,
+	) { }
 
 	public async open(deviceId: string, control: boolean): Promise<{ readonly failure: DesktopFailure } | { readonly session: IDesktopSession }> {
 		let report;
@@ -85,7 +77,8 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 			return { failure: 'disconnected' };
 		}
 		await this.registerDecoders();
-		const session = new EngineDesktopSession(control, target, createWebCodecsDecoder, async () => {
+		const createDecoder: CameraDecoderFactory = (codec, output, error) => this.videoDecoders.createDecoder(codec, output, error);
+		const session = new EngineDesktopSession(control, target, createDecoder, async () => {
 			const reply = await this.engine.execute({ type: 'sessionTopology', sessionId: target.id, generation: target.generation });
 			return reply.type === 'displays' ? reply.displays : [];
 		});
@@ -103,12 +96,13 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		};
 		let video: DesktopVideoChannel | undefined;
 		try {
-			video = await this.openChannel({ kind: 'video', ...request }, packet => session.consume(packet), lost);
+			video = await this.dataChannels.open({ kind: 'video', ...request }, packet => session.consume(packet), lost);
 			// Input shares the screen's owner, so it opens once the picture is admitted.
-			const input = control ? await this.openChannel({ kind: 'input', ...request }, () => Promise.resolve(), lost) : undefined;
+			const input = control ? await this.dataChannels.open({ kind: 'input', ...request }, () => Promise.resolve(), lost) : undefined;
 			session.attach({ video, input });
 		} catch (error) {
 			video?.close();
+			unshown.dispose();
 			session.dispose();
 			return { failure: desktopOpenFailure(error) };
 		}
@@ -121,7 +115,7 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 	 * answer the engine offers what its own decoders take.
 	 */
 	private async registerDecoders(): Promise<void> {
-		this.decoders ??= probeWindowDecoders(this.decoderSupport);
+		this.decoders ??= probeWindowDecoders(config => this.videoDecoders.support(config));
 		try {
 			const probed = await this.decoders;
 			// A window whose WebCodecs answered nothing says nothing either.
