@@ -21,7 +21,9 @@ import { setup as setupNotice } from './areas/notice/notice.test.js';
 import { setup as setupRenderer } from './areas/renderer/renderer.test.js';
 import { setup as setupWorkbench } from './areas/workbench/workbench.test.js';
 
-const application = new TestApplication();
+// Each test has mocha's minute; the whole run, its areas on the slowest computer it runs on
+// (the Linux laptop takes minutes where a Mac takes seconds), has ten.
+const application = new TestApplication({ timeoutMs: 10 * 60_000 });
 
 const selection = new ScenarioSelection(application.args);
 

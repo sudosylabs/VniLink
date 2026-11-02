@@ -7,14 +7,14 @@
 
 /**
  * The Electron main process of `test:unit:electron`, after VS Code's
- * `test/unit/electron/index.js`: one window, hidden except on Windows, runs the renderer unit
+ * `test/unit/electron/index.js`: one window, hidden on macOS, runs the renderer unit
  * tests (`renderer.ts`) and reports each result here, where it is printed;
  * the process exits 0 only when every test passed. `build/lib/unitTests.ts`
  * passes the bundles and options in `VNILINK_UNIT_*`.
  */
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
-import { isWindows } from '../../../src/base/common/platform.js';
+import { isMacintosh } from '../../../src/base/common/platform.js';
 
 interface TestResult {
 	readonly title: string;
@@ -85,9 +85,10 @@ void app.whenReady().then(async () => {
 			console.error(event.message);
 		}
 	});
-	// Windows gives a window never shown about one frame a second, whatever the switches say,
-	// so the tests that wait on frames run out of time. It is shown there, without focus.
-	if (isWindows) {
+	// Windows gives a window never shown about one frame a second, whatever the switches say, and
+	// Linux one never mapped none, so the tests that wait on frames run out of time. Only macOS
+	// draws a hidden window; elsewhere it is shown, without focus.
+	if (!isMacintosh) {
 		window.showInactive();
 	}
 	await window.loadFile(join(output, 'test/unit/electron/renderer.html'));
