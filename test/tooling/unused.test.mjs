@@ -126,3 +126,37 @@ test('a copied interface\'s unread properties are unused; an application interfa
 		await rm(root, { recursive: true, force: true });
 	}
 });
+
+test('a test folder under src is test code: its declarations are not candidates and its uses are by tests', async () => {
+	const root = await project({
+		'src/main.ts': `export {};\n`,
+		'src/lib.ts': 'export function forTests(): void { }\n',
+		'src/area/test/common/support.ts': `import { forTests } from '../../../lib.js';\nexport function unusedHelper(): void { }\nexport function helper(): void { forTests(); }\n`,
+		'src/area/test/common/area.test.ts': `import { helper } from './support.js';\nhelper();\n`,
+	});
+	try {
+		assert.deepEqual(names(findUnused(root)), ['forTests (tests)']);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test('an allowlisted class also covers the members only tests use', async () => {
+	const root = await project({
+		'src/main.ts': `export {};\n`,
+		'src/lib.ts': 'export class Tracker { track(): void { } report(): void { } unused(): void { } }\n',
+		'test/lib.test.ts': `import { Tracker } from '../src/lib.js';\nconst tracker = new Tracker(); tracker.track(); tracker.report();\n`,
+		'build/lint/unused-allowlist.json': JSON.stringify([{ path: 'src/lib.ts', name: 'Tracker', reason: 'the test leak tracker' }]),
+	});
+	try {
+		assert.deepEqual(names(findUnused(root, new Set(['src/lib.ts#Tracker']))), ['Tracker.unused']);
+		await assert.rejects(checkUnused(root), error => {
+			assert.match(error.message, /Tracker\.unused is unused/);
+			assert.doesNotMatch(error.message, /Tracker\.(track|report)/);
+			assert.doesNotMatch(error.message, /used now/);
+			return true;
+		});
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});

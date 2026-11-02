@@ -61,7 +61,9 @@ async function writeManifest(root: string, manifest: VsCodeManifest): Promise<vo
 	// A recorded copy is part of the graph, never its application boundary.
 	const copies = new Set(manifest.files.map(file => file.path));
 	const compilerSupport = new Set(manifest.compilerSupport);
-	manifest.entryPoints = [...await applicationImports(root, copies)].filter(path => !compilerSupport.has(path)).sort();
+	// A copied test is run by the unit-test runner, so it is an entry point like application code that imports a copy.
+	const tests = [...copies].filter(path => path.endsWith('.test.ts'));
+	manifest.entryPoints = [...new Set([...await applicationImports(root, copies), ...tests])].filter(path => !compilerSupport.has(path)).sort();
 	manifest.roots = [...manifest.entryPoints, ...compilerSupport].sort();
 	manifest.applicationDependencies = manifest.applicationDependencies.filter(path => !copies.has(path));
 	let graph = await provenanceGraph(root, manifest);

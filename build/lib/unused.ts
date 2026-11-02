@@ -7,7 +7,11 @@
 
 /**
  * Finds declarations in `src/` that nothing uses, with the TypeScript checker
- * over the root `tsconfig.json` (application and `test/**` TypeScript).
+ * over the root `tsconfig.json` (application and test TypeScript).
+ *
+ * Test code is `test/**` and every `test` folder under `src/`, as VS Code
+ * places a module's tests in `<layer>/../test/<layer>/`. Its declarations are
+ * not candidates and its uses count as uses by tests.
  *
  * Candidates are top-level declarations, members of namespaces, and class and
  * interface members. Liveness is a mark from roots: a use in module-level code
@@ -132,6 +136,8 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 	const src = `${slash(join(root, 'src'))}/`;
 	const test = `${slash(join(root, 'test'))}/`;
 	const files = program.getSourceFiles().filter(file => file.fileName.startsWith(src) || file.fileName.startsWith(test));
+	const isTestCode = (file: ts.SourceFile): boolean => file.fileName.startsWith(test)
+		|| (file.fileName.startsWith(src) && slash(relative(src, file.fileName)).split('/').includes('test'));
 
 	// Verbatim and pruned copies; adapted and derived files are application code.
 	const manifest = JSON.parse(readFileSync(join(root, 'build/vscode-source.json'), 'utf8')) as { files: { path: string; adapted?: boolean }[] };
@@ -222,7 +228,7 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 		}
 	};
 	for (const file of files) {
-		if (file.fileName.startsWith(src) && !file.isDeclarationFile) {
+		if (file.fileName.startsWith(src) && !file.isDeclarationFile && !isTestCode(file)) {
 			collectStatements(file.statements);
 		}
 	}
@@ -307,7 +313,7 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 		}
 	};
 	for (const file of files) {
-		const isTest = file.fileName.startsWith(test);
+		const isTest = isTestCode(file);
 		const visit = (node: ts.Node): void => {
 			if (ts.isIdentifier(node) && ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node) {
 				// `{ name }` reads the variable `name`.
@@ -513,7 +519,17 @@ export function findUnused(root: string, allowed: ReadonlySet<string> = new Set(
 	// Report the outermost dead declaration only; its members go with it.
 	const outermost = dead.filter(candidate => !candidate.owner || !deadSet.has(candidate.owner));
 	const ownerLive = (candidate: Candidate): boolean => !candidate.owner || liveWithoutTests.has(candidate.owner);
-	const testOnly = candidates.filter(candidate => live.has(candidate) && !liveWithoutTests.has(candidate) && ownerLive(candidate));
+	// An allowed owner's entry also covers the members tests use: without the entry the owner alone is reported.
+	const ownerAllowed = (candidate: Candidate): boolean => {
+		for (let owner = candidate.owner; owner; owner = owner.owner) {
+			if (allowedCandidate(owner)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	const testOnly = candidates.filter(candidate => live.has(candidate) && !liveWithoutTests.has(candidate)
+		&& ownerLive(candidate) && !ownerAllowed(candidate));
 	const unused = [...outermost, ...testOnly]
 		.map(candidate => ({ name: candidate.name, path: candidate.path, line: candidate.line, testOnly: live.has(candidate) }));
 	const usedOutside = new Set<Candidate>();
