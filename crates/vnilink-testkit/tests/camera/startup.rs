@@ -10,85 +10,25 @@
 //! wanted, rather than waiting out its startup, without being released from
 //! outside, and a backend that opens anyway is closed unused.
 
-use expect_test::{expect, Expect};
+use expect_test::expect;
 use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 
 use vnilink::camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory};
 use vnilink::{BackendStartup, Error, ServiceKind};
-use vnilink_testkit::camera::{self, config, HeldStartup, StandInCameras};
+use vnilink_testkit::camera::{self, check, config, StandInCameras, Unwanted};
 use vnilink_testkit::desktop::keyframe;
-use vnilink_testkit::terminal::Held;
-use vnilink_testkit::{lock, traced, wait_for, TestResult, Traced, DEFAULT_WAIT};
+use vnilink_testkit::{lock, traced, wait_for, TestResult, DEFAULT_WAIT};
 
-/// What ends a camera's wanting while its backend starts.
-enum Cause {
-    HostStopsSharing,
-    HostStopsServingThePeer,
-    HostShutsDown,
-    ViewerCloses,
-}
-
-/// Opens the camera on a host whose backend never finishes starting, and
-/// once it is starting, `cause` ends the camera's wanting. The backend's
-/// startup learns it was cancelled, not that its own deadline passed, and
-/// the open fails; a cause that leaves the connection leaves it active,
-/// the host serving nothing. The host's camera records are `expect`.
-#[track_caller]
-fn check(trace: &Traced, cause: Cause, expect: Expect) -> TestResult {
-    let held = HeldStartup::new();
-    let (pair, connection) = camera::connect(true, Arc::clone(&held) as _)?;
-    let owner = pair.attach(&connection, ServiceKind::Camera);
-    std::thread::scope(|scope| -> TestResult {
-        let opening = scope.spawn(|| {
-            pair.controller
-                .core
-                .open_camera_service(owner.id, owner.generation, config())
-        });
-        held.wait_holding();
-        match cause {
-            Cause::HostStopsSharing => pair
-                .host
-                .core
-                .set_service_sharing(ServiceKind::Camera, false)?,
-            Cause::HostStopsServingThePeer => {
-                let peer = pair.host.core.hosted_sessions()?[0].id;
-                pair.host.core.stop_hosted_peer(peer)?;
-            }
-            Cause::HostShutsDown => pair.host.core.shutdown(),
-            Cause::ViewerCloses => pair
-                .controller
-                .core
-                .close_controller_service(owner.id, owner.generation)?,
-        }
-        assert_eq!(
-            held.wait_finished(),
-            Held::Cancelled,
-            "a starting backend whose camera is no longer wanted is cancelled"
-        );
-        assert!(
-            opening.join().map_err(|_| "the open panicked")?.is_err(),
-            "a camera whose startup stopped does not open"
-        );
-        Ok(())
-    })?;
-    if matches!(cause, Cause::HostStopsSharing | Cause::ViewerCloses) {
-        pair.host.wait_released(None);
-        assert!(
-            camera::connection_active(&pair.controller, &connection),
-            "a camera that did not start keeps the connection"
-        );
-    }
-    vnilink_testkit::assert_story(expect, || trace.story(&["camera"]));
-    Ok(())
-}
-
+/// A camera still starting when the host stops sharing it is cancelled
+/// rather than left to its deadline, does not open, and the connection
+/// stays.
 #[test]
 fn a_starting_camera_stops_when_the_host_stops_sharing_it() -> TestResult {
     let trace = traced();
     check(
         &trace,
-        Cause::HostStopsSharing,
+        Unwanted::HostStopsSharing,
         expect![[r#"
         host:
           camera: camera stream ended ended=service closed service=1
@@ -96,12 +36,14 @@ fn a_starting_camera_stops_when_the_host_stops_sharing_it() -> TestResult {
     )
 }
 
+/// A camera still starting when the host stops serving its peer is
+/// cancelled rather than left to its deadline, and does not open.
 #[test]
 fn a_starting_camera_stops_when_the_host_stops_serving_its_peer() -> TestResult {
     let trace = traced();
     check(
         &trace,
-        Cause::HostStopsServingThePeer,
+        Unwanted::HostStopsServingThePeer,
         expect![[r#"
         host:
           camera: camera stream ended ended=connection ended service=1
@@ -109,12 +51,14 @@ fn a_starting_camera_stops_when_the_host_stops_serving_its_peer() -> TestResult 
     )
 }
 
+/// A camera still starting when the host shuts down is cancelled rather
+/// than left to its deadline, and does not open.
 #[test]
 fn a_starting_camera_stops_when_the_host_shuts_down() -> TestResult {
     let trace = traced();
     check(
         &trace,
-        Cause::HostShutsDown,
+        Unwanted::HostShutsDown,
         expect![[r#"
         host:
           camera: camera stream ended ended=shut down service=1
@@ -122,12 +66,14 @@ fn a_starting_camera_stops_when_the_host_shuts_down() -> TestResult {
     )
 }
 
+/// A camera still starting when its viewer closes it is cancelled rather
+/// than left to its deadline, does not open, and the connection stays.
 #[test]
 fn a_starting_camera_stops_when_its_viewer_closes_it() -> TestResult {
     let trace = traced();
     check(
         &trace,
-        Cause::ViewerCloses,
+        Unwanted::ViewerCloses,
         expect![[r#"
         host:
           camera: camera not opened error=no session service=1

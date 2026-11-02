@@ -16,40 +16,27 @@ use vnilink::audio::{
     AudioBackend, AudioConfig, AudioDevice, AudioKind, AudioSource, HostAudioFactory,
 };
 use vnilink::{BackendStartup, Error, ServiceKind, SessionPhase};
-use vnilink_testkit::audio::{self, config, encoder, packet, AudioHost};
+use vnilink_testkit::audio::{self, check, config, encoder, packet, AudioHost, Stop};
 use vnilink_testkit::{lock, traced, wait_for, TestResult, DEFAULT_WAIT};
 
 /// System sound and the microphone each arrive exactly as sent, and
-/// closing one leaves the other playing.
+/// closing the microphone leaves system sound playing, and Files and the
+/// connection open.
 #[test]
 fn each_source_arrives_as_sent_and_closes_alone() -> TestResult {
     let trace = traced();
-    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone])?;
-    let system = host.open(AudioKind::System)?;
-    let microphone = host.open(AudioKind::Microphone)?;
-    let mut encoding = encoder();
-    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
-    host.assert_arrives(AudioKind::Microphone, &microphone, &mut encoding)?;
-    microphone.close();
-    wait_for("the microphone to stop", DEFAULT_WAIT, || {
-        host.audio
-            .latest(AudioKind::Microphone)
-            .is_cancelled()
-            .then_some(())
-    });
-    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
-    vnilink_testkit::assert_story(
+    check(
+        &trace,
+        &[(AudioKind::Microphone, Stop::ViewerCloses)],
         expect![[r#"
         controller:
-          audio: audio ended closed_here=true dropped=0 kind=Microphone service=2
+          audio: audio ended closed_here=true dropped=0 kind=Microphone service=3
         host:
           audio: audio opened channels=2 kind=System service=1 voice=false
           audio: audio opened channels=2 kind=Microphone service=2 voice=false
           audio: audio stream ended ended=viewer closed kind=Microphone service=2
     "#]],
-        || trace.story(&["audio"]),
-    );
-    Ok(())
+    )
 }
 
 /// The host offers both sounds before it shares either, lists the devices
@@ -155,50 +142,12 @@ fn an_audio_service_opens_its_own_kind_once() -> TestResult {
 #[test]
 fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
     let trace = traced();
-    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone])?;
-    let files = host.pair.attach(&host.connection, ServiceKind::Files);
-    let files = host
-        .pair
-        .controller
-        .core
-        .service_lease(files.id, files.generation)?;
-    let system = host.open(AudioKind::System)?;
-    let microphone = host.open(AudioKind::Microphone)?;
-    let (system_source, microphone_source) = (
-        host.audio.latest(AudioKind::System),
-        host.audio.latest(AudioKind::Microphone),
-    );
-    let mut encoding = encoder();
-    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
-
-    host.pair
-        .host
-        .core
-        .set_service_sharing(ServiceKind::Microphone, false)?;
-    wait_for("the microphone to stop on both sides", DEFAULT_WAIT, || {
-        (microphone_source.is_cancelled() && microphone.is_cancelled()).then_some(())
-    });
-    assert!(
-        !system_source.is_cancelled(),
-        "withdrawing the microphone leaves system sound"
-    );
-    assert!(
-        !files.is_cancelled(),
-        "withdrawing the microphone leaves Files"
-    );
-    host.assert_arrives(AudioKind::System, &system, &mut encoding)?;
-
-    system.close();
-    wait_for("the host to stop system sound", DEFAULT_WAIT, || {
-        system_source.is_cancelled().then_some(())
-    });
-    assert!(!files.is_cancelled(), "closing system sound leaves Files");
-    assert!(
-        host.connection_active(),
-        "closing system sound keeps the connection"
-    );
-    trace.wait_for_records("audio ended", 2);
-    vnilink_testkit::assert_story(
+    check(
+        &trace,
+        &[
+            (AudioKind::Microphone, Stop::HostWithdraws),
+            (AudioKind::System, Stop::ViewerCloses),
+        ],
         expect![[r#"
         controller:
           audio: audio ended closed_here=false dropped=0 ended=withdrawn kind=Microphone service=3
@@ -209,9 +158,7 @@ fn withdrawing_the_microphone_stops_it_alone() -> TestResult {
           audio: audio stream ended ended=service closed kind=Microphone service=2
           audio: audio stream ended ended=viewer closed kind=System service=1
     "#]],
-        || trace.story(&["audio"]),
-    );
-    Ok(())
+    )
 }
 
 /// A microphone that opens on the host only once its grant is withdrawn,

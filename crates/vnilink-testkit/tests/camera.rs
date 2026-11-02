@@ -15,33 +15,13 @@ mod opening;
 mod startup;
 
 use expect_test::expect;
-use std::sync::Arc;
 use std::time::Duration;
 
-use vnilink::camera::{CameraConfig, CameraEnd, HostCameraFactory};
+use vnilink::camera::CameraConfig;
 use vnilink::{Error, ServiceKind};
 use vnilink_testkit::camera::{config, CameraHost};
 use vnilink_testkit::desktop::{delta, keyframe};
-use vnilink_testkit::session::service_ended;
-use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
-
-/// Why `camera` ended, once it says; it says it once, and its owner on the
-/// controller is finished by then.
-fn ended(
-    controller: &vnilink::Core,
-    camera: &vnilink::RemoteCameraService,
-) -> Result<CameraEnd, Error> {
-    let end = wait_for("the camera to say why it ended", DEFAULT_WAIT, || {
-        camera.take_end()
-    });
-    assert_eq!(camera.take_end(), None, "the reason is reported once");
-    let owner = controller.controller_service(camera.info().id)?;
-    assert!(
-        service_ended(&owner.phase),
-        "an ended camera still holds its owner: {owner:?}"
-    );
-    Ok(end)
-}
+use vnilink_testkit::{traced, TestResult};
 
 /// A camera opens once per owner at the size asked, pictures start at the
 /// first keyframe, a large one arrives whole, and the opening is recorded
@@ -88,116 +68,6 @@ fn pictures_start_at_a_keyframe_and_arrive_whole() -> TestResult {
           camera: camera opened fps=30 height=480 service=1 width=640
     "#]],
         || trace.story(&["camera"]),
-    );
-    Ok(())
-}
-
-/// The viewer learns why its picture stopped, once, and its owner is
-/// finished: the host's camera failed or stopped delivering, the host
-/// stopped sharing it or turned it off, or the host went away. Each end is
-/// recorded with its reason.
-#[test]
-fn the_viewer_learns_why_the_picture_stopped() -> TestResult {
-    let trace = traced();
-    let host = CameraHost::start()?;
-    let (hosting, controller) = (&host.pair.host.core, &host.pair.controller.core);
-    let cameras: Arc<dyn HostCameraFactory> = host.cameras.clone();
-    let open = || -> Result<_, Error> {
-        hosting.set_service_sharing(ServiceKind::Camera, true)?;
-        hosting.set_camera_factory(Some(Arc::clone(&cameras)))?;
-        let camera = host.open(config())?;
-        let source = host.first_picture(&camera)?;
-        assert_eq!(camera.take_end(), None, "a camera that shows has not ended");
-        Ok((camera, source))
-    };
-
-    let (camera, source) = open()?;
-    source.fail();
-    assert_eq!(
-        ended(controller, &camera)?,
-        CameraEnd::Stopped,
-        "a failed capture stops the picture"
-    );
-    let (camera, source) = open()?;
-    source.close();
-    assert_eq!(
-        ended(controller, &camera)?,
-        CameraEnd::Stopped,
-        "a capture that stops delivering stops the picture"
-    );
-
-    let (camera, _) = open()?;
-    hosting.set_service_sharing(ServiceKind::Camera, false)?;
-    assert_eq!(
-        ended(controller, &camera)?,
-        CameraEnd::Withdrawn,
-        "a camera the host stops sharing is withdrawn"
-    );
-    let (camera, _) = open()?;
-    hosting.turn_off_camera()?;
-    assert_eq!(
-        ended(controller, &camera)?,
-        CameraEnd::Withdrawn,
-        "a camera the host turns off is withdrawn"
-    );
-
-    // The host's side before it goes away; its last end follows below.
-    trace.wait_for_records("camera stream ended", 4);
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        host:
-          camera: camera opened fps=30 height=480 service=1 width=640
-          camera: camera capture ended failed=true sent=1 service=1
-          camera: camera stream ended ended=capture failed service=1
-          camera: camera opened fps=30 height=480 service=2 width=640
-          camera: camera capture ended failed=false sent=1 service=2
-          camera: camera stream ended ended=capture ended service=2
-          camera: camera opened fps=30 height=480 service=3 width=640
-          camera: camera stream ended ended=service closed service=3
-          camera: camera opened fps=30 height=480 service=4 width=640
-          camera: camera stream ended ended=service closed service=4
-    "#]],
-        || trace.tell(&["camera"]).of("host").to_string(),
-    );
-
-    let (camera, _) = open()?;
-    hosting.shutdown();
-    assert_eq!(
-        ended(controller, &camera)?,
-        CameraEnd::Lost,
-        "a host that goes away loses the picture"
-    );
-    trace.wait_for_records("camera picture ended", 5);
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          camera: camera picture ended closed_here=false reason=Stopped service=1
-          camera: camera picture ended closed_here=false reason=Stopped service=2
-          camera: camera picture ended closed_here=false reason=Withdrawn service=3
-          camera: camera picture ended closed_here=false reason=Withdrawn service=4
-          camera: camera picture ended closed_here=false reason=Lost service=5
-    "#]],
-        || trace.tell(&["camera"]).of("controller").to_string(),
-    );
-    // The host records the end of the camera it was serving as it shut down.
-    trace.wait_for_records("camera stream ended", 5);
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        host:
-          camera: camera opened fps=30 height=480 service=1 width=640
-          camera: camera capture ended failed=true sent=1 service=1
-          camera: camera stream ended ended=capture failed service=1
-          camera: camera opened fps=30 height=480 service=2 width=640
-          camera: camera capture ended failed=false sent=1 service=2
-          camera: camera stream ended ended=capture ended service=2
-          camera: camera opened fps=30 height=480 service=3 width=640
-          camera: camera stream ended ended=service closed service=3
-          camera: camera opened fps=30 height=480 service=4 width=640
-          camera: camera stream ended ended=service closed service=4
-          camera: camera opened fps=30 height=480 service=5 width=640
-          camera: camera stream ended ended=shut down service=5
-    "#]],
-        || trace.tell(&["camera"]).of("host").to_string(),
     );
     Ok(())
 }

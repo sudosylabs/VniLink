@@ -7,20 +7,25 @@
 
 //! What the camera suites share: a stand-in camera on the host that sends
 //! the pictures a test gives it, a host offering a camera backend and a
-//! camera opened from the controller as the application opens one, and a
-//! backend whose startup holds until it is no longer wanted.
+//! camera opened from the controller as the application opens one, a
+//! backend whose startup holds until it is no longer wanted; [`check`],
+//! which ends a camera's wanting while that backend starts, and
+//! [`check_ending`], which ends a camera that shows.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+use expect_test::Expect;
 use vnilink::camera::{CameraBackend, CameraConfig, CameraDevice, CameraSource, HostCameraFactory};
 use vnilink::{BackendStartup, Error, RemoteCameraService, ServiceKind, SessionInfo, SessionPhase};
 
 use crate::desktop::keyframe;
 use crate::terminal::Held;
-use crate::{lock, wait_for, Engine, Pair, DEFAULT_WAIT};
+use crate::{assert_story, lock, wait_for, Engine, Pair, TestResult, Traced, DEFAULT_WAIT};
 
 pub const CAMERA: &str = "testkit-camera";
+/// The name the host gives its stand-in camera.
+pub const CAMERA_NAME: &str = "Test kit camera";
 
 pub fn config() -> CameraConfig {
     CameraConfig {
@@ -56,7 +61,7 @@ impl HostCameraFactory for StandInCameras {
     fn devices(&self) -> Result<Vec<CameraDevice>, Error> {
         Ok(vec![CameraDevice {
             id: CAMERA.into(),
-            name: "Test kit camera".into(),
+            name: CAMERA_NAME.into(),
         }])
     }
 
@@ -223,4 +228,165 @@ impl HostCameraFactory for HeldStartup {
         });
         Err(Error::NoSession)
     }
+}
+
+/// What ends a camera's wanting in [`check`], while its backend starts.
+#[derive(Clone, Copy, Debug)]
+pub enum Unwanted {
+    /// The host stops sharing its camera.
+    HostStopsSharing,
+    /// The host stops serving the viewer's peer.
+    HostStopsServingThePeer,
+    /// The host shuts down.
+    HostShutsDown,
+    /// The viewer closes the camera's service.
+    ViewerCloses,
+}
+
+/// Opens the camera on a host whose backend never finishes starting
+/// ([`HeldStartup`]), and once it is starting, `unwanted` ends the camera's
+/// wanting. Asserts that the backend's startup learns it was cancelled, not
+/// that its own deadline passed, and that the open fails; that a cause
+/// which leaves the connection leaves it active, the host serving nothing;
+/// that no record holds the host's camera's name or id; and that the host
+/// told the story `expect` of its camera.
+#[track_caller]
+pub fn check(trace: &Traced, unwanted: Unwanted, expect: Expect) -> TestResult {
+    let held = HeldStartup::new();
+    let (pair, connection) = connect(true, Arc::clone(&held) as _)?;
+    let owner = pair.attach(&connection, ServiceKind::Camera);
+    std::thread::scope(|scope| -> TestResult {
+        let opening = scope.spawn(|| {
+            pair.controller
+                .core
+                .open_camera_service(owner.id, owner.generation, config())
+        });
+        held.wait_holding();
+        match unwanted {
+            Unwanted::HostStopsSharing => pair
+                .host
+                .core
+                .set_service_sharing(ServiceKind::Camera, false)?,
+            Unwanted::HostStopsServingThePeer => {
+                let peer = pair.host.core.hosted_sessions()?[0].id;
+                pair.host.core.stop_hosted_peer(peer)?;
+            }
+            Unwanted::HostShutsDown => pair.host.core.shutdown(),
+            Unwanted::ViewerCloses => pair
+                .controller
+                .core
+                .close_controller_service(owner.id, owner.generation)?,
+        }
+        assert_eq!(
+            held.wait_finished(),
+            Held::Cancelled,
+            "a starting backend whose camera is no longer wanted is cancelled"
+        );
+        assert!(
+            opening.join().map_err(|_| "the open panicked")?.is_err(),
+            "a camera whose startup stopped does not open"
+        );
+        Ok(())
+    })?;
+    if matches!(
+        unwanted,
+        Unwanted::HostStopsSharing | Unwanted::ViewerCloses
+    ) {
+        pair.host.wait_released(None);
+        assert!(
+            connection_active(&pair.controller, &connection),
+            "a camera that did not start keeps the connection"
+        );
+    }
+    assert_story(expect, || trace.story(&["camera"]));
+    trace.assert_unrecorded("the host's camera", &[CAMERA, CAMERA_NAME]);
+    Ok(())
+}
+
+/// How a camera that shows ends in [`check_ending`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ending {
+    /// The viewer closes its camera.
+    ViewerCloses,
+    /// The host stops sharing its camera.
+    HostStopsSharing,
+    /// The host removes its camera backend.
+    HostRemovesBackend,
+    /// The host's user turns its camera off.
+    HostTurnsOff,
+    /// The host's capture fails.
+    CaptureFails,
+    /// The host's capture stops delivering pictures.
+    CaptureEnds,
+    /// The host shuts down.
+    HostShutsDown,
+}
+
+/// The camera [`check_ending`] ended, and the source its host captured
+/// from, for what a test asserts beyond what every ending shares.
+pub struct Ended {
+    pub camera: RemoteCameraService,
+    pub source: Arc<CameraSource>,
+}
+
+/// Opens `host`'s camera, shows its first picture, and ends it by
+/// `ending`. Asserts that the host's capture stops; that a camera the host
+/// ended is cancelled for the viewer and its owner finished; that the
+/// viewer learns why at most once; that every ending but the host's own
+/// going away keeps the connection; that no record holds the host's
+/// camera's name or id; and that `expect` states the end the viewer learned
+/// and the engines' story of the camera.
+#[track_caller]
+pub fn check_ending(
+    trace: &Traced,
+    host: &CameraHost,
+    ending: Ending,
+    expect: Expect,
+) -> Result<Ended, Box<dyn std::error::Error>> {
+    let (hosting, controller) = (&host.pair.host.core, &host.pair.controller.core);
+    let camera = host.open(config())?;
+    let source = host.first_picture(&camera)?;
+    assert_eq!(camera.take_end(), None, "a camera that shows has not ended");
+    match ending {
+        Ending::ViewerCloses => camera.close(),
+        Ending::HostStopsSharing => hosting.set_service_sharing(ServiceKind::Camera, false)?,
+        Ending::HostRemovesBackend => hosting.set_camera_factory(None)?,
+        Ending::HostTurnsOff => hosting.turn_off_camera()?,
+        Ending::CaptureFails => source.fail(),
+        Ending::CaptureEnds => source.close(),
+        Ending::HostShutsDown => hosting.shutdown(),
+    }
+    wait_for("the host to stop capturing", DEFAULT_WAIT, || {
+        source.is_cancelled().then_some(())
+    });
+    trace.wait_for_records("camera picture ended", 1);
+    let learned = if ending == Ending::ViewerCloses {
+        camera.take_end()
+    } else {
+        wait_for("the viewer's camera to stop", DEFAULT_WAIT, || {
+            camera.is_cancelled().then_some(())
+        });
+        let learned = wait_for("the camera to say why it ended", DEFAULT_WAIT, || {
+            camera.take_end()
+        });
+        let owner = controller.controller_service(camera.info().id)?;
+        assert!(
+            crate::session::service_ended(&owner.phase),
+            "a camera the host ended finishes its owner: {owner:?}"
+        );
+        Some(learned)
+    };
+    assert_eq!(camera.take_end(), None, "the reason is reported once");
+    if ending != Ending::HostShutsDown {
+        assert!(
+            host.connection_active(),
+            "a camera's end keeps the connection"
+        );
+    }
+    trace.wait_for_records("camera stream ended", 1);
+    assert_story(expect, || {
+        format!("viewer learned: {learned:?}\n{}", trace.story(&["camera"]))
+    });
+    trace.assert_unrecorded("the host's camera", &[CAMERA, CAMERA_NAME]);
+    Ok(Ended { camera, source })
 }

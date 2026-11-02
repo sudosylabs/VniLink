@@ -7,21 +7,25 @@
 
 //! What the audio suites share: the host's sound sources standing in for
 //! its system sound and microphone, sending the Opus packets a test
-//! encodes, and audio opened from the controller as the application opens
-//! it.
+//! encodes, audio opened from the controller as the application opens it,
+//! and [`check`], which stops those sounds one at a time.
 
 use std::sync::{Arc, Mutex};
 
+use expect_test::Expect;
 use vnilink::audio::{
     AudioBackend, AudioConfig, AudioDevice, AudioKind, AudioSource, HostAudioFactory,
 };
 use vnilink::{BackendStartup, Error, RemoteAudioService, ServiceKind, SessionInfo, SessionPhase};
 use vnilink_audio::{AudioEncoder, AudioPacket};
 
-use crate::{wait_for, Pair, DEFAULT_WAIT};
+use crate::{assert_story, wait_for, Pair, TestResult, Traced, DEFAULT_WAIT};
 
 /// Samples in one packet: 20 ms of stereo at 48 kHz.
 pub const PACKET_SAMPLES: usize = 1920;
+
+/// The name the host gives each of its stand-in sounds.
+pub const SOUND_NAME: &str = "Test kit sound";
 
 pub fn config(kind: AudioKind) -> AudioConfig {
     AudioConfig {
@@ -79,7 +83,7 @@ impl HostAudioFactory for StandInAudio {
             .into_iter()
             .map(|kind| AudioDevice {
                 id: config(kind).device_id,
-                name: "Test kit sound".into(),
+                name: SOUND_NAME.into(),
                 kind,
             })
             .collect())
@@ -175,4 +179,84 @@ impl AudioHost {
         }
         Ok(audio)
     }
+}
+
+/// How [`check`] stops one of the host's sounds.
+#[derive(Clone, Copy, Debug)]
+pub enum Stop {
+    /// The viewer closes it.
+    ViewerCloses,
+    /// The host stops sharing it.
+    HostWithdraws,
+}
+
+/// Opens the system sound and the microphone of a host sharing both, beside
+/// Files, then stops each sound of `stopping` in turn as its [`Stop`] says.
+/// Asserts that each sound arrives exactly as sent before any stops; that a
+/// stopped sound stops on both sides while each sound still open keeps
+/// arriving as sent; that Files and the connection stay throughout; that no
+/// record holds the host's sound devices' names or ids; and that the
+/// engines told the story `expect` of their audio.
+#[track_caller]
+pub fn check(trace: &Traced, stopping: &[(AudioKind, Stop)], expect: Expect) -> TestResult {
+    let host = AudioHost::start(&[ServiceKind::SystemAudio, ServiceKind::Microphone])?;
+    let files = host.pair.attach(&host.connection, ServiceKind::Files);
+    let files = host
+        .pair
+        .controller
+        .core
+        .service_lease(files.id, files.generation)?;
+    let mut open = Vec::new();
+    for kind in [AudioKind::System, AudioKind::Microphone] {
+        let audio = host.open(kind)?;
+        open.push((kind, audio, host.audio.latest(kind)));
+    }
+    let mut encoding = encoder();
+    for (kind, audio, _) in &open {
+        host.assert_arrives(*kind, audio, &mut encoding)?;
+    }
+    for &(kind, stop) in stopping {
+        let at = open
+            .iter()
+            .position(|(opened, _, _)| *opened == kind)
+            .ok_or("each sound stops once")?;
+        let (_, audio, source) = open.remove(at);
+        match stop {
+            Stop::ViewerCloses => audio.close(),
+            Stop::HostWithdraws => host
+                .pair
+                .host
+                .core
+                .set_service_sharing(kind.service(), false)?,
+        }
+        wait_for(
+            &format!("{kind:?} sound to stop on both sides"),
+            DEFAULT_WAIT,
+            || (source.is_cancelled() && audio.is_cancelled()).then_some(()),
+        );
+        for (other, audio, source) in &open {
+            assert!(
+                !source.is_cancelled(),
+                "stopping {kind:?} sound leaves {other:?} sound"
+            );
+            host.assert_arrives(*other, audio, &mut encoding)?;
+        }
+        assert!(
+            !files.is_cancelled(),
+            "stopping {kind:?} sound leaves Files"
+        );
+        assert!(
+            host.connection_active(),
+            "stopping {kind:?} sound keeps the connection"
+        );
+    }
+    trace.wait_for_records("audio ended", stopping.len());
+    assert_story(expect, || trace.story(&["audio"]));
+    let system = config(AudioKind::System).device_id;
+    let microphone = config(AudioKind::Microphone).device_id;
+    trace.assert_unrecorded(
+        "the host's sound devices",
+        &[&system, &microphone, SOUND_NAME],
+    );
+    Ok(())
 }
