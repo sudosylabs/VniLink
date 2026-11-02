@@ -23,7 +23,7 @@ import { ProcessRunner } from './processes.ts';
 import { assignExecutableUuids, darwinUsageDescriptions, executableUuids } from './macos/identity.ts';
 import { linuxSandbox, linuxSandboxProfile, systemProbe } from './prerequisites.ts';
 import { loadProduct, type Product } from './product.ts';
-import { fileSha256, releaseInventory } from './verify.ts';
+import { fileSha256, releaseInventory } from './inventory.ts';
 import { isLinux, isMacintosh, isWindows } from './platform.ts';
 
 const require = createRequire(import.meta.url);

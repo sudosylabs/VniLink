@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 /** Assembles one host-native, unsigned Electron directory from a verified release payload. */
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
@@ -15,7 +16,7 @@ import { assignExecutableUuids, darwinUsageDescriptions } from './macos/identity
 import { acquireLock } from './lock.ts';
 import { ProcessRunner } from './processes.ts';
 import { validateProduct, type Product, type ProductPlatform } from './product.ts';
-import { packageInventory, verifyReleaseFiles, type ReleaseManifest } from './verify.ts';
+import { fileSha256, packageInventory, verifyReleaseFiles, type PackageManifest, type ReleaseManifest } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
 
 /** electron-builder v26 options; only what VniLink sets is described. */
@@ -193,4 +194,18 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		}
 		await releaseLock();
 	}
+}
+
+/** Checks an assembled application against its packaging manifest. */
+export async function verifyPackageFiles(directory: string, product: Product): Promise<PackageManifest> {
+	const manifest = JSON.parse(await readFile(join(directory, 'packaging-manifest.json'), 'utf8')) as PackageManifest;
+	assert.equal(manifest.appId, product.appId);
+	assert.equal(manifest.platform, process.platform);
+	assert.equal(manifest.architecture, process.arch);
+	assert.equal(manifest.signing, 'unsigned');
+	assert.deepEqual(await packageInventory(directory), manifest.files, 'Assembled application inventory differs');
+	const layout = packagedLayout(directory, process.platform, product);
+	assert.equal(await fileSha256(layout.asar), manifest.asarSha256);
+	assert.equal(await fileSha256(layout.native), manifest.nativeSha256);
+	return manifest;
 }

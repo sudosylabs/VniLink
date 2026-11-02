@@ -13,7 +13,7 @@ import { buildApplication, bundleOptions, type ApplicationBuildOptions } from '.
 import { acquireLock } from './lock.ts';
 import { assertNativeFresh, GLASS_DIRECTORY, type NativeOptions } from './native.ts';
 import { loadProduct } from './product.ts';
-import { releaseInventory, type ReleaseFile } from './verify.ts';
+import { releaseInventory, type ReleaseFile } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
 
 async function sourceFingerprint(root: string): Promise<string> {

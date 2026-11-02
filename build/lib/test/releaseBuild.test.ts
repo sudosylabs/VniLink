@@ -19,7 +19,7 @@ import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, st
 import { isMacintosh, isWindows } from '../platform.ts';
 import { loadProduct, type ProductTarget } from '../product.ts';
 import { buildRelease } from '../release.ts';
-import { verifyReleaseFiles, type ReleaseManifest } from '../verify.ts';
+import { verifyReleaseFiles, type ReleaseManifest } from '../inventory.ts';
 
 const product = await loadProduct(fileURLToPath(new URL('../../../', import.meta.url)));
 

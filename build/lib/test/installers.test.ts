@@ -13,10 +13,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, suite, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildInstallers, installerConfiguration, installerExtensions, type InstallerOptions } from '../installers.ts';
-import { packagedLayout, type BuilderConfiguration, type PackagedLayout } from '../package.ts';
+import { buildInstallers, installerConfiguration, installerExtensions, verifyInstallerFiles, type InstallerOptions } from '../installers.ts';
+import { packagedLayout, verifyPackageFiles, type BuilderConfiguration, type PackagedLayout } from '../package.ts';
 import { readProduct, type ProductPlatform } from '../product.ts';
-import { fileSha256, packageInventory, releaseInventory, verifyInstallerFiles, verifyPackageFiles } from '../verify.ts';
+import { fileSha256, packageInventory, releaseInventory } from '../inventory.ts';
 
 const product = await readProduct(fileURLToPath(new URL('../../../', import.meta.url)));
 

@@ -15,10 +15,9 @@ import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { release, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assemblyEnvironment, packagedLayout } from './package.ts';
+import { assemblyEnvironment, packagedLayout, verifyPackageFiles } from './package.ts';
 import { ProcessRunner } from './processes.ts';
 import { readProduct } from './product.ts';
-import { verifyPackageFiles } from './verify.ts';
 import { isMacintosh } from './platform.ts';
 
 /** What `--self-check` prints; see `SelfCheckResult` in the application. */

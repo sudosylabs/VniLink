@@ -7,16 +7,16 @@
 
 /** Installer generation: input integrity, cancellation and publication of the host's installers. */
 import assert from 'node:assert/strict';
-import { access, cp, mkdir, mkdtemp, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, extname, join } from 'node:path';
 import * as darwin from './package.darwin.ts';
 import * as linux from './package.linux.ts';
-import { builderPlatformFlag, packageConfiguration, runElectronBuilder, type BuilderConfiguration } from './package.ts';
+import { builderPlatformFlag, packageConfiguration, runElectronBuilder, verifyPackageFiles, type BuilderConfiguration } from './package.ts';
 import * as win32 from './package.win32.ts';
 import { acquireLock } from './lock.ts';
 import { ProcessRunner } from './processes.ts';
 import { readProduct, type Product } from './product.ts';
-import { fileSha256, verifyPackageFiles, verifyReleaseFiles, type InstallerArtifact, type ReleaseManifest } from './verify.ts';
+import { fileSha256, verifyReleaseFiles, type InstallerArtifact, type InstallerManifest, type ReleaseManifest } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
 
 const platforms: Partial<Record<NodeJS.Platform, typeof darwin>> = { darwin, win32, linux };
@@ -121,4 +121,29 @@ async function publish(built: string, output: string, previous: string): Promise
 		}
 		throw error;
 	}
+}
+
+/** Checks installer checksums against their manifest and `SHA256SUMS`. */
+export async function verifyInstallerFiles(
+	directory: string,
+	product: Product,
+	platform: NodeJS.Platform = process.platform,
+	architecture: string = process.arch,
+): Promise<InstallerManifest> {
+	const manifest = JSON.parse(await readFile(join(directory, 'installer-manifest.json'), 'utf8')) as InstallerManifest;
+	assert.equal(manifest.application.appId, product.appId);
+	assert.equal(manifest.application.platform, platform);
+	assert.equal(manifest.application.architecture, architecture);
+	assert.equal(manifest.application.signing, 'unsigned');
+	assert.deepEqual(manifest.artifacts.map(file => extname(file.path)).sort(), [...installerExtensions(platform)].sort());
+	for (const file of manifest.artifacts) {
+		assert.equal(file.path, basename(file.path), 'Installer path must be a filename');
+		assert(!file.path.includes('\\') && !file.path.includes('/'));
+		assert.match(file.sha256, /^[a-f0-9]{64}$/);
+		assert(file.bytes > 0);
+		assert.equal((await stat(join(directory, file.path))).size, file.bytes);
+		assert.equal(await fileSha256(join(directory, file.path)), file.sha256, `Installer checksum differs: ${file.path}`);
+	}
+	assert.equal(await readFile(join(directory, 'SHA256SUMS'), 'utf8'), manifest.artifacts.map(file => `${file.sha256}  ${file.path}\n`).join(''));
+	return manifest;
 }
