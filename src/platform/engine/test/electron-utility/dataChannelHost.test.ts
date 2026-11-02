@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
-import { timeout } from '../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../base/common/async.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../base/test/common/virtualScheduling/index.js';
 import type { DataChannelRequest, DesktopCursor } from '../../common/dataChannel.js';
@@ -74,9 +74,7 @@ class TestNativeDataChannel implements NativeDataChannel {
 		this.resizes.push([rows, columns]);
 	}
 
-	public fileOperation(): Promise<string> {
-		return Promise.resolve('{}');
-	}
+	public fileOperation: (command: string) => Promise<string> = () => Promise.resolve('{}');
 }
 
 const request: DataChannelRequest = { kind: 'video', requestId: 'test', sessionId: '1', generation: '2' };
@@ -273,6 +271,35 @@ suite('DataChannelHost', () => {
 			host.close();
 			assert.strictEqual(sent()[0]?.kind, 'video');
 		}));
+	});
+	suite('files', () => {
+		const listing = JSON.stringify({ ok: { entries: [], total: '0', nextOffset: null, truncated: false, skipped: '0' } });
+		test('a slow file operation holds up neither the operations after it nor their answers', async () => {
+			const { host, native, messages, receive } = channel('files');
+			const slowListing = new DeferredPromise<string>();
+			const operations: string[] = [];
+			native.fileOperation = command => {
+				const operation = (JSON.parse(command) as { type: string }).type;
+				operations.push(operation);
+				return operation === 'list' ? slowListing.p : Promise.resolve('{"error":"FileExists: the name is taken"}');
+			};
+			host.start(native);
+			receive({ type: 'file', id: 1, operation: { type: 'list', root: '0', path: 'Users', offset: '0' } });
+			receive({ type: 'file', id: 2, operation: { type: 'rename', root: '0', path: 'Users', name: 'a.txt', token: null, newName: 'b.txt' } });
+			await timeout(0);
+			assert.deepStrictEqual(operations, ['list', 'rename']);
+			assert.deepStrictEqual(messages.filter(message => message.type === 'fileReply'), [{ type: 'fileReply', id: 2, metadata: '{"error":"FileExists: the name is taken"}' }]);
+			await slowListing.complete(listing);
+			await timeout(0);
+			assert.deepStrictEqual(messages.filter(message => message.type === 'fileReply').map(message => message.id), [2, 1]);
+		});
+		test('a job change the engine pushes reaches the window as a packet', () => {
+			const { host, native, sent } = channel('files');
+			const jobs = JSON.stringify({ jobs: [] });
+			native.packets.push({ kind: 'jobs', metadata: jobs });
+			host.start(native);
+			assert.deepStrictEqual(sent().map(message => [message.kind, message.metadata]), [['jobs', jobs]]);
+		});
 	});
 	test('closing before the engine\'s end starts closes that late end exactly once', () => {
 		const { host, native } = channel();

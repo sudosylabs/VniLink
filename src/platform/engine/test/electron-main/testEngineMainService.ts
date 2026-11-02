@@ -12,18 +12,20 @@ import { TestEngineService } from '../common/testEngineService.js';
 /**
  * The engine as main's services and channels use it: a {@link TestEngineService}
  * that also records the data channels attached to it and the owners whose
- * channels were closed.
+ * channels were closed, and counts how often restart state was read again.
  */
 export class TestEngineMainService extends TestEngineService {
 	public readonly isRestarting = false;
 	public readonly attached: { readonly request: DataChannelRequest; readonly owner: string }[] = [];
 	public readonly closedOwners: string[] = [];
+	public restartRefreshes = 0;
 
 	public getRestartRequired(): Promise<boolean> {
 		return Promise.resolve(this.restartRequired);
 	}
 
 	public refreshRestartRequired(): Promise<void> {
+		this.restartRefreshes++;
 		return Promise.resolve();
 	}
 

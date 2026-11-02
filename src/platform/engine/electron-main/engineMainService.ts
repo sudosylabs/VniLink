@@ -23,6 +23,18 @@ import { ENGINE_HOST_CHANNEL_NAME, ENGINE_HOST_CONNECTION, type EngineEventBatch
 
 export const IEngineMainService = createDecorator<EngineMainService>('engineMainService');
 
+/**
+ * The engine as main's settings use it: its commands, whether it is running,
+ * and the restart state that a relay change can alter.
+ */
+export interface IEngineSettingsService {
+	readonly available: boolean;
+	readonly onDidChangeAvailability: Event<boolean>;
+	execute(command: EngineCommand): Promise<EngineReply>;
+	/** Reads whether a restart is required again and reports a change. */
+	refreshRestartRequired(): Promise<void>;
+}
+
 /** The IPC connection to the engine host. */
 export interface IEngineConnection extends IDisposable {
 	readonly channel: IChannel;
@@ -107,7 +119,7 @@ const stableAfter = 60_000;
  * restart handler re-applies what main configured on the first start, and
  * availability returns after that.
  */
-export class EngineMainService extends Disposable {
+export class EngineMainService extends Disposable implements IEngineSettingsService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly availabilityChanged = this._register(new Emitter<boolean>());
 	public readonly onDidChangeAvailability = this.availabilityChanged.event;
