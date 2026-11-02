@@ -173,7 +173,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { assertBundleFresh } from './bundles.ts';
 import { electronExecutable } from './electron.ts';
-import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
+import { assertNativeFresh, defaultNativeOptions, nativeArtifact, nativeCargo } from './native.ts';
 import { isLinux, isMacintosh, isWindows, osName } from './platform.ts';
 import { type LaunchedProcess, ProcessRunner } from './processes.ts';
 import { agentPeer, openAgentSession, type AgentPeer, type AgentSession } from './remote.ts';
@@ -642,10 +642,7 @@ export function readerBuild(
 	environment: NodeJS.ProcessEnv = process.env,
 	exists?: (path: string) => boolean,
 ): { readonly args: string[]; readonly env: NodeJS.ProcessEnv } {
-	return {
-		args: ['build', '--release', '--locked', ...(target ? ['--target', target] : []), '-p', crate, '--example', 'glass_latency'],
-		env: nativeEnvironment({ profile: 'dev', target }, environment, exists),
-	};
+	return nativeCargo('build', ['--release', '-p', crate, '--example', 'glass_latency'], { profile: 'dev', target }, environment, exists);
 }
 
 /** How one platform runs the two sides and the reader. */
@@ -669,7 +666,7 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 		const bundle = app ?? dirname(dirname(dirname(await electronExecutable(root, signal))));
 		return {
 			readerCrate: 'vnilink-macos',
-			reader: join(root, 'target/release/examples/glass_latency'),
+			reader: nativeArtifact(root, { profile: 'dev' }, 'release', 'examples/glass_latency'),
 			// macOS asks before the run; a refusal stops it.
 			consentMs: 0,
 			// Launched through LaunchServices, each side is its own responsible
@@ -702,7 +699,7 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 		return {
 			readerCrate: 'vnilink-windows',
 			readerTarget: target,
-			reader: join(root, 'target', ...(target ? [target] : []), 'release/examples/glass_latency.exe'),
+			reader: nativeArtifact(root, { profile: 'dev', target }, 'release', 'examples/glass_latency.exe'),
 			consentMs: 0,
 			launch: direct(() => []),
 		};
@@ -719,7 +716,7 @@ async function latencyPlatform(root: string, app: string | undefined, processes:
 		// software.
 		return {
 			readerCrate: 'vnilink-linux',
-			reader: join(root, 'target/release/examples/glass_latency'),
+			reader: nativeArtifact(root, { profile: 'dev' }, 'release', 'examples/glass_latency'),
 			consentMs: 5 * 60000,
 			launch: direct((role, environment) => [role === 'viewer' && environment.VNILINK_LATENCY_ACROSS === '1' ? '--ozone-platform=wayland' : '--ozone-platform=x11']),
 		};

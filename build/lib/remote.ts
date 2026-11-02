@@ -16,9 +16,9 @@
  * the agent's terminal; nothing is approved unattended.
  */
 import { mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { defaultNativeOptions, nativeEnvironment } from './native.ts';
+import { defaultNativeOptions, nativeArtifact, nativeCargo } from './native.ts';
 import { isWindows } from './platform.ts';
 import { ProcessRunner } from './processes.ts';
 
@@ -82,17 +82,14 @@ export interface AgentSession {
 /** The test kit's command, built with the addon's toolchain as `testkit:agent` builds it, so both sides share one revision. */
 async function bridgeExecutable(root: string, signal: AbortSignal): Promise<string> {
 	const native = defaultNativeOptions();
-	const target = native.target ? ['--target', native.target] : [];
+	const build = nativeCargo('build', ['--release', '-p', 'vnilink-testkit', '--bin', 'vnilink-testkit'], native);
 	const processes = new ProcessRunner(signal);
 	try {
-		await processes.run('cargo', ['build', '--release', '--locked', '--target-dir', 'target/electron', ...target, '-p', 'vnilink-testkit', '--bin', 'vnilink-testkit'], {
-			cwd: root,
-			env: nativeEnvironment(native),
-		});
+		await processes.run('cargo', build.args, { cwd: root, env: build.env });
 	} finally {
 		await processes.stop();
 	}
-	return join(root, 'target/electron', ...native.target ? [native.target] : [], 'release', isWindows ? 'vnilink-testkit.exe' : 'vnilink-testkit');
+	return nativeArtifact(root, native, 'release', isWindows ? 'vnilink-testkit.exe' : 'vnilink-testkit');
 }
 
 /** A line the bridge printed, as JSON. */

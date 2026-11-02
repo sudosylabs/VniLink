@@ -13,7 +13,7 @@ import { ScenarioSelection, scenarioNames } from '../../test/automation/scenario
 import { linuxValidationVolumes } from './containers.ts';
 import { electronExecutable } from './electron.ts';
 import { launchLatencySide } from './latency.ts';
-import { assertNativeFresh, defaultNativeOptions, nativeEnvironment } from './native.ts';
+import { assertNativeFresh, nativeCargo } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 
 /** Runs the selected browser and integration scenarios in Electron with a temporary profile. */
@@ -48,9 +48,8 @@ export async function testRust(root: string, signal: AbortSignal): Promise<void>
 	const processes = new ProcessRunner(signal);
 	try {
 		// The addon's target and toolchain: on Windows, the GNU target with MSYS2's MinGW tools.
-		const native = defaultNativeOptions();
-		const target = native.target ? ['--target', native.target] : [];
-		await processes.run('cargo', ['test', '--no-fail-fast', '--locked', '--target-dir', 'target/electron', ...target, ...packages.flatMap(name => ['-p', name])], { cwd: root, env: nativeEnvironment(native) });
+		const test = nativeCargo('test', ['--no-fail-fast', ...packages.flatMap(name => ['-p', name])]);
+		await processes.run('cargo', test.args, { cwd: root, env: test.env });
 	} finally {
 		await processes.stop();
 	}
@@ -210,12 +209,11 @@ interface TestkitOptions {
 async function runTestkit(root: string, signal: AbortSignal, command: readonly string[], options: TestkitOptions = {}): Promise<void> {
 	const processes = new ProcessRunner(signal);
 	try {
-		const native = defaultNativeOptions();
-		const target = native.target ? ['--target', native.target] : [];
 		const [verb, ...suites] = command;
-		const launched = processes.start('cargo', [verb, '--locked', '--target-dir', 'target/electron', ...target, '-p', 'vnilink-testkit', ...suites], {
+		const testkit = nativeCargo(verb, ['-p', 'vnilink-testkit', ...suites]);
+		const launched = processes.start('cargo', testkit.args, {
 			cwd: root,
-			env: { ...nativeEnvironment(native), ...options.env },
+			env: { ...testkit.env, ...options.env },
 			...options.typing ? { stdio: ['pipe', 'inherit', 'inherit'] } : {},
 		});
 		if (options.typing && launched.child.stdin) {

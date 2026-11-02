@@ -215,9 +215,9 @@ test('a two-computer run is summarised from each side\'s own samples', async () 
 
 test('the reader is built for the addon\'s target with its tools, and for the host\'s default elsewhere', () => {
 	const windows = readerBuild('vnilink-windows', 'x86_64-pc-windows-gnu', { PATH: 'C:\\mingw\\bin' }, () => true);
-	assert.deepEqual(windows.args, ['build', '--release', '--locked', '--target', 'x86_64-pc-windows-gnu', '-p', 'vnilink-windows', '--example', 'glass_latency']);
+	assert.deepEqual(windows.args, ['build', '--locked', '--target-dir', 'target/electron', '--target', 'x86_64-pc-windows-gnu', '--release', '-p', 'vnilink-windows', '--example', 'glass_latency'], 'the reader shares the addon\'s build of the codecs');
 	assert.equal(windows.env.CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER, 'gcc', 'the MinGW tools the addon build uses');
 	const mac = readerBuild('vnilink-macos', undefined, { PATH: '/bin' });
-	assert.deepEqual(mac.args, ['build', '--release', '--locked', '-p', 'vnilink-macos', '--example', 'glass_latency']);
+	assert.deepEqual(mac.args, ['build', '--locked', '--target-dir', 'target/electron', '--release', '-p', 'vnilink-macos', '--example', 'glass_latency']);
 	assert.deepEqual(mac.env, { PATH: '/bin' });
 });
