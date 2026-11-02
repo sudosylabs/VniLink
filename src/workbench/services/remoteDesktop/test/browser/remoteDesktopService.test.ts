@@ -7,7 +7,7 @@
 
 import assert from 'assert';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
-import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { ensureNoDisposablesAreLeakedInTestSuite, throwIfDisposablesAreLeakedAsync } from '../../../../../base/test/common/utils.js';
 import { IDataChannelService } from '../../../../../platform/engine/common/dataChannelService.js';
 import type { EngineCommand, EngineReply, RemoteStatus, VideoCodecCaps, WindowDecoder } from '../../../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../../../platform/engine/common/engineService.js';
@@ -46,19 +46,12 @@ suite('RemoteDesktopService', () => {
 		statuses = { desktopControl: 'available', desktopView: 'available' };
 	});
 	teardown(() => {
-		// The service releases its `onEnd` listener when a session ends, not when it is disposed,
-		// so a session still open ends as one whose picture was lost before it is disposed.
-		for (const channel of dataChannels.openedFor('video')) {
-			if (!channel.closed) {
-				channel.onError(new Error('Data channel disconnected'));
-			}
-		}
 		disposables.clear();
 	});
 
-	/** The service, as the workbench builds it. */
-	function createService(): RemoteDesktopService {
-		const instantiationService = disposables.add(new TestInstantiationService());
+	/** The service, as the workbench builds it; what it needs is released with `store`. */
+	function createService(store = disposables): RemoteDesktopService {
+		const instantiationService = store.add(new TestInstantiationService());
 		instantiationService.stub(IEngineService, engine);
 		instantiationService.stub(IDeviceService, {
 			availability: (id: string) => {
@@ -126,6 +119,14 @@ suite('RemoteDesktopService', () => {
 		await openScreen(createService(), false);
 		assert.deepStrictEqual(registered(), [[{ codec: 'h264', hardware: true, chroma444: false, bt601: false }, { codec: 'h265', hardware: false, chroma444: false, bt601: false }]]);
 	});
+	test('disposing an open session releases what the service holds', () => throwIfDisposablesAreLeakedAsync(async () => {
+		const store = new DisposableStore();
+		const result = await createService(store).open('peer', true);
+		assert.ok('session' in result, 'the screen did not open');
+		result.session.dispose();
+		store.dispose();
+		assert.deepStrictEqual(dataChannels.closes.map(request => request.kind), ['video', 'input']);
+	}));
 	test('a keyframe the window has no decoder for ends the session as one it can\'t show', async () => {
 		decodeH264AndSoftwareH265();
 		decoders.decodes = false;

@@ -81,14 +81,9 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 		const session = new EngineDesktopSession(control, target, createDecoder, async () => {
 			const reply = await this.engine.execute({ type: 'sessionTopology', sessionId: target.id, generation: target.generation });
 			return reply.type === 'displays' ? reply.displays : [];
-		});
-		// A codec this window could not show is left out of the next offer.
-		const unshown = session.onEnd(end => {
-			unshown.dispose();
-			const codec = session.shownCodec;
-			if (end === 'cantShow' && codec) {
-				this.unshown.add(codec);
-			}
+		}, codec => {
+			// A codec this window could not show is left out of the next offer.
+			this.unshown.add(codec);
 		});
 		const request = { sessionId: target.id, generation: target.generation };
 		const lost = (): void => {
@@ -102,7 +97,6 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 			session.attach({ video, input });
 		} catch (error) {
 			video?.close();
-			unshown.dispose();
 			session.dispose();
 			return { failure: desktopOpenFailure(error) };
 		}
