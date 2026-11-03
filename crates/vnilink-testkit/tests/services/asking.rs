@@ -106,7 +106,7 @@ fn a_service_opens_once_the_person_at_the_host_accepts() -> TestResult {
         host.core.admission_requests()?.is_empty(),
         "the answer ended it"
     );
-    controller.open_files(&connection)?;
+    drop(controller.open_files(&connection)?);
     assert_story(
         expect![[r#"
             host:
@@ -114,6 +114,8 @@ fn a_service_opens_once_the_person_at_the_host_accepts() -> TestResult {
               hosting: admission asked connection=1 request=1
               hosting: admission answered accept=true request=1
               hosting: service opened connection=1 kind=Some(Files) service=1
+              hosting: service closed kind=Files phase=closed: PeerClose service=1
+              hosting: service released service=1
         "#]],
         || trace.story(&["hosting"]),
     );
