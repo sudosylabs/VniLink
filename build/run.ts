@@ -122,6 +122,7 @@ const tasks: Readonly<Record<string, TaskFunction>> = {
 	'format:check': async (_root, _signal, args) => (await import('./lib/format.ts')).formatFiles(['--check', ...args]),
 	'license:apply': async (root, _signal, args) => (await import('./lib/license.ts')).applyLicenseCommand(root, args),
 	'assets:tray': async (root, signal) => (await import('./lib/trayAssets.ts')).renderTrayAssets(root, signal),
+	'assets:installers': async (root, signal) => (await import('./lib/installerAssets.ts')).renderInstallerAssets(root, signal),
 	'vscode': async (root, _signal, args) => (await import('./lib/vscode/import.ts')).vscodeCommand(root, args),
 	'doctor': async (root, _signal, args) => (await import('./lib/doctor.ts')).doctor(root, args),
 	'docs:prerequisites': async (root, _signal, args) => (await import('./lib/prerequisitesDocs.ts')).updatePrerequisiteDocs(root, args),

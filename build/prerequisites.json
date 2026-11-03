@@ -519,7 +519,7 @@
     },
     "rsvg-convert": {
       "title": "rsvg-convert",
-      "purpose": "Renders the tray icons from their SVG sources.",
+      "purpose": "Renders the tray icons and the installers' artwork from their SVG sources.",
       "check": {
         "commands": {
           "rsvg-convert": {
@@ -861,6 +861,10 @@
     },
     "assets:tray": {
       "description": "Render the tray icons",
+      "requires": ["node", "rsvg-convert"]
+    },
+    "assets:installers": {
+      "description": "Render the installers' artwork",
       "requires": ["node", "rsvg-convert"]
     },
     "format": {

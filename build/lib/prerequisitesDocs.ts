@@ -23,7 +23,7 @@ const end = '<!-- prerequisites:end -->';
 const coreTasks = ['build', 'start', 'test:ui', 'test:rust'];
 
 /** Tasks whose extra needs are listed separately. */
-const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'package:installers:staged', 'assets:tray', 'sandbox:linux', 'desktop:linux'];
+const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'package:installers:staged', 'assets:tray', 'assets:installers', 'sandbox:linux', 'desktop:linux'];
 
 function applies(requirement: Requirement, platform: Platform): boolean {
 	return !requirement.platforms || requirement.platforms.includes(platform);

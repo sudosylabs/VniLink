@@ -24,6 +24,7 @@ export type BuilderConfiguration = Record<string, unknown> & {
 	readonly mac: Record<string, unknown>;
 	readonly win: Record<string, unknown>;
 	readonly linux: Record<string, unknown>;
+	readonly directories: { readonly app: string; readonly output: string; readonly buildResources: string };
 };
 
 export interface PackagedLayout {

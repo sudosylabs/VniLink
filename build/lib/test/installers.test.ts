@@ -26,6 +26,11 @@ function configuration(platform: ProductPlatform): BuilderConfiguration {
 	return installerConfiguration('/repo', '/stage', '/output', product, { platform, electronVersion: '44.7.0' });
 }
 
+/** `path` with forward slashes, as on the macOS host that builds the DMG. */
+function packagedPath(path: string): string {
+	return path.split('\\').join('/');
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -104,6 +109,11 @@ suite('installers', () => {
 	}
 	test('builds a DMG on macOS', () => {
 		assert.deepStrictEqual(configuration('darwin').mac.target, ['dmg']);
+	});
+	test('shows the DMG window over its staged artwork, the application beside the Applications link', () => {
+		const dmg = options(configuration('darwin'), 'dmg');
+		assert.strictEqual(packagedPath(String(dmg.background)), '/stage/packaging-resources/assets/apple/dmg/background.png');
+		assert.deepStrictEqual(dmg.contents, [{ x: 140, y: 170, type: 'file' }, { x: 400, y: 170, type: 'link', path: '/Applications' }]);
 	});
 	test('leaves the DMG unsigned', () => {
 		assert.strictEqual(options(configuration('darwin'), 'dmg').sign, false);

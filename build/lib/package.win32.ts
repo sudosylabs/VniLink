@@ -11,6 +11,9 @@ import type { Product } from './product.ts';
 
 export const extensions = ['.exe'];
 
+/** Files the release stages into `packaging-resources` for this installer, at the same paths. */
+export const resources: readonly string[] = [];
+
 export function installerOptions(product: Product, base: BuilderConfiguration): Record<string, unknown> {
 	return {
 		win: { ...base.win, target: ['nsis'] },

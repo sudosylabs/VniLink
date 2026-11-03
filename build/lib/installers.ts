@@ -19,9 +19,16 @@ import { readProduct, type Product } from './product.ts';
 import { fileSha256, verifyReleaseFiles, type InstallerArtifact, type InstallerManifest, type ReleaseManifest } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
 
-const platforms: Partial<Record<NodeJS.Platform, typeof darwin>> = { darwin, win32, linux };
+/** What each `package.<platform>.ts` declares about its installers. */
+interface PlatformInstallers {
+	readonly extensions: readonly string[];
+	readonly resources: readonly string[];
+	installerOptions(product: Product, base: BuilderConfiguration): Record<string, unknown>;
+}
 
-function platformInstallers(platform: NodeJS.Platform): typeof darwin {
+const platforms: Partial<Record<NodeJS.Platform, PlatformInstallers>> = { darwin, win32, linux };
+
+function platformInstallers(platform: NodeJS.Platform): PlatformInstallers {
 	const installers = platforms[platform];
 	if (!installers) {
 		throw new Error(`Unsupported installer host: ${platform}`);
@@ -31,6 +38,11 @@ function platformInstallers(platform: NodeJS.Platform): typeof darwin {
 
 export function installerExtensions(platform: NodeJS.Platform): readonly string[] {
 	return platformInstallers(platform).extensions;
+}
+
+/** The repository files `platform`'s installer reads, which the release stages under `packaging-resources`. */
+export function installerResources(platform: NodeJS.Platform): readonly string[] {
+	return platformInstallers(platform).resources;
 }
 
 /** Native-host installer targets consume an existing, verified Electron application. */

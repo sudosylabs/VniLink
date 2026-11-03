@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { buildApplication, bundleOptions, type ApplicationBuildOptions } from './bundles.ts';
+import { installerResources } from './installers.ts';
 import { acquireLock } from './lock.ts';
 import { assertNativeFresh, GLASS_DIRECTORY, type NativeOptions } from './native.ts';
 import { loadProduct } from './product.ts';
@@ -71,7 +72,8 @@ export async function buildRelease(root: string, signal: AbortSignal, options: R
 		const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as PackageJson;
 		await writeFile(join(app, 'package.json'), JSON.stringify({ name: product.applicationName, productName: product.nameLong, version: packageJson.version, private: true, main: 'main.cjs', type: 'module', author: product.publisherName, description: product.description, homepage: product.repositoryUrl, desktopName: product.platforms.linux.desktopFileName, license: 'AGPL-3.0-only' }, null, 2) + '\n');
 		await writeFile(join(app, 'product.json'), JSON.stringify(product, null, 2) + '\n');
-		const artwork = isMacintosh ? [platform.icon, product.platforms.darwin.fallbackIconSource] : [platform.icon];
+		const icons = isMacintosh ? [platform.icon, product.platforms.darwin.fallbackIconSource] : [platform.icon];
+		const artwork = [...icons, ...installerResources(process.platform)];
 		for (const asset of artwork) {
 			const destination = join(stage, 'packaging-resources', asset);
 			await mkdir(join(destination, '..'), { recursive: true });

@@ -78,6 +78,7 @@ Some tasks need more:
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:latency` | Screen Recording for the development VniLink: Run the task; on its first run macOS asks and the run stops. Allow VniLink in System Settings > Privacy & Security > Screen & System Audio Recording, then run it again; A second computer (optional) |
 | `node build/run.ts assets:tray` | rsvg-convert: `brew install librsvg` |
+| `node build/run.ts assets:installers` | rsvg-convert: `brew install librsvg` |
 
 ### Windows
 
@@ -101,6 +102,7 @@ Some tasks need more:
 | `npm run measure:impaired` | Docker: Install and start Docker Desktop: https://docs.docker.com/desktop/ |
 | `npm run measure:latency` | Signed-in desktop: Run the task from a terminal on the signed-in desktop; A second computer (optional) |
 | `node build/run.ts assets:tray` | rsvg-convert: `pacman -S mingw-w64-x86_64-librsvg` in the MSYS2 shell |
+| `node build/run.ts assets:installers` | rsvg-convert: `pacman -S mingw-w64-x86_64-librsvg` in the MSYS2 shell |
 
 ### Linux
 
@@ -133,6 +135,7 @@ Some tasks need more:
 | `npm run measure:latency` | Screen sharing through the desktop portal: Run the task in the graphical session and choose the display in both portal dialogs; the answers are kept in `.build/latency` for later runs; A second computer (optional) |
 | `npm run package:installers:staged` | rpmbuild: Ubuntu and Debian: `rpm`; Fedora: `rpm-build` |
 | `node build/run.ts assets:tray` | rsvg-convert: Ubuntu and Debian: `librsvg2-bin`; Fedora: `librsvg2-tools` |
+| `node build/run.ts assets:installers` | rsvg-convert: Ubuntu and Debian: `librsvg2-bin`; Fedora: `librsvg2-tools` |
 | `npm run sandbox:linux` | AppArmor |
 
 The first native build downloads, once:
