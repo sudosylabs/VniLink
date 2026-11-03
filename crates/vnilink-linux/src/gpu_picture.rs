@@ -17,8 +17,9 @@
 //! pixels gets them read back once, packed.
 //!
 //! The pool is small. A picture counts as in use until the last frame
-//! holding it is dropped, and a capture with every picture in use drops the
-//! compositor's frame instead of waiting. The bytes are screen content: do
+//! holding it is dropped; a capture with every picture in use grows the
+//! pool, up to a bound, and only past it drops the compositor's frame
+//! instead of waiting. The bytes are screen content: do
 //! not log them.
 
 use std::any::Any;
@@ -54,9 +55,16 @@ pub(crate) const PREFERRED_MODIFIERS: [u64; 3] = [
     MODIFIER_LINEAR,
 ];
 
-/// Pictures a capture keeps: one being encoded, one held for a still
+/// Pictures a capture starts with: one being encoded, one held for a still
 /// screen, and the compositor's next.
 const POOL: usize = 4;
+
+/// The most pictures a capture grows its pool to while every one is in
+/// use, as when several viewers' encoders and a still hold pictures at
+/// once. A picture the compositor delivered is copied rather than lost: it
+/// sends none again until the screen changes, so the picture dropped would
+/// be the last one shown until then.
+pub(crate) const POOL_MAX: usize = 8;
 
 const REJECTED: Error = Error::CaptureRejected("VA-API rejected the screen picture");
 
@@ -258,6 +266,24 @@ struct Slot {
     in_use: AtomicBool,
 }
 
+impl Slot {
+    fn new(surface: Surface<()>) -> Result<Arc<Self>, Error> {
+        Ok(Arc::new(Self {
+            id: NEXT_PICTURE.fetch_add(1, Ordering::Relaxed),
+            prime: Prime::exported(&surface)?,
+            surface: Mutex::new(Some(surface)),
+            in_use: AtomicBool::new(false),
+        }))
+    }
+
+    /// Takes the picture for a frame; false while one holds it.
+    fn claim(&self) -> bool {
+        self.in_use
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+}
+
 /// A screen picture in GPU memory, as a frame's native pixels.
 pub(crate) struct GpuPicture {
     slot: Arc<Slot>,
@@ -383,14 +409,7 @@ impl Importer {
             .map_err(|_| REJECTED)?;
         let slots = surfaces
             .into_iter()
-            .map(|surface| {
-                Ok(Arc::new(Slot {
-                    id: NEXT_PICTURE.fetch_add(1, Ordering::Relaxed),
-                    prime: Prime::exported(&surface)?,
-                    surface: Mutex::new(Some(surface)),
-                    in_use: AtomicBool::new(false),
-                }))
-            })
+            .map(Slot::new)
             .collect::<Result<_, Error>>()?;
         Ok(Self {
             display,
@@ -404,27 +423,34 @@ impl Importer {
     }
 
     /// The compositor's buffer `key` (its inode), copied into a picture;
-    /// `None` when every picture is in use. `prime` is made when the buffer
-    /// has not been imported before.
+    /// `None` when every picture is in use and the pool is at
+    /// [`POOL_MAX`]. `prime` is made when the buffer has not been imported
+    /// before.
     pub(crate) fn copy(
         &mut self,
         key: u64,
         prime: impl FnOnce() -> Result<Prime, Error>,
     ) -> Result<Option<GpuPicture>, Error> {
-        let _display = self.display_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let display_lock = Arc::clone(&self.display_lock);
+        let _display = display_lock.lock().unwrap_or_else(|e| e.into_inner());
         if !self.imported.contains_key(&key) {
             let surface = import(&self.display, prime()?, self.size.0, self.size.1)?;
             self.imported.insert(key, surface);
         }
-        let source = self.imported.get(&key).ok_or(REJECTED)?;
-        let Some(slot) = self.slots.iter().find(|slot| {
-            slot.in_use
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-        }) else {
-            return Ok(None);
+        let slot = match self.slots.iter().find(|slot| slot.claim()) {
+            Some(slot) => Arc::clone(slot),
+            None if self.slots.len() < POOL_MAX => {
+                let slot = self.grow()?;
+                tracing::debug!(
+                    target: vnilink::trace::CAPTURE,
+                    pictures = self.slots.len(),
+                    "every picture in use: the pool grew"
+                );
+                slot
+            }
+            None => return Ok(None),
         };
-        let slot = Arc::clone(slot);
+        let source = self.imported.get(&key).ok_or(REJECTED)?;
         let target = slot
             .surface
             .lock()
@@ -448,6 +474,28 @@ impl Importer {
             node: self.node.clone(),
             size: (self.size.0 as u16, self.size.1 as u16),
         }))
+    }
+
+    /// One more picture for the pool, claimed for the caller.
+    fn grow(&mut self) -> Result<Arc<Slot>, Error> {
+        let surface = self
+            .display
+            .create_surfaces(
+                libva::VA_RT_FORMAT_RGB32,
+                Some(libva::VA_FOURCC_BGRX),
+                self.size.0,
+                self.size.1,
+                Some(UsageHint::USAGE_HINT_VPP_READ | UsageHint::USAGE_HINT_VPP_WRITE),
+                vec![()],
+            )
+            .map_err(|_| REJECTED)?
+            .pop()
+            .ok_or(REJECTED)?;
+        let slot = Slot::new(surface)?;
+        let claimed = slot.claim();
+        debug_assert!(claimed, "a new picture is free");
+        self.slots.push(Arc::clone(&slot));
+        Ok(slot)
     }
 
     /// The video processor's copy of `source` into `target`, colour unchanged.
