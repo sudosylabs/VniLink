@@ -20,10 +20,14 @@ export class Onboarding {
 		await this.code.waitForElement(`${WELCOME}:not([hidden])`);
 	}
 
-	/** How wide the welcome is, and the tab area it is shown in. */
-	public async widths(): Promise<{ readonly welcome: number; readonly tab: number }> {
+	/**
+	 * How wide the welcome is, and the tab area it is shown in, once the tab
+	 * fits a window resized to `windowWidth`. The welcome is read after the
+	 * tab, so both come from the same layout.
+	 */
+	public async widths(windowWidth: number): Promise<{ readonly welcome: number; readonly tab: number }> {
+		const tab = await this.code.waitForLayout('.view-host', [], layout => layout.width > 0 && layout.width <= windowWidth);
 		const welcome = await this.code.waitForLayout(WELCOME, [], layout => layout.width > 0);
-		const tab = await this.code.waitForLayout('.view-host', [], layout => layout.width > 0);
 		return { welcome: welcome.width, tab: tab.width };
 	}
 
