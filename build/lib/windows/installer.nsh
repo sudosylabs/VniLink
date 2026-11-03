@@ -67,6 +67,18 @@
 	!macroend
 !endif
 
+# electron-builder's uninstaller deletes the invitation's file type but leaves
+# .vnl naming it, so the extension would point at nothing. Clear that only while
+# .vnl still names VniLink's type: another application may have taken it since.
+# The extension and type name are product.json's invitation, as package.ts
+# registers them.
 !macro customUnInstall
 	Delete "$DESKTOP\${SHORTCUT_NAME}.lnk"
+	ReadRegStr $0 SHELL_CONTEXT "Software\Classes\.vnl" ""
+	${If} $0 == "VniLink invitation"
+		DeleteRegValue SHELL_CONTEXT "Software\Classes\.vnl" ""
+	${EndIf}
+	DeleteRegValue SHELL_CONTEXT "Software\Classes\.vnl\OpenWithProgids" "VniLink invitation"
+	DeleteRegKey /ifempty SHELL_CONTEXT "Software\Classes\.vnl\OpenWithProgids"
+	DeleteRegKey /ifempty SHELL_CONTEXT "Software\Classes\.vnl"
 !macroend

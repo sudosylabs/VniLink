@@ -133,6 +133,11 @@ suite('installers', () => {
 		const nsis = options(configuration('win32'), 'nsis');
 		assert.deepStrictEqual([nsis.oneClick, nsis.allowToChangeInstallationDirectory, nsis.allowElevation], [false, true, false]);
 	});
+	test('the Windows uninstaller clears the invitation extension package.ts registers', async () => {
+		const script = await readFile(new URL('../windows/installer.nsh', import.meta.url), 'utf8');
+		const { ext, name } = (configuration('win32').fileAssociations as readonly { readonly ext: string; readonly name: string }[])[0];
+		assert.ok(script.includes(`"Software\\Classes\\.${ext}" ""`) && script.includes(`$0 == "${name}"`), 'installer.nsh names another extension or file type');
+	});
 	test('the Windows installer offers to start VniLink when it finishes', () => {
 		assert.strictEqual(options(configuration('win32'), 'nsis').runAfterFinish, true);
 	});
