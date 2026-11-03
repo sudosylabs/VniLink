@@ -25,6 +25,9 @@ const SHUT_DOWN: &str = "the other computer shut down";
 /// What a job says whose connection the peer's shutdown ended.
 const CONNECTION_ENDED: &str = "the connection to the other computer ended";
 
+/// What a job says whose fetch the peer refused as it shut down.
+const SENDER_STOPPED: &str = "the other computer stopped sending";
+
 /// A host that shuts down mid-download ends the controller's services
 /// connection, and the controller's job is interrupted at once: it does
 /// not dial the stopped host again.
@@ -59,10 +62,12 @@ fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResul
         JobState::Interrupted,
         "a job whose sender shut down is interrupted, to resume later"
     );
+    // A fetch that reaches the host as it shuts down is refused, which
+    // reads as the sender having stopped; each is its end, heard.
     assert!(
         matches!(
             snapshot.error.as_deref(),
-            Some(CONNECTION_ENDED | SHUT_DOWN)
+            Some(CONNECTION_ENDED | SHUT_DOWN | SENDER_STOPPED)
         ),
         "the job heard its sender's end rather than failing to reach it: {snapshot:?}"
     );
