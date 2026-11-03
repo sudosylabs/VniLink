@@ -16,7 +16,7 @@
  */
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { isLinux } from './platform.ts';
 import { loadProduct, type Product } from './product.ts';
 
@@ -44,7 +44,8 @@ function execArgument(value: string): string {
 
 /** The entry that starts the development Electron in `root` and opens invitations with it. */
 export function developmentDesktopEntry(product: Product, root: string): string {
-	const executable = join(root, '.build/electron', product.platforms.linux.executableName);
+	// The entry is read on Linux, so its paths are Linux paths whichever computer writes it.
+	const executable = posix.join(root, '.build/electron', product.platforms.linux.executableName);
 	const id = developmentDesktopId(product);
 	return [
 		'[Desktop Entry]',
@@ -64,7 +65,7 @@ export function developmentDesktopEntry(product: Product, root: string): string 
 /** `$XDG_DATA_HOME`, or `~/.local/share` when it is unset or empty. */
 export function dataHome(environment: NodeJS.ProcessEnv = process.env): string {
 	const configured = environment.XDG_DATA_HOME;
-	return configured !== undefined && configured !== '' ? configured : join(homedir(), '.local/share');
+	return configured !== undefined && configured !== '' ? configured : posix.join(homedir(), '.local/share');
 }
 
 async function replace(path: string, contents: string | Buffer): Promise<void> {
