@@ -100,7 +100,6 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
             (events.contains(&button) && events.contains(&wheel)).then_some(events)
         },
     );
-    let at = |event: InputEvent| got.iter().rposition(|seen| *seen == event);
     assert_eq!(
         got.iter()
             .filter(|event| matches!(event, InputEvent::Key { .. } | InputEvent::Button { .. }))
@@ -114,8 +113,15 @@ fn keyboard_and_pointer_events_are_applied_and_released() -> TestResult {
         1,
         "the wheel step applies once"
     );
-    assert!(
-        at(rest) < at(button) && got[..at(button).unwrap_or(0)].contains(&rest),
+    // The newest position's datagram may still land after the button, as a
+    // repeat of where the pointer already is; what counts is where it is when
+    // the button goes down.
+    let before_button = &got[..got.iter().position(|seen| *seen == button).unwrap_or(0)];
+    assert_eq!(
+        before_button
+            .iter()
+            .rfind(|event| matches!(event, InputEvent::Pointer { .. })),
+        Some(&rest),
         "the pointer is at its newest position when the button goes down: {got:?}"
     );
     assert!(
