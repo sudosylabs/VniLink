@@ -252,6 +252,7 @@ fn consume<E, F>(
                     .flatten()
                     .map(|mut sample| {
                         sample.unchanged = true;
+                        sample.pointer_only = false;
                         if let Some(at) = sample.captured_at {
                             let since = u64::try_from(at.elapsed().as_micros()).unwrap_or(u64::MAX);
                             let stamp = sample.frame.timestamp_us().saturating_add(since);
@@ -267,6 +268,7 @@ fn consume<E, F>(
             capture_us,
             captured_at,
             unchanged,
+            pointer_only,
         }) = next
         else {
             continue;
@@ -341,13 +343,20 @@ fn consume<E, F>(
                     }
                 }
             }
+            // The viewer moves the pointer it draws: the picture it has is
+            // still the screen, unless the encoder owes or refines one.
+            if pointer_only && !session.keyframe_pending() && !session.refining() {
+                continue;
+            }
         } else if let Some(cursor) = cursor.as_ref() {
-            // A pointer drawn into the picture changes it where it was and where it is.
+            // A pointer drawn into the picture changes it where it was and
+            // where it is, and the still it would leave there.
             let pointer = pointer_bounds(cursor);
             if pointer != drawn_pointer {
                 let places: Vec<_> = drawn_pointer.into_iter().chain(pointer).collect();
                 sink.add(Some(&places));
                 drawn_pointer = pointer;
+                stills.changed_a_little(Instant::now());
             }
             match composite(&frame, cursor) {
                 Ok(composited) => frame = composited,

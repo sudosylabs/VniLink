@@ -1026,6 +1026,17 @@ impl<'a> CaptureBuffer<'a> {
         std::ptr::NonNull::new(unsafe { stream.dequeue_raw_buffer() })
             .map(|raw| Self { raw, stream })
     }
+    /// Whether the producer marked the whole buffer corrupted in its
+    /// header: nothing in it, the pointer included, can be trusted.
+    fn corrupted(&self) -> bool {
+        // SAFETY: the dequeued buffer and its metadata remain owned until Drop.
+        let Some(buffer) = (unsafe { self.raw.as_ref().buffer.as_ref() }) else {
+            return false;
+        };
+        // SAFETY: the buffer's SPA arrays and allocations stay readable while
+        // it is dequeued, which lasts until Drop.
+        unsafe { header_corrupted(buffer) }
+    }
     fn cursor_bytes(&self) -> Option<&[u8]> {
         // SAFETY: the dequeued buffer and its metadata remain owned until Drop.
         let buffer = unsafe { self.raw.as_ref().buffer.as_ref()? };
@@ -1093,6 +1104,36 @@ impl Drop for CaptureBuffer<'_> {
             self.stream.queue_raw_buffer(self.raw.as_ptr());
         }
     }
+}
+
+/// Whether `buffer`'s header says the producer could not fill it.
+///
+/// Safety: the SPA descriptor arrays and every advertised allocation must stay
+/// readable for the borrowed buffer's lifetime, as guaranteed while dequeued.
+unsafe fn header_corrupted(buffer: &pw::spa::sys::spa_buffer) -> bool {
+    if buffer.n_metas == 0 || buffer.metas.is_null() {
+        return false;
+    }
+    // SAFETY: `metas` is non-null with `n_metas` entries, owned by the dequeued
+    // buffer.
+    let metas = unsafe { std::slice::from_raw_parts(buffer.metas, buffer.n_metas as usize) };
+    metas
+        .iter()
+        .find(|meta| meta.type_ == pw::spa::sys::SPA_META_Header)
+        .filter(|meta| {
+            !meta.data.is_null()
+                && meta.size as usize >= std::mem::size_of::<pw::spa::sys::spa_meta_header>()
+        })
+        .is_some_and(|meta| {
+            // SAFETY: SPA owns `size` readable bytes, a whole header at least
+            // (checked above).
+            let header = unsafe {
+                meta.data
+                    .cast::<pw::spa::sys::spa_meta_header>()
+                    .read_unaligned()
+            };
+            header.flags & pw::spa::sys::SPA_META_HEADER_FLAG_CORRUPTED != 0
+        })
 }
 
 /// Safety: the SPA descriptor arrays and every advertised allocation must stay
@@ -1217,6 +1258,9 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
     let Some(mut buffer) = CaptureBuffer::dequeue(stream) else {
         return;
     };
+    if buffer.corrupted() {
+        return;
+    }
     if let Some(meta) = buffer.cursor_bytes() {
         let mut cursor = shared.cursor.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(update) = crate::cursor::parse(
@@ -1231,6 +1275,10 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
     let damage = buffer.damage();
     let datas = buffer.datas_mut();
     if datas.is_empty() {
+        return;
+    }
+    let chunk = datas[0].chunk();
+    if !holds_picture(chunk.size(), chunk.flags()) {
         return;
     }
     if datas[0].type_() == pw::spa::buffer::DataType::DmaBuf {
@@ -1262,7 +1310,7 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
         return;
     };
     let end = offset.saturating_add(size);
-    if size == 0 || end > bytes.len() {
+    if end > bytes.len() {
         return;
     }
     let Some((width, height)) = *shared
@@ -1293,6 +1341,15 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
             .map(|damage| damage_changes(damage, width, height)),
     });
     record_delivery(shared, false);
+}
+
+/// Whether a buffer the compositor queued, its first plane `size` bytes
+/// with `flags`, holds a picture. GNOME queues one empty and corrupted when
+/// only the pointer moved, without drawing into it: its pixels are what the
+/// buffer showed when last drawn, frames ago, and so is its damage. Such a
+/// buffer brings the pointer and nothing else.
+pub(crate) fn holds_picture(size: u32, flags: pw::spa::buffer::ChunkFlags) -> bool {
+    size > 0 && !flags.contains(pw::spa::buffer::ChunkFlags::CORRUPTED)
 }
 
 /// Where a buffer's damage says the screen changed. SPA ends the list at
@@ -1575,5 +1632,50 @@ mod cursor_buffer_tests {
         buffer.metas = std::ptr::null_mut();
         // SAFETY: a null `metas` is rejected before any slice is built.
         assert!(unsafe { cursor_metadata(&buffer) }.is_none());
+    }
+
+    #[test]
+    fn a_buffer_its_header_marks_corrupted_is_left_whole() {
+        let mut header = pw::spa::sys::spa_meta_header {
+            flags: 0,
+            offset: 0,
+            pts: 0,
+            dts_offset: 0,
+            seq: 0,
+        };
+        let mut meta = pw::spa::sys::spa_meta {
+            type_: pw::spa::sys::SPA_META_Header,
+            size: std::mem::size_of_val(&header) as u32,
+            data: (&raw mut header).cast(),
+        };
+        let mut buffer = pw::spa::sys::spa_buffer {
+            n_metas: 1,
+            n_datas: 0,
+            metas: &mut meta,
+            datas: std::ptr::null_mut(),
+        };
+        // SAFETY: `meta.data` is the live `header`, `meta.size` its size.
+        let corrupted = unsafe { header_corrupted(&buffer) };
+        assert!(
+            !corrupted,
+            "a header with no flag leaves the buffer to its chunks"
+        );
+        header.flags = pw::spa::sys::SPA_META_HEADER_FLAG_CORRUPTED;
+        // SAFETY: `meta.data` is the live `header`, `meta.size` its size.
+        let corrupted = unsafe { header_corrupted(&buffer) };
+        assert!(
+            corrupted,
+            "a header marked corrupted makes the whole buffer untrusted"
+        );
+        meta.size = 4;
+        // SAFETY: a size short of a header is rejected before the header is read.
+        let corrupted = unsafe { header_corrupted(&buffer) };
+        assert!(
+            !corrupted,
+            "a header too short to hold its flags says nothing"
+        );
+        buffer.metas = std::ptr::null_mut();
+        // SAFETY: a null `metas` is rejected before any slice is built.
+        assert!(!unsafe { header_corrupted(&buffer) });
     }
 }

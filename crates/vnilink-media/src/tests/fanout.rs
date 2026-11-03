@@ -1181,9 +1181,27 @@ fn frames_of(
     shows: bool,
     watch: Duration,
 ) -> Vec<vnilink::EncodedFrame> {
+    watch_viewer(source, Box::new(StillsCapture), false, shows, watch).0
+}
+
+/// The frames a viewer receives over `watch` of `source` from a host
+/// whose capture is `capture`, and the pointer it has at the end. The
+/// viewer takes the pointer apart from the picture when `separate_pointer`
+/// and the capture offers it, and shows stills when `shows`.
+fn watch_viewer(
+    source: impl FrameSource + Send + 'static,
+    capture: Box<dyn vnilink::HostCapture>,
+    separate_pointer: bool,
+    shows: bool,
+    watch: Duration,
+) -> (
+    Vec<vnilink::EncodedFrame>,
+    Option<Arc<vnilink::CursorState>>,
+) {
     let host = Arc::new(boot());
     let viewer = boot();
-    host.set_capture(Box::new(StillsCapture)).unwrap();
+    host.set_capture(capture).unwrap();
+    viewer.set_cursor_receiver(separate_pointer).unwrap();
     for core in [&host, &viewer] {
         core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
             .unwrap();
@@ -1246,9 +1264,10 @@ fn frames_of(
             roles.push(frame);
         }
     }
+    let pointer = handle.cursor().unwrap();
     stop.store(true, Ordering::Relaxed);
     worker.join().unwrap().unwrap();
-    roles
+    (roles, pointer)
 }
 
 /// An unchanged screen brings one still picture once it stayed so for
@@ -1333,6 +1352,133 @@ fn a_changed_picture_says_where_the_screen_changed() {
 
 /// A source that is told of each picture as it arrives, as the platform
 /// captures are, and records when it is read.
+/// A screen whose pixels never change while its pointer, a two-pixel
+/// square, moves right a pixel every 20 ms from (0, 8) until it stops at
+/// [`POINTER_STOPS`].
+struct MovingPointer {
+    at: Instant,
+}
+
+const POINTER_STOPS: (i32, i32) = (60, 8);
+
+/// The capture of [`MovingPointer`]: one that offers its pointer apart
+/// from the picture when `separate`.
+struct PointerCapture {
+    separate: bool,
+}
+
+impl vnilink::HostCapture for PointerCapture {
+    fn monitor(&self) -> (u16, u16) {
+        (64, 64)
+    }
+    fn separate_cursor(&self) -> bool {
+        self.separate
+    }
+}
+
+impl FrameSource for MovingPointer {
+    fn size(&self) -> (u16, u16) {
+        (64, 64)
+    }
+
+    fn poll_frame(&self, timestamp: u64) -> Result<Option<RawFrame>, Error> {
+        Ok(Some(solid(64, 64, timestamp)))
+    }
+
+    fn attested_at(&self) -> Option<Instant> {
+        Some(self.at)
+    }
+
+    fn cursor(&self) -> Option<vnilink::CursorState> {
+        let moved = (self.at.elapsed().as_millis() / 20) as i32;
+        Some(vnilink::CursorState {
+            position: (moved.min(POINTER_STOPS.0), POINTER_STOPS.1),
+            visible: true,
+            image: Some(Arc::new(
+                vnilink::CursorImage::new(2, 2, (0, 0), vec![255; 16]).unwrap(),
+            )),
+        })
+    }
+}
+
+/// A pointer the viewer draws, moving over a screen that does not change,
+/// reaches the viewer on its own: no picture is encoded for it beyond the
+/// first and the once-a-second keepalive.
+#[test]
+fn a_pointer_the_viewer_draws_moving_alone_sends_no_picture() {
+    use vnilink::FrameRole::Changed;
+    let watch = Duration::from_millis(1_800);
+    let (frames, pointer) = watch_viewer(
+        MovingPointer { at: Instant::now() },
+        Box::new(PointerCapture { separate: true }),
+        true,
+        false,
+        watch,
+    );
+    let roles: Vec<_> = frames.iter().map(|frame| frame.role).collect();
+    assert_eq!(roles.first(), Some(&Changed), "{roles:?}");
+    assert!(
+        roles[1..].iter().all(|role| *role != Changed),
+        "a pointer moving alone changed the picture: {roles:?}"
+    );
+    // The keyframe, then a keepalive a second: a busy computer that
+    // stretched the watch allows one more.
+    assert!(
+        frames.len() <= 4,
+        "a pointer moving alone was encoded: {} pictures in {watch:?}",
+        frames.len()
+    );
+    assert_eq!(
+        pointer.map(|pointer| pointer.position),
+        Some(POINTER_STOPS),
+        "the viewer has the pointer where it stopped"
+    );
+}
+
+/// A pointer drawn into the picture, moving over a screen that does not
+/// change, changes the picture where it was and where it is.
+#[test]
+fn a_pointer_drawn_into_the_picture_moving_alone_changes_it_where_it_moved() {
+    use vnilink::FrameRole::Changed;
+    let (frames, _) = watch_viewer(
+        MovingPointer { at: Instant::now() },
+        Box::new(PointerCapture { separate: false }),
+        false,
+        false,
+        Duration::from_millis(1_800),
+    );
+    let moved: Vec<_> = frames[1..]
+        .iter()
+        .filter(|frame| frame.role == Changed)
+        .collect();
+    assert!(
+        moved.len() >= 5,
+        "the pointer drawn in moved in {} pictures",
+        moved.len()
+    );
+    // A picture after one its encoder missed cannot say where; one that
+    // says names only the pointer's row.
+    let said: Vec<_> = moved
+        .iter()
+        .filter_map(|frame| frame.regions.as_deref())
+        .collect();
+    assert!(
+        said.len() * 2 >= moved.len(),
+        "{} of {} pictures the pointer changed say where",
+        said.len(),
+        moved.len()
+    );
+    for regions in said {
+        assert!(
+            !regions.is_empty()
+                && regions
+                    .iter()
+                    .all(|region| region.y == 8 && region.height == 2),
+            "a picture the pointer changed says where it was and is: {regions:?}"
+        );
+    }
+}
+
 struct Pushing {
     channel: crate::channel::FrameChannel,
     seen: std::sync::atomic::AtomicU64,
