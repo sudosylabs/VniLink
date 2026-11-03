@@ -1233,6 +1233,10 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
     if datas.is_empty() {
         return;
     }
+    let chunk = datas[0].chunk();
+    if !holds_picture(chunk.size(), chunk.flags()) {
+        return;
+    }
     if datas[0].type_() == pw::spa::buffer::DataType::DmaBuf {
         match state.gpu.as_mut() {
             Some(gpu) => push_dma_buf(shared, gpu, damage.as_deref(), datas),
@@ -1262,7 +1266,7 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
         return;
     };
     let end = offset.saturating_add(size);
-    if size == 0 || end > bytes.len() {
+    if end > bytes.len() {
         return;
     }
     let Some((width, height)) = *shared
@@ -1293,6 +1297,15 @@ fn copy_buffer(stream: &pw::stream::Stream, state: &mut ListenerState) {
             .map(|damage| damage_changes(damage, width, height)),
     });
     record_delivery(shared, false);
+}
+
+/// Whether a buffer the compositor queued, its first plane `size` bytes
+/// with `flags`, holds a picture. GNOME queues one empty and corrupted when
+/// only the pointer moved, without drawing into it: its pixels are what the
+/// buffer showed when last drawn, frames ago, and so is its damage. Such a
+/// buffer brings the pointer and nothing else.
+pub(crate) fn holds_picture(size: u32, flags: pw::spa::buffer::ChunkFlags) -> bool {
+    size > 0 && !flags.contains(pw::spa::buffer::ChunkFlags::CORRUPTED)
 }
 
 /// Where a buffer's damage says the screen changed. SPA ends the list at
