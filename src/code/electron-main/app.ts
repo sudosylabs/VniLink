@@ -55,6 +55,9 @@ import { INativeHostMainService, NativeHostMainService } from '../../platform/na
 import { PERMISSIONS_CHANNEL_NAME } from '../../platform/permissions/common/permissions.js';
 import { PermissionsChannel } from '../../platform/permissions/electron-main/permissionsChannel.js';
 import { IPermissionsMainService, PermissionsMainService } from '../../platform/permissions/electron-main/permissionsMainService.js';
+import { APPLICATION_LOCATION_CHANNEL_NAME } from '../../platform/applicationLocation/common/applicationLocation.js';
+import { ApplicationLocationChannel } from '../../platform/applicationLocation/electron-main/applicationLocationChannel.js';
+import { ApplicationLocationMainService, electronApplicationLocationEnvironment, IApplicationLocationMainService } from '../../platform/applicationLocation/electron-main/applicationLocationMainService.js';
 import { INVITATIONS_CHANNEL_NAME } from '../../platform/invitations/common/invitations.js';
 import { InvitationsChannel } from '../../platform/invitations/electron-main/invitationsChannel.js';
 import { IInvitationsMainService, InvitationsMainService, readInvitation } from '../../platform/invitations/electron-main/invitationsMainService.js';
@@ -141,6 +144,7 @@ export class VniLinkApplication extends Disposable {
 			[ISystemActionNoticeMainService, new SyncDescriptor(SystemActionNoticeMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IInvitationsMainService, new SyncDescriptor(InvitationsMainService, [readInvitation])],
+			[IApplicationLocationMainService, new SyncDescriptor(ApplicationLocationMainService, [electronApplicationLocationEnvironment])],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
 			[IStateService, this.stateService],
@@ -206,6 +210,10 @@ export class VniLinkApplication extends Disposable {
 			if (startsWithoutWindow(this.options.temporaryEngine ?? false, this.runsInBackground(), () => launchedAtLogin())) {
 				// Started by the login item: accept paired devices without a window until the user opens one.
 				windowRequests.startedWithoutWindow();
+				return;
+			}
+			// A macOS application opened from the disk image or Downloads offers to move to Applications, which relaunches it.
+			if (await this.instantiationService.invokeFunction(accessor => accessor.get(IApplicationLocationMainService)).offerAtStartup()) {
 				return;
 			}
 			const window = await this.openWindow();
@@ -365,6 +373,7 @@ export class VniLinkApplication extends Disposable {
 		server.registerChannel(ENGINE_CHANNEL_NAME, disposables.add(new EngineChannel(engine, windows, nativeHost, permissions)));
 		server.registerChannel(PERMISSIONS_CHANNEL_NAME, new PermissionsChannel(permissions));
 		server.registerChannel(INVITATIONS_CHANNEL_NAME, new InvitationsChannel(accessor.get(IInvitationsMainService)));
+		server.registerChannel(APPLICATION_LOCATION_CHANNEL_NAME, new ApplicationLocationChannel(accessor.get(IApplicationLocationMainService)));
 		server.registerChannel(LOGGER_CHANNEL_NAME, new WindowLoggerChannel(disposables.add(new LoggerChannel(this.loggerService)), this.logsHome));
 		// A closed window's loggers, and their open files, go with it.
 		disposables.add(windows.onDidOpenWindow(window => {
