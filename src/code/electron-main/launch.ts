@@ -35,6 +35,13 @@ interface LaunchPlan {
 	readonly name: string;
 	/** Windows groups taskbar buttons and notifications by this id. */
 	readonly appUserModelId: string | undefined;
+	/**
+	 * The Linux desktop entry: Wayland's app id and X11's `WM_CLASS`, which
+	 * desktops match to an installed `.desktop` file for the icon and portals.
+	 * The source checkout has its own, so it never takes an installed build's
+	 * grants or entry.
+	 */
+	readonly desktopName: string;
 	readonly action: LaunchAction;
 }
 
@@ -68,5 +75,15 @@ function launchAction(context: LaunchContext): LaunchAction {
 
 /** Decides a launch from its arguments; smoke isolation is explicit and required. */
 export function planLaunch(context: LaunchContext): LaunchPlan {
-	return { name: product.name, appUserModelId: context.windows ? product.appId : undefined, action: launchAction(context) };
+	return {
+		name: product.name,
+		appUserModelId: context.windows ? product.appId : undefined,
+		desktopName: desktopName(context.built),
+		action: launchAction(context),
+	};
+}
+
+/** The product's desktop entry when built; from the source checkout, the same name with `.dev` before `.desktop`. */
+export function desktopName(built: boolean): string {
+	return built ? product.linux.desktopFileName : product.linux.desktopFileName.replace(/\.desktop$/, '.dev.desktop');
 }

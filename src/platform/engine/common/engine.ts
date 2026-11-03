@@ -49,6 +49,8 @@ export interface SharingPolicy {
 	microphone: boolean;
 	recording: boolean;
 	system_actions: boolean;
+	/** Paired computers use what is shared without the person here accepting them each time. */
+	unattended: boolean;
 }
 
 interface Device {
@@ -138,6 +140,9 @@ export type EngineEvent =
 	/** A paired computer asked this one to restart or shut down; it runs after `remainingMs` unless cancelled. */
 	| { type: 'systemActionScheduled'; id: string; action: 'restart' | 'shutdown'; endpoint_id: string; remainingMs: number }
 	| { type: 'systemActionEnded'; id: string; state: SystemOperationState }
+	| { type: 'admissionRequested'; id: string; endpoint_id: string; remainingMs: number }
+	| { type: 'admissionRequestEnded'; id: string }
+	| { type: 'admissionWaiting'; endpoint_id: string; waiting: boolean }
 	| { type: 'addressesUpdated'; endpoint_id: string }
 	| { type: 'peerRenamed'; endpoint_id: string; hostname: string | null }
 	| { type: 'presenceChanged'; endpoint_id: string; presence: DevicePresence }
@@ -207,6 +212,8 @@ export type EngineCommand =
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
 	| { type: 'peerHostname'; endpointId: string }
+	| { type: 'computerName' }
+	| { type: 'setComputerName'; name: string | null }
 	| { type: 'controllerSessionPaths'; sessionId: string }
 	| { type: 'pollEvents'; subscriptionId: string; maxEvents: number }
 	| { type: 'releaseEvents'; subscriptionId: string }
@@ -220,6 +227,8 @@ export type EngineCommand =
 	| { type: 'setSystemPrivacy'; sessionId: string; generation: string; enabled: boolean }
 	| { type: 'systemPrivacy'; sessionId: string; generation: string }
 	| { type: 'scheduledSystemActions' }
+	| { type: 'admissionRequests' }
+	| { type: 'answerAdmissionRequest'; id: string; accept: boolean }
 	| { type: 'cancelHostedSystemAction' | 'runHostedSystemActionNow'; id: string }
 	| { type: 'terminalPolicy' }
 	| { type: 'setTerminalPolicy'; policy: TerminalPolicy }
@@ -323,6 +332,7 @@ export type EngineReply =
 	| { type: 'capabilities'; capabilities: Capabilities }
 	| { type: 'videoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'hostname'; hostname: string | null }
+	| { type: 'computerName'; chosen: string | null; system: string | null }
 	| { type: 'eventSubscription'; subscriptionId: string }
 	| { type: 'events'; events: EngineEvent[]; lagged: string }
 	| { type: 'sharingPolicy'; policy: SharingPolicy }
@@ -330,6 +340,7 @@ export type EngineReply =
 	| { type: 'systemOperation'; operation: SystemOperation }
 	| { type: 'systemPrivacy'; privacy: SystemPrivacy }
 	| { type: 'scheduledSystemActions'; actions: ScheduledSystemAction[] }
+	| { type: 'admissionRequests'; requests: AdmissionRequest[] }
 	| { type: 'terminalPolicy'; policy: TerminalPolicy }
 	| { type: 'terminalSessions'; sessions: TerminalSession[] }
 	| ({ type: 'terminalShells' } & TerminalShells)
@@ -341,6 +352,14 @@ export type EngineReply =
 
 export function record(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The most bytes of UTF-8 a computer's name may take, as the engine keeps it. */
+export const MAX_COMPUTER_NAME_BYTES = 128;
+
+/** A name the engine keeps as given: not padded, no control characters, at most 128 bytes. */
+export function isComputerName(value: unknown): value is string {
+	return typeof value === 'string' && value.length > 0 && value === value.trim() && !/\p{Cc}/u.test(value) && new TextEncoder().encode(value).length <= MAX_COMPUTER_NAME_BYTES;
 }
 
 function text(value: unknown): value is string {
@@ -461,6 +480,13 @@ interface ScheduledSystemAction {
 	readonly remainingMs: number;
 }
 
+/** A paired computer waiting for the person here to accept it. */
+interface AdmissionRequest {
+	readonly id: string;
+	readonly endpoint_id: string;
+	readonly remainingMs: number;
+}
+
 const systemActionKinds: readonly string[] = ['lock', 'restart', 'shutdown'];
 
 const systemOperationStates: readonly string[] = ['admitted', 'refused', 'executed', 'failed', 'scheduled', 'cancelled'];
@@ -484,6 +510,10 @@ function scheduledSystemAction(value: unknown): value is ScheduledSystemAction {
 		&& text(value.endpoint_id) && noticeMs(value.remainingMs) && Object.keys(value).length === 4;
 }
 
+function admissionRequest(value: unknown): value is AdmissionRequest {
+	return record(value) && decimal(value.id) && text(value.endpoint_id) && noticeMs(value.remainingMs) && Object.keys(value).length === 3;
+}
+
 function systemSupport(value: unknown): value is SystemSupport {
 	return record(value) && typeof value.lock === 'boolean' && typeof value.restart === 'boolean'
 		&& typeof value.shutdown === 'boolean' && typeof value.privacy === 'boolean' && Object.keys(value).length === 4;
@@ -494,12 +524,14 @@ function serviceKind(value: unknown): value is ServiceSummary['kind'] {
 		|| value === 'SystemAudio' || value === 'Microphone' || value === 'System' || value === 'ScreenSnapshot';
 }
 
+const sharingKeys: readonly string[] = ['view', 'control', 'clipboard', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions', 'unattended'];
+
 function sharingPolicyUpdate(value: unknown): boolean {
-	return record(value) && Object.keys(value).length > 0 && Object.entries(value).every(([key, field]) => ['view', 'control', 'clipboard', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].includes(key) && typeof field === 'boolean');
+	return record(value) && Object.keys(value).length > 0 && Object.entries(value).every(([key, field]) => sharingKeys.includes(key) && typeof field === 'boolean');
 }
 
 function sharingPolicy(value: unknown): value is SharingPolicy {
-	return record(value) && ['view', 'control', 'clipboard', 'files', 'terminal', 'camera', 'system_audio', 'microphone', 'recording', 'system_actions'].every(key => typeof value[key] === 'boolean') && Object.keys(value).length === 10;
+	return record(value) && sharingKeys.every(key => typeof value[key] === 'boolean') && Object.keys(value).length === sharingKeys.length;
 }
 
 function terminalPolicy(value: unknown): value is TerminalPolicy {
@@ -594,6 +626,9 @@ export function isEngineEvent(value: unknown): value is EngineEvent {
 		case 'controlCheck': return text(value.endpoint_id) && /^[0-9]{6}$/.test(String(value.check)) && Object.keys(value).length === 3;
 		case 'systemActionScheduled': return decimal(value.id) && (value.action === 'restart' || value.action === 'shutdown') && text(value.endpoint_id) && noticeMs(value.remainingMs) && Object.keys(value).length === 5;
 		case 'systemActionEnded': return decimal(value.id) && systemOperationStates.includes(String(value.state)) && Object.keys(value).length === 3;
+		case 'admissionRequested': return decimal(value.id) && text(value.endpoint_id) && noticeMs(value.remainingMs) && Object.keys(value).length === 4;
+		case 'admissionRequestEnded': return decimal(value.id) && Object.keys(value).length === 2;
+		case 'admissionWaiting': return text(value.endpoint_id) && typeof value.waiting === 'boolean' && Object.keys(value).length === 3;
 		case 'addressesUpdated': return text(value.endpoint_id) && Object.keys(value).length === 2;
 		case 'peerRenamed': return text(value.endpoint_id) && (value.hostname === null || text(value.hostname)) && Object.keys(value).length === 3;
 		case 'presenceChanged': return text(value.endpoint_id) && devicePresences.some(presence => presence === value.presence) && Object.keys(value).length === 3;
@@ -767,6 +802,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{6}$/.test(value.digits); break;
 		case 'revoke': case 'unpair': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
+		case 'computerName': keys = []; valid = true; break;
+		case 'setComputerName': keys = ['name']; valid = value.name === null || isComputerName(value.name); break;
 		case 'disconnect': keys = []; valid = true; break;
 		case 'disconnectSession': case 'stopHostedPeer': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'setInputDefaults': keys = ['mode', 'swap', 'pointer']; valid = keyboardMode(value.mode) && typeof value.swap === 'boolean' && pointerSettings(value.pointer); break;
@@ -819,7 +856,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'systemOperation': case 'cancelSystemAction': keys = ['sessionId', 'generation', 'id']; valid = decimal(value.sessionId) && decimal(value.generation) && decimal(value.id); break;
 		case 'setSystemPrivacy': keys = ['sessionId', 'generation', 'enabled']; valid = decimal(value.sessionId) && decimal(value.generation) && typeof value.enabled === 'boolean'; break;
 		case 'systemPrivacy': keys = ['sessionId', 'generation']; valid = decimal(value.sessionId) && decimal(value.generation); break;
-		case 'scheduledSystemActions': keys = []; valid = true; break;
+		case 'scheduledSystemActions': case 'admissionRequests': keys = []; valid = true; break;
+		case 'answerAdmissionRequest': keys = ['id', 'accept']; valid = decimal(value.id) && typeof value.accept === 'boolean'; break;
 		case 'cancelHostedSystemAction': case 'runHostedSystemActionNow': keys = ['id']; valid = decimal(value.id); break;
 		case 'terminalPolicy': keys = []; valid = true; break;
 		case 'setTerminalPolicy': keys = ['policy']; valid = terminalPolicy(value.policy); break;
@@ -876,6 +914,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'capabilities': return capabilities(value.capabilities) && Object.keys(value).length === 2;
 		case 'videoCodecs': return videoCodecs(value.codecs) && Object.keys(value).length === 2;
 		case 'hostname': return (value.hostname === null || text(value.hostname)) && Object.keys(value).length === 2;
+		case 'computerName': return (value.chosen === null || isComputerName(value.chosen)) && (value.system === null || isComputerName(value.system)) && Object.keys(value).length === 3;
 		case 'eventSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
 		case 'events': return Array.isArray(value.events) && value.events.length <= 256 && value.events.every((item: unknown) => isEngineEvent(item)) && decimal(value.lagged) && Object.keys(value).length === 3;
 		case 'sharingPolicy': return sharingPolicy(value.policy) && Object.keys(value).length === 2;
@@ -883,6 +922,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'systemOperation': return systemOperation(value.operation) && Object.keys(value).length === 2;
 		case 'systemPrivacy': return systemPrivacy(value.privacy) && Object.keys(value).length === 2;
 		case 'scheduledSystemActions': return Array.isArray(value.actions) && value.actions.length <= 64 && value.actions.every((action: unknown) => scheduledSystemAction(action)) && Object.keys(value).length === 2;
+		case 'admissionRequests': return Array.isArray(value.requests) && value.requests.length <= 256 && value.requests.every((request: unknown) => admissionRequest(request)) && Object.keys(value).length === 2;
 		case 'terminalPolicy': return terminalPolicy(value.policy) && Object.keys(value).length === 2;
 		case 'terminalSessions': return terminalSessions(value.sessions) && Object.keys(value).length === 2;
 		case 'terminalShells': return terminalShells(value);

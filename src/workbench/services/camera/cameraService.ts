@@ -28,6 +28,10 @@ export type CameraFailure =
 	| 'noCamera'
 	/** Another computer is watching this camera. */
 	| 'inUse'
+	/** The person there didn't allow this computer. */
+	| 'declined'
+	/** Nobody there answered whether to allow this computer. */
+	| 'unanswered'
 	/** The camera didn't start. */
 	| 'failed';
 

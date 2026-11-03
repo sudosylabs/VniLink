@@ -37,6 +37,9 @@ function desktopOpenFailure(error: unknown): DesktopFailure {
 		case 'Unauthorized':
 		case 'TransferDenied': return 'turnedOff';
 		case 'Busy': return 'unavailable';
+		case 'Declined':
+		case 'NotAdmitted': return 'declined';
+		case 'Unanswered': return 'unanswered';
 		case 'NoSession':
 		case 'StaleSession': return 'disconnected';
 		default: return 'failed';

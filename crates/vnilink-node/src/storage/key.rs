@@ -29,7 +29,6 @@ pub(crate) enum KeyAccess {
 pub(crate) trait KeyVault: Send + Sync {
     fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, KeyAccess>;
     fn write(&self, key: &[u8; KEY_LEN]) -> Result<(), KeyAccess>;
-    #[cfg(any(test, feature = "reset-installation"))]
     fn delete(&self) -> Result<(), KeyAccess>;
 }
 
@@ -81,7 +80,6 @@ impl KeyVault for KeyringVault {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "reset-installation"))]
     fn delete(&self) -> Result<(), KeyAccess> {
         let entry = keyring::Entry::new(&self.service, &self.account).map_err(map_keyring)?;
         match entry.delete_credential() {
@@ -165,7 +163,6 @@ impl KeyVault for MemoryVault {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "reset-installation"))]
     fn delete(&self) -> Result<(), KeyAccess> {
         self.inner.lock().expect("memory vault").bytes = None;
         Ok(())
@@ -216,7 +213,6 @@ impl KeyVault for FileVault {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "reset-installation"))]
     fn delete(&self) -> Result<(), KeyAccess> {
         match std::fs::remove_file(&self.path) {
             Ok(()) => Ok(()),

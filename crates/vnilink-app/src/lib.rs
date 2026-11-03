@@ -162,12 +162,19 @@ impl VnilinkCore {
         })
     }
 
-    /// Temporary loopback-only fixture; never exposed through the desktop bridge.
+    /// Temporary loopback-only fixture; never exposed through the desktop
+    /// bridge. Paired computers use what it shares without anyone accepting
+    /// them, as a test of services needs.
     #[cfg(feature = "test-support")]
     pub fn create_loopback_for_test() -> Result<Self, FfiError> {
         let core = Core::start(CoreConfig {
             listen: Listen::Loopback,
             ..CoreConfig::default()
+        })
+        .map_err(map_error)?;
+        core.change_sharing_policy(vnilink::SharingPolicyUpdate {
+            unattended: Some(true),
+            ..Default::default()
         })
         .map_err(map_error)?;
         Ok(Self {
@@ -489,6 +496,19 @@ impl VnilinkCore {
         self.inner.peer_hostname(&endpoint_id).map_err(map_error)
     }
 
+    /// The name this computer chose, if any, and the operating system's.
+    pub fn computer_name(&self) -> Result<(Option<String>, Option<String>), FfiError> {
+        let name = self.inner.computer_name().map_err(map_error)?;
+        Ok((name.chosen, name.system))
+    }
+
+    /// Saves the name other computers are told, or with `None` goes back to the operating system's.
+    pub fn set_computer_name(&self, name: Option<String>) -> Result<(), FfiError> {
+        self.inner
+            .set_computer_name(name.as_deref())
+            .map_err(map_error)
+    }
+
     pub fn confirm_control_request(&self, digits: String) -> Result<FfiDeviceInfo, FfiError> {
         self.inner
             .confirm_control_request(&digits)
@@ -655,6 +675,17 @@ impl VnilinkCore {
 
 #[cfg(test)]
 mod tests;
+
+/// Lets paired computers use what `core` shares without anyone accepting
+/// them, as a test of services needs; admission has its own tests.
+#[cfg(test)]
+pub(crate) fn unattended(core: &VnilinkCore) {
+    core.set_sharing_policy(FfiSharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .expect("unattended sharing");
+}
 
 #[cfg(test)]
 mod desktop_tests;

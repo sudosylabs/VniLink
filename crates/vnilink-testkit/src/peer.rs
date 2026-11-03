@@ -879,7 +879,7 @@ mod tests {
             );
             assert_eq!(
                 agent.core.sharing_policy()?,
-                vnilink::SharingPolicy::default(),
+                crate::NOTHING_SHARED,
                 "a refused scenario shares nothing"
             );
             Ok(())
@@ -949,7 +949,7 @@ mod tests {
             );
             assert_eq!(
                 agent.core.sharing_policy()?,
-                vnilink::SharingPolicy::default(),
+                crate::NOTHING_SHARED,
                 "the agent shares nothing again"
             );
             assert!(!folder.exists(), "the inbox is removed");
@@ -1086,9 +1086,10 @@ mod tests {
                 agent.core.sharing_policy()?,
                 SharingPolicy {
                     terminal: true,
+                    unattended: true,
                     ..SharingPolicy::default()
                 },
-                "the agent shares the terminal and nothing else"
+                "the agent shares the terminal, unattended, and nothing else"
             );
             assert_eq!(
                 agent.core.service_permissions(&suite.endpoint())?,
@@ -1186,7 +1187,7 @@ mod tests {
             assert!(!folder.exists(), "the scenario's folder is removed");
             assert_eq!(
                 agent.core.sharing_policy()?,
-                SharingPolicy::default(),
+                crate::NOTHING_SHARED,
                 "the agent shares nothing again"
             );
             assert!(

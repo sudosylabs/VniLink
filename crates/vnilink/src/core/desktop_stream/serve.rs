@@ -31,6 +31,11 @@ impl Drop for HostedDesktopGuard {
             .is_some_and(|r| r.info.generation == self.generation)
         {
             if let Some(mut record) = state.hosted_services.remove(&self.id) {
+                super::super::admission::service_ended(
+                    &mut state,
+                    &record.info.peer_id,
+                    std::time::Instant::now(),
+                );
                 // Backstop for a serve loop that ended without an explicit
                 // close: explicit paths set the cause first and `change`
                 // keeps the first one. A live parent means the desktop
@@ -113,6 +118,12 @@ pub(in crate::core) async fn serve(
             Err(3)
         } else if !state.trust.service_granted(&peer, ServiceKind::Desktop) {
             Err(6)
+        } else if !super::super::admission::approved(
+            &state,
+            &session.peer_id,
+            std::time::Instant::now(),
+        ) {
+            Err(super::super::admission::NOT_ADMITTED)
         } else if shared
             .desktop_owners
             .load(std::sync::atomic::Ordering::Acquire)

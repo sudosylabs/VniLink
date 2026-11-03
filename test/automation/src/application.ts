@@ -7,7 +7,7 @@
 
 /** Isolated application profile, diagnostics and total smoke-run cleanup. */
 import { app, session, type BrowserWindow } from 'electron';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isLinux } from '../../../src/base/common/platform.js';
@@ -27,6 +27,8 @@ export interface TestApplicationOptions {
 	/** Where that engine keeps the desktop portal's grant to share the screen, so a run asks once. */
 	readonly screenGrant?: string;
 	readonly timeoutMs?: number;
+	/** Whether the profile starts with the welcome finished, as every scenario but the welcome's own expects. */
+	readonly onboarded?: boolean;
 }
 
 export class TestApplication {
@@ -51,6 +53,11 @@ export class TestApplication {
 		// Identity as VniLinkMain sets it, which test launches bypass.
 		app.setName(product.name);
 		app.setPath('userData', this.profile);
+		// A fresh profile opens the welcome over Home; scenarios start past it unless they test it.
+		const state = join(this.profile, 'storage.json');
+		if ((options.onboarded ?? true) && !existsSync(state)) {
+			writeFileSync(state, JSON.stringify({ 'onboarding.completed': true }));
+		}
 		mkdirSync(this.output, { recursive: true });
 		writeFileSync(join(this.output, 'environment.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, versions: process.versions, chromiumSandbox: !this.container }, null, 2));
 	}

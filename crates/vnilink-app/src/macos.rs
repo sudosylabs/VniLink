@@ -905,7 +905,7 @@ mod viewer_tests {
         }
     }
     fn core() -> VnilinkCore {
-        VnilinkCore {
+        let core = VnilinkCore {
             inner: Arc::new(
                 Core::start(vnilink::CoreConfig {
                     listen: vnilink::Listen::Loopback,
@@ -921,7 +921,9 @@ mod viewer_tests {
             previews: Mutex::new(std::collections::HashMap::new()),
             next_preview: std::sync::atomic::AtomicU64::new(1),
             audio_coordinator: std::sync::Arc::new(crate::audio_native::AudioCoordinator::default()),
-        }
+        };
+        crate::unattended(&core);
+        core
     }
     #[test]
     fn last_capture_retirement_preserves_files_parent() {

@@ -158,8 +158,8 @@ pub use core::service_stream::RemoteFilesService;
 pub use core::RemoteDesktopService;
 pub use core::TopologySnapshot;
 pub use core::{
-    ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath, Snapshot,
-    VideoRouting, VideoTarget,
+    ComputerName, ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath,
+    Snapshot, VideoRouting, VideoTarget,
 };
 pub use core::{DesktopControlState, DesktopInfo};
 pub use diagnostics::{
@@ -190,9 +190,9 @@ pub use pairing::{PairingFile, PairingPreview, PAIRING_FILE_EXTENSION};
 pub use protocol::{Capabilities, Quality, CODEC_H264, CODEC_H264_HIGH, PROTOCOL_VERSION};
 pub use relay::{CustomRelay, RelaySettings};
 pub use service::{
-    CloseCause, DesktopEnd, ServiceInfo, ServiceKind, ServiceLease, ServicePermissions,
-    ServicePhase, ServiceSupport, SharingPolicy, SharingPolicyUpdate, StreamEnd, StreamFailure,
-    MAX_SERVICE_RECORDS,
+    AdmissionRequest, CloseCause, DesktopEnd, ServiceInfo, ServiceKind, ServiceLease,
+    ServicePermissions, ServicePhase, ServiceSupport, SharingPolicy, SharingPolicyUpdate,
+    StreamEnd, StreamFailure, MAX_SERVICE_RECORDS,
 };
 pub use session::{Grants, SessionInfo, SessionPhase, SessionRole};
 pub use system::{

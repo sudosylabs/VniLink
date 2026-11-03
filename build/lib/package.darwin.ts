@@ -5,13 +5,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-/** The macOS installer: a UDZO disk image with the application and an Applications link. */
+/**
+ * The macOS installer: a UDZO disk image whose window shows the application
+ * beside an Applications link, over artwork pointing from one to the other
+ * (`installerAssets.ts` renders it at 1x and 2x, which the packager combines).
+ */
+import { join } from 'node:path';
+import { dmgLayout } from './installerAssets.ts';
 import type { BuilderConfiguration } from './package.ts';
 import type { Product } from './product.ts';
 
 export const extensions = ['.dmg'];
 
+/** Files the release stages into `packaging-resources` for this installer, at the same paths. */
+export const resources: readonly string[] = ['assets/apple/dmg/background.png', 'assets/apple/dmg/background@2x.png'];
+
 export function installerOptions(product: Product, base: BuilderConfiguration): Record<string, unknown> {
+	const { width, height, application, applications } = dmgLayout;
 	return {
 		mac: { ...base.mac, target: ['dmg'] },
 		dmg: {
@@ -19,9 +29,10 @@ export function installerOptions(product: Product, base: BuilderConfiguration): 
 			format: 'UDZO',
 			sign: false,
 			writeUpdateInfo: false,
-			backgroundColor: '#f5f5f5',
-			window: { width: 540, height: 380 },
-			contents: [{ x: 140, y: 180, type: 'file' }, { x: 400, y: 180, type: 'link', path: '/Applications' }],
+			background: join(base.directories.buildResources, resources[0]),
+			iconSize: 96,
+			window: { width, height },
+			contents: [{ ...application, type: 'file' }, { ...applications, type: 'link', path: '/Applications' }],
 		},
 	};
 }

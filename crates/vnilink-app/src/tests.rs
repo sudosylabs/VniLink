@@ -14,8 +14,16 @@ fn full_codecs() -> FfiVideoCodecCaps {
     vnilink::VideoCodecCaps::h264_full(4096, 4096, "test").into()
 }
 
+/// `core`, letting paired computers use what it shares unattended.
+fn started(core: VnilinkCore) -> VnilinkCore {
+    crate::unattended(&core);
+    core
+}
+
 fn open_core() -> VnilinkCore {
-    VnilinkCore::create(true, vec![]).expect("public-relay core starts")
+    let core = VnilinkCore::create(true, vec![]).expect("public-relay core starts");
+    crate::unattended(&core);
+    core
 }
 
 #[test]
@@ -153,22 +161,24 @@ fn independent_controller_handles_cross_the_ffi() {
             (640, 480)
         }
     }
-    let make = || VnilinkCore {
-        inner: std::sync::Arc::new(
-            vnilink::Core::start(vnilink::CoreConfig {
-                listen: vnilink::Listen::Loopback,
-                relay: vnilink::RelaySettings::custom(vec![vnilink::CustomRelay::new(
-                    "http://127.0.0.1:9",
-                )
-                .unwrap()])
+    let make = || {
+        started(VnilinkCore {
+            inner: std::sync::Arc::new(
+                vnilink::Core::start(vnilink::CoreConfig {
+                    listen: vnilink::Listen::Loopback,
+                    relay: vnilink::RelaySettings::custom(vec![vnilink::CustomRelay::new(
+                        "http://127.0.0.1:9",
+                    )
+                    .unwrap()])
+                    .unwrap(),
+                    ..vnilink::CoreConfig::default()
+                })
                 .unwrap(),
-                ..vnilink::CoreConfig::default()
-            })
-            .unwrap(),
-        ),
-        previews: std::sync::Mutex::new(std::collections::HashMap::new()),
-        next_preview: std::sync::atomic::AtomicU64::new(1),
-        audio_coordinator: std::sync::Arc::new(crate::audio_native::AudioCoordinator::default()),
+            ),
+            previews: std::sync::Mutex::new(std::collections::HashMap::new()),
+            next_preview: std::sync::atomic::AtomicU64::new(1),
+            audio_coordinator: std::sync::Arc::new(crate::audio_native::AudioCoordinator::default()),
+        })
     };
     let controller = make();
     let a = make();

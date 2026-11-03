@@ -421,6 +421,27 @@ impl EventTransfer {
             vnilink_app::FfiEvent::ControlRequested { endpoint_id } => {
                 serde_json::json!({ "type": "controlRequested", "endpoint_id": endpoint_id })
             }
+            vnilink_app::FfiEvent::AdmissionRequested {
+                request_id,
+                endpoint_id,
+                remaining_ms,
+            } => serde_json::json!({
+                "type": "admissionRequested",
+                "id": request_id.to_string(),
+                "endpoint_id": endpoint_id,
+                "remainingMs": remaining_ms,
+            }),
+            vnilink_app::FfiEvent::AdmissionRequestEnded { request_id } => {
+                serde_json::json!({ "type": "admissionRequestEnded", "id": request_id.to_string() })
+            }
+            vnilink_app::FfiEvent::AdmissionWaiting {
+                endpoint_id,
+                waiting,
+            } => serde_json::json!({
+                "type": "admissionWaiting",
+                "endpoint_id": endpoint_id,
+                "waiting": waiting,
+            }),
             vnilink_app::FfiEvent::ControlCheck { endpoint_id, check } => {
                 serde_json::json!({ "type": "controlCheck", "endpoint_id": endpoint_id, "check": check })
             }
@@ -517,6 +538,16 @@ fn keyboard_mode_name(mode: vnilink_app::FfiKeyboardMode) -> &'static str {
     }
 }
 
+/// A paired computer waiting for the person here, as the window reads it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TransferAdmissionRequest {
+    id: String,
+    #[serde(rename = "endpoint_id")]
+    endpoint_id: String,
+    remaining_ms: u64,
+}
+
 fn parse_id(value: &str, what: &str) -> Result<u64> {
     value
         .parse::<u64>()
@@ -591,6 +622,12 @@ enum Call {
     ReleaseEvents {
         #[serde(rename = "subscriptionId")]
         subscription_id: String,
+    },
+    /// Paired computers waiting for the person here to accept them.
+    AdmissionRequests,
+    AnswerAdmissionRequest {
+        id: String,
+        accept: bool,
     },
     SharingPolicy,
     SetSharingPolicy {
@@ -702,6 +739,10 @@ enum Call {
         #[serde(rename = "endpointId")]
         endpoint_id: String,
         name: String,
+    },
+    ComputerName,
+    SetComputerName {
+        name: Option<String>,
     },
     Disconnect,
     DisconnectSession {
@@ -1075,6 +1116,10 @@ enum Reply {
     Hostname {
         hostname: Option<String>,
     },
+    ComputerName {
+        chosen: Option<String>,
+        system: Option<String>,
+    },
     EventSubscription {
         #[serde(rename = "subscriptionId")]
         subscription_id: String,
@@ -1082,6 +1127,9 @@ enum Reply {
     Events {
         events: Vec<serde_json::Value>,
         lagged: String,
+    },
+    AdmissionRequests {
+        requests: Vec<TransferAdmissionRequest>,
     },
     SharingPolicy {
         policy: TransferSharingPolicy,
@@ -1190,6 +1238,26 @@ pub struct OpenTask {
     /// grant, so a measurement asks once; a persistent engine keeps it in
     /// its installation's private directory.
     screen_grant: Option<std::path::PathBuf>,
+    /// A persistent engine whose installation the store refuses as
+    /// unreadable sets it aside and opens a new one. A readable installation
+    /// is opened as it is: starting fresh never discards one.
+    start_fresh: bool,
+}
+
+/// This computer's installation and where it keeps its grants. With
+/// `start_fresh`, one the store refuses as unreadable is set aside first.
+fn open_installation(
+    start_fresh: bool,
+) -> std::result::Result<(VnilinkCore, std::path::PathBuf, std::path::PathBuf), vnilink_app::FfiError>
+{
+    let open = || {
+        let store = storage::EncryptedInstallationStore::open_production()?;
+        start_log_file(Some(&store.log_folder()));
+        let (screen_grant, screenshot_grant) = (store.screen_grant(), store.screenshot_grant());
+        VnilinkCore::open_persistent(Box::new(store))
+            .map(|core| (core, screen_grant, screenshot_grant))
+    };
+    storage::open_or_start_fresh(start_fresh, open, storage::start_fresh)
 }
 impl Task for OpenTask {
     type Output = OpenedEngine;
@@ -1203,15 +1271,9 @@ impl Task for OpenTask {
                 None,
             )
         } else {
-            let store =
-                storage::EncryptedInstallationStore::open_production().map_err(core_error)?;
-            start_log_file(Some(&store.log_folder()));
-            let (screen_grant, screenshot_grant) = (store.screen_grant(), store.screenshot_grant());
-            (
-                VnilinkCore::open_persistent(Box::new(store)),
-                Some(screen_grant),
-                Some(screenshot_grant),
-            )
+            let (core, screen_grant, screenshot_grant) =
+                open_installation(self.start_fresh).map_err(core_error)?;
+            (Ok(core), Some(screen_grant), Some(screenshot_grant))
         };
         let core = result.map_err(core_error)?;
         let backends = if self.temporary && self.capture {
@@ -1302,13 +1364,16 @@ fn start_log_file(folder: Option<&std::path::Path>) {
     }
 }
 
+/// Opens this computer's installation. `start_fresh` sets aside one the
+/// store refuses as unreadable and opens a new one, as its person chose.
 #[napi]
-pub fn open_engine() -> AsyncTask<OpenTask> {
+pub fn open_engine(start_fresh: Option<bool>) -> AsyncTask<OpenTask> {
     vnilink_log::install();
     AsyncTask::new(OpenTask {
         temporary: false,
         capture: false,
         screen_grant: None,
+        start_fresh: start_fresh.unwrap_or(false),
     })
 }
 // Explicit isolated test/preview mode; never a fallback for unavailable storage.
@@ -1324,6 +1389,7 @@ pub fn open_temporary_engine(
         temporary: true,
         capture: capture.unwrap_or(false),
         screen_grant: screen_grant.map(std::path::PathBuf::from),
+        start_fresh: false,
     })
 }
 
@@ -1780,6 +1846,14 @@ impl EngineBridge {
                     .map_err(core_error)?;
                 Reply::Done
             }
+            Call::ComputerName => {
+                let (chosen, system) = core.computer_name().map_err(core_error)?;
+                Reply::ComputerName { chosen, system }
+            }
+            Call::SetComputerName { name } => {
+                core.set_computer_name(name.clone()).map_err(core_error)?;
+                Reply::Done
+            }
             Call::PeerHostname { endpoint_id } => Reply::Hostname {
                 hostname: core
                     .peer_hostname(endpoint_id.clone())
@@ -1862,6 +1936,24 @@ impl EngineBridge {
             Call::SharingPolicy => Reply::SharingPolicy {
                 policy: core.sharing_policy().map_err(core_error)?,
             },
+            Call::AdmissionRequests => Reply::AdmissionRequests {
+                requests: core
+                    .admission_requests()
+                    .map_err(core_error)?
+                    .into_iter()
+                    .map(|request| TransferAdmissionRequest {
+                        id: request.id.to_string(),
+                        endpoint_id: request.endpoint_id,
+                        remaining_ms: request.remaining_ms,
+                    })
+                    .collect(),
+            },
+            Call::AnswerAdmissionRequest { id, accept } => {
+                let id = parse_id(id, "Invalid admission request ID")?;
+                core.answer_admission_request(id, *accept)
+                    .map_err(core_error)?;
+                Reply::Done
+            }
             Call::SetSharingPolicy { policy } => {
                 core.set_sharing_policy(*policy).map_err(core_error)?;
                 Reply::Done
@@ -2078,6 +2170,8 @@ impl EngineBridge {
             | Call::Revoke { .. }
             | Call::Unpair { .. }
             | Call::SetPeerName { .. }
+            | Call::ComputerName
+            | Call::SetComputerName { .. }
             | Call::PeerHostname { .. } => Self::pairing(&self.core, command),
             Call::ControlRequest
             | Call::ConfirmControlRequest { .. }
@@ -2167,6 +2261,8 @@ impl EngineBridge {
             }
             Call::SharingPolicy
             | Call::SetSharingPolicy { .. }
+            | Call::AdmissionRequests
+            | Call::AnswerAdmissionRequest { .. }
             | Call::SystemPolicy
             | Call::SetSystemPolicy { .. }
             | Call::TerminalPolicy
@@ -2375,6 +2471,8 @@ impl CommandShape {
             "confirmPairing" => &["type", "previewId", "digits"],
             "revoke" | "unpair" => &["type", "endpointId"],
             "setPeerName" => &["type", "endpointId", "name"],
+            "computerName" => &["type"],
+            "setComputerName" => &["type", "name"],
             "disconnectSession" | "stopHostedPeer" => &["type", "sessionId"],
             "peerAvailability" => &["type", "endpointId"],
             "submitKey" => &["type", "sessionId", "generation", "usage", "down"],
@@ -2496,7 +2594,8 @@ impl CommandShape {
             | "controllerSessionPaths" => &["type", "sessionId"],
             "pollEvents" => &["type", "subscriptionId", "maxEvents"],
             "releaseEvents" => &["type", "subscriptionId"],
-            "sharingPolicy" => &["type"],
+            "sharingPolicy" | "admissionRequests" => &["type"],
+            "answerAdmissionRequest" => &["type", "id", "accept"],
             "setSharingPolicy" => &["type", "policy"],
             "systemPolicy" => &["type"],
             "setSystemPolicy" => &["type", "policy"],
@@ -2558,6 +2657,10 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
         FfiError::InvalidPairingFile => "InvalidPairingFile",
         FfiError::PairingCheckMismatch => "PairingCheckMismatch",
         FfiError::NoControlRequest => "NoControlRequest",
+        FfiError::Declined => "Declined",
+        FfiError::NotAdmitted => "NotAdmitted",
+        FfiError::Unanswered => "Unanswered",
+        FfiError::NoAdmissionRequest => "NoAdmissionRequest",
     }
 }
 

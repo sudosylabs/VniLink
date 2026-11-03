@@ -100,7 +100,7 @@ export function validateProduct(product: unknown): Product {
 		}
 	}
 	const { darwin, win32, linux } = platforms as Record<ProductPlatform, Record<string, unknown>>;
-	requireValue(darwin.signing === 'developer-id-and-notarization' && win32.signing === 'unsigned' && linux.signing === 'unsigned', 'unexpected signing policy');
+	requireValue(darwin.signing === 'developer-id-and-notarization' && win32.signing === 'authenticode' && linux.signing === 'unsigned', 'unexpected signing policy');
 	requireValue(matches(darwin.minimumSystemVersion, /^\d+\.\d+$/) && Number(darwin.minimumSystemVersion.split('.')[0]) >= 14, 'macOS floor must cover the native macOS 14 APIs');
 	requireValue(matches(win32.minimumSystemVersion, /^10\.0\.\d+$/) && Number(win32.minimumSystemVersion.split('.')[2]) >= 19045, 'Windows floor must be at least 10 22H2');
 	requireValue(assetPath(darwin.fallbackIconSource), 'invalid macOS fallback artwork');

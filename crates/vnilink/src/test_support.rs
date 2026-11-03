@@ -33,7 +33,18 @@ pub(crate) fn loopback_core() -> crate::core::Core {
     .expect("a loopback engine");
     core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
         .expect("codec flags");
+    unattended(&core);
     core
+}
+
+/// Lets paired computers use what `core` shares without anyone accepting
+/// them, as a test of services needs; admission has its own tests.
+pub(crate) fn unattended(core: &crate::core::Core) {
+    core.change_sharing_policy(crate::SharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .expect("unattended sharing");
 }
 
 /// A unique temporary directory, removed with everything in it on drop.

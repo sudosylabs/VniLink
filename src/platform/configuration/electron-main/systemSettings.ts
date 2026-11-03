@@ -78,13 +78,16 @@ function configHome(): string {
 	return configured !== undefined && configured !== '' ? configured : join(homedir(), '.config');
 }
 
-/** A Desktop Entry for `executable`; its Exec value is quoted, then string-escaped, as the specification requires. */
+/**
+ * A Desktop Entry for `executable`; its Exec value is quoted, then string-escaped, as the specification requires.
+ * Its icon and window class are the installed application's, so the session lists it as VniLink.
+ */
 export function autostartEntry(executable: string): string {
 	if (/[\n\r]/.test(executable)) {
 		throw new Error('The executable path contains a line break');
 	}
 	const quoted = executable.replace(/[\\"`$]/g, character => `\\${character}`).replace(/%/g, '%%').replace(/\\/g, '\\\\');
-	return `[Desktop Entry]\nType=Application\nName=${product.name}\nExec="${quoted}" ${HIDDEN_ARGUMENT}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n`;
+	return `[Desktop Entry]\nType=Application\nName=${product.name}\nExec="${quoted}" ${HIDDEN_ARGUMENT}\nIcon=${product.linux.iconName}\nStartupWMClass=${product.linux.desktopFileName.replace(/\.desktop$/, '')}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n`;
 }
 
 function platformLoginItem(): LoginItem {

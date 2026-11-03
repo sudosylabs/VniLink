@@ -342,6 +342,17 @@ suite('DevicesPage', () => {
 			click(choices(empty)[1]);
 			assert.strictEqual(empty.commands.at(-1)?.[0], ImportInvitationAction.ID);
 		});
+		test('an invitation opened from outside shows under the visible Open an invitation button', async () => {
+			await fixture.popoverPairing.openInvitation(new File([new Uint8Array([1])], 'Lab.vnl'));
+			assert.strictEqual(fixture.popover.isOpen, true);
+			fixture.popover.hide();
+		});
+		test('a closed invitation stays closed while its step changes only its message', async () => {
+			await fixture.popoverPairing.openInvitation(new File([new Uint8Array([1])], 'Lab.vnl'));
+			fixture.popover.hide();
+			await fixture.popoverPairing.submitCode('12');
+			assert.strictEqual(fixture.popover.isOpen, false);
+		});
 		test('no pairing choices are offered while devices are unavailable', () => {
 			const unavailable = disposables.add(new DevicePageFixture('unavailable'));
 			assert.strictEqual(shown(unavailable.page.element.querySelector('.device-pairing-choices')), false);

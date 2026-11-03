@@ -26,6 +26,12 @@ suite('planLaunch', () => {
 	test('gives other platforms no application id', () => {
 		assert.strictEqual(planLaunch(context([])).appUserModelId, undefined);
 	});
+	test('matches a built application to its installed desktop entry', () => {
+		assert.strictEqual(planLaunch(context([], { built: true })).desktopName, product.linux.desktopFileName);
+	});
+	test('gives the source checkout a desktop entry of its own', () => {
+		assert.strictEqual(planLaunch(context([])).desktopName, `${product.appId}.dev.desktop`);
+	});
 	test('starts the installed engine in the default profile', () => {
 		assert.deepStrictEqual(planLaunch(context([])).action, { kind: 'start', userData: undefined, options: { temporaryEngine: false, automationDriver: false } });
 	});

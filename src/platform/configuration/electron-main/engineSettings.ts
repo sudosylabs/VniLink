@@ -148,6 +148,7 @@ const sharingFields: Readonly<Record<string, readonly (keyof SharingPolicy)[]>> 
 	'sharing.clipboard': ['clipboard'],
 	'sharing.recording': ['recording'],
 	'sharing.systemActions': ['system_actions'],
+	'sharing.unattended': ['unattended'],
 };
 
 const sharing: PolicyBinding = {
@@ -242,9 +243,29 @@ const relays: PolicyBinding = {
 	},
 };
 
-const bindings: Readonly<Record<EngineSource, PolicyBinding>> = { power, terminal, sharing, security, relays };
+/** The name paired computers are told; empty uses the operating system's. */
+const computer: PolicyBinding = {
+	async read(engine) {
+		const reply = await engine.execute({ type: 'computerName' });
+		if (reply.type !== 'computerName') {
+			throw new Error('Invalid computer name reply');
+		}
+		return { values: { 'application.computerName': reply.chosen ?? '' }, restricted: [] };
+	},
+	async write(engine, _key, value) {
+		await expectDone(engine, { type: 'setComputerName', name: value === '' ? null : String(value) });
+	},
+	messages: {
+		unavailable: nls.localize('computer.unavailable', 'The computer name is unavailable while the connection engine is stopped.'),
+		readFailed: nls.localize('computer.loadFailed', 'The computer name could not be loaded.'),
+		writeFailed: nls.localize('computer.saveFailed', 'The computer name could not be saved.'),
+		readbackFailed: nls.localize('computer.readbackFailed', 'The name was saved, but could not be read again. Waiting for updated settings.'),
+	},
+};
 
-const engineSources: readonly EngineSource[] = ['power', 'terminal', 'sharing', 'security', 'relays'];
+const bindings: Readonly<Record<EngineSource, PolicyBinding>> = { computer, power, terminal, sharing, security, relays };
+
+const engineSources: readonly EngineSource[] = ['computer', 'power', 'terminal', 'sharing', 'security', 'relays'];
 
 /**
  * Settings the engine persists. Each policy is read whole, and each change is a

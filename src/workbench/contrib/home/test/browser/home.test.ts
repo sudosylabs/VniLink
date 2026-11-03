@@ -8,7 +8,7 @@
 import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
 import { timeout } from '../../../../../base/common/async.js';
-import { Emitter } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { toDisposable } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IMenuService, type IMenu } from '../../../../../platform/actions/common/actions.js';
@@ -27,7 +27,9 @@ import { CommandService } from '../../../../services/commands/commandService.js'
 import { IWorkbenchConfigurationService } from '../../../../services/configuration/configurationService.js';
 import { TestConfigurationService } from '../../../../services/configuration/test/common/testConfigurationService.js';
 import { IConnectionService } from '../../../../services/connection/connectionService.js';
+import { IDevicePairingService } from '../../../../services/devices/devicePairingService.js';
 import { IDeviceService } from '../../../../services/devices/deviceService.js';
+import { IHomeService } from '../../../../services/home/homeService.js';
 import { TestDeviceService } from '../../../../services/devices/test/common/testDeviceService.js';
 import { IPermissionService } from '../../../../services/permissions/permissionService.js';
 import { TestPermissionService } from '../../../../services/permissions/test/common/testPermissionService.js';
@@ -52,6 +54,7 @@ class TestPairingPopover implements IDevicePairingPopover {
 	}
 
 	public hides = 0;
+	public readonly isOpen = false;
 
 	public hide(): void {
 		this.hides++;
@@ -105,7 +108,9 @@ suite('Home', () => {
 		let home: HomeView;
 		let contextKeys: IContextKeyService;
 		let menu: IMenu;
+		let pageRequests: Emitter<string>;
 		setup(() => {
+			pageRequests = disposables.add(new Emitter<string>());
 			devices = disposables.add(new TestDeviceService());
 			popover = new TestPairingPopover();
 			restartRequired = false;
@@ -134,6 +139,8 @@ suite('Home', () => {
 			instantiationService.stub(ICommandService, disposables.add(instantiationService.createInstance(CommandService)));
 			instantiationService.stub(IMenuService, disposables.add(instantiationService.createInstance(MenuService)));
 			instantiationService.stub(IDevicePairingPopover, popover);
+			instantiationService.stub(IDevicePairingService, { state: { step: { kind: 'idle' }, busy: false, message: '' }, onDidChange: Event.None });
+			instantiationService.stub(IHomeService, { requestedPage: undefined, onDidRequestPage: pageRequests.event, showPage: () => undefined });
 			instantiationService.stub(ISystemActionService, disposables.add(new TestSystemActionService()));
 			instantiationService.stub(IClipboardService, new TestClipboardService());
 			home = disposables.add(instantiationService.createInstance(HomeView));
@@ -153,6 +160,11 @@ suite('Home', () => {
 			restartRequired = required;
 			RestartRequiredContext.bindTo(contextKeys).set(required);
 		}
+		test('a page another feature asks for is shown and marked current', () => {
+			pageRequests.fire('connection');
+			assert.strictEqual(button('connection').getAttribute('aria-current'), 'page');
+			assert.strictEqual(button('devices').getAttribute('aria-current'), null);
+		});
 		test('Files settings do not appear in the sidebar', () => {
 			assert.strictEqual(home.element.querySelector('[data-section-id="files"]'), null);
 		});

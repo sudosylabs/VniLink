@@ -115,7 +115,7 @@ impl InstallationStore for MemoryStore {
     }
 }
 
-pub(crate) use record::{decode, encode, Policies};
+pub(crate) use record::{decode, encode, LocalSettings, Policies};
 
 #[cfg(test)]
 pub(crate) use record::checksum;
@@ -181,6 +181,7 @@ mod tests {
                 power: &crate::power::PowerPolicy::default(),
                 file_resource: &crate::job::FileResourcePolicy::default(),
                 system: &crate::system::SystemPolicy::default(),
+                local: &LocalSettings::default(),
             },
         )
         .unwrap();

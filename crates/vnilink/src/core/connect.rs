@@ -86,7 +86,8 @@ impl Core {
                 refused = forgotten.as_ref().err().map(Error::name),
                 "unpair requested"
             );
-            forgotten?;
+            let device = forgotten?;
+            super::admission::forget(&self.shared, &mut state, &device.display_id);
             let live: Vec<u64> = state
                 .incoming
                 .values()

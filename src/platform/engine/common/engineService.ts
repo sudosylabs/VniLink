@@ -53,6 +53,14 @@ export interface IEngineService {
 	readonly restarting: boolean;
 	readonly onDidChangeRestarting: Event<boolean>;
 
+	/**
+	 * Whether the engine is stopped because it could not read what this
+	 * computer saved, as an installation from an older build. Restarting does
+	 * not help; {@link startFresh} does.
+	 */
+	readonly installationUnreadable: boolean;
+	readonly onDidChangeInstallationUnreadable: Event<boolean>;
+
 	/** Whether relay changes need an application restart to take effect. */
 	readonly restartRequired: boolean;
 	readonly onDidChangeRestartRequired: Event<boolean>;
@@ -61,6 +69,13 @@ export interface IEngineService {
 	readonly onDidReceiveEvents: Event<EngineEventBatch>;
 
 	execute(command: EngineCommand): Promise<EngineReply>;
+
+	/**
+	 * Sets aside the installation the engine could not read and starts it on
+	 * a new one: this computer is new to its paired computers. Only while
+	 * {@link installationUnreadable}; ask the person first.
+	 */
+	startFresh(): Promise<void>;
 
 	/** Asks main to attach a native data channel; the port arrives on {@link DATA_CHANNEL_PORT_RESPONSE}. */
 	openDataChannel(request: DataChannelRequest): Promise<void>;

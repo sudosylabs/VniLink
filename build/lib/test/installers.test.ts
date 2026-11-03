@@ -10,13 +10,15 @@ import { validateConfiguration } from 'app-builder-lib/out/util/config/config.js
 import { DebugLogger } from 'builder-util';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, suite, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildInstallers, installerConfiguration, installerExtensions, verifyInstallerFiles, type InstallerOptions } from '../installers.ts';
 import { packagedLayout, verifyPackageFiles, type BuilderConfiguration, type PackagedLayout } from '../package.ts';
 import { readProduct, type ProductPlatform } from '../product.ts';
 import { fileSha256, packageInventory, releaseInventory } from '../inventory.ts';
+import { isMacintosh, isWindows } from '../platform.ts';
+import type { SigningKind } from '../signing.ts';
 
 const product = await readProduct(fileURLToPath(new URL('../../../', import.meta.url)));
 
@@ -24,6 +26,11 @@ const platforms: readonly ProductPlatform[] = ['darwin', 'win32', 'linux'];
 
 function configuration(platform: ProductPlatform): BuilderConfiguration {
 	return installerConfiguration('/repo', '/stage', '/output', product, { platform, electronVersion: '44.7.0' });
+}
+
+/** `path` with forward slashes, as on the macOS host that builds the DMG. */
+function packagedPath(path: string): string {
+	return path.split('\\').join('/');
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -46,7 +53,7 @@ interface Checkout {
 	readonly output: string;
 }
 
-async function checkout(): Promise<Checkout> {
+async function checkout(signing: SigningKind = 'unsigned'): Promise<Checkout> {
 	const root = await mkdtemp(join(tmpdir(), 'vnilink-installer-contract-'));
 	const target = `${process.platform}-${process.arch}`;
 	const application = join(root, 'dist', target);
@@ -54,7 +61,7 @@ async function checkout(): Promise<Checkout> {
 	await mkdir(join(layout.resources, 'app.asar.unpacked/native'), { recursive: true });
 	await writeFile(layout.asar, 'test application archive');
 	await writeFile(layout.native, 'test native library');
-	const manifest = { appId: product.appId, version: '0.1.0', electronVersion: '44.7.0', platform: process.platform, architecture: process.arch, signing: 'unsigned', asarSha256: await fileSha256(layout.asar), nativeSha256: await fileSha256(layout.native), files: await packageInventory(application) };
+	const manifest = { appId: product.appId, version: '0.1.0', electronVersion: '44.7.0', platform: process.platform, architecture: process.arch, signing, asarSha256: await fileSha256(layout.asar), nativeSha256: await fileSha256(layout.native), files: await packageInventory(application) };
 	await writeFile(join(application, 'packaging-manifest.json'), JSON.stringify(manifest));
 	const stage = join(root, '.build/release', target);
 	await mkdir(join(stage, 'app'), { recursive: true });
@@ -105,6 +112,11 @@ suite('installers', () => {
 	test('builds a DMG on macOS', () => {
 		assert.deepStrictEqual(configuration('darwin').mac.target, ['dmg']);
 	});
+	test('shows the DMG window over its staged artwork, the application beside the Applications link', () => {
+		const dmg = options(configuration('darwin'), 'dmg');
+		assert.strictEqual(packagedPath(String(dmg.background)), '/stage/packaging-resources/assets/apple/dmg/background.png');
+		assert.deepStrictEqual(dmg.contents, [{ x: 140, y: 170, type: 'file' }, { x: 400, y: 170, type: 'link', path: '/Applications' }]);
+	});
 	test('leaves the DMG unsigned', () => {
 		assert.strictEqual(options(configuration('darwin'), 'dmg').sign, false);
 	});
@@ -117,8 +129,24 @@ suite('installers', () => {
 	test('keeps user data when VniLink is uninstalled from Windows', () => {
 		assert.strictEqual(options(configuration('win32'), 'nsis').deleteAppDataOnUninstall, false);
 	});
-	test('does not launch VniLink when the Windows installer finishes', () => {
-		assert.strictEqual(options(configuration('win32'), 'nsis').runAfterFinish, false);
+	test('the Windows installer is assisted: the person sees its pages and chooses the folder', () => {
+		const nsis = options(configuration('win32'), 'nsis');
+		assert.deepStrictEqual([nsis.oneClick, nsis.allowToChangeInstallationDirectory, nsis.allowElevation], [false, true, false]);
+	});
+	test('the Windows uninstaller clears the invitation extension package.ts registers', async () => {
+		const script = await readFile(new URL('../windows/installer.nsh', import.meta.url), 'utf8');
+		const { ext, name } = (configuration('win32').fileAssociations as readonly { readonly ext: string; readonly name: string }[])[0];
+		assert.ok(script.includes(`"Software\\Classes\\.${ext}" ""`) && script.includes(`$0 == "${name}"`), 'installer.nsh names another extension or file type');
+	});
+	test('the Windows installer offers to start VniLink when it finishes', () => {
+		assert.strictEqual(options(configuration('win32'), 'nsis').runAfterFinish, true);
+	});
+	test('the Windows installer shows the staged license, artwork and its own pages', () => {
+		const nsis = options(configuration('win32'), 'nsis');
+		const staged = (path: unknown) => packagedPath(String(path)).replace('/stage/packaging-resources/', '');
+		assert.deepStrictEqual([nsis.license, nsis.include, nsis.installerSidebar, nsis.installerHeader].map(staged), [
+			'LICENSE', 'build/lib/windows/installer.nsh', 'assets/windows/installer-sidebar.bmp', 'assets/windows/installer-header.bmp',
+		]);
 	});
 	test('builds deb and rpm packages on Linux', () => {
 		assert.deepStrictEqual(configuration('linux').linux.target, ['deb', 'rpm']);
@@ -172,6 +200,72 @@ suite('installers', () => {
 			await assert.rejects(buildInstallers(f.root, never(), failingBuilder), /installer tool failed/);
 			assert.strictEqual(await readFile(join(f.output, 'previous'), 'utf8'), 'completed output');
 		});
+		test('an unsigned application\'s installers are not notarized', async () => {
+			let notarized = 0;
+			await buildInstallers(f.root, never(), {
+				...builder, notarize: () => {
+					notarized++;
+					return Promise.resolve();
+				}
+			});
+			assert.strictEqual(notarized, 0);
+		});
+		if (isMacintosh) {
+			const signing = { VNILINK_MACOS_SIGNING_IDENTITY: 'Developer ID Application: Test', VNILINK_MACOS_NOTARY_PROFILE: 'test-profile' };
+			test('a signed application\'s disk image is notarized before its checksum is taken', async () => {
+				const signed = await checkout('developer-id');
+				try {
+					const images: string[] = [];
+					await buildInstallers(signed.root, never(), {
+						...builder,
+						environment: signing,
+						notarize: async (_processes, image, identity) => {
+							images.push(`${basename(image)} ${identity.notaryProfile}`);
+							await writeFile(image, 'stapled installer artifact');
+						},
+					});
+					assert.deepStrictEqual(images, ['VniLink-test.dmg test-profile']);
+					const manifest = await verifyInstallerFiles(signed.output, product);
+					assert.strictEqual(manifest.artifacts[0].sha256, await fileSha256(join(signed.output, 'VniLink-test.dmg')));
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+			test('a signed application without the notary profile is refused', async () => {
+				const signed = await checkout('developer-id');
+				try {
+					await assert.rejects(buildInstallers(signed.root, never(), { ...builder, environment: {} }), /not set to notarize/);
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+		}
+		if (isWindows) {
+			test('a signed application\'s installer is signed with the same certificate, given only to the packager', async () => {
+				const signed = await checkout('authenticode');
+				try {
+					let given: NodeJS.ProcessEnv = {};
+					await buildInstallers(signed.root, never(), {
+						environment: { VNILINK_WINDOWS_CERTIFICATE_FILE: 'release.pfx', VNILINK_WINDOWS_CERTIFICATE_PASSWORD: 'secret' },
+						runBuilder: (_processes, args, _cwd, signing) => {
+							given = signing;
+							return writeArtifacts(args, 'VniLink-test');
+						},
+					});
+					assert.deepStrictEqual(given, { WIN_CSC_LINK: 'release.pfx', WIN_CSC_KEY_PASSWORD: 'secret' });
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+			test('a signed application without its certificate is refused', async () => {
+				const signed = await checkout('authenticode');
+				try {
+					await assert.rejects(buildInstallers(signed.root, never(), { ...builder, environment: {} }), /not set to sign its installer/);
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+		}
 		test('a failing builder leaves no work directory behind', async () => {
 			await assert.rejects(buildInstallers(f.root, never(), failingBuilder), /installer tool failed/);
 			assert.ok(!(await readdir(join(f.root, 'dist/installers'))).some(name => name.startsWith('.installer-')));

@@ -38,6 +38,10 @@ export type DesktopFailure =
 	| 'unsupported'
 	/** It can't open another service right now. */
 	| 'unavailable'
+	/** The person there didn't allow this computer. */
+	| 'declined'
+	/** Nobody there answered whether to allow this computer. */
+	| 'unanswered'
 	/** Its screen didn't start. */
 	| 'failed';
 

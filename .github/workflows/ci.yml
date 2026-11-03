@@ -250,7 +250,7 @@ jobs:
           path: .build/linux-validation
           if-no-files-found: ignore
 
-  # Unsigned installers, on main and on request: the release path every OS ships.
+  # Installers, on main and on request: the release path every OS ships, signed where the secrets are set.
   package:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: [macos, ubuntu, windows]
@@ -269,7 +269,55 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          node build/lib/prerequisites.ts packages debian package:installers | xargs sudo apt-get install -y --no-install-recommends
+          node build/lib/prerequisites.ts packages debian package:installers verify:installers | xargs sudo apt-get install -y --no-install-recommends
+      # Without these secrets the macOS installer stays unsigned, as a contributor's does.
+      - name: Prepare macOS release signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_DEVELOPER_ID_IDENTITY }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_API_ISSUER }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            echo "No Developer ID secrets: the macOS installer is unsigned."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -s "$keychain"
+          printf '%s' "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials vnilink-release --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
+          rm "$RUNNER_TEMP/notary.p8"
+          echo "VNILINK_MACOS_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "VNILINK_MACOS_NOTARY_PROFILE=vnilink-release" >> "$GITHUB_ENV"
+      # Without these secrets the Windows application and installer stay unsigned.
+      - name: Prepare Windows release signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:CERTIFICATE) {
+            Write-Output 'No code-signing secrets: the Windows installer is unsigned.'
+            exit 0
+          }
+          $Certificate = Join-Path $env:RUNNER_TEMP 'release.pfx'
+          [IO.File]::WriteAllBytes($Certificate, [Convert]::FromBase64String($env:CERTIFICATE))
+          "VNILINK_WINDOWS_CERTIFICATE_FILE=$Certificate" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VNILINK_WINDOWS_CERTIFICATE_PASSWORD=$env:CERTIFICATE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Read MSYS2 packages
         if: runner.os == 'Windows'
         id: packages

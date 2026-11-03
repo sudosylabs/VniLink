@@ -5,14 +5,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-/** What the notice window shows: who asked, what, and when it runs (milliseconds since the epoch). */
+/**
+ * What the notice window shows: who asked, what, and when it happens
+ * unanswered (milliseconds since the epoch). A restart or shutdown runs at
+ * its deadline; a computer asking to use this one (`admit`) is declined at
+ * its deadline.
+ */
 export interface NoticeContent {
-	readonly action: 'restart' | 'shutdown';
+	readonly action: NoticeAction;
 	readonly name: string;
 	readonly deadline: number;
 }
 
+export type NoticeAction = 'restart' | 'shutdown' | 'admit';
+
+/** `cancel` leaves the computer as it is, the default; `now` does what was asked, at once. */
 export type NoticeAnswer = 'cancel' | 'now';
+
+const noticeActions: readonly unknown[] = ['restart', 'shutdown', 'admit'] satisfies readonly NoticeAction[];
 
 /** The notice window's channels; its preload exposes only these. */
 export const NOTICE_SHOW_CHANNEL = 'vnilink:notice-show';
@@ -26,7 +36,7 @@ export const NOTICE_URL = 'vnilink://app/notice.html';
 
 export function isNoticeContent(value: unknown): value is NoticeContent {
 	return typeof value === 'object' && value !== null && Object.keys(value).length === 3
-		&& (Reflect.get(value, 'action') === 'restart' || Reflect.get(value, 'action') === 'shutdown')
+		&& noticeActions.includes(Reflect.get(value, 'action'))
 		&& typeof Reflect.get(value, 'name') === 'string' && String(Reflect.get(value, 'name')).length <= 256
 		&& Number.isSafeInteger(Reflect.get(value, 'deadline'));
 }

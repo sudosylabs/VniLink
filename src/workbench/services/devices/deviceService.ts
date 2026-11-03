@@ -56,7 +56,13 @@ export interface IDeviceService {
 	pair(bytes: Uint8Array, digits: string): Promise<string>;
 	/** Fires on the controller with the digits to read out on the host once it is waiting for its owner. */
 	readonly onDidReceiveControlCheck: Event<ControlCheck>;
+	/** Whether this computer waits for the person at device `id` to accept it, before using it. */
+	isAwaitingAcceptance(id: string): boolean;
+	/** Fires with a device's id when this computer starts or stops waiting for its person. */
+	readonly onDidChangeAwaitingAcceptance: Event<string>;
 	incomingPairing(): Promise<ControlRequestInfo | null>;
+	/** The name the operating system gives this computer, which paired computers see unless another is chosen. */
+	systemComputerName(): Promise<string | null>;
 	approvePairing(digits: string): Promise<void>;
 	rejectPairing(): Promise<void>;
 }

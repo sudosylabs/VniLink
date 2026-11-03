@@ -16,6 +16,8 @@ import { Registry } from '../../../../../platform/registry/common/platform.js';
 import { IApplicationService } from '../../../../services/application/applicationService.js';
 import { IConnectionService, type RunningRelays } from '../../../../services/connection/connectionService.js';
 import { IWorkbenchConfigurationService } from '../../../../services/configuration/configurationService.js';
+import { IDeviceService } from '../../../../services/devices/deviceService.js';
+import { TestDeviceService } from '../../../../services/devices/test/common/testDeviceService.js';
 import { TestConfigurationService } from '../../../../services/configuration/test/common/testConfigurationService.js';
 import { INativeRuntimeService } from '../../../../services/nativeRuntime/nativeRuntimeService.js';
 import { IPermissionService } from '../../../../services/permissions/permissionService.js';
@@ -82,6 +84,8 @@ const editDelay = 650;
 export class SettingsFixture extends Disposable {
 	public readonly configuration = this._register(new TestConfigurationService());
 	public readonly permissions = this._register(new TestPermissionService());
+	/** Names this computer `workstation` in the system's settings. */
+	public readonly devices = this._register(new TestDeviceService());
 	public chosenFolder: string | null = '/Recordings';
 	public openedDocumentation = 0;
 	public running: RunningRelays = { publicRelay: true, urls: [] };
@@ -112,6 +116,7 @@ export class SettingsFixture extends Disposable {
 		});
 		this.instantiationService.stub(IConnectionService, { getRunningRelays: () => Promise.resolve(this.running) });
 		this.instantiationService.stub(ITerminalHostService, { shells: () => Promise.resolve(this.shells) });
+		this.instantiationService.stub(IDeviceService, this.devices);
 		document.body.append(this.host);
 	}
 

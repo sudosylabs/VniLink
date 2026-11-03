@@ -23,6 +23,10 @@ export interface EnvironmentVariable {
 
 export const environmentVariables: Readonly<Record<string, EnvironmentVariable>> = {
 	// The build and its checks.
+	VNILINK_MACOS_SIGNING_IDENTITY: { kind: 'setting', description: 'The Developer ID Application identity in the keychain that signs a macOS release, with `VNILINK_MACOS_NOTARY_PROFILE`; unset, the release is unsigned.' },
+	VNILINK_MACOS_NOTARY_PROFILE: { kind: 'setting', description: 'The `notarytool` keychain profile that notarizes a signed macOS disk image.' },
+	VNILINK_WINDOWS_CERTIFICATE_FILE: { kind: 'setting', description: 'The PKCS#12 code-signing certificate that signs a Windows release and its installer, with `VNILINK_WINDOWS_CERTIFICATE_PASSWORD`; unset, they are unsigned.' },
+	VNILINK_WINDOWS_CERTIFICATE_PASSWORD: { kind: 'setting', description: 'The password of `VNILINK_WINDOWS_CERTIFICATE_FILE`.' },
 	VNILINK_BUILD_STACK: { kind: 'setting', description: '`1`: a failed build task prints its stack, not only its message.' },
 	VNILINK_FORCE_INSTALL: { kind: 'setting', description: '`1`: npm\'s postinstall prepares the first build again although its inputs are unchanged.' },
 	VNILINK_MSYS_ROOT: { kind: 'setting', description: 'The MSYS2 root whose `mingw64\\bin` the Windows GNU build uses when MinGW is not on PATH.' },

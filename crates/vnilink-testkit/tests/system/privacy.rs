@@ -12,7 +12,9 @@
 use expect_test::expect;
 use std::sync::Arc;
 
-use vnilink::{Error, PrivacyState, ServiceKind, SessionPhase, SystemAction, SystemPolicy};
+use vnilink::{
+    Error, PrivacyState, ServiceKind, SessionPhase, SharingPolicyUpdate, SystemAction, SystemPolicy,
+};
 use vnilink_testkit::store::{Fault, Installed};
 use vnilink_testkit::system::{check_giving_back, FakeSystem, Giving, GivingBack, SystemSession};
 use vnilink_testkit::{pair_cores_for_control, traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
@@ -195,6 +197,12 @@ fn privacy_narrowing_restores_exactly_once_and_failed_save_preserves_lease() -> 
     let sibling = Engine::start("sibling");
     pair_cores_for_control(host, &sibling.core)?;
     host.set_service_sharing(ServiceKind::System, true)?;
+    // Unlike the kit's own engines, this one is not set up to share
+    // unattended; admission has its own suite.
+    host.change_sharing_policy(SharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })?;
     host.set_system_policy(PRIVACY)?;
     let connection = holder.connect_services_to(&host.endpoint_id())?;
     let system = holder.open_system(&connection)?;

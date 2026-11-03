@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat, readFile, readdir, readlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import type { SigningKind } from './signing.ts';
 
 export interface ReleaseFile {
 	readonly path: string;
@@ -39,7 +40,7 @@ export interface PackageManifest {
 	readonly packagerVersion: string;
 	readonly platform: NodeJS.Platform;
 	readonly architecture: string;
-	readonly signing: 'unsigned';
+	readonly signing: SigningKind;
 	readonly executable: string;
 	readonly asarSha256: string;
 	readonly nativeSha256: string;

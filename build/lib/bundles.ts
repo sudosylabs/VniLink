@@ -32,7 +32,7 @@ export function bundleOptions(root: string, { production = false, outputDirector
 		node('src/main.ts', 'main.cjs'),
 		node('src/platform/engine/electron-utility/engineMain.ts', 'engine.cjs'),
 		node('src/preload.ts', 'preload.cjs'),
-		// The restart notice: its own page, bundle and preload, apart from the workbench's IPC.
+		// The notice window: its own page, bundle and preload, apart from the workbench's IPC.
 		node('src/noticePreload.ts', 'noticePreload.cjs'),
 		...(!production ? [node('test/smoke/src/main.ts', 'smoke.cjs'), node('test/latency/main.ts', 'latency.cjs')] : []),
 		browser('src/renderer.ts', 'renderer/renderer.js'),

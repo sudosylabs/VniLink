@@ -17,8 +17,8 @@ import { windowPrompt } from './noticeWindow.js';
 import { ILifecycleMainService, type LifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
 import { ILogService } from '../../log/common/log.js';
 
-/** The engine as the notice uses it. */
-interface NoticeEngine {
+/** The engine as a notice uses it. */
+export interface NoticeEngine {
 	readonly available: boolean;
 	readonly onDidChangeAvailability: Event<boolean>;
 	readonly onDidReceiveEvents: Event<EngineEventBatch>;
@@ -110,7 +110,7 @@ export class SystemActionNotices extends Disposable {
 		}
 		const controller = new AbortController();
 		this.open.set(id, controller);
-		const content: NoticeContent = { action, name: await this.nameOf(endpointId), deadline: this.now() + remainingMs };
+		const content: NoticeContent = { action, name: await pairedComputerName(this.engine, endpointId), deadline: this.now() + remainingMs };
 		let response: number | undefined;
 		try {
 			response = controller.signal.aborted ? undefined : await this.prompt(content, controller.signal);
@@ -141,21 +141,23 @@ export class SystemActionNotices extends Disposable {
 		this.open.delete(id);
 	}
 
-	private async nameOf(endpointId: string): Promise<string> {
-		try {
-			const reply = await this.engine.execute({ type: 'snapshot' });
-			if (reply.type === 'snapshot') {
-				const device = reply.snapshot.devices.find(candidate => candidate.endpoint_id === endpointId);
-				const name = device?.pet_name ?? device?.hostname;
-				if (name) {
-					return name;
-				}
+}
+
+/** The name the person here knows the paired computer `endpointId` by. */
+export async function pairedComputerName(engine: NoticeEngine, endpointId: string): Promise<string> {
+	try {
+		const reply = await engine.execute({ type: 'snapshot' });
+		if (reply.type === 'snapshot') {
+			const device = reply.snapshot.devices.find(candidate => candidate.endpoint_id === endpointId);
+			const name = device?.pet_name ?? device?.hostname;
+			if (name) {
+				return name;
 			}
-		} catch {
-			// The generic name below still says what is happening.
 		}
-		return nls.localize('systemNotice.someone', 'A paired computer');
+	} catch {
+		// The generic name below still says what is happening.
 	}
+	return nls.localize('systemNotice.someone', 'A paired computer');
 }
 
 export const ISystemActionNoticeMainService = createDecorator<SystemActionNoticeMainService>('systemActionNoticeMainService');

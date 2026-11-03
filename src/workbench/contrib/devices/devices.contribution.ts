@@ -11,10 +11,12 @@ import { registerAction2 } from '../../../platform/actions/common/actions.js';
 import { SyncDescriptor } from '../../../platform/instantiation/common/descriptors.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { Registry } from '../../../platform/registry/common/platform.js';
+import { registerWorkbenchContribution2, WorkbenchPhase } from '../../contributions.js';
 import { Extensions, HomePageGroup, type IHomePagesRegistry } from '../home/homePages.js';
 import { CreateInvitationAction, ImportInvitationAction } from './deviceActions.js';
 import { DevicePairingPopover, IDevicePairingPopover } from './devicePairingPopover.js';
 import { DevicesPage } from './devicesPage.js';
+import { OpenedInvitationsContribution } from './openedInvitations.js';
 
 Registry.as<IHomePagesRegistry>(Extensions.HomePages).registerPage({
 	id: 'devices',
@@ -30,3 +32,5 @@ registerSingleton(IDevicePairingPopover, DevicePairingPopover, InstantiationType
 registerAction2(ImportInvitationAction);
 
 registerAction2(CreateInvitationAction);
+
+registerWorkbenchContribution2(OpenedInvitationsContribution.ID, OpenedInvitationsContribution, WorkbenchPhase.AfterRestored);

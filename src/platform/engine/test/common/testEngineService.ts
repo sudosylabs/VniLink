@@ -40,8 +40,9 @@ export function snapshotReply(devices: readonly EngineDevice[]): EngineSnapshotR
 /**
  * An {@link IEngineService} whose replies a test scripts: `handler` answers
  * each command (a throw is a refusal), `fireEvents` delivers an event batch and `setAvailable`
- * changes availability and `setRestartRequired` the restart state, as main
- * would report them. Every command it was
+ * changes availability, `setRestartRequired` the restart state and
+ * `setInstallationUnreadable` an unreadable installation, as main would
+ * report them. Every command it was
  * asked is kept in `commands`.
  */
 export class TestEngineService extends Disposable implements IEngineService {
@@ -52,6 +53,11 @@ export class TestEngineService extends Disposable implements IEngineService {
 	public readonly onDidChangeRestarting = this._register(new Emitter<boolean>()).event;
 	private readonly restartRequiredChanged = this._register(new Emitter<boolean>());
 	public readonly onDidChangeRestartRequired = this.restartRequiredChanged.event;
+	private readonly installationUnreadableChanged = this._register(new Emitter<boolean>());
+	public readonly onDidChangeInstallationUnreadable = this.installationUnreadableChanged.event;
+	private _installationUnreadable = false;
+	/** How many times a window asked to start fresh. */
+	public startedFresh = 0;
 	private readonly events = this._register(new Emitter<EngineEventBatch>());
 	public readonly onDidReceiveEvents = this.events.event;
 	public readonly commands: EngineCommand[] = [];
@@ -97,6 +103,24 @@ export class TestEngineService extends Disposable implements IEngineService {
 	public setAvailable(available: boolean): void {
 		this._available = available;
 		this.availabilityChanged.fire(available);
+	}
+
+	public get installationUnreadable(): boolean {
+		return this._installationUnreadable;
+	}
+
+	/** Starting fresh brings the engine back, as main does once the engine starts on a new installation. */
+	public startFresh(): Promise<void> {
+		this.startedFresh++;
+		this.setInstallationUnreadable(false);
+		this.setAvailable(true);
+		return Promise.resolve();
+	}
+
+	/** The engine stops on, or recovers from, an unreadable installation, as main would report it. */
+	public setInstallationUnreadable(unreadable: boolean): void {
+		this._installationUnreadable = unreadable;
+		this.installationUnreadableChanged.fire(unreadable);
 	}
 
 	public setRestartRequired(restartRequired: boolean): void {

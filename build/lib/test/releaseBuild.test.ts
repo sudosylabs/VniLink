@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, suite, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { bundleOptions, relinkSourceFilter, releaseSourceFilter, type ApplicationBuildOptions } from '../bundles.ts';
+import { installerResources } from '../installers.ts';
 import { acquireLock } from '../lock.ts';
 import { assertNativeFresh, compileNative, nativeEnvironment, nativeIdentity, stageGlass, stageNative, stageSpdlog, type NativeOptions } from '../native.ts';
 import { isMacintosh, isWindows } from '../platform.ts';
@@ -305,6 +306,9 @@ suite('release build', () => {
 				await put(root, platform.icon.endsWith('.icon') ? `${platform.icon}/icon.json` : platform.icon, '{}');
 			}
 			await put(root, product.platforms.darwin.fallbackIconSource, '{}');
+			for (const resource of installerResources(process.platform)) {
+				await put(root, resource);
+			}
 			await put(root, 'out/dev-sentinel');
 		});
 		test('builds the application for production', async () => {
@@ -329,6 +333,12 @@ suite('release build', () => {
 			const output = await release();
 			for (const file of (await manifest(output)).files) {
 				assert.strictEqual(createHash('sha256').update(await readFile(join(output, file.path))).digest('hex'), file.sha256, file.path);
+			}
+		});
+		test('stages the resources the host\'s installer reads beside its icon', async () => {
+			const stage = await release();
+			for (const resource of installerResources(process.platform)) {
+				await access(join(stage, 'packaging-resources', resource));
 			}
 		});
 		test('publishes the tray assets', async () => {

@@ -18,10 +18,18 @@ import { ProcessRunner } from './processes.ts';
 import { readProduct, type Product } from './product.ts';
 import { fileSha256, verifyReleaseFiles, type InstallerArtifact, type InstallerManifest, type ReleaseManifest } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
+import { macSigning, notarizeDiskImage, signingKinds, windowsSigning, windowsSigningEnvironment, type SigningKind } from './signing.ts';
 
-const platforms: Partial<Record<NodeJS.Platform, typeof darwin>> = { darwin, win32, linux };
+/** What each `package.<platform>.ts` declares about its installers. */
+interface PlatformInstallers {
+	readonly extensions: readonly string[];
+	readonly resources: readonly string[];
+	installerOptions(product: Product, base: BuilderConfiguration): Record<string, unknown>;
+}
 
-function platformInstallers(platform: NodeJS.Platform): typeof darwin {
+const platforms: Partial<Record<NodeJS.Platform, PlatformInstallers>> = { darwin, win32, linux };
+
+function platformInstallers(platform: NodeJS.Platform): PlatformInstallers {
 	const installers = platforms[platform];
 	if (!installers) {
 		throw new Error(`Unsupported installer host: ${platform}`);
@@ -33,15 +41,31 @@ export function installerExtensions(platform: NodeJS.Platform): readonly string[
 	return platformInstallers(platform).extensions;
 }
 
+/** The repository files `platform`'s installer reads, which the release stages under `packaging-resources`. */
+export function installerResources(platform: NodeJS.Platform): readonly string[] {
+	return platformInstallers(platform).resources;
+}
+
 /** Native-host installer targets consume an existing, verified Electron application. */
-export function installerConfiguration(root: string, stage: string, output: string, product: Product, manifest: Pick<ReleaseManifest, 'platform' | 'electronVersion'>): BuilderConfiguration {
-	const base = packageConfiguration(root, stage, output, product, manifest);
+export function installerConfiguration(
+	root: string,
+	stage: string,
+	output: string,
+	product: Product,
+	manifest: Pick<ReleaseManifest, 'platform' | 'electronVersion'> & { readonly signing?: SigningKind },
+): BuilderConfiguration {
+	// The installer carries the application's signature: an Authenticode-signed application gets a signed setup.
+	const base = packageConfiguration(root, stage, output, product, manifest, manifest.signing);
 	return { ...base, artifactName: product.nameLong + '-${version}-${os}-${arch}.${ext}', ...platformInstallers(manifest.platform).installerOptions(product, base) };
 }
 
 export interface InstallerOptions {
 	/** Runs electron-builder; replaced by tests. */
-	readonly runBuilder?: (processes: ProcessRunner, args: readonly string[], cwd: string) => Promise<unknown>;
+	readonly runBuilder?: (processes: ProcessRunner, args: readonly string[], cwd: string, signing: NodeJS.ProcessEnv) => Promise<unknown>;
+	/** Signs, notarizes and staples a disk image; replaced by tests. */
+	readonly notarize?: typeof notarizeDiskImage;
+	/** Where release signing is read from; the process's environment by default. */
+	readonly environment?: NodeJS.ProcessEnv;
 }
 
 /** Generates `dist/installers/<platform>-<arch>` from the verified assembled application. */
@@ -71,7 +95,24 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 		await cp(application, copy, { recursive: true, verbatimSymlinks: true });
 		const prepackaged = isMacintosh ? join(copy, `${product.nameLong}.app`) : copy;
 		const args = ['--config', configPath, '--prepackaged', prepackaged, builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'];
-		await (options.runBuilder ?? runElectronBuilder)(processes, args, root);
+		let signingEnvironment: NodeJS.ProcessEnv = {};
+		if (manifest.signing === 'authenticode') {
+			const signing = windowsSigning(options.environment);
+			if (!signing) {
+				throw new Error('The application is signed, but VNILINK_WINDOWS_CERTIFICATE_FILE and VNILINK_WINDOWS_CERTIFICATE_PASSWORD are not set to sign its installer');
+			}
+			signingEnvironment = windowsSigningEnvironment(signing);
+		}
+		await (options.runBuilder ?? runElectronBuilder)(processes, args, root, signingEnvironment);
+		if (manifest.signing === 'developer-id') {
+			const signing = macSigning(options.environment);
+			if (!signing) {
+				throw new Error('The application is signed, but VNILINK_MACOS_SIGNING_IDENTITY and VNILINK_MACOS_NOTARY_PROFILE are not set to notarize its disk image');
+			}
+			for (const image of (await readdir(buildOutput)).filter(name => extname(name) === '.dmg')) {
+				await (options.notarize ?? notarizeDiskImage)(processes, join(buildOutput, image), signing);
+			}
+		}
 		const artifacts: InstallerArtifact[] = [];
 		for (const extension of installerExtensions(process.platform)) {
 			const entries = (await readdir(buildOutput, { withFileTypes: true })).filter(entry => entry.isFile() && extname(entry.name) === extension);
@@ -87,7 +128,7 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 		await writeFile(join(buildOutput, 'SHA256SUMS'), artifacts.map(file => `${file.sha256}  ${file.path}\n`).join(''));
 		signal.throwIfAborted();
 		await publish(buildOutput, output, join(work, 'previous'));
-		console.log(`Unsigned installers generated: ${output}`);
+		console.log(`${manifest.signing === 'unsigned' ? 'Unsigned' : 'Signed'} installers generated: ${output}`);
 		return output;
 	} finally {
 		try {
@@ -134,7 +175,7 @@ export async function verifyInstallerFiles(
 	assert.equal(manifest.application.appId, product.appId);
 	assert.equal(manifest.application.platform, platform);
 	assert.equal(manifest.application.architecture, architecture);
-	assert.equal(manifest.application.signing, 'unsigned');
+	assert(signingKinds(platform).includes(manifest.application.signing), 'Unexpected signature in the installer manifest');
 	assert.deepEqual(manifest.artifacts.map(file => extname(file.path)).sort(), [...installerExtensions(platform)].sort());
 	for (const file of manifest.artifacts) {
 		assert.equal(file.path, basename(file.path), 'Installer path must be a filename');
