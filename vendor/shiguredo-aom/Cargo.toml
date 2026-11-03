@@ -41,6 +41,8 @@ commit = "ad44980d7f3c7a2605c25d51ea96946949000841"
 
 [package.metadata.external-dependencies.aom.prebuilt-sha256]
 macos_arm64 = "deaf35b4feefa0e7d32cb316f7b323a1f1d8d48c1a746649b5977c8ce70b515b"
+# The MSVC build, which a check on the Windows host target uses; the GNU target builds from source.
+windows_x86_64 = "46a5b2cd700830843a18e907b7a4521d842626431c25f7d6244401f698cb46e8"
 
 [features]
 source-build = []
