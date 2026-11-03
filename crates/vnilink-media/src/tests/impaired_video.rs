@@ -173,12 +173,14 @@ fn boot_in(namespace: Option<String>) -> Core {
         if let Some(name) = namespace {
             enter_namespace(&name);
         }
-        Core::start(CoreConfig {
-            listen: Listen::Loopback,
-            relay: RelaySettings::custom(vec![CustomRelay::new(relay).unwrap()]).unwrap(),
-            ..CoreConfig::default()
-        })
-        .expect("loopback core")
+        super::unattended(
+            Core::start(CoreConfig {
+                listen: Listen::Loopback,
+                relay: RelaySettings::custom(vec![CustomRelay::new(relay).unwrap()]).unwrap(),
+                ..CoreConfig::default()
+            })
+            .expect("loopback core"),
+        )
     })
     .join()
     .expect("boot thread")

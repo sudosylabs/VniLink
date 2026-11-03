@@ -191,13 +191,15 @@ fn capture_worker_exit(idle: bool, exit: CaptureExit) {
         }
     }
     let boot = || {
-        Core::start(CoreConfig {
-            listen: Listen::Loopback,
-            relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
-                .unwrap(),
-            ..CoreConfig::default()
-        })
-        .unwrap()
+        super::unattended(
+            Core::start(CoreConfig {
+                listen: Listen::Loopback,
+                relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
+                    .unwrap(),
+                ..CoreConfig::default()
+            })
+            .unwrap(),
+        )
     };
     let host = Arc::new(boot());
     let controller = boot();

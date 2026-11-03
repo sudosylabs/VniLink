@@ -39,3 +39,15 @@ mod still_tests;
 mod timecode_tests;
 #[path = "tests/wait.rs"]
 mod wait;
+
+/// `core`, letting paired computers use what it shares without anyone
+/// accepting them, as a test of the picture needs; admission has its own
+/// tests in the test kit.
+fn unattended(core: vnilink::Core) -> vnilink::Core {
+    core.change_sharing_policy(vnilink::SharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .expect("unattended sharing");
+    core
+}

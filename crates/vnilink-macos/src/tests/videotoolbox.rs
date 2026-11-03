@@ -322,6 +322,12 @@ fn recorder_worker_uses_independent_feed_and_preserves_desktop_after_stop() {
         transfer: false,
     })
     .unwrap();
+    // Nobody is at the host to accept the controller.
+    host.change_sharing_policy(vnilink::SharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .unwrap();
     let parent = controller
         .begin_connect_services(&host.endpoint_id())
         .unwrap();

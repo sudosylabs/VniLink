@@ -174,6 +174,12 @@ fn pair(host: &Core, controller: &Core) {
         transfer: true,
     })
     .unwrap();
+    // Nobody is at the host to accept the controller.
+    host.change_sharing_policy(vnilink::SharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .unwrap();
     controller
         .set_desktop_sharing(Grants {
             view: false,
