@@ -594,7 +594,10 @@ export class FilesPaneView extends Disposable {
 			this.onKey(new StandardKeyboardEvent(event));
 		}));
 		const resize = new ResizeObserver(() => {
-			this.list.layout(this.listContainer.clientHeight, this.listContainer.clientWidth);
+			// clientHeight rounds a fractional box up, which would lay the list half a pixel taller
+			// than it shows and put its last row partly under the status bar.
+			const box = this.listContainer.getBoundingClientRect();
+			this.list.layout(Math.floor(box.height), Math.floor(box.width));
 			this.revealLastCrumb();
 		});
 		resize.observe(this.listContainer);
