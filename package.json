@@ -85,6 +85,9 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.1"
   },
+  "overrides": {
+    "serialize-javascript": "7.1.4"
+  },
   "type": "module",
   "optionalDependencies": {
     "@vnilink/elg": "0.1.0-rc",
