@@ -430,8 +430,10 @@ export class VniLinkApplication extends Disposable {
 		try {
 			await engine.start(temporary, temporary && this.options.temporaryEngineCaptures === true, this.options.temporaryEngineScreenGrant);
 		} catch (error) {
-			// The engine tries again by itself; its restart handler configures it then.
-			this.logService.error('The engine could not be started; it will be tried again.', error);
+			// The engine tries again by itself, or waits for its person to start fresh; its restart handler configures it then.
+			this.logService.error(engine.isInstallationUnreadable
+				? 'The engine could not read this computer\'s installation; it waits for its person to start fresh.'
+				: 'The engine could not be started; it will be tried again.', error);
 			return;
 		}
 		try {
