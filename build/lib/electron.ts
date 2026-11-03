@@ -103,6 +103,9 @@ function platformBranding(root: string, product: Product, signal: AbortSignal): 
 	throw new Error(`No Electron branding for ${process.platform}`);
 }
 
+/** Raised when `brandDarwin`, `brandWin32` or `brandLinux` change what they write, so a prepared Electron is branded again. */
+const brandingRevision = 1;
+
 async function brandingFingerprint(root: string, product: Product): Promise<Record<string, string>> {
 	const electron = (JSON.parse(await readFile(require.resolve('electron/package.json'), 'utf8')) as { version: string }).version;
 	const icons: Record<string, string> = {};
@@ -114,7 +117,7 @@ async function brandingFingerprint(root: string, product: Product): Promise<Reco
 	const darwin: Record<string, string> = isMacintosh
 		? { usage: JSON.stringify(darwinUsageDescriptions), uuids: JSON.stringify(await executableUuids(require('electron') as string, developmentBundleIdentifier(product))) }
 		: {};
-	return { electron, platform: `${process.platform}-${process.arch}`, product: JSON.stringify(product), icons: JSON.stringify(icons), ...darwin };
+	return { revision: String(brandingRevision), electron, platform: `${process.platform}-${process.arch}`, product: JSON.stringify(product), icons: JSON.stringify(icons), ...darwin };
 }
 
 async function current(stamp: string, executable: string, fingerprint: string): Promise<boolean> {

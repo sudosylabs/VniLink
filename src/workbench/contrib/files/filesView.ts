@@ -250,6 +250,12 @@ export class FilesView extends Disposable implements WorkbenchTab {
 			case 'unavailable':
 				this.remote.setUnavailable(nls.localize('files.unavailable', 'Files isn’t available on {0} right now.', name), '', reconnect);
 				break;
+			case 'declined':
+				this.remote.setUnavailable(nls.localize('files.declinedTitle', '{0} didn’t allow this computer.', name), '', reconnect);
+				break;
+			case 'unanswered':
+				this.remote.setUnavailable(nls.localize('files.unansweredTitle', 'Nobody at {0} answered.', name), nls.localize('files.unansweredBody', 'Someone at {0} needs to allow this computer. Try again when they’re there.', name), reconnect);
+				break;
 			case 'disconnected':
 				this.remote.setUnavailable(nls.localize('files.disconnected', 'Not connected to {0}.', name), nls.localize('files.disconnectedBody', 'Transfers keep what has arrived and can resume once it’s back.'), reconnect);
 				break;

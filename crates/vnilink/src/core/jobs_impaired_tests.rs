@@ -120,6 +120,7 @@ fn boot_in(namespace: Option<String>) -> Arc<Core> {
         // A link carries codecs even when only Files rides it.
         core.set_video_codecs(crate::VideoCodecCaps::h264_full(4096, 4096, "test"))
             .expect("codec capabilities");
+        crate::test_support::unattended(&core);
         Arc::new(core)
     })
     .join()

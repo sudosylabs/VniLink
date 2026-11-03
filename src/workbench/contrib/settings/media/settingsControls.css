@@ -60,7 +60,8 @@
 }
 
 .setting-row-control select,
-.setting-number {
+.setting-number,
+.setting-text {
 	box-sizing: border-box;
 	height: 30px;
 	padding: 0 10px;
@@ -80,6 +81,16 @@
 	width: 88px;
 	text-align: right;
 	font-variant-numeric: tabular-nums;
+}
+
+/* A name is as wide as a select, so the column keeps one edge. */
+.setting-text {
+	width: 300px;
+	max-width: 100%;
+}
+
+.setting-text::placeholder {
+	color: var(--muted);
 }
 
 /* Units keep their column, so number fields line up down a section. */

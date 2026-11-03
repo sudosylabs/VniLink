@@ -615,13 +615,15 @@ fn recording_totals(frame_count: u64, wall: bool) {
         Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, VideoCodecCaps,
     };
     let boot = || {
-        Core::start(CoreConfig {
-            listen: Listen::Loopback,
-            relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
-                .unwrap(),
-            ..CoreConfig::default()
-        })
-        .unwrap()
+        super::unattended(
+            Core::start(CoreConfig {
+                listen: Listen::Loopback,
+                relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
+                    .unwrap(),
+                ..CoreConfig::default()
+            })
+            .unwrap(),
+        )
     };
     let host = boot();
     let peer = boot();
@@ -720,13 +722,15 @@ fn failed_recorder_preserves_finalized_segment_totals() {
         Core, CoreConfig, CustomRelay, Grants, Listen, RelaySettings, ServiceKind, VideoCodecCaps,
     };
     let boot = || {
-        Core::start(CoreConfig {
-            listen: Listen::Loopback,
-            relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
-                .unwrap(),
-            ..CoreConfig::default()
-        })
-        .unwrap()
+        super::unattended(
+            Core::start(CoreConfig {
+                listen: Listen::Loopback,
+                relay: RelaySettings::custom(vec![CustomRelay::new("http://127.0.0.1:9").unwrap()])
+                    .unwrap(),
+                ..CoreConfig::default()
+            })
+            .unwrap(),
+        )
     };
     let host = boot();
     let peer = boot();

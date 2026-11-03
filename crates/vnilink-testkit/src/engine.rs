@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use vnilink::{
     Core, Error, Grants, MemoryStore, RelaySettings, RemoteDesktopService, RemoteFilesService,
-    ServiceInfo, ServiceKind, SessionInfo, SessionPhase,
+    ServiceInfo, ServiceKind, SessionInfo, SessionPhase, SharingPolicy,
 };
 
 use crate::{wait_for, Scratch, DEFAULT_WAIT};
@@ -354,6 +354,13 @@ fn configure(name: &str, core: &Core, scratch: &Scratch, disk: Disk) {
         .expect("codecs");
     core.set_transfer_directory(scratch.join("transfers"))
         .expect("a transfer folder");
+    // Services open without a person to accept them; the admission suite
+    // turns this off.
+    core.change_sharing_policy(vnilink::SharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .expect("unattended sharing");
     if disk == Disk::Shared {
         core.enable_filesystem_access()
             .expect("the whole disk shared");
@@ -382,6 +389,23 @@ pub fn pair_cores_for_control(host: &Core, viewer: &Core) -> Result<(), Error> {
     pair_cores(host, viewer)?;
     host.set_desktop_sharing(SEEN_AND_CONTROLLED)
 }
+
+/// What a kit engine shares before a test shares anything: nothing, and
+/// what it comes to share is used without anyone accepting it, as its
+/// engine is configured.
+pub const NOTHING_SHARED: SharingPolicy = SharingPolicy {
+    view: false,
+    control: false,
+    clipboard: false,
+    files: false,
+    terminal: false,
+    camera: false,
+    system_audio: false,
+    microphone: false,
+    recording: false,
+    system_actions: false,
+    unattended: true,
+};
 
 /// What a host shares once paired for control: it may be seen and
 /// controlled, and no more.

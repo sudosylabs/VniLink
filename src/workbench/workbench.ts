@@ -10,13 +10,15 @@ import { runWhenWindowIdle } from '../base/browser/dom.js';
 import { ensureCodeWindow, mainWindow } from '../base/browser/window.js';
 import { errorHandler, isCancellationError, setUnexpectedErrorHandler } from '../base/common/errors.js';
 import { IWorkbenchConfigurationService } from './services/configuration/configurationService.js';
+import * as nls from '../nls.js';
 import { IEngineService } from '../platform/engine/common/engineService.js';
+import type { ILogService } from '../platform/log/common/log.js';
+import { IDialogService } from './services/dialogs/dialogService.js';
 import { getSingletonServiceDescriptors } from '../platform/instantiation/common/extensions.js';
 import { ILayoutService } from '../platform/layout/browser/layoutService.js';
 import { IInstantiationService, type ServicesAccessor } from '../platform/instantiation/common/instantiation.js';
 import { InstantiationService } from '../platform/instantiation/common/instantiationService.js';
 import type { ServiceCollection } from '../platform/instantiation/common/serviceCollection.js';
-import type { ILogService } from '../platform/log/common/log.js';
 import type { INativeWindowConfiguration } from '../platform/window/common/windowConfiguration.js';
 import { WorkbenchContributionsRegistry } from './contributions.js';
 import { Layout } from './layout.js';
@@ -93,11 +95,37 @@ export class Workbench extends Layout {
 	private registerListeners(accessor: ServicesAccessor): void {
 		const engineService = accessor.get(IEngineService);
 		const lifecycleService = accessor.get(ILifecycleService);
+		const dialogService = accessor.get(IDialogService);
+		const startFresh = async (): Promise<void> => {
+			const { button } = await dialogService.show({
+				type: 'warning',
+				message: nls.localize('workbench.startFreshTitle', 'Start VniLink fresh on this computer?'),
+				detail: nls.localize('workbench.startFreshDetail', 'VniLink can’t read the installation it saved here, as can happen after updating from an older test version. Starting fresh gives this computer a new identity: pair your other computers with it again. What it shares starts from the defaults. The unreadable installation is kept aside, not deleted.'),
+				buttons: [nls.localize('workbench.startFresh', 'Start Fresh'), nls.localize('workbench.startFreshCancel', 'Cancel')],
+				cancelId: 1,
+			});
+			if (button === 0) {
+				// The notice follows the engine: back once it runs, or this one again if it still cannot read.
+				await engineService.startFresh().catch((error: unknown) => {
+					this.logService.error('Starting fresh failed.', error);
+				});
+			}
+		};
 		const updateEngineNotice = (): void => {
-			this.setNotice(engineService.available ? undefined : engineService.restarting ? Layout.engineRestartingNotice : Layout.engineUnavailableNotice);
+			if (engineService.available) {
+				this.setNotice(undefined);
+			} else if (engineService.installationUnreadable) {
+				this.setNotice(Layout.installationUnreadableNotice, {
+					label: nls.localize('workbench.startFreshAction', 'Start Fresh…'),
+					run: () => void startFresh(),
+				});
+			} else {
+				this.setNotice(engineService.restarting ? Layout.engineRestartingNotice : Layout.engineUnavailableNotice);
+			}
 		};
 		this._register(engineService.onDidChangeAvailability(updateEngineNotice));
 		this._register(engineService.onDidChangeRestarting(updateEngineNotice));
+		this._register(engineService.onDidChangeInstallationUnreadable(updateEngineNotice));
 		updateEngineNotice();
 		this._register({
 			dispose: () => {

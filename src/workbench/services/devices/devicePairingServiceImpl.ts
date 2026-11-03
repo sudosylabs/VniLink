@@ -10,11 +10,10 @@ import { RunOnceScheduler } from '../../../base/common/async.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
+import { MAX_INVITATION_BYTES } from '../../../platform/invitations/common/invitations.js';
 import { IDevicePairingService, type PairingState, type PairingStep } from './devicePairingService.js';
 import { IDeviceService, type PairingFile } from './deviceService.js';
 
-/** Invitations larger than this are not VniLink invitations. */
-const maxInvitationSize = 65_536;
 
 /** How often a live invitation checks for an incoming pairing request. */
 const requestPollInterval = 500;
@@ -77,7 +76,7 @@ export class DevicePairingService extends Disposable implements IDevicePairingSe
 	public openInvitation(file: File): Promise<void> {
 		return this.run(async revision => {
 			this.stopWaiting();
-			if (file.size > maxInvitationSize || !file.size) {
+			if (file.size > MAX_INVITATION_BYTES || !file.size) {
 				throw new Error(nls.localize('devices.fileSize', 'Choose a valid .vnl invitation smaller than 64 KB.'));
 			}
 			const bytes = new Uint8Array(await file.arrayBuffer());

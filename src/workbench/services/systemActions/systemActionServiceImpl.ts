@@ -74,6 +74,9 @@ function failedMessage(action: SystemActionKind): string {
 export function systemRequestMessage(error: unknown): string {
 	switch (engineErrorCategory(error) ?? '') {
 		case 'Unauthorized': return nls.localize('system.requestNotAllowed', 'Not allowed there');
+		case 'Declined':
+		case 'NotAdmitted': return nls.localize('system.requestDeclined', 'Declined there');
+		case 'Unanswered': return nls.localize('system.requestUnanswered', 'Nobody answered there');
 		case 'NoSession':
 		case 'StaleSession': return nls.localize('system.requestDisconnected', 'Not connected');
 		// Reached, but still doing an earlier action or slow to answer.

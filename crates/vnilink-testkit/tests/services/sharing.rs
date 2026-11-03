@@ -8,7 +8,7 @@
 //! The host's installation-wide consent to share each service.
 
 use vnilink::{SharingPolicy, SharingPolicyUpdate};
-use vnilink_testkit::{traced, Engine, TestResult};
+use vnilink_testkit::{traced, Engine, TestResult, NOTHING_SHARED};
 
 /// Two partial changes made at once each change only their own switch, so
 /// neither undoes the other.
@@ -39,7 +39,7 @@ fn concurrent_partial_changes_keep_each_others_switches() -> TestResult {
         SharingPolicy {
             terminal: true,
             camera: true,
-            ..Default::default()
+            ..NOTHING_SHARED
         },
         "both changes hold and nothing else changed"
     );

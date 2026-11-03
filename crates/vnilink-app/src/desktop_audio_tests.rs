@@ -12,7 +12,7 @@ use crate::{
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn core() -> Arc<VnilinkCore> {
-    Arc::new(VnilinkCore {
+    let core = Arc::new(VnilinkCore {
         inner: Arc::new(
             vnilink::Core::start(vnilink::CoreConfig {
                 listen: vnilink::Listen::Loopback,
@@ -28,7 +28,9 @@ fn core() -> Arc<VnilinkCore> {
         previews: Mutex::new(Default::default()),
         next_preview: AtomicU64::new(1),
         audio_coordinator: Arc::new(crate::audio_native::AudioCoordinator::default()),
-    })
+    });
+    crate::unattended(&core);
+    core
 }
 struct Capture;
 impl vnilink::HostCapture for Capture {

@@ -1283,3 +1283,82 @@ fn electron_application_directory_can_contain_a_private_engine_store() {
     assert!(!unsafe_app.join("engine").exists());
     assert_eq!(mode_bits(&unsafe_app), 0o777);
 }
+
+/// An engine on the fixture installation `engine` with `vault`, on loopback.
+fn open_engine_at(
+    engine: &Path,
+    vault: &Arc<MemoryVault>,
+) -> Result<vnilink_app::VnilinkCore, FfiError> {
+    let store = EncryptedInstallationStore::open_fixture(engine, as_vault(vault))?;
+    vnilink_app::VnilinkCore::open_persistent_direct(Box::new(store))
+}
+
+/// Recovery directories the fixture's engine directory holds.
+fn recovery_dirs(fixture: &Fixture) -> usize {
+    fs::read_dir(&fixture.engine)
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("installation-recovery-")
+        })
+        .count()
+}
+
+#[test]
+fn starting_fresh_sets_an_unreadable_installation_aside_and_opens_a_new_one() {
+    let fixture = Fixture::new();
+    let vault = memory();
+    // A record the engine cannot read, as one written by an older build.
+    let store = open(&fixture.engine, as_vault(&vault));
+    store.save(b"not an installation record".to_vec()).unwrap();
+    drop(store);
+    let paths = paths::InstallationPaths::from_engine(fixture.engine.clone());
+    let reset = || {
+        recover_installation(&paths, vault.as_ref())
+            .map(|_| ())
+            .map_err(|_| FfiError::StoreUnavailable)
+    };
+    assert!(matches!(
+        super::open_or_start_fresh(false, || open_engine_at(&fixture.engine, &vault), reset),
+        Err(FfiError::CorruptRecord)
+    ));
+    assert_eq!(
+        recovery_dirs(&fixture),
+        0,
+        "nothing is set aside unless asked"
+    );
+    let core = super::open_or_start_fresh(true, || open_engine_at(&fixture.engine, &vault), reset)
+        .expect("a new installation opens");
+    drop(core);
+    assert_eq!(
+        recovery_dirs(&fixture),
+        1,
+        "the unreadable one is kept aside"
+    );
+    assert!(
+        open_engine_at(&fixture.engine, &vault).is_ok(),
+        "the new installation reopens"
+    );
+}
+
+#[test]
+fn starting_fresh_never_sets_a_readable_installation_aside() {
+    let fixture = Fixture::new();
+    let vault = memory();
+    let first = open_engine_at(&fixture.engine, &vault).expect("a new installation");
+    let endpoint = first.snapshot().unwrap().endpoint_id;
+    drop(first);
+    let reset = || -> Result<(), FfiError> { panic!("a readable installation was reset") };
+    let again = super::open_or_start_fresh(true, || open_engine_at(&fixture.engine, &vault), reset)
+        .expect("it opens as it is");
+    assert_eq!(
+        again.snapshot().unwrap().endpoint_id,
+        endpoint,
+        "the same identity"
+    );
+    assert_eq!(recovery_dirs(&fixture), 0);
+}

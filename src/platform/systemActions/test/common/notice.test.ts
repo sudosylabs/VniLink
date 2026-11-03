@@ -8,11 +8,11 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { isNoticeAnswer, isNoticeContent, type NoticeContent } from '../../common/notice.js';
-import { noticeCountdown, noticeTitle } from '../../common/noticeText.js';
+import { noticeCancelLabel, noticeCountdown, noticeNowLabel, noticeTitle } from '../../common/noticeText.js';
 
 const restart: NoticeContent = { action: 'restart', name: 'Studio Mac', deadline: 30_000 };
 
-suite('System action notice', () => {
+suite('Notice', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 	test('the title names who asks to restart', () => {
 		assert.strictEqual(noticeTitle(restart), 'Studio Mac wants to restart this computer');
@@ -31,6 +31,15 @@ suite('System action notice', () => {
 	});
 	test('a restart notice is valid content', () => {
 		assert.strictEqual(isNoticeContent(restart), true);
+	});
+	test('a computer asking to use this one is named, and declined at the deadline', () => {
+		const admit: NoticeContent = { action: 'admit', name: 'Studio Mac', deadline: 30_000 };
+		assert.deepStrictEqual([noticeTitle(admit), noticeCountdown(admit, 5_100), noticeNowLabel(admit), noticeCancelLabel(admit), isNoticeContent(admit)], [
+			'Studio Mac wants to use this computer', 'It can use what you share once you allow it. Declining in 25 s.', 'Allow', 'Decline', true,
+		]);
+	});
+	test('a restart is started now or cancelled', () => {
+		assert.deepStrictEqual([noticeNowLabel(restart), noticeCancelLabel(restart)], ['Restart Now', 'Cancel']);
 	});
 	test('a lock never counts down', () => {
 		assert.strictEqual(isNoticeContent({ ...restart, action: 'lock' }), false);

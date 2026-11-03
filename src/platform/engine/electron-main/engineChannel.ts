@@ -32,15 +32,17 @@ const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	// Replacing the identity unpairs every computer; no window asks for it.
 	'resetIdentity',
 	'saveCustomRelays', 'setRelayPublic', 'setRelayCustom',
-	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setTerminalShell', 'setPowerPolicy',
+	'setComputerName', 'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setTerminalShell', 'setPowerPolicy',
 	'setDesktopCodecDefault', 'setDesktopQualityDefaults', 'setInputDefaults',
 	'setNativeCameraSources', 'setNativeAudioSources', 'setTransferDirectory', 'enableFilesystemAccess',
 	// Only the operating system knows what was granted; main reads it and tells the engine.
 	'reportNativePermissions',
 	// The engine log's filter follows `diagnostics.engineLog`.
 	'setLogFilter',
-	// A restart or shutdown asked of this computer is answered in the main process's notice.
+	// A restart or shutdown asked of this computer, or a computer asking to
+	// use it, is answered in the main process's notice.
 	'scheduledSystemActions', 'cancelHostedSystemAction', 'runHostedSystemActionNow',
+	'admissionRequests', 'answerAdmissionRequest',
 ]);
 
 /** A connected pair of ports, as `MessageChannelMain` creates them. */
@@ -94,6 +96,7 @@ export class EngineChannel extends Disposable implements IServerChannel {
 		switch (event) {
 			case 'onDidChangeAvailability': return this.engine.onDidChangeAvailability as Event<T>;
 			case 'onDidChangeRestarting': return this.engine.onDidChangeRestarting as Event<T>;
+			case 'onDidChangeInstallationUnreadable': return this.engine.onDidChangeInstallationUnreadable as Event<T>;
 			case 'onDidChangeRestartRequired': return this.engine.onDidChangeRestartRequired as Event<T>;
 			case 'onDidReceiveEvents': return this.engine.onDidReceiveEvents as Event<T>;
 		}
@@ -105,6 +108,11 @@ export class EngineChannel extends Disposable implements IServerChannel {
 		switch (command) {
 			case 'getAvailability': return this.engine.available as T;
 			case 'getRestarting': return this.engine.isRestarting as T;
+			case 'getInstallationUnreadable': return this.engine.isInstallationUnreadable as T;
+			// Main refuses it unless the engine is stopped on an unreadable installation.
+			case 'startFresh':
+				await this.engine.startFresh();
+				return undefined as T;
 			case 'getRestartRequired': return await this.engine.getRestartRequired() as T;
 			case 'execute': return await this.execute(arg) as T;
 			case 'openDataChannel':

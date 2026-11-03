@@ -85,7 +85,7 @@ fn a_picture_on_the_gpu_is_scaled_into_an_encoder_picture() {
     use libva::{Display, Image, UsageHint};
     use vnilink_media::{NativePicture, RawFrame, SoftwareDecoder, VideoDecoder};
 
-    use crate::gpu_picture::{Importer, Prime};
+    use crate::gpu_picture::{Importer, Prime, POOL_MAX};
     use crate::vaapi::{Input, Session, VaCodec};
 
     let Some(node) = crate::vaapi::offering(VaCodec::H265) else {
@@ -150,17 +150,28 @@ fn a_picture_on_the_gpu_is_scaled_into_an_encoder_picture() {
         );
     }
 
-    // The pool is small and a picture stays taken while a frame holds it.
+    // A picture stays taken while a frame holds it; a pool with every
+    // picture taken grows, up to its bound, rather than lose the next one.
     let mut held = vec![picture];
     while let Some(next) = importer.copy(1, || buffer.duplicate()).unwrap() {
         held.push(next);
-        assert!(held.len() <= 8, "the pool never runs out");
+        assert!(held.len() <= POOL_MAX, "the pool grows no further");
     }
-    let taken = held.len();
+    assert_eq!(held.len(), POOL_MAX, "a full pool grows to its bound");
+    let grown = held.last().unwrap().read_back().unwrap();
+    for (x, y) in [(10, 10), (900, 600)] {
+        let at = (y * width + x) * 4;
+        assert_eq!(
+            grown[at..at + 4],
+            quadrant_colour(x, y, width, height),
+            "pixel {x},{y} of a picture the pool grew for"
+        );
+    }
     held.pop();
-    assert!(importer.copy(1, || buffer.duplicate()).unwrap().is_some());
-    assert!(taken >= 2);
-    eprintln!("{taken} pictures taken before the pool ran out");
+    assert!(
+        importer.copy(1, || buffer.duplicate()).unwrap().is_some(),
+        "a picture let go is taken again"
+    );
     held.truncate(1);
     let picture = held.pop().unwrap();
 

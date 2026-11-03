@@ -267,3 +267,64 @@ fn pairing_learns_names_before_connect_and_local_names_survive_refresh() -> Test
     );
     Ok(())
 }
+
+/// A name the owner chooses is what paired computers are told from the next
+/// connection on, and going back to none tells them the system's again.
+#[test]
+fn a_chosen_computer_name_reaches_paired_computers_at_the_next_connection() -> TestResult {
+    let _trace = traced();
+    let pair = Pair::for_desktop();
+    let (host, controller) = (&pair.host.core, &pair.controller.core);
+    host.set_computer_name(Some("  Studio Mac  "))?;
+    assert_eq!(
+        host.computer_name()?.chosen.as_deref(),
+        Some("Studio Mac"),
+        "the name is kept without the spaces around it"
+    );
+    let events = controller.subscribe()?;
+    pair.connect_services();
+    assert_eq!(
+        controller.peer_hostname(&pair.host.endpoint())?.as_deref(),
+        Some("Studio Mac"),
+        "the controller learns the chosen name when it connects"
+    );
+    assert!(
+        drain(&events).iter().any(|event| matches!(
+            event,
+            CoreEvent::PeerRenamed { hostname: Some(name), .. } if name == "Studio Mac"
+        )),
+        "the controller announces the new name"
+    );
+    host.set_computer_name(None)?;
+    assert_eq!(
+        host.computer_name()?.chosen,
+        None,
+        "no name is chosen any more"
+    );
+    Ok(())
+}
+
+/// The chosen name is saved with the installation, and a name that cannot be
+/// told to another computer is refused and leaves the saved one.
+#[test]
+fn a_chosen_computer_name_is_saved_and_an_invalid_one_refused() -> TestResult {
+    let _trace = traced();
+    let mut host = Engine::start("host");
+    host.core.set_computer_name(Some("Studio Mac"))?;
+    for invalid in ["", "   ", "two\nlines", &"a".repeat(129)] {
+        assert!(
+            matches!(
+                host.core.set_computer_name(Some(invalid)),
+                Err(Error::InvalidSetting(_))
+            ),
+            "{invalid:?} is refused"
+        );
+    }
+    host.restart();
+    assert_eq!(
+        host.core.computer_name()?.chosen.as_deref(),
+        Some("Studio Mac"),
+        "the name survives a restart"
+    );
+    Ok(())
+}

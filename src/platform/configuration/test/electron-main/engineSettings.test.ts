@@ -32,11 +32,12 @@ class EnginePolicies {
 	};
 	public sharing: SharingPolicy = {
 		view: false, control: false, clipboard: true, files: false, terminal: false,
-		camera: false, system_audio: false, microphone: false, recording: false, system_actions: false,
+		camera: false, system_audio: false, microphone: false, recording: false, system_actions: false, unattended: false,
 	};
 	public system: SystemPolicy = { allow_lock: true, allow_restart: false, allow_shutdown: false, allow_privacy: false };
 	public readonly support: SystemSupport = { lock: true, restart: false, shutdown: true, privacy: true };
 	public relays: RelayInfo[] = [];
+	public computerName: string | null = null;
 	public failWrite = false;
 	public failRead = false;
 	public loseReadAfterWrite = false;
@@ -60,6 +61,10 @@ class EnginePolicies {
 			return { type: 'sharingPolicy', policy: this.sharing };
 		} else if (command.type === 'systemPolicy') {
 			return { type: 'systemPolicy', policy: this.system, support: this.support };
+		} else if (command.type === 'computerName') {
+			return { type: 'computerName', chosen: this.computerName, system: 'workstation' };
+		} else if (command.type === 'setComputerName') {
+			this.computerName = command.name;
 		} else if (command.type === 'savedRelays') {
 			return { type: 'relays', relays: this.relays };
 		} else if (command.type === 'setPowerPolicy') {
@@ -134,6 +139,19 @@ suite('EngineSettings', () => {
 			assert.deepStrictEqual(sent('setSharingPolicy').at(-1)?.policy, { view: true, control: true, system_audio: true });
 			assert.strictEqual(policies.sharing.clipboard, true);
 			assert.strictEqual(settings.values['sharing.screen'], true);
+		});
+	});
+	suite('computer name', () => {
+		test('no chosen name reads as empty, which uses the system\'s', async () => {
+			const settings = await createSettings();
+			assert.strictEqual(settings.values['application.computerName'], '');
+		});
+		test('a name is saved, and an empty one goes back to the system\'s', async () => {
+			const settings = await createSettings();
+			await settings.update('application.computerName', 'Studio Mac');
+			assert.strictEqual(settings.values['application.computerName'], 'Studio Mac');
+			await settings.update('application.computerName', '');
+			assert.deepStrictEqual(sent('setComputerName').map(command => command.name), ['Studio Mac', null]);
 		});
 	});
 	suite('security', () => {

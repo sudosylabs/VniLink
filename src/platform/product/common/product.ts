@@ -11,4 +11,11 @@ import metadata from '../../../../product.json' with { type: 'json' };
 export const product = Object.freeze({
 	name: metadata.nameLong,
 	appId: metadata.appId,
+	/** The extension of invitation files, which installers associate with the application. */
+	invitationExtension: metadata.invitation.extension,
+	/** The Linux desktop entry a built application is matched to, and the icon name it installs. */
+	linux: Object.freeze({
+		desktopFileName: metadata.platforms.linux.desktopFileName,
+		iconName: metadata.platforms.linux.executableName,
+	}),
 });

@@ -5,7 +5,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! Developer reset for one installation directory.
+//! Reset of one installation directory, for the application's start fresh
+//! ([`super::start_fresh`]) and the developer command.
 //!
 //! The database, journal, and any unexpected WAL or SHM files are renamed into
 //! a private recovery directory on the same file system. The installation key
@@ -23,7 +24,7 @@ use super::StoreFailure;
 #[derive(Debug)]
 pub(crate) struct Recovered {
     pub(crate) moved: Vec<String>,
-    /// Read by the reset command and by tests. Normal application builds omit both.
+    /// Read by the reset command and by tests.
     #[cfg_attr(not(any(test, feature = "reset-installation")), allow(dead_code))]
     pub(crate) key_deleted: bool,
 }

@@ -519,7 +519,7 @@
     },
     "rsvg-convert": {
       "title": "rsvg-convert",
-      "purpose": "Renders the tray icons from their SVG sources.",
+      "purpose": "Renders the tray icons and the installers' artwork from their SVG sources.",
       "check": {
         "commands": {
           "rsvg-convert": {
@@ -540,6 +540,23 @@
           "rpmbuild": {
             "debian": "rpm",
             "fedora": "rpm-build"
+          }
+        }
+      }
+    },
+    "package-readers": {
+      "title": "dpkg-deb and rpm",
+      "platforms": ["linux"],
+      "purpose": "verify:installers reads what the .deb and .rpm install without installing them.",
+      "check": {
+        "commands": {
+          "dpkg-deb": {
+            "debian": "dpkg",
+            "fedora": "dpkg"
+          },
+          "rpm": {
+            "debian": "rpm",
+            "fedora": "rpm"
           }
         }
       }
@@ -662,7 +679,7 @@
     },
     "verify:installers": {
       "description": "Check the installers",
-      "requires": ["platform", "node"]
+      "requires": ["platform", "node", "package-readers"]
     },
     "start": {
       "description": "Launch the built application",
@@ -761,6 +778,11 @@
       "platforms": ["linux"],
       "requires": ["platform", "node", "apparmor"]
     },
+    "desktop:linux": {
+      "description": "Install the development Electron's desktop entry and icon for this user",
+      "platforms": ["linux"],
+      "requires": ["platform", "node"]
+    },
     "measure:impaired": {
       "description": "Measure sessions over impaired networks in the container",
       "requires": ["platform", "node", "docker"]
@@ -839,6 +861,10 @@
     },
     "assets:tray": {
       "description": "Render the tray icons",
+      "requires": ["node", "rsvg-convert"]
+    },
+    "assets:installers": {
+      "description": "Render the installers' artwork",
       "requires": ["node", "rsvg-convert"]
     },
     "format": {

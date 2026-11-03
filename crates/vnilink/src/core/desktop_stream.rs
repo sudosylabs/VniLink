@@ -1218,6 +1218,9 @@ pub(super) fn open(core: &Core, id: u64, generation: u64) -> Result<RemoteDeskto
                                 continue;
                             }
                             6 => return Err(Error::Unauthorized),
+                            super::admission::NOT_ADMITTED => {
+                                return Err(Error::NotAdmitted)
+                            }
                             3 => return Err(Error::StaleSession),
                             1 => return Err(Error::Unsupported("remote Desktop backend")),
                             _ => return Err(Error::IncompatibleVersion),

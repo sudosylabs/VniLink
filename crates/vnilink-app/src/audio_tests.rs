@@ -8,7 +8,7 @@
 use crate::{audio::*, *};
 use std::sync::{Arc, Mutex};
 fn core() -> VnilinkCore {
-    VnilinkCore {
+    let core = VnilinkCore {
         inner: Arc::new(
             vnilink::Core::start(vnilink::CoreConfig {
                 listen: vnilink::Listen::Loopback,
@@ -24,7 +24,9 @@ fn core() -> VnilinkCore {
         previews: Mutex::new(Default::default()),
         next_preview: AtomicU64::new(1),
         audio_coordinator: Arc::new(audio_native::AudioCoordinator::default()),
-    }
+    };
+    crate::unattended(&core);
+    core
 }
 fn config() -> FfiAudioConfig {
     FfiAudioConfig {

@@ -38,7 +38,7 @@ const terminalPolicy = {
 
 const sharingPolicy = {
 	view: false, control: false, clipboard: false, files: false, terminal: false,
-	camera: false, system_audio: false, microphone: false, recording: false, system_actions: false,
+	camera: false, system_audio: false, microphone: false, recording: false, system_actions: false, unattended: false,
 };
 
 const service = { id: '1', connectionId: '2', generation: '3', peer_id: 'peer', kind: 'Desktop', phase: 'Active' };
@@ -103,6 +103,9 @@ suite('isEngineCommand', () => {
 			['a relay without credentials', { type: 'saveCustomRelays', relays: [{ url: 'https://relay.example', authenticated: false, replacementToken: '' }] }],
 			['an authenticated relay with a token', { type: 'saveCustomRelays', relays: [{ url: 'https://relay.example', authenticated: true, replacementToken: 'token' }] }],
 			['a device host name query', { type: 'peerHostname', endpointId: 'peer' }],
+			['a computer name query', { type: 'computerName' }],
+			['a chosen computer name', { type: 'setComputerName', name: 'Studio Mac' }],
+			['going back to the system\'s computer name', { type: 'setComputerName', name: null }],
 			['a controller session\'s paths', { type: 'controllerSessionPaths', sessionId: '1' }],
 			['an event read of 32', { type: 'pollEvents', subscriptionId: '1', maxEvents: 32 }],
 			['releasing an event subscription', { type: 'releaseEvents', subscriptionId: '1' }],
@@ -185,11 +188,16 @@ suite('isEngineCommand', () => {
 		accepts(isEngineCommand, [
 			['a sharing policy query', { type: 'sharingPolicy' }],
 			['a complete sharing policy', { type: 'setSharingPolicy', policy: sharingPolicy }],
+			['sharing without asking', { type: 'setSharingPolicy', policy: { unattended: true } }],
+			['the computers waiting to be accepted', { type: 'admissionRequests' }],
+			['an answer to one of them', { type: 'answerAdmissionRequest', id: '7', accept: true }],
 		]);
 		refuses(isEngineCommand, [
 			['a sharing policy with a field that is not a boolean', { type: 'setSharingPolicy', policy: { ...sharingPolicy, camera: 'yes' } }],
 			['a sharing policy for one device', { type: 'setSharingPolicy', policy: sharingPolicy, endpointId: 'peer' }],
 			['a sharing policy with an extra field', { type: 'setSharingPolicy', policy: { ...sharingPolicy, extra: true } }],
+			['an answer that is not yes or no', { type: 'answerAdmissionRequest', id: '7', accept: 'later' }],
+			['an answer to a request with a numeric id', { type: 'answerAdmissionRequest', id: 7, accept: false }],
 		]);
 	});
 	suite('availability and diagnostics', () => {
@@ -218,6 +226,9 @@ suite('isEngineCommand', () => {
 			['a native runtime query', { type: 'nativeRuntime' }],
 		]);
 		refuses(isEngineCommand, [
+			['a computer name with a line break', { type: 'setComputerName', name: 'two\nlines' }],
+			['a computer name longer than 128 bytes', { type: 'setComputerName', name: 'é'.repeat(65) }],
+			['an empty computer name, which is no name', { type: 'setComputerName', name: '' }],
 			['a native runtime query for a device', { type: 'nativeRuntime', endpointId: 'unexpected' }],
 			['a camera source named twice', { type: 'setNativeCameraSources', ids: ['one', 'one'] }],
 			['an audio source used as microphone and system sound', { type: 'setNativeAudioSources', microphones: ['one'], system: ['one'] }],
@@ -235,11 +246,14 @@ suite('isEngineReply', () => {
 			['codecs', { type: 'videoCodecs', codecs }],
 			['an unknown host name', { type: 'hostname', hostname: null }],
 			['a host name', { type: 'hostname', hostname: 'peer' }],
+			['a chosen computer name beside the system\'s', { type: 'computerName', chosen: 'Studio Mac', system: 'studio.local' }],
+			['no chosen computer name and no system name', { type: 'computerName', chosen: null, system: null }],
 			['an event subscription', { type: 'eventSubscription', subscriptionId: '3' }],
 			['no events', { type: 'events', events: [], lagged: '0' }],
 			['a known event', { type: 'events', events: [{ type: 'hostingChanged', hosting: true }], lagged: '0' }],
 		]);
 		refuses(isEngineReply, [
+			['a computer name with spaces around it', { type: 'computerName', chosen: ' Studio ', system: null }],
 			['a clipboard owner, since no reply names one,', { type: 'ownerSession', session: null }],
 			['an unknown event', { type: 'events', events: [{ type: 'bogus' }], lagged: '0' }],
 		]);
@@ -270,10 +284,13 @@ suite('isEngineReply', () => {
 		accepts(isEngineReply, [
 			['a pairing preview with the largest ids as decimal strings', { type: 'pairingPreview', preview }],
 			['a sharing policy', { type: 'sharingPolicy', policy: sharingPolicy }],
+			['a computer waiting to be accepted', { type: 'admissionRequests', requests: [{ id: '7', endpoint_id: 'peer', remainingMs: 30000 }] }],
 		]);
 		refuses(isEngineReply, [
 			['a pairing preview with a numeric id', { type: 'pairingPreview', preview: { ...preview, id: Number(preview.id) } }],
 			['a device with only an id', { type: 'device', device: { endpoint_id: 'peer' } }],
+			['a sharing policy without its asking switch', { type: 'sharingPolicy', policy: { ...sharingPolicy, unattended: undefined } }],
+			['a waiting computer without its time left', { type: 'admissionRequests', requests: [{ id: '7', endpoint_id: 'peer' }] }],
 		]);
 	});
 	suite('availability', () => {
@@ -347,6 +364,9 @@ suite('isEngineEvent', () => {
 		['a locked host', { type: 'hostLocked', locked: true }],
 		['a presence change', { type: 'presenceChanged', endpoint_id: 'peer', presence: 'notAccepting' }],
 		['an availability change', { type: 'peerAvailabilityChanged', endpoint_id: 'peer' }],
+		['a computer asking to be accepted', { type: 'admissionRequested', id: '7', endpoint_id: 'peer', remainingMs: 30000 }],
+		['its request ending', { type: 'admissionRequestEnded', id: '7' }],
+		['this computer waiting to be accepted', { type: 'admissionWaiting', endpoint_id: 'peer', waiting: true }],
 	]);
 	refuses(isEngineEvent, [
 		['a numeric watch id', { type: 'folderChanged', watch: 4 }],

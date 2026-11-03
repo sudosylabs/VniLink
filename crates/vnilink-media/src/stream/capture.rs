@@ -28,6 +28,8 @@ struct Picture {
     captured_at: Option<Instant>,
     /// The source attested the same screen as the picture before.
     unchanged: bool,
+    /// The pointer moved and nothing else did: read for the pointer alone.
+    pointer_only: bool,
 }
 pub(super) struct PictureSlot {
     picture: Mutex<Picture>,
@@ -47,6 +49,7 @@ impl PictureSlot {
         capture_us: u64,
         captured_at: Instant,
         unchanged: bool,
+        pointer_only: bool,
     ) {
         let mut picture = self
             .picture
@@ -57,6 +60,7 @@ impl PictureSlot {
         picture.capture_us = capture_us;
         picture.captured_at = Some(captured_at);
         picture.unchanged = unchanged;
+        picture.pointer_only = pointer_only;
         picture.generation = picture.generation.wrapping_add(1).max(1);
         drop(picture);
         self.wake.notify_all();
@@ -89,6 +93,7 @@ impl PictureSlot {
             capture_us: picture.capture_us,
             captured_at: picture.captured_at,
             unchanged: picture.unchanged,
+            pointer_only: picture.pointer_only,
         })
     }
     /// The newest picture, whether or not this consumer has seen it.
@@ -104,6 +109,7 @@ impl PictureSlot {
             capture_us: picture.capture_us,
             captured_at: picture.captured_at,
             unchanged: picture.unchanged,
+            pointer_only: picture.pointer_only,
         })
     }
     pub(super) fn poke(&self) {
@@ -143,7 +149,11 @@ pub(super) struct Sample {
     pub(super) cursor: Option<CursorState>,
     pub(super) capture_us: u64,
     pub(super) captured_at: Option<Instant>,
+    /// The screen's pixels are those of the picture before.
     pub(super) unchanged: bool,
+    /// Read because the pointer moved, the pixels unchanged: a consumer
+    /// that sends the pointer apart from the picture has no picture to send.
+    pub(super) pointer_only: bool,
 }
 
 /// How often an unchanged picture is still handed on, so a viewer sees the
@@ -280,24 +290,30 @@ impl Reader {
         let attested = capture.attested_at();
         // A read that says the screen changed is a change, whatever the
         // attestation says: a picture stored between the read and the
-        // attestation would otherwise lose where it changed.
+        // attestation would otherwise lose where it changed. The pointer
+        // is not the screen: whether its moving changes a consumer's
+        // picture is the consumer's to say.
         let unchanged = attested.is_some()
             && attested == self.last_attested
-            && cursor == self.last_cursor
             && !frame.changed().is_some_and(|changes| changes.share > 0.0);
+        let pointer_moved = cursor != self.last_cursor;
+        let keepalive = self
+            .last_published
+            .is_none_or(|at| at.elapsed() >= IDLE_KEEPALIVE);
         let frame = if changed_where_unsaid(attested, self.last_attested, frame.changed()) {
             frame.with_changed(None)
         } else {
             frame
         };
-        if !unchanged
-            || self
-                .last_published
-                .is_none_or(|at| at.elapsed() >= IDLE_KEEPALIVE)
-        {
+        if !unchanged || pointer_moved || keepalive {
+            // A read for the pointer alone is no picture of the screen: the
+            // keepalive still comes a second after the last one.
+            let pointer_only = unchanged && !keepalive;
             self.last_attested = attested;
             self.last_cursor.clone_from(&cursor);
-            self.last_published = Some(read_started);
+            if !pointer_only {
+                self.last_published = Some(read_started);
+            }
             let captured_at = if unchanged {
                 read_started
             } else {
@@ -309,6 +325,7 @@ impl Reader {
                 captured_at.elapsed().as_micros().min(5_000_000) as u64,
                 captured_at,
                 unchanged,
+                pointer_only,
             );
         }
         // A source read on a timer keeps the frame rate's cadence: the
@@ -405,6 +422,7 @@ mod coherent_slot_tests {
                     }),
                     sequence,
                     origin + Duration::from_micros(sequence),
+                    false,
                     false,
                 );
             }

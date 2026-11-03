@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-/** Entry of the restart notice window; see `platform/systemActions/browser/noticePage.ts`. */
+/** Entry of the notice window, for restarts, shutdowns and computers asking to use this one; see `platform/systemActions/browser/noticePage.ts`. */
 import { mainWindow } from './base/browser/window.js';
 import { NoticePage, type NoticeBridge } from './platform/systemActions/browser/noticePage.js';
 

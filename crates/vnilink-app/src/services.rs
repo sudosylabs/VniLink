@@ -1178,6 +1178,7 @@ pub struct FfiSharingPolicy {
     pub microphone: bool,
     pub recording: bool,
     pub system_actions: bool,
+    pub unattended: bool,
 }
 
 impl From<vnilink::SharingPolicy> for FfiSharingPolicy {
@@ -1193,6 +1194,7 @@ impl From<vnilink::SharingPolicy> for FfiSharingPolicy {
             microphone: value.microphone,
             recording: value.recording,
             system_actions: value.system_actions,
+            unattended: value.unattended,
         }
     }
 }
@@ -1210,6 +1212,7 @@ impl From<FfiSharingPolicy> for vnilink::SharingPolicy {
             microphone: value.microphone,
             recording: value.recording,
             system_actions: value.system_actions,
+            unattended: value.unattended,
         }
     }
 }
@@ -1278,6 +1281,12 @@ pub struct FfiSharingPolicyUpdate {
         deserialize_with = "sharing_boolean"
     )]
     pub system_actions: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub unattended: Option<bool>,
 }
 
 fn sharing_boolean<'de, D: serde::Deserializer<'de>>(
@@ -1299,11 +1308,55 @@ impl From<FfiSharingPolicyUpdate> for vnilink::SharingPolicyUpdate {
             microphone: value.microphone,
             recording: value.recording,
             system_actions: value.system_actions,
+            unattended: value.unattended,
         }
     }
 }
 
+/// A paired computer waiting for the person here to accept it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiAdmissionRequest {
+    pub id: u64,
+    pub endpoint_id: String,
+    pub remaining_ms: u64,
+}
+
 impl VnilinkCore {
+    pub fn admission_requests(&self) -> Result<Vec<FfiAdmissionRequest>, FfiError> {
+        self.inner
+            .admission_requests()
+            .map(|requests| {
+                requests
+                    .into_iter()
+                    .map(|request| FfiAdmissionRequest {
+                        id: request.id,
+                        endpoint_id: request.endpoint_id,
+                        remaining_ms: u64::try_from(request.remaining.as_millis())
+                            .unwrap_or(u64::MAX),
+                    })
+                    .collect()
+            })
+            .map_err(map_error)
+    }
+    pub fn answer_admission_request(&self, id: u64, accept: bool) -> Result<(), FfiError> {
+        self.inner
+            .answer_admission_request(id, accept)
+            .map_err(map_error)
+    }
+    /// Asks the host of connection `id` to admit this computer to `kind`;
+    /// `done` has the answer, which may wait for the host's person.
+    pub fn admit(
+        &self,
+        id: u64,
+        generation: u64,
+        kind: FfiServiceKind,
+        done: impl FnOnce(Result<(), FfiError>) + Send + 'static,
+    ) {
+        self.inner
+            .admit(id, generation, kind.into(), move |result| {
+                done(result.map_err(map_error));
+            });
+    }
     pub fn sharing_policy(&self) -> Result<FfiSharingPolicy, FfiError> {
         self.inner
             .sharing_policy()

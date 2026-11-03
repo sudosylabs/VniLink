@@ -55,6 +55,7 @@
     "measure:impaired": "node build/run.ts measure:impaired",
     "measure:latency": "node build/run.ts measure:latency",
     "sandbox:linux": "node build/run.ts sandbox:linux",
+    "desktop:linux": "node build/run.ts desktop:linux",
     "doctor": "node build/run.ts doctor"
   },
   "devDependencies": {

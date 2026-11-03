@@ -25,15 +25,16 @@
 //! unlocked credential store lets the same user open the record. Replacing
 //! the database with an older authentic copy is not detected.
 //!
-//! The developer reset is not part of the application. With the
-//! `reset-installation` feature:
+//! An installation that cannot be read is set aside by [`start_fresh`], which
+//! the application runs only when its person asks to start fresh after the
+//! store refused the record (`open_engine` with `start_fresh`). The same reset
+//! is a developer command with the `reset-installation` feature:
 //! `cargo run -p vnilink-node --features reset-installation --bin vnilink-reset-installation -- --confirm-forget-installation`
 
 mod crypto;
 mod database;
 mod key;
 mod paths;
-#[cfg(any(test, feature = "reset-installation"))]
 mod recover;
 
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -481,6 +482,45 @@ fn cfg_sync_failure(store: &EncryptedInstallationStore) -> bool {
     {
         let _ = store;
         false
+    }
+}
+
+/// Sets this computer's installation aside, as [`recover::recover`] does,
+/// so the next open starts a new one. The application calls it only once the
+/// store refused the record as unreadable and its person chose to start fresh.
+pub(crate) fn start_fresh() -> Result<(), FfiError> {
+    let paths = paths::production_paths().map_err(FfiError::from)?;
+    let vault = KeyringVault::production();
+    match recover::recover(&paths, &vault) {
+        Ok(report) => {
+            tracing::info!(
+                target: vnilink::trace::STORAGE,
+                preserved = report.moved.len(),
+                "an unreadable installation was set aside"
+            );
+            Ok(())
+        }
+        Err(failure) => {
+            tracing::warn!(target: vnilink::trace::STORAGE, %failure, "an unreadable installation could not be set aside");
+            Err(FfiError::StoreUnavailable)
+        }
+    }
+}
+
+/// Opens with `open`; with `start_fresh`, an installation it refuses as
+/// unreadable is `reset` and opened again. Any other failure, and a readable
+/// installation, is left as it is.
+pub(crate) fn open_or_start_fresh<T>(
+    start_fresh: bool,
+    open: impl Fn() -> Result<T, FfiError>,
+    reset: impl FnOnce() -> Result<(), FfiError>,
+) -> Result<T, FfiError> {
+    match open() {
+        Err(FfiError::CorruptRecord) if start_fresh => {
+            reset()?;
+            open()
+        }
+        opened => opened,
     }
 }
 

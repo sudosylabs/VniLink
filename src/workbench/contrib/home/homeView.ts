@@ -13,6 +13,7 @@ import { IContextKeyService, type IContextKey } from '../../../platform/contextk
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { Registry } from '../../../platform/registry/common/platform.js';
 import { HomePageContext } from '../../contextkeys.js';
+import { HOME_TAB_ID, IHomeService } from '../../services/home/homeService.js';
 import type { WorkbenchTab } from '../../services/tabs/tabService.js';
 import { Extensions, HomePageGroup, type IHomePage, type IHomePagesRegistry } from './homePages.js';
 import { Sidebar, type SidebarGroup } from './sidebar.js';
@@ -22,7 +23,7 @@ import { Sidebar, type SidebarGroup } from './sidebar.js';
  * being shown. Pages are created on first visit and kept until Home closes.
  */
 export class HomeView extends Disposable implements WorkbenchTab {
-	public static readonly ID = 'home';
+	public static readonly ID = HOME_TAB_ID;
 	public readonly id = HomeView.ID;
 	public readonly permanent = true;
 	public readonly label = nls.localize('home.viewLabel', 'Home');
@@ -38,6 +39,7 @@ export class HomeView extends Disposable implements WorkbenchTab {
 	constructor(
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IContextKeyService contextKeyService: IContextKeyService,
+		@IHomeService homeService: IHomeService,
 	) {
 		super();
 		// Pages contribute titlebar actions with `when` clauses on the page shown.
@@ -53,9 +55,13 @@ export class HomeView extends Disposable implements WorkbenchTab {
 			this.sidebar.setGroups(this.groups());
 		}));
 		this.sidebar.setGroups(this.groups());
+		this._register(homeService.onDidRequestPage(id => {
+			this.sidebar.select(id);
+		}));
 		const first = this.registry.getPages(HomePageGroup.Devices).at(0) ?? this.registry.getPages(HomePageGroup.Settings).at(0);
-		if (first) {
-			this.sidebar.select(first.id);
+		const requested = homeService.requestedPage !== undefined && this.registry.getPage(homeService.requestedPage) ? homeService.requestedPage : first?.id;
+		if (requested !== undefined) {
+			this.sidebar.select(requested);
 		}
 	}
 

@@ -245,6 +245,17 @@ export function setup(automation: Automation): void {
 				}
 			}
 		}
+		Mocha.it('shows the welcome across its whole tab, at any width', async () => {
+			await automation.settings.open('general');
+			await automation.onboarding.open();
+			for (const width of [1200, 760]) {
+				automation.window.setSize(width, 820);
+				const { welcome, tab } = await automation.onboarding.widths(width);
+				assert.ok(Math.abs(welcome - tab) <= 1, `the welcome is ${String(welcome)} px in a ${String(tab)} px tab at ${String(width)} px`);
+			}
+			await automation.screenshot('welcome');
+			await automation.onboarding.skip();
+		});
 	});
 	Mocha.describe('reload', () => {
 		let endpointId = '';

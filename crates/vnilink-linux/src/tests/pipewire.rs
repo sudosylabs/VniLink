@@ -14,7 +14,7 @@ use crate::gpu_picture::{
 };
 use crate::pipewire::{
     damage_meta_object, delivery_of, dma_buf_object, enum_formats, fixated_format, format_objects,
-    offered_modifiers, PortalBuffer, PortalDelivery, PortalFormat,
+    holds_picture, offered_modifiers, PortalBuffer, PortalDelivery, PortalFormat,
 };
 
 #[test]
@@ -112,6 +112,27 @@ fn gpu_buffers_ask_for_dmabuf_only_and_damage_has_room_for_regions() {
         meta.properties[1].value,
         pw::spa::pod::Value::Int(size) if size % 16 == 0 && size >= 16
     ));
+}
+
+#[test]
+fn a_buffer_the_compositor_queued_empty_or_corrupted_holds_no_picture() {
+    use pw::spa::buffer::ChunkFlags;
+    assert!(
+        holds_picture(8_294_400, ChunkFlags::empty()),
+        "a buffer drawn into holds the screen"
+    );
+    assert!(
+        !holds_picture(0, ChunkFlags::CORRUPTED),
+        "GNOME's buffer for a pointer that moved alone holds an old picture"
+    );
+    assert!(
+        !holds_picture(0, ChunkFlags::empty()),
+        "a buffer with no bytes holds no picture"
+    );
+    assert!(
+        !holds_picture(8_294_400, ChunkFlags::CORRUPTED),
+        "a buffer marked corrupted holds no picture, whatever its size"
+    );
 }
 
 #[test]

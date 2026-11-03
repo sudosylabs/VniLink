@@ -28,6 +28,10 @@
 //! recording leases stop; unrelated services stay connected. Each paired
 //! device gets [`CoreEvent::DeviceAuthorized`].
 //!
+//! `unattended` is the one switch that shares nothing itself: off, the
+//! default, a paired computer is admitted to what is shared only once the
+//! person here accepts it (`core/admission.rs`).
+//!
 //! Forgetting a device ([`Core::unpair`]) removes its identity and ends its
 //! connections without changing this policy.
 use super::*;
@@ -71,6 +75,10 @@ impl Core {
             if let Err(error) = persist(&self.shared, &mut state) {
                 state.trust.sharing = previous;
                 return Err(error);
+            }
+            if previous.unattended && !policy.unattended {
+                // What was used unattended was never accepted by anyone here.
+                state.admission.forget_approvals();
             }
             peers = state
                 .trust

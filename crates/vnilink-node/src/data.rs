@@ -9,7 +9,7 @@
 // trace: records every ignored failure
 use super::{core_error, parse_id, Call, CommandShape, Engine};
 use napi::{
-    bindgen_prelude::{AsyncTask, Buffer, Function},
+    bindgen_prelude::{AsyncTask, Buffer, Function, Object},
     threadsafe_function::ThreadsafeFunctionCallMode,
     Env, Error, Result, Task,
 };
@@ -1389,6 +1389,48 @@ impl Engine {
             columns,
             media: config,
         }))
+    }
+}
+
+/// The service a controller asks to be admitted to, by its engine name.
+fn admission_kind(name: &str) -> Option<vnilink_app::FfiServiceKind> {
+    Some(match name {
+        "Desktop" => vnilink_app::FfiServiceKind::Desktop,
+        "Files" => vnilink_app::FfiServiceKind::Files,
+        "Terminal" => vnilink_app::FfiServiceKind::Terminal,
+        "Camera" => vnilink_app::FfiServiceKind::Camera,
+        "SystemAudio" => vnilink_app::FfiServiceKind::SystemAudio,
+        "Microphone" => vnilink_app::FfiServiceKind::Microphone,
+        "System" => vnilink_app::FfiServiceKind::System,
+        _ => return None,
+    })
+}
+
+#[napi]
+impl Engine {
+    /// Asks the host of controller session `session_id` to admit this
+    /// computer to the service `kind`. Resolves once admitted, which may wait
+    /// for the host's person to answer, and rejects with the engine's error
+    /// otherwise. No thread waits for the answer meanwhile.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn admit<'env>(
+        &self,
+        env: &'env Env,
+        kind: String,
+        session_id: String,
+        generation: String,
+    ) -> Result<Object<'env>> {
+        let kind =
+            admission_kind(&kind).ok_or_else(|| Error::from_reason("Invalid service kind"))?;
+        let id = parse_id(&session_id, "Invalid session ID")?;
+        let generation = parse_id(&generation, "Invalid generation")?;
+        let (deferred, promise) = env.create_deferred::<(), fn(Env) -> Result<()>>()?;
+        self.core
+            .admit(id, generation, kind, move |result| match result {
+                Ok(()) => deferred.resolve(|_| Ok(())),
+                Err(error) => deferred.reject(core_error(error)),
+            });
+        Ok(promise)
     }
 }
 

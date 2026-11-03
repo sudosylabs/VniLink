@@ -61,6 +61,14 @@ suite('RemoteDesktopView', () => {
 			assert.strictEqual(tab.overlay.hidden, false);
 			assert.ok(tab.overlay.textContent.includes('Connecting to Studio PC'), tab.overlay.textContent);
 		});
+		test('while the other computer\'s person is asked, the tab says whom it waits for', async () => {
+			const tab = new DesktopTab(fixture.open(), fixture.contextMenu);
+			await fixture.opened(1);
+			fixture.devices.setAwaiting('studio', true);
+			assert.ok(tab.overlay.textContent.includes('Waiting for Studio PC to accept'), tab.overlay.textContent);
+			fixture.devices.setAwaiting('studio', false);
+			assert.ok(tab.overlay.textContent.includes('Connecting to Studio PC'), tab.overlay.textContent);
+		});
 		test('the first picture is drawn at its size and takes the keyboard', async () => {
 			const { tab } = await live();
 			assert.deepStrictEqual([tab.canvas.width, tab.canvas.height], [1920, 1080]);

@@ -30,6 +30,7 @@ import { HostingMainService, IHostingMainService } from '../../platform/hosting/
 import { electronScreenHostingEnvironment, IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
 import { electronTrayEnvironment, ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
 import { ISystemActionNoticeMainService, SystemActionNoticeMainService } from '../../platform/systemActions/electron-main/systemActionNotice.js';
+import { AdmissionNoticeMainService, IAdmissionNoticeMainService } from '../../platform/hosting/electron-main/admissionNotice.js';
 import { traySupported } from '../../platform/tray/electron-main/traySupport.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import type { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
@@ -55,6 +56,12 @@ import { INativeHostMainService, NativeHostMainService } from '../../platform/na
 import { PERMISSIONS_CHANNEL_NAME } from '../../platform/permissions/common/permissions.js';
 import { PermissionsChannel } from '../../platform/permissions/electron-main/permissionsChannel.js';
 import { IPermissionsMainService, PermissionsMainService } from '../../platform/permissions/electron-main/permissionsMainService.js';
+import { APPLICATION_LOCATION_CHANNEL_NAME } from '../../platform/applicationLocation/common/applicationLocation.js';
+import { ApplicationLocationChannel } from '../../platform/applicationLocation/electron-main/applicationLocationChannel.js';
+import { ApplicationLocationMainService, electronApplicationLocationEnvironment, IApplicationLocationMainService } from '../../platform/applicationLocation/electron-main/applicationLocationMainService.js';
+import { INVITATIONS_CHANNEL_NAME } from '../../platform/invitations/common/invitations.js';
+import { InvitationsChannel } from '../../platform/invitations/electron-main/invitationsChannel.js';
+import { IInvitationsMainService, InvitationsMainService, readInvitation } from '../../platform/invitations/electron-main/invitationsMainService.js';
 import { RECORDING_CHANNEL_NAME } from '../../platform/recording/common/recording.js';
 import { UI_STATE_CHANNEL_NAME } from '../../platform/state/common/uiState.js';
 import { UIStateChannel } from '../../platform/state/electron-main/uiStateChannel.js';
@@ -136,7 +143,10 @@ export class VniLinkApplication extends Disposable {
 			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService, [electronScreenHostingEnvironment])],
 			[ITrayMainService, new SyncDescriptor(TrayMainService, [electronTrayEnvironment])],
 			[ISystemActionNoticeMainService, new SyncDescriptor(SystemActionNoticeMainService)],
+			[IAdmissionNoticeMainService, new SyncDescriptor(AdmissionNoticeMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
+			[IInvitationsMainService, new SyncDescriptor(InvitationsMainService, [readInvitation])],
+			[IApplicationLocationMainService, new SyncDescriptor(ApplicationLocationMainService, [electronApplicationLocationEnvironment])],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
 			[IStateService, this.stateService],
@@ -179,6 +189,8 @@ export class VniLinkApplication extends Disposable {
 				this.applyLogLevel(accessor);
 				this.configureSession();
 				this.initChannels(accessor);
+				// Windows and Linux start the application with the invitation the user opened.
+				void accessor.get(IInvitationsMainService).openFromCommandLine(process.argv.slice(1), process.cwd());
 			});
 			mark('vnilink/appReady');
 			await this.startEngine();
@@ -188,8 +200,10 @@ export class VniLinkApplication extends Disposable {
 				if (sharesScreen(this.options)) {
 					void accessor.get(IScreenHostingMainService).start();
 				}
-				// A paired computer may ask this one to restart or shut down; its user sees and answers it.
+				// A paired computer may ask this one to restart or shut down, or to
+				// start using it; its user sees and answers it.
 				accessor.get(ISystemActionNoticeMainService).start();
+				accessor.get(IAdmissionNoticeMainService).start();
 			});
 			if (await traySupported()) {
 				this.checkRunning();
@@ -200,6 +214,12 @@ export class VniLinkApplication extends Disposable {
 			if (startsWithoutWindow(this.options.temporaryEngine ?? false, this.runsInBackground(), () => launchedAtLogin())) {
 				// Started by the login item: accept paired devices without a window until the user opens one.
 				windowRequests.startedWithoutWindow();
+				return;
+			}
+			// A macOS application opened from the disk image or Downloads offers to move to Applications, which relaunches it.
+			// A self-check runs a copy wherever it was assembled, with nobody to answer.
+			const location = this.instantiationService.invokeFunction(accessor => accessor.get(IApplicationLocationMainService));
+			if (!this.options.selfCheck && await location.offerAtStartup()) {
 				return;
 			}
 			const window = await this.openWindow();
@@ -253,7 +273,18 @@ export class VniLinkApplication extends Disposable {
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
 			this.dispose();
 		}));
-		this._register(Event.fromNodeEventEmitter<unknown>(app, 'second-instance')(() => {
+		const invitations = accessor.get(IInvitationsMainService);
+		// Another launch passes on its command line, which names the invitation opened on Windows and Linux.
+		this._register(Event.fromNodeEventEmitter<{ argv: string[]; workingDirectory: string }>(app, 'second-instance', (_event: unknown, argv: string[], workingDirectory: string) => ({ argv, workingDirectory }))(launch => {
+			void invitations.openFromCommandLine(launch.argv.slice(1), launch.workingDirectory);
+			windowRequests.request();
+		}));
+		// macOS opens an invitation in the running application, before `ready` when it starts it.
+		this._register(Event.fromNodeEventEmitter<string>(app, 'open-file', (event: { preventDefault(): void }, path: string) => {
+			event.preventDefault();
+			return path;
+		})(path => {
+			void invitations.openPaths([path]);
 			windowRequests.request();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'activate')(() => {
@@ -347,6 +378,8 @@ export class VniLinkApplication extends Disposable {
 		}));
 		server.registerChannel(ENGINE_CHANNEL_NAME, disposables.add(new EngineChannel(engine, windows, nativeHost, permissions)));
 		server.registerChannel(PERMISSIONS_CHANNEL_NAME, new PermissionsChannel(permissions));
+		server.registerChannel(INVITATIONS_CHANNEL_NAME, new InvitationsChannel(accessor.get(IInvitationsMainService)));
+		server.registerChannel(APPLICATION_LOCATION_CHANNEL_NAME, new ApplicationLocationChannel(accessor.get(IApplicationLocationMainService)));
 		server.registerChannel(LOGGER_CHANNEL_NAME, new WindowLoggerChannel(disposables.add(new LoggerChannel(this.loggerService)), this.logsHome));
 		// A closed window's loggers, and their open files, go with it.
 		disposables.add(windows.onDidOpenWindow(window => {
@@ -397,8 +430,10 @@ export class VniLinkApplication extends Disposable {
 		try {
 			await engine.start(temporary, temporary && this.options.temporaryEngineCaptures === true, this.options.temporaryEngineScreenGrant);
 		} catch (error) {
-			// The engine tries again by itself; its restart handler configures it then.
-			this.logService.error('The engine could not be started; it will be tried again.', error);
+			// The engine tries again by itself, or waits for its person to start fresh; its restart handler configures it then.
+			this.logService.error(engine.isInstallationUnreadable
+				? 'The engine could not read this computer\'s installation; it waits for its person to start fresh.'
+				: 'The engine could not be started; it will be tried again.', error);
 			return;
 		}
 		try {

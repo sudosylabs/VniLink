@@ -552,6 +552,18 @@ pub enum FfiEvent {
         endpoint_id: String,
         check: String,
     },
+    AdmissionRequested {
+        request_id: u64,
+        endpoint_id: String,
+        remaining_ms: u64,
+    },
+    AdmissionRequestEnded {
+        request_id: u64,
+    },
+    AdmissionWaiting {
+        endpoint_id: String,
+        waiting: bool,
+    },
     AddressesUpdated {
         endpoint_id: String,
     },
@@ -818,6 +830,25 @@ pub(crate) fn event(event: vnilink::CoreEvent) -> FfiEvent {
         vnilink::CoreEvent::ControlCheck { endpoint_id, check } => {
             FfiEvent::ControlCheck { endpoint_id, check }
         }
+        vnilink::CoreEvent::AdmissionRequested {
+            request_id,
+            endpoint_id,
+            remaining_ms,
+        } => FfiEvent::AdmissionRequested {
+            request_id,
+            endpoint_id,
+            remaining_ms,
+        },
+        vnilink::CoreEvent::AdmissionRequestEnded { request_id } => {
+            FfiEvent::AdmissionRequestEnded { request_id }
+        }
+        vnilink::CoreEvent::AdmissionWaiting {
+            endpoint_id,
+            waiting,
+        } => FfiEvent::AdmissionWaiting {
+            endpoint_id,
+            waiting,
+        },
         vnilink::CoreEvent::AddressesUpdated { endpoint_id } => {
             FfiEvent::AddressesUpdated { endpoint_id }
         }

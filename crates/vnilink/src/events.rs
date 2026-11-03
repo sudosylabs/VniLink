@@ -72,6 +72,25 @@ pub enum CoreEvent {
         endpoint_id: String,
         check: String,
     },
+    /// A paired computer asks to start using what this computer shares, and
+    /// waits `remaining_ms` for the person here to answer with
+    /// [`crate::Core::answer_admission_request`].
+    AdmissionRequested {
+        request_id: u64,
+        endpoint_id: String,
+        remaining_ms: u64,
+    },
+    /// Admission request `request_id` was answered, timed out, or its
+    /// computer stopped waiting: nothing is left to answer.
+    AdmissionRequestEnded {
+        request_id: u64,
+    },
+    /// This computer, as a controller, starts or stops waiting for the person
+    /// at `endpoint_id` to accept it.
+    AdmissionWaiting {
+        endpoint_id: String,
+        waiting: bool,
+    },
     /// A paired device replaced its saved relay URLs and direct addresses.
     ///
     /// Grants are unchanged. The list is what the next dial uses.

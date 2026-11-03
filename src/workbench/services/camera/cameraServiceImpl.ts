@@ -40,6 +40,9 @@ export function cameraOpenFailure(error: unknown): CameraFailure {
 	switch (engineErrorCategory(error) ?? '') {
 		case 'Busy': return 'inUse';
 		case 'Unauthorized': return 'turnedOff';
+		case 'Declined':
+		case 'NotAdmitted': return 'declined';
+		case 'Unanswered': return 'unanswered';
 		case 'NoSession':
 		case 'StaleSession': return 'disconnected';
 		default: return 'failed';

@@ -88,10 +88,12 @@ impl Scenario for TerminalHost {
             .set_terminal_factory(Some(Arc::clone(&shells) as Arc<dyn HostTerminalFactory>))
             .map_err(|error| error.to_string())?;
         self.shells = Some(shells);
-        // Exactly the terminal: whatever else was shared is not.
+        // Exactly the terminal: whatever else was shared is not. Nobody is
+        // at the agent to accept the suite; its owner allowed this already.
         host.core
             .set_sharing_policy(SharingPolicy {
                 terminal: true,
+                unattended: true,
                 ..SharingPolicy::default()
             })
             .map_err(|error| error.to_string())?;

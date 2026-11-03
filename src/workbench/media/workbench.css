@@ -178,10 +178,24 @@ h2 {
 }
 
 .workbench-notice {
+	display: flex;
+	align-items: center;
+	gap: 12px;
 	padding: 10px 18px;
 	color: var(--text);
 	background: var(--canvas);
 	border-bottom: 1px solid var(--line);
+}
+
+.workbench-notice-text {
+	flex: 1;
+	min-width: 0;
+}
+
+.workbench-notice-action .monaco-button {
+	width: auto;
+	padding: 4px 12px;
+	white-space: nowrap;
 }
 
 .workbench-notice[hidden] {

@@ -98,6 +98,12 @@ fn main() {
         transfer: false,
     })
     .expect("authorized");
+    // Nobody is at the host to accept the controller.
+    host.change_sharing_policy(vnilink::SharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .expect("unattended");
     host.start_hosting().expect("hosting");
 
     let started = Instant::now();

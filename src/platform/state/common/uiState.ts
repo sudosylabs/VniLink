@@ -35,6 +35,8 @@ export interface UIStateValues {
 	readonly [key: `desktop.statsCorner.${string}`]: DesktopStatsCorner;
 	/** Whether remote desktops show the picture's details over the picture. */
 	readonly 'desktop.showStats': boolean;
+	/** Whether the person finished or skipped the welcome that sets VniLink up; until then it opens at start. */
+	readonly 'onboarding.completed': boolean;
 	/** Whether the remote desktop of `<deviceId>` exchanges Control and Command, as chosen there: `desktop.swapModifiers.<deviceId>`. */
 	readonly [key: `desktop.swapModifiers.${string}`]: boolean;
 }
@@ -68,12 +70,12 @@ function boundedString(value: unknown, maximum: number): value is string {
 }
 
 function isUIStateKey(value: unknown): value is UIStateKey {
-	return typeof value === 'string' && (value === 'files.showHidden' || value === 'desktop.showStats' || lastFolderKey.test(value) || statsCornerKey.test(value) || swapModifiersKey.test(value));
+	return typeof value === 'string' && (value === 'files.showHidden' || value === 'desktop.showStats' || value === 'onboarding.completed' || lastFolderKey.test(value) || statsCornerKey.test(value) || swapModifiersKey.test(value));
 }
 
 /** Whether `value` may be stored under `key`; `undefined` is never a value, it removes the key. */
 export function isUIStateValue<K extends UIStateKey>(key: K, value: unknown): value is UIStateValues[K] {
-	if (key === 'files.showHidden' || key === 'desktop.showStats' || swapModifiersKey.test(key)) {
+	if (key === 'files.showHidden' || key === 'desktop.showStats' || key === 'onboarding.completed' || swapModifiersKey.test(key)) {
 		return typeof value === 'boolean';
 	}
 	if (statsCornerKey.test(key)) {

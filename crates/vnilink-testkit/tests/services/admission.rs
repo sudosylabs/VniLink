@@ -12,12 +12,9 @@
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{
-    CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase, SharingPolicy,
-    VideoCodecCaps,
-};
+use vnilink::{CloseCause, Error, Grants, ServiceKind, ServicePhase, SessionPhase, VideoCodecCaps};
 use vnilink_testkit::session::wait_control_check;
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT, NOTHING_SHARED};
 
 use super::support::phase;
 
@@ -287,7 +284,7 @@ fn a_neutral_connection_needs_the_hosts_consent_and_shares_nothing() -> TestResu
     );
     assert_eq!(
         host.core.sharing_policy()?,
-        SharingPolicy::default(),
+        NOTHING_SHARED,
         "approving shares nothing"
     );
     assert!(
