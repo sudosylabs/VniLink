@@ -16,17 +16,26 @@
  * keychain profile; the application is signed with the hardened runtime after
  * its executable UUIDs are assigned, and the disk image is signed, notarized
  * and stapled.
+ *
+ * Windows: `VNILINK_WINDOWS_CERTIFICATE_FILE` is a PKCS#12 code-signing
+ * certificate and `VNILINK_WINDOWS_CERTIFICATE_PASSWORD` its password; the
+ * packager signs the executables and the installer with them.
  */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import type { ProcessRunner } from './processes.ts';
 
 /** What a packaging manifest records about an artifact's signature. */
-export type SigningKind = 'unsigned' | 'developer-id';
+export type SigningKind = 'unsigned' | 'developer-id' | 'authenticode';
 
 export interface MacSigning {
 	readonly identity: string;
 	readonly notaryProfile: string;
+}
+
+export interface WindowsSigning {
+	readonly certificateFile: string;
+	readonly certificatePassword: string;
 }
 
 /** The variables that must be set together, or not at all. */
@@ -46,14 +55,30 @@ export function macSigning(environment: NodeJS.ProcessEnv = process.env): MacSig
 	return values && { identity: values[0], notaryProfile: values[1] };
 }
 
+export function windowsSigning(environment: NodeJS.ProcessEnv = process.env): WindowsSigning | undefined {
+	const values = pair(environment, 'VNILINK_WINDOWS_CERTIFICATE_FILE', 'VNILINK_WINDOWS_CERTIFICATE_PASSWORD');
+	return values && { certificateFile: values[0], certificatePassword: values[1] };
+}
+
 /** The signature this host's build will carry, from the environment. */
 export function signingKind(platform: NodeJS.Platform, environment: NodeJS.ProcessEnv = process.env): SigningKind {
-	return platform === 'darwin' && macSigning(environment) ? 'developer-id' : 'unsigned';
+	if (platform === 'darwin' && macSigning(environment)) {
+		return 'developer-id';
+	}
+	if (platform === 'win32' && windowsSigning(environment)) {
+		return 'authenticode';
+	}
+	return 'unsigned';
 }
 
 /** The signatures a manifest from `platform` may record. */
 export function signingKinds(platform: NodeJS.Platform): readonly SigningKind[] {
-	return platform === 'darwin' ? ['unsigned', 'developer-id'] : ['unsigned'];
+	return platform === 'darwin' ? ['unsigned', 'developer-id'] : platform === 'win32' ? ['unsigned', 'authenticode'] : ['unsigned'];
+}
+
+/** The packager's variables that sign Windows executables and installers, given only to its process. */
+export function windowsSigningEnvironment(signing: WindowsSigning | undefined): NodeJS.ProcessEnv {
+	return signing ? { WIN_CSC_LINK: signing.certificateFile, WIN_CSC_KEY_PASSWORD: signing.certificatePassword } : {};
 }
 
 export const entitlements = fileURLToPath(new URL('./macos/entitlements.plist', import.meta.url));

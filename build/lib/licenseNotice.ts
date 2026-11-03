@@ -27,6 +27,7 @@ const commentStyles: Readonly<Record<string, CommentStyle>> = {
 	css: 'css',
 	sh: 'hash',
 	ps1: 'hash',
+	nsh: 'hash',
 	bat: 'rem',
 };
 

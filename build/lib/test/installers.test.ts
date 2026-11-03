@@ -17,7 +17,7 @@ import { buildInstallers, installerConfiguration, installerExtensions, verifyIns
 import { packagedLayout, verifyPackageFiles, type BuilderConfiguration, type PackagedLayout } from '../package.ts';
 import { readProduct, type ProductPlatform } from '../product.ts';
 import { fileSha256, packageInventory, releaseInventory } from '../inventory.ts';
-import { isMacintosh } from '../platform.ts';
+import { isMacintosh, isWindows } from '../platform.ts';
 import type { SigningKind } from '../signing.ts';
 
 const product = await readProduct(fileURLToPath(new URL('../../../', import.meta.url)));
@@ -129,8 +129,19 @@ suite('installers', () => {
 	test('keeps user data when VniLink is uninstalled from Windows', () => {
 		assert.strictEqual(options(configuration('win32'), 'nsis').deleteAppDataOnUninstall, false);
 	});
-	test('does not launch VniLink when the Windows installer finishes', () => {
-		assert.strictEqual(options(configuration('win32'), 'nsis').runAfterFinish, false);
+	test('the Windows installer is assisted: the person sees its pages and chooses the folder', () => {
+		const nsis = options(configuration('win32'), 'nsis');
+		assert.deepStrictEqual([nsis.oneClick, nsis.allowToChangeInstallationDirectory, nsis.allowElevation], [false, true, false]);
+	});
+	test('the Windows installer offers to start VniLink when it finishes', () => {
+		assert.strictEqual(options(configuration('win32'), 'nsis').runAfterFinish, true);
+	});
+	test('the Windows installer shows the staged license, artwork and its own pages', () => {
+		const nsis = options(configuration('win32'), 'nsis');
+		const staged = (path: unknown) => packagedPath(String(path)).replace('/stage/packaging-resources/', '');
+		assert.deepStrictEqual([nsis.license, nsis.include, nsis.installerSidebar, nsis.installerHeader].map(staged), [
+			'LICENSE', 'build/lib/windows/installer.nsh', 'assets/windows/installer-sidebar.bmp', 'assets/windows/installer-header.bmp',
+		]);
 	});
 	test('builds deb and rpm packages on Linux', () => {
 		assert.deepStrictEqual(configuration('linux').linux.target, ['deb', 'rpm']);
@@ -219,6 +230,32 @@ suite('installers', () => {
 				const signed = await checkout('developer-id');
 				try {
 					await assert.rejects(buildInstallers(signed.root, never(), { ...builder, environment: {} }), /not set to notarize/);
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+		}
+		if (isWindows) {
+			test('a signed application\'s installer is signed with the same certificate, given only to the packager', async () => {
+				const signed = await checkout('authenticode');
+				try {
+					let given: NodeJS.ProcessEnv = {};
+					await buildInstallers(signed.root, never(), {
+						environment: { VNILINK_WINDOWS_CERTIFICATE_FILE: 'release.pfx', VNILINK_WINDOWS_CERTIFICATE_PASSWORD: 'secret' },
+						runBuilder: (_processes, args, _cwd, signing) => {
+							given = signing;
+							return writeArtifacts(args, 'VniLink-test');
+						},
+					});
+					assert.deepStrictEqual(given, { WIN_CSC_LINK: 'release.pfx', WIN_CSC_KEY_PASSWORD: 'secret' });
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+			test('a signed application without its certificate is refused', async () => {
+				const signed = await checkout('authenticode');
+				try {
+					await assert.rejects(buildInstallers(signed.root, never(), { ...builder, environment: {} }), /not set to sign its installer/);
 				} finally {
 					await rm(signed.root, { recursive: true, force: true });
 				}

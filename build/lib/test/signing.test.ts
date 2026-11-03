@@ -8,7 +8,7 @@
 import assert from 'assert';
 import { readFile } from 'node:fs/promises';
 import { suite, test } from 'node:test';
-import { entitlements, macSigning, notarizeDiskImage, signingKind, signingKinds } from '../signing.ts';
+import { entitlements, macSigning, notarizeDiskImage, signingKind, signingKinds, windowsSigning, windowsSigningEnvironment } from '../signing.ts';
 
 const configured = { VNILINK_MACOS_SIGNING_IDENTITY: 'Developer ID Application: Test', VNILINK_MACOS_NOTARY_PROFILE: 'test-profile' };
 
@@ -27,6 +27,16 @@ suite('signing', () => {
 	test('the macOS variables sign nothing on another platform', () => {
 		assert.strictEqual(signingKind('linux', configured), 'unsigned');
 		assert.deepStrictEqual(signingKinds('linux'), ['unsigned']);
+	});
+	test('a Windows build with a certificate and its password is signed with Authenticode', () => {
+		const windows = { VNILINK_WINDOWS_CERTIFICATE_FILE: 'C:\\keys\\release.pfx', VNILINK_WINDOWS_CERTIFICATE_PASSWORD: 'secret' };
+		assert.strictEqual(signingKind('win32', windows), 'authenticode');
+		assert.deepStrictEqual(signingKinds('win32'), ['unsigned', 'authenticode']);
+		assert.throws(() => windowsSigning({ VNILINK_WINDOWS_CERTIFICATE_FILE: 'release.pfx' }), /set both or neither/);
+	});
+	test('only the packager\'s own certificate variables reach it, and none without a certificate', () => {
+		assert.deepStrictEqual(windowsSigningEnvironment({ certificateFile: 'release.pfx', certificatePassword: 'secret' }), { WIN_CSC_LINK: 'release.pfx', WIN_CSC_KEY_PASSWORD: 'secret' });
+		assert.deepStrictEqual(windowsSigningEnvironment(undefined), {});
 	});
 	test('the hardened runtime allows JIT and the shared devices, nothing else', async () => {
 		const keys = [...(await readFile(entitlements, 'utf8')).matchAll(/<key>([^<]+)<\/key>/g)].map(match => match[1]);

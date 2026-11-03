@@ -73,6 +73,10 @@ suite('packageConfiguration', () => {
 			assert.ok(packagedPath(packagedLayout('/application', platform, product).executable).endsWith(executable));
 		});
 	}
+	test('an Authenticode release has the packager sign the Windows executables, and nothing else', () => {
+		const config = packageConfiguration('/repo', '/stage', '/output', product, { platform: 'win32', electronVersion: '44.7.0' }, 'authenticode');
+		assert.deepStrictEqual([config.win.signExecutable, config.mac.identity, config.mac.notarize], [true, null, false]);
+	});
 	test('unsigned assembly neither discovers signing credentials nor inherits Node launch flags', () => {
 		assert.deepStrictEqual(assemblyEnvironment({ PATH: '/tools', CSC_LINK: 'secret', CSC_KEY_PASSWORD: 'secret', WIN_CSC_LINK: 'secret', APPLE_ID: 'secret', CSC_IDENTITY_AUTO_DISCOVERY: 'true', ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--inspect' }), { PATH: '/tools', CSC_IDENTITY_AUTO_DISCOVERY: 'false' });
 	});

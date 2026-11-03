@@ -18,7 +18,7 @@ import { ProcessRunner } from './processes.ts';
 import { readProduct, type Product } from './product.ts';
 import { fileSha256, verifyReleaseFiles, type InstallerArtifact, type InstallerManifest, type ReleaseManifest } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
-import { macSigning, notarizeDiskImage, signingKinds } from './signing.ts';
+import { macSigning, notarizeDiskImage, signingKinds, windowsSigning, windowsSigningEnvironment, type SigningKind } from './signing.ts';
 
 /** What each `package.<platform>.ts` declares about its installers. */
 interface PlatformInstallers {
@@ -47,14 +47,21 @@ export function installerResources(platform: NodeJS.Platform): readonly string[]
 }
 
 /** Native-host installer targets consume an existing, verified Electron application. */
-export function installerConfiguration(root: string, stage: string, output: string, product: Product, manifest: Pick<ReleaseManifest, 'platform' | 'electronVersion'>): BuilderConfiguration {
-	const base = packageConfiguration(root, stage, output, product, manifest);
+export function installerConfiguration(
+	root: string,
+	stage: string,
+	output: string,
+	product: Product,
+	manifest: Pick<ReleaseManifest, 'platform' | 'electronVersion'> & { readonly signing?: SigningKind },
+): BuilderConfiguration {
+	// The installer carries the application's signature: an Authenticode-signed application gets a signed setup.
+	const base = packageConfiguration(root, stage, output, product, manifest, manifest.signing);
 	return { ...base, artifactName: product.nameLong + '-${version}-${os}-${arch}.${ext}', ...platformInstallers(manifest.platform).installerOptions(product, base) };
 }
 
 export interface InstallerOptions {
 	/** Runs electron-builder; replaced by tests. */
-	readonly runBuilder?: (processes: ProcessRunner, args: readonly string[], cwd: string) => Promise<unknown>;
+	readonly runBuilder?: (processes: ProcessRunner, args: readonly string[], cwd: string, signing: NodeJS.ProcessEnv) => Promise<unknown>;
 	/** Signs, notarizes and staples a disk image; replaced by tests. */
 	readonly notarize?: typeof notarizeDiskImage;
 	/** Where release signing is read from; the process's environment by default. */
@@ -88,7 +95,15 @@ export async function buildInstallers(root: string, signal: AbortSignal, options
 		await cp(application, copy, { recursive: true, verbatimSymlinks: true });
 		const prepackaged = isMacintosh ? join(copy, `${product.nameLong}.app`) : copy;
 		const args = ['--config', configPath, '--prepackaged', prepackaged, builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'];
-		await (options.runBuilder ?? runElectronBuilder)(processes, args, root);
+		let signingEnvironment: NodeJS.ProcessEnv = {};
+		if (manifest.signing === 'authenticode') {
+			const signing = windowsSigning(options.environment);
+			if (!signing) {
+				throw new Error('The application is signed, but VNILINK_WINDOWS_CERTIFICATE_FILE and VNILINK_WINDOWS_CERTIFICATE_PASSWORD are not set to sign its installer');
+			}
+			signingEnvironment = windowsSigningEnvironment(signing);
+		}
+		await (options.runBuilder ?? runElectronBuilder)(processes, args, root, signingEnvironment);
 		if (manifest.signing === 'developer-id') {
 			const signing = macSigning(options.environment);
 			if (!signing) {

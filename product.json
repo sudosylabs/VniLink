@@ -28,7 +28,7 @@
       "executableName": "vnilink",
       "minimumSystemVersion": "10.0.19045",
       "icon": "assets/windows/app-icon.ico",
-      "signing": "unsigned",
+      "signing": "authenticode",
       "targets": [{ "architecture": "x64", "rustTarget": "x86_64-pc-windows-gnu" }]
     },
     "linux": {

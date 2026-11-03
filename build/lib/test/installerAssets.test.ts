@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
 import { decodePng, encodeBmp, installerImageFile, installerImages } from '../installerAssets.ts';
 import * as darwin from '../package.darwin.ts';
+import * as win32 from '../package.win32.ts';
 
 const assets = fileURLToPath(new URL('../../../assets/', import.meta.url));
 
@@ -55,6 +56,10 @@ suite('installerAssets', () => {
 	test('the macOS installer stages every macOS image at each scale', () => {
 		const rendered = installerImages.filter(image => image.path.startsWith('apple/')).flatMap(image => image.scales.map(scale => `assets/${installerImageFile(image, scale)}`));
 		assert.deepStrictEqual([...darwin.resources].sort(), rendered.sort());
+	});
+	test('the Windows installer stages every Windows image', () => {
+		const rendered = installerImages.filter(image => image.path.startsWith('windows/')).map(image => `assets/${image.path}`);
+		assert.deepStrictEqual(win32.resources.filter(path => path.startsWith('assets/')).sort(), rendered.sort());
 	});
 	test('undoes each PNG row filter', () => {
 		// One row per filter: none, sub, up, average and Paeth, each two pixels wide.

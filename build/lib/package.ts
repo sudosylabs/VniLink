@@ -18,7 +18,7 @@ import { ProcessRunner } from './processes.ts';
 import { validateProduct, type Product, type ProductPlatform } from './product.ts';
 import { fileSha256, packageInventory, verifyReleaseFiles, type PackageManifest, type ReleaseManifest } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
-import { macSigning, signingKind, signingKinds, signMacApplication } from './signing.ts';
+import { macSigning, signingKind, signingKinds, signMacApplication, windowsSigning, windowsSigningEnvironment, type SigningKind } from './signing.ts';
 
 /** electron-builder v26 options; only what VniLink sets is described. */
 export type BuilderConfiguration = Record<string, unknown> & {
@@ -36,7 +36,15 @@ export interface PackagedLayout {
 }
 
 /** Converts approved staged product inputs to pinned electron-builder options. */
-export function packageConfiguration(root: string, stage: string, output: string, product: Product, manifest: Pick<ReleaseManifest, 'platform' | 'electronVersion'>): BuilderConfiguration {
+/** `signing`: what the application will carry; only Authenticode is applied by the packager itself. */
+export function packageConfiguration(
+	root: string,
+	stage: string,
+	output: string,
+	product: Product,
+	manifest: Pick<ReleaseManifest, 'platform' | 'electronVersion'>,
+	signing: SigningKind = 'unsigned',
+): BuilderConfiguration {
 	const icon = (platform: ProductPlatform): string => join(stage, 'packaging-resources', product.platforms[platform].icon);
 	const resources: Record<string, unknown>[] = [
 		{ from: join(stage, 'app/licenses'), to: 'licenses', filter: ['**/*'] },
@@ -86,7 +94,7 @@ export function packageConfiguration(root: string, stage: string, output: string
 			category: 'public.app-category.utilities',
 			extendInfo: darwinUsageDescriptions,
 		},
-		win: { executableName: product.platforms.win32.executableName, icon: icon('win32'), signExecutable: false },
+		win: { executableName: product.platforms.win32.executableName, icon: icon('win32'), signExecutable: signing === 'authenticode' },
 		linux: { executableName: product.platforms.linux.executableName, icon: icon('linux'), category: 'Network' },
 	};
 }
@@ -123,10 +131,10 @@ async function readJson(path: string): Promise<{ version: string }> {
 	return JSON.parse(await readFile(path, 'utf8')) as { version: string };
 }
 
-/** Runs electron-builder's command line with this Node, in `cwd`, with the assembly environment. */
-export function runElectronBuilder(processes: Pick<ProcessRunner, 'run'>, args: readonly string[], cwd: string): Promise<number> {
+/** Runs electron-builder's command line with this Node, in `cwd`, with the assembly environment and only the signing variables given. */
+export function runElectronBuilder(processes: Pick<ProcessRunner, 'run'>, args: readonly string[], cwd: string, signing: NodeJS.ProcessEnv = {}): Promise<number> {
 	const cli = createRequire(import.meta.url).resolve('electron-builder/cli.js');
-	return processes.run(process.execPath, [cli, ...args], { cwd, env: assemblyEnvironment(process.env) });
+	return processes.run(process.execPath, [cli, ...args], { cwd, env: { ...assemblyEnvironment(process.env), ...signing } });
 }
 
 /** Assembles `dist/<platform>-<arch>` from the staged release; refuses to overlap another assembly. */
@@ -148,8 +156,10 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		work = await mkdtemp(join(parent, '.assemble-'));
 		const buildOutput = join(work, 'output');
 		const configPath = join(work, 'builder.json');
-		await writeFile(configPath, JSON.stringify(packageConfiguration(root, stage, buildOutput, product, manifest), null, 2));
-		await runElectronBuilder(processes, ['--config', configPath, '--dir', builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'], root);
+		const signing = signingKind(process.platform);
+		await writeFile(configPath, JSON.stringify(packageConfiguration(root, stage, buildOutput, product, manifest, signing), null, 2));
+		const args = ['--config', configPath, '--dir', builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'];
+		await runElectronBuilder(processes, args, root, windowsSigningEnvironment(windowsSigning()));
 		const candidates: string[] = [];
 		for (const entry of await readdir(buildOutput, { withFileTypes: true })) {
 			if (entry.isDirectory()) {
@@ -169,7 +179,6 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		}
 		const directory = candidates[0];
 		const layout = packagedLayout(directory, process.platform, product);
-		const signing = signingKind(process.platform);
 		if (isMacintosh) {
 			// Its own executable UUID, so local network privacy decides for VniLink
 			// alone. The fuses changed the Electron framework and the UUID the executable,
