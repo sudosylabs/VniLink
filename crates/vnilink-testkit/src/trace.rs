@@ -115,7 +115,7 @@ impl Traced {
         for event in self.events() {
             for text in content {
                 assert!(
-                    !event.contains(text),
+                    !holds(&event, text),
                     "{what} is never recorded, yet {text:?} was: {event}"
                 );
             }
@@ -150,6 +150,20 @@ impl Traced {
         ends.sort();
         ends
     }
+}
+
+/// Whether `event` holds `text`. Records carry peers' fingerprints, keys
+/// and hashes in hexadecimal, and a random one can spell a `text` made of
+/// hexadecimal digits, as `c47caf06` spells "caf": such a text counts only
+/// where it does not stand inside a longer run of them.
+fn holds(event: &str, text: &str) -> bool {
+    if !text.chars().all(|c| c.is_ascii_hexdigit()) {
+        return event.contains(text);
+    }
+    let hex = |c: Option<char>| c.is_some_and(|c| c.is_ascii_hexdigit());
+    event.match_indices(text).any(|(at, _)| {
+        !hex(event[..at].chars().next_back()) && !hex(event[at + text.len()..].chars().next())
+    })
 }
 
 /// Fields a story leaves out: they differ from run to run, as times and
@@ -408,4 +422,24 @@ pub fn assert_story(expected: expect_test::Expect, mut tell: impl FnMut() -> Str
         story = tell();
     }
     expected.assert_eq(&story);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::holds;
+
+    #[test]
+    fn a_hexadecimal_text_inside_a_fingerprint_is_not_held() {
+        let accepted = r#"{"message":"invitation accepted","peer":"c47caf06"}"#;
+        assert!(!holds(accepted, "caf"), "a fingerprint spells it by chance");
+        assert!(
+            holds(r#"{"text":"caf"}"#, "caf"),
+            "standing alone it is held"
+        );
+        assert!(
+            holds(r#"{"text":"café"}"#, "caf"),
+            "before other letters too"
+        );
+        assert!(holds(accepted, "accepted"), "other text is held anywhere");
+    }
 }
