@@ -25,7 +25,7 @@ const MOST = 0.5;
 
 
 /** A part of the picture, in its pixels. */
-export interface PictureRect {
+interface PictureRect {
 	readonly x: number;
 	readonly y: number;
 	readonly width: number;
@@ -33,7 +33,7 @@ export interface PictureRect {
 }
 
 /** What to draw of a picture: all of it, or only these parts of it, over a still shown before. */
-export type StillPlan = 'whole' | readonly PictureRect[];
+type StillPlan = 'whole' | readonly PictureRect[];
 
 interface Sample {
 	readonly width: number;
@@ -58,11 +58,6 @@ export class StillCompositor {
 	private changed = new Uint8Array(0);
 	private readonly sampler = new OffscreenCanvas(1, 1);
 	private readonly samplerContext = this.sampler.getContext('2d', { willReadFrequently: true });
-
-	/** Whether a still shows, at least in part. */
-	public get stillShown(): boolean {
-		return this.showing;
-	}
 
 	/**
 	 * What of `frame`, a picture in its `role` that changed in `regions`

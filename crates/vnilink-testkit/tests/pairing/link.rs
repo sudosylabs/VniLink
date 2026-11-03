@@ -100,14 +100,7 @@ fn cursor_delivery_is_independent_of_video_and_fenced_by_generation() -> TestRes
         wait_for(
             "the cursor to arrive without video",
             Duration::from_secs(3),
-            || {
-                (desktop
-                    .cursor()
-                    .expect("the live Desktop's cursor")
-                    .as_deref()
-                    == Some(&state))
-                .then_some(())
-            },
+            || (desktop.cursor().ok()?.as_deref() == Some(&state)).then_some(()),
         );
     }
     let stale = CursorState {

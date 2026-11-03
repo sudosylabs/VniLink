@@ -12,8 +12,7 @@ import { basename, join } from 'node:path';
 const KEPT_RUNS = 10;
 
 /**
- * A run's logs folder name from when it started, as VS Code names
- * `logsHome`: the ISO time without separators or milliseconds, so names
+ * A run's logs folder name from when it started: the ISO time without separators or milliseconds, so names
  * sort in time order.
  */
 export function logsFolderName(startedAt: Date): string {
@@ -22,7 +21,7 @@ export function logsFolderName(startedAt: Date): string {
 
 /**
  * Removes all but the newest {@link KEPT_RUNS} runs' folders under `root`,
- * never `current`; what VS Code's logs data cleaner does in the workbench.
+ * never `current`.
  */
 export async function pruneLogs(root: string, current: string, kept = KEPT_RUNS): Promise<void> {
 	const runs = (await readdir(root, { withFileTypes: true }).catch(() => []))

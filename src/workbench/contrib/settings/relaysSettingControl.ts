@@ -8,7 +8,7 @@
 import * as nls from '../../../nls.js';
 import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
 import { Emitter } from '../../../base/common/event.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 import type { ISettingSchema } from '../../../platform/configuration/common/configurationSchema.js';
 import type { RelayInfo, RelayInput } from '../../../platform/engine/common/engine.js';
 import { relaysChanged, validateRelays } from '../../../platform/engine/common/relayValidation.js';
@@ -35,6 +35,8 @@ export class RelaysSettingControl extends Disposable implements ISettingControl 
 	private readonly publicHelp = $('p.connection-description.connection-public-help');
 	private readonly message = $('p.setting-error');
 	private readonly rows: RelayEditor[] = [];
+	/** Each row's editor with the listeners on it, released together. */
+	private readonly rowStores = new Map<RelayEditor, DisposableStore>();
 	private saved: readonly RelayInfo[] = [];
 	private enabled = false;
 
@@ -86,19 +88,26 @@ export class RelaysSettingControl extends Disposable implements ISettingControl 
 		if (this.rows.length >= maxRelays) {
 			return;
 		}
-		const row = new RelayEditor(relay);
+		const store = new DisposableStore();
+		const row = store.add(new RelayEditor(relay));
+		this.rowStores.set(row, store);
 		this.rows.push(row);
 		this.rowsContainer.append(row.element);
 		row.setEnabled(this.enabled);
-		row.onDidChange(() => {
+		store.add(row.onDidChange(() => {
 			this.commit();
-		});
-		row.onDidRemove(() => {
+		}));
+		store.add(row.onDidRemove(() => {
 			this.rows.splice(this.rows.indexOf(row), 1);
-			row.dispose();
+			this.removeRow(row);
 			this.updateMode();
 			this.commit();
-		});
+		}));
+	}
+
+	private removeRow(row: RelayEditor): void {
+		this.rowStores.get(row)?.dispose();
+		this.rowStores.delete(row);
 	}
 
 	private draft(): RelayInput[] {
@@ -134,7 +143,7 @@ export class RelaysSettingControl extends Disposable implements ISettingControl 
 			}
 		} else if (clean) {
 			for (const row of this.rows.splice(0)) {
-				row.dispose();
+				this.removeRow(row);
 			}
 			this.mode.setValue(saved.length ? 'custom' : 'public');
 			for (const relay of saved) {
@@ -166,7 +175,7 @@ export class RelaysSettingControl extends Disposable implements ISettingControl 
 
 	public override dispose(): void {
 		for (const row of this.rows.splice(0)) {
-			row.dispose();
+			this.removeRow(row);
 		}
 		super.dispose();
 	}

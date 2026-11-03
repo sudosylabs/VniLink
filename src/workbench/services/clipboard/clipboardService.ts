@@ -15,11 +15,10 @@ import { InstantiationType, registerSingleton } from '../../../platform/instanti
 import { INativeHostService } from '../../../platform/native/common/native.js';
 
 /**
- * The system clipboard through the main process, as VS Code's
- * `NativeClipboardService` (workbench/services/clipboard/electron-browser)
- * reaches it: the window's session refuses web clipboard permissions.
+ * The system clipboard through the main process, because the window's
+ * session refuses web clipboard permissions.
  */
-export class NativeClipboardService implements IClipboardService {
+class NativeClipboardService implements IClipboardService {
 	declare public readonly _serviceBrand: undefined;
 
 	constructor(@INativeHostService private readonly nativeHostService: INativeHostService) { }

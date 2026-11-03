@@ -31,6 +31,12 @@ vnilink-media = { path = "../vnilink-media" }
 # `UPDATE_EXPECT=1` rewrites a changed one for review.
 expect-test = "=1.5.1"
 
+# The tidy suite (`tests/tidy.rs`) reads the workspace's Rust as syntax
+# trees, and a macro's input as the tokens it holds.
+[dev-dependencies]
+proc-macro2 = "=1.0.107"
+syn = { version = "=2.0.119", features = ["full", "visit"] }
+
 # The agent opens a scenario's files without following links and ends a
 # launched side's process group (`peer::folders`, `peer::scenarios::launch`).
 [target.'cfg(unix)'.dependencies]

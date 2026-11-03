@@ -16,15 +16,14 @@ import { isLinux, isWindows } from '../../../base/common/platform.js';
 import { MenuItemAction, type SubmenuItemAction } from '../common/actions.js';
 
 /**
- * Menu entry helpers, in the role of VS Code's `menuEntryActionViewItem.ts`.
- * VniLink renders its toolbar items itself (`viewActionsToolbar.ts`), so only
+ * Menu entry helpers. VniLink renders its toolbar items itself (`viewActionsToolbar.ts`), so only
  * the flattening that context menus use is provided here.
  */
 
 /**
  * Flattens a menu's groups into one list for a context menu, with a separator
  * between groups. While Alt (or Shift on Windows and Linux) is held, an item
- * with an alternative command shows that command instead, as in VS Code.
+ * with an alternative command shows that command instead.
  */
 export function getFlatContextMenuActions(groups: readonly [string, readonly (MenuItemAction | SubmenuItemAction)[]][]): IAction[] {
 	const keyStatus = ModifierKeyEmitter.getInstance().keyStatus;

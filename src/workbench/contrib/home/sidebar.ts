@@ -11,7 +11,7 @@ import { Emitter } from '../../../base/common/event.js';
 import type { IconId } from '../../../base/common/icons.js';
 import { Disposable, DisposableStore } from '../../../base/common/lifecycle.js';
 
-export interface SidebarItem {
+interface SidebarItem {
 	readonly id: string;
 	readonly label: string;
 	readonly icon: IconId;

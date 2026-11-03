@@ -16,7 +16,7 @@ use crate::shared::ServeProbe;
 use vnilink::{Core, JobSnapshot, JobState};
 use vnilink_testkit::files::{
     download, drive_to_end, files_with_bytes, job_on, link_folder, only_job, payload, received,
-    upload,
+    upload, Job, Way,
 };
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult};
 
@@ -240,25 +240,18 @@ fn receivers_release_partials_once_finished_or_forgotten() -> TestResult {
     let bytes = payload(64 * 1024, 707);
     std::fs::write(pair.controller.folder().join("payload.bin"), &bytes)?;
     let files = pair.open_files();
-    let job = upload(&pair, &files, "payload.bin", "")?;
-    let receiver = received(&pair.host.core);
-    let (_, got) = drive_to_end(
-        &pair.controller.core,
-        job,
-        &pair.host.core,
-        receiver,
-        TRANSFER,
-    );
+    let job = Job::submit(&pair, &files, Way::Upload, "payload.bin", "")?;
+    let (_, got) = job.drive_to_end(&pair, TRANSFER);
     assert_eq!(
         got.state,
         JobState::Complete,
         "the receiver completes: {got:?}"
     );
     assert!(
-        !staging(&pair.host, receiver).exists(),
+        !staging(&pair.host, job.host).exists(),
         "a finished file leaves no partial behind"
     );
-    pair.host.core.job_forget(receiver)?;
+    pair.host.core.job_forget(job.host)?;
     assert_eq!(
         std::fs::read(pair.host.folder().join("payload.bin"))?,
         bytes,

@@ -408,6 +408,22 @@ impl RateControl {
     }
 }
 
+/// Room in a coded buffer for the parameter sets, SEI and slice headers a
+/// picture carries besides its slice data.
+const HEADER_BYTES: usize = 4096;
+
+/// The coded buffer one picture is written into, in bytes. A picture takes
+/// up to a byte per coded pixel, and constant bitrate pads a small one with
+/// filler up to its share of the bitrate, which rate control's buffer
+/// (`buffer_bits`) bounds. A buffer sized by area alone is too small for a
+/// tiny picture at an ordinary bitrate, and the driver then refuses to map
+/// what it wrote.
+pub(crate) fn coded_buffer_bytes(coded_width: u32, coded_height: u32, buffer_bits: u32) -> usize {
+    let area = coded_width as usize * coded_height as usize;
+    let budget = (buffer_bits as usize).div_ceil(8);
+    area.max(budget) + HEADER_BYTES
+}
+
 impl Encoder {
     fn open(
         node: &Path,
@@ -488,7 +504,11 @@ impl Encoder {
         let rejected = |_| Error::EncodeRejected("VA-API rejected the frame");
         let context = &self.context;
         let coded = context
-            .create_enc_coded((self.coded_width * self.coded_height) as usize)
+            .create_enc_coded(coded_buffer_bytes(
+                self.coded_width,
+                self.coded_height,
+                self.rate.buffer_bits(),
+            ))
             .map_err(rejected)?;
         let job = PictureJob {
             surface_id: surface.id(),

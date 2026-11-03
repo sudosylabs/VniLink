@@ -11,6 +11,9 @@
 //! computer that opens the same file, and stops on its own when nothing is
 //! asked of it. A build script drives it through `vnilink-testkit bridge`.
 
+#[path = "agent/channel.rs"]
+mod channel;
+
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
@@ -316,6 +319,10 @@ fn a_shared_shell_ends_when_the_agent_idles_or_its_suite_goes() -> TestResult {
 /// Interrupting the agent (Ctrl-C), or its terminal closing (SIGHUP),
 /// while it shares a shell ends the shell and everything it started, and
 /// removes its folder, before the agent exits.
+///
+/// Unix only: the test sends the signals a terminal sends there; Windows
+/// delivers Ctrl-C and a closed console as console events, which the suite
+/// has no way yet to send to the agent's console.
 #[cfg(unix)]
 #[test]
 fn a_shared_shell_ends_when_the_agent_is_interrupted_or_its_terminal_closes() -> TestResult {
@@ -362,15 +369,26 @@ fn paired_with_fake_side(
         "the bridge says what to type: {approve}"
     );
     agent.line("a computer asks to be approved");
-    agent.type_line(approve["digits"].as_str().expect("digits"));
+    agent.type_line(
+        approve["digits"]
+            .as_str()
+            .ok_or("the bridge names the digits to type")?,
+    );
     let ready = bridge.next();
     assert_eq!(ready["event"], "ready", "paired: {ready}");
-    assert_eq!(ready["platform"]["os"], std::env::consts::OS);
+    assert_eq!(
+        ready["platform"]["os"],
+        std::env::consts::OS,
+        "the agent names its operating system: {ready}"
+    );
     Ok((agent, bridge))
 }
 
 /// Interrupting the agent while it serves stops the running scenario,
 /// ending everything its side started, before the agent exits.
+///
+/// Unix only: the side is a POSIX shell script ([`FAKE_SIDE`]) and the
+/// interrupt a signal ([`send`]).
 #[cfg(unix)]
 #[test]
 fn an_interrupted_agent_stops_its_scenario_first() -> TestResult {
@@ -499,6 +517,8 @@ impl Drop for BridgeProcess {
 /// does: it starts a side with whitelisted variables only, relays the two
 /// sides' rendezvous files, fetches the side's evidence and stops it, and
 /// the bridge ends when its input closes.
+///
+/// Unix only: the side is a POSIX shell script ([`FAKE_SIDE`]).
 #[cfg(unix)]
 #[test]
 fn a_build_script_drives_a_launched_side_through_the_bridge() -> TestResult {
@@ -523,7 +543,11 @@ fn a_build_script_drives_a_launched_side_through_the_bridge() -> TestResult {
         "op": "start", "scenario": "latency-viewer", "params": { "env": { "VNILINK_LATENCY_FPS": "60" } }
     }));
     assert_eq!(started["ok"], true, "the side starts: {started}");
-    assert_eq!(bridge.polled("viewer.json"), br#"{"token":"viewer"}"#);
+    assert_eq!(
+        bridge.polled("viewer.json"),
+        br#"{"token":"viewer"}"#,
+        "the bridge polls what the side wrote"
+    );
     let escape = bridge
         .ask(serde_json::json!({ "op": "put", "name": "../host.json", "data": encode(b"{}") }));
     assert_eq!(

@@ -17,12 +17,6 @@ export interface IRegistry {
 	add(id: string, data: any): void;
 
 	/**
-	 * Returns true iff there is an extension with the provided id.
-	 * @param id an extension identifier
-	 */
-	knows(id: string): boolean;
-
-	/**
 	 * Returns the extension functions and properties defined by the specified key or null.
 	 * @param id an extension identifier
 	 */
@@ -39,10 +33,6 @@ class RegistryImpl implements IRegistry {
 		Assert.ok(!this.data.has(id), 'There is already an extension with this id');
 
 		this.data.set(id, data);
-	}
-
-	public knows(id: string): boolean {
-		return this.data.has(id);
 	}
 
 	public as(id: string): any {

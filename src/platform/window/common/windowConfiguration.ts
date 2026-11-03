@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { isLogLevel, type LogLevel } from '../../log/common/log.js';
+import { isKnownLogLevel, type LogLevel } from '../../log/common/logLevel.js';
 
 /** Per-window values the main process hands to the sandboxed workbench before it starts. */
 export interface INativeWindowConfiguration {
@@ -23,7 +23,7 @@ export interface INativeWindowConfiguration {
 }
 
 /** Channel the preload uses to resolve the window configuration. */
-export const WINDOW_CONFIGURATION_CHANNEL = 'vscode:windowConfiguration';
+export const WINDOW_CONFIGURATION_CHANNEL = 'vnilink:windowConfiguration';
 
 export function isNativeWindowConfiguration(value: unknown): value is INativeWindowConfiguration {
 	if (typeof value !== 'object' || value === null) {
@@ -48,6 +48,6 @@ export function isNativeWindowConfiguration(value: unknown): value is INativeWin
 		typeof value.logsPath === 'string' &&
 		value.logsPath.length > 0 &&
 		'logLevel' in value &&
-		isLogLevel(value.logLevel)
+		isKnownLogLevel(value.logLevel)
 	);
 }

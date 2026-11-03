@@ -17,11 +17,8 @@ use vnilink::{
     AvailabilityReason, Capability, CoreEvent, Error, OperationState, ServiceKind, SessionPhase,
     SystemAction, SystemPolicy, SystemSupport,
 };
-use vnilink_testkit::system::FakeSystem;
-use vnilink_testkit::system::{RecordingSystem, SystemSession};
+use vnilink_testkit::system::{check_actions, Asking, FakeSystem, Step, SystemSession};
 use vnilink_testkit::{holds, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
-
-use super::sharing;
 
 /// The host's policy allows restart and shutdown besides the lock.
 const RESTART_AND_SHUTDOWN: SystemPolicy = SystemPolicy {
@@ -105,72 +102,21 @@ fn a_service_opens_only_when_shared_and_without_a_backend_refuses_and_says_why()
 #[test]
 fn a_lock_runs_and_a_restart_waits_for_the_host_s_policy() -> TestResult {
     let trace = traced();
-    let system = Arc::new(RecordingSystem::default());
-    let session = SystemSession::open(Some(Arc::clone(&system)));
-    let host = &session.pair.host.core;
-    let locked = session.service.execute(SystemAction::Lock)?;
-    assert_eq!(
-        locked.state,
-        OperationState::Executed,
-        "a lock runs at once"
-    );
-    assert!(
-        locked.completion_observable,
-        "a lock's completion is observable"
-    );
-    assert_eq!(
-        system.asked().locks,
-        1,
-        "the host's OS was asked to lock once"
-    );
-    assert_eq!(
-        session.service.operation(locked.id)?,
-        locked,
-        "an executed lock is kept as it ended"
-    );
-    let restart = session.service.execute(SystemAction::Restart)?;
-    assert_eq!(
-        restart.state,
-        OperationState::Refused,
-        "a restart the host's policy does not allow is refused"
-    );
-    let shutdown = session.service.execute(SystemAction::Shutdown)?;
-    assert_eq!(
-        shutdown.state,
-        OperationState::Refused,
-        "a shutdown the host's policy does not allow is refused"
-    );
-    assert_eq!(
-        (system.asked().restarts, system.asked().shutdowns),
-        (0, 0),
-        "a refused action never reaches the host's OS"
-    );
-
-    host.set_system_policy(RESTART_AND_SHUTDOWN)?;
-    host.set_system_action_notice(Duration::ZERO);
-    let restart = session.service.execute(SystemAction::Restart)?;
-    assert_eq!(
-        restart.state,
-        OperationState::Scheduled,
-        "an allowed restart waits out its notice"
-    );
-    assert!(
-        !restart.completion_observable,
-        "a restart's completion is not observable"
-    );
-    wait_for("the restart to run", DEFAULT_WAIT, || {
-        (session.service.operation(restart.id).ok()?.state == OperationState::Executed)
-            .then_some(())
-    });
-    assert_eq!(system.asked().restarts, 1, "the host's OS restarted once");
-    let shutdown = session.service.execute(SystemAction::Shutdown)?;
-    wait_for("the shutdown to run", DEFAULT_WAIT, || {
-        (session.service.operation(shutdown.id).ok()?.state == OperationState::Executed)
-            .then_some(())
-    });
-    assert_eq!(system.asked().shutdowns, 1, "the host's OS shut down once");
-    trace.wait_for_records("system action ended", 3);
-    vnilink_testkit::assert_story(
+    check_actions(
+        &trace,
+        Asking {
+            policy: None,
+            fail_lock: false,
+            steps: &[
+                Step::Ask(SystemAction::Lock, OperationState::Executed),
+                Step::Ask(SystemAction::Restart, OperationState::Refused),
+                Step::Ask(SystemAction::Shutdown, OperationState::Refused),
+                Step::Policy(RESTART_AND_SHUTDOWN),
+                Step::Notice(Duration::ZERO),
+                Step::Ask(SystemAction::Restart, OperationState::Executed),
+                Step::Ask(SystemAction::Shutdown, OperationState::Executed),
+            ],
+        },
         expect![[r#"
         host:
           system: system action admitted action=Lock connection=1 operation=1 scheduled=false
@@ -182,49 +128,40 @@ fn a_lock_runs_and_a_restart_waits_for_the_host_s_policy() -> TestResult {
           system: system action admitted action=Shutdown connection=1 operation=5 scheduled=true
           system: system action ended action=Shutdown operation=5 scheduled=true state=Executed
     "#]],
-        || trace.story(&["system"]),
-    );
+    )?;
     Ok(())
 }
 
 /// An allowed restart waits out its notice, can be cancelled meanwhile,
 /// and otherwise runs.
 #[test]
-fn an_allowed_restart_waits_its_notice_and_can_be_cancelled() {
-    let _trace = traced();
-    let system = Arc::new(RecordingSystem::default());
-    let session = SystemSession::open(Some(Arc::clone(&system)));
-    session
-        .pair
-        .host
-        .core
-        .set_system_policy(SystemPolicy {
-            allow_restart: true,
-            ..SystemPolicy::default()
-        })
-        .unwrap();
-    session
-        .pair
-        .host
-        .core
-        .set_system_action_notice(Duration::from_secs(30));
-    let restart = session.service.execute(SystemAction::Restart).unwrap();
-    assert_eq!(restart.state, OperationState::Scheduled);
-    let cancelled = session.service.cancel(restart.id).unwrap();
-    assert_eq!(cancelled.state, OperationState::Cancelled);
-    assert_eq!(system.asked().restarts, 0);
-
-    session
-        .pair
-        .host
-        .core
-        .set_system_action_notice(Duration::ZERO);
-    let restart = session.service.execute(SystemAction::Restart).unwrap();
-    wait_for("the restart to run", DEFAULT_WAIT, || {
-        (session.service.operation(restart.id).ok()?.state == OperationState::Executed)
-            .then_some(())
-    });
-    assert_eq!(system.asked().restarts, 1);
+fn an_allowed_restart_waits_its_notice_and_can_be_cancelled() -> TestResult {
+    let trace = traced();
+    check_actions(
+        &trace,
+        Asking {
+            policy: Some(SystemPolicy {
+                allow_restart: true,
+                ..SystemPolicy::default()
+            }),
+            fail_lock: false,
+            steps: &[
+                Step::Notice(Duration::from_secs(30)),
+                Step::Ask(SystemAction::Restart, OperationState::Scheduled),
+                Step::Cancel,
+                Step::Notice(Duration::ZERO),
+                Step::Ask(SystemAction::Restart, OperationState::Executed),
+            ],
+        },
+        expect![[r#"
+        host:
+          system: system action admitted action=Restart connection=1 operation=1 scheduled=true
+          system: system action cancelled action=Restart by_viewer=true detail=cancelled by the computer that asked operation=1
+          system: system action admitted action=Restart connection=1 operation=2 scheduled=true
+          system: system action ended action=Restart operation=2 scheduled=true state=Executed
+    "#]],
+    )?;
+    Ok(())
 }
 
 /// A lock the host's OS never answers fails the viewer's request, as
@@ -234,12 +171,14 @@ fn an_allowed_restart_waits_its_notice_and_can_be_cancelled() {
 fn an_action_that_never_answers_does_not_hold_the_service() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    allow_restart(&pair, Duration::ZERO)?;
+    let SystemSession {
+        pair,
+        connection,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(RESTART_AND_SHUTDOWN))?;
+    pair.host.core.set_system_action_notice(Duration::ZERO);
     let controller = &pair.controller.core;
-    let connection = pair.connect_services();
     let _stalled = fake.stall_locks();
-    let system = pair.controller.open_system(&connection)?;
     let locked = system.execute(SystemAction::Lock);
     assert!(
         locked.is_err(),
@@ -303,12 +242,16 @@ fn an_action_that_never_answers_does_not_hold_the_service() -> TestResult {
 fn a_restart_waits_out_its_notice_and_tells_the_host() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    allow_restart(&pair, Duration::from_millis(600))?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(RESTART_AND_SHUTDOWN))?;
+    pair.host
+        .core
+        .set_system_action_notice(Duration::from_millis(600));
     let (host, controller) = (&pair.host.core, &pair.controller.core);
     let events = host.subscribe()?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     let restart = system.execute(SystemAction::Restart)?;
     assert_eq!(
         restart.state,
@@ -322,7 +265,10 @@ fn a_restart_waits_out_its_notice_and_tells_the_host() -> TestResult {
     );
     let scheduled = host.scheduled_system_actions()?;
     assert_eq!(scheduled.len(), 1, "the host lists the scheduled restart");
-    assert_eq!(scheduled[0].operation_id, restart.id);
+    assert_eq!(
+        scheduled[0].operation_id, restart.id,
+        "the listed action is the scheduled restart"
+    );
     assert_eq!(
         scheduled[0].endpoint_id,
         controller.endpoint_id(),
@@ -389,14 +335,22 @@ fn a_restart_waits_out_its_notice_and_tells_the_host() -> TestResult {
 fn either_computer_can_cancel_a_scheduled_restart() -> TestResult {
     let _trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    allow_restart(&pair, Duration::from_secs(30))?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(RESTART_AND_SHUTDOWN))?;
+    pair.host
+        .core
+        .set_system_action_notice(Duration::from_secs(30));
     // At the host, as its user chooses in the notice.
     let first = system.execute(SystemAction::Restart)?;
     let cancelled = pair.host.core.cancel_system_action(first.id)?;
-    assert_eq!(cancelled.state, OperationState::Cancelled);
+    assert_eq!(
+        cancelled.state,
+        OperationState::Cancelled,
+        "the host cancels a scheduled restart"
+    );
     assert_eq!(
         cancelled.detail, "cancelled at that computer",
         "a cancel at the host says so"
@@ -409,7 +363,11 @@ fn either_computer_can_cancel_a_scheduled_restart() -> TestResult {
     // From the computer that asked.
     let second = system.execute(SystemAction::Shutdown)?;
     let cancelled = system.cancel(second.id)?;
-    assert_eq!(cancelled.state, OperationState::Cancelled);
+    assert_eq!(
+        cancelled.state,
+        OperationState::Cancelled,
+        "the computer that asked cancels its scheduled shutdown"
+    );
     assert_eq!(
         cancelled.detail, "cancelled by the computer that asked",
         "a cancel by the computer that asked says so"
@@ -432,12 +390,20 @@ fn either_computer_can_cancel_a_scheduled_restart() -> TestResult {
 fn a_scheduled_restart_is_not_forgotten_to_make_room_for_later_operations() -> TestResult {
     let _trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    allow_restart(&pair, Duration::from_secs(30))?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(RESTART_AND_SHUTDOWN))?;
+    pair.host
+        .core
+        .set_system_action_notice(Duration::from_secs(30));
     let restart = system.execute(SystemAction::Restart)?;
-    assert_eq!(restart.state, OperationState::Scheduled);
+    assert_eq!(
+        restart.state,
+        OperationState::Scheduled,
+        "an allowed restart waits out its notice"
+    );
     for _ in 0..80 {
         system.execute(SystemAction::Lock)?;
     }
@@ -447,7 +413,11 @@ fn a_scheduled_restart_is_not_forgotten_to_make_room_for_later_operations() -> T
         "the countdown is still there to cancel or run"
     );
     let cancelled = system.cancel(restart.id)?;
-    assert_eq!(cancelled.state, OperationState::Cancelled);
+    assert_eq!(
+        cancelled.state,
+        OperationState::Cancelled,
+        "the kept countdown can still be cancelled"
+    );
     Ok(())
 }
 
@@ -457,19 +427,33 @@ fn a_scheduled_restart_is_not_forgotten_to_make_room_for_later_operations() -> T
 fn a_computer_cannot_queue_scheduled_actions_without_end() -> TestResult {
     let _trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    allow_restart(&pair, Duration::from_secs(30))?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(RESTART_AND_SHUTDOWN))?;
+    pair.host
+        .core
+        .set_system_action_notice(Duration::from_secs(30));
     let waiting = (0..4)
         .map(|_| system.execute(SystemAction::Restart))
         .collect::<Result<Vec<_>, _>>()?;
-    assert!(waiting
-        .iter()
-        .all(|operation| operation.state == OperationState::Scheduled));
+    assert!(
+        waiting
+            .iter()
+            .all(|operation| operation.state == OperationState::Scheduled),
+        "a few actions may wait at once"
+    );
     let refused = system.execute(SystemAction::Shutdown)?;
-    assert_eq!(refused.state, OperationState::Refused);
-    assert_eq!(refused.detail, "too many actions are waiting");
+    assert_eq!(
+        refused.state,
+        OperationState::Refused,
+        "an action past the waiting limit is refused"
+    );
+    assert_eq!(
+        refused.detail, "too many actions are waiting",
+        "the refused action says why"
+    );
     system.cancel(waiting[0].id)?;
     assert_eq!(
         system.execute(SystemAction::Shutdown)?.state,
@@ -485,11 +469,15 @@ fn a_computer_cannot_queue_scheduled_actions_without_end() -> TestResult {
 fn another_connection_cannot_cancel_and_run_now_starts_at_once() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    allow_restart(&pair, Duration::from_secs(30))?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(RESTART_AND_SHUTDOWN))?;
+    pair.host
+        .core
+        .set_system_action_notice(Duration::from_secs(30));
     let host = &pair.host.core;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     let restart = system.execute(SystemAction::Restart)?;
     // A second paired computer asks to cancel someone else's restart.
     let other = pair.add_viewer("other");
@@ -533,11 +521,15 @@ fn another_connection_cannot_cancel_and_run_now_starts_at_once() -> TestResult {
 fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    allow_restart(&pair, Duration::from_secs(30))?;
+    let SystemSession {
+        pair,
+        connection,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(RESTART_AND_SHUTDOWN))?;
+    pair.host
+        .core
+        .set_system_action_notice(Duration::from_secs(30));
     let (host, controller) = (&pair.host.core, &pair.controller.core);
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     let restart = system.execute(SystemAction::Restart)?;
     controller.disconnect_session(connection.id)?;
     wait_for(
@@ -588,31 +580,24 @@ fn a_restart_ends_when_the_computer_that_asked_leaves_or_policy_changes() -> Tes
 #[test]
 fn backend_failure_is_a_failed_operation_not_a_lost_request() -> TestResult {
     let trace = traced();
-    let fake = Arc::new(FakeSystem::full());
-    fake.calls().fail_lock = true;
-    let pair = sharing(&fake)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
-    let failed = system.execute(SystemAction::Lock)?;
-    assert_eq!(failed.state, OperationState::Failed, "a refused lock fails");
-    assert!(
-        failed.detail.contains("refused"),
-        "the failed lock says the OS refused it: {}",
-        failed.detail
-    );
-    assert_eq!(fake.calls().locks, 0, "the host did not lock");
-    assert_eq!(
-        system.operation(failed.id)?,
-        failed,
-        "the failed lock is kept as it ended"
-    );
-    vnilink_testkit::assert_story(
+    let ended = check_actions(
+        &trace,
+        Asking {
+            policy: None,
+            fail_lock: true,
+            steps: &[Step::Ask(SystemAction::Lock, OperationState::Failed)],
+        },
         expect![[r#"
         host:
           system: system action admitted action=Lock connection=1 operation=1 scheduled=false
           system: system action ended action=Lock error=unsupported operation=1 scheduled=false state=Failed
     "#]],
-        || trace.story(&["system"]),
+    )?;
+    let failed = ended.first().ok_or("the failed lock")?;
+    assert!(
+        failed.detail.contains("refused"),
+        "the failed lock says the OS refused it: {}",
+        failed.detail
     );
     Ok(())
 }
@@ -623,12 +608,18 @@ fn backend_failure_is_a_failed_operation_not_a_lost_request() -> TestResult {
 fn operations_never_replay_across_reconnect() -> TestResult {
     let trace = traced();
     let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection,
+        service: system,
+    } = SystemSession::open(fake.clone(), None)?;
     let controller = &pair.controller.core;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     let first = system.execute(SystemAction::Lock)?;
-    assert_eq!(first.state, OperationState::Executed);
+    assert_eq!(
+        first.state,
+        OperationState::Executed,
+        "the first connection's lock runs"
+    );
     controller.disconnect_session(connection.id)?;
     wait_for("the connection to close", DEFAULT_WAIT, || {
         controller
@@ -648,7 +639,11 @@ fn operations_never_replay_across_reconnect() -> TestResult {
         "the previous connection's operation is unreachable, not resumed"
     );
     let second = system.execute(SystemAction::Lock)?;
-    assert_eq!(second.state, OperationState::Executed);
+    assert_eq!(
+        second.state,
+        OperationState::Executed,
+        "the reconnected lock runs"
+    );
     assert_ne!(second.id, first.id, "a new lock is a new operation");
     vnilink_testkit::assert_story(
         expect![[r#"
@@ -728,7 +723,10 @@ fn system_availability_follows_native_bits_not_adapter_presence() -> TestResult 
     );
     let peer = controller.endpoint_id();
     let lock = host.capability_availability(Some(&peer), Capability::SystemLock)?;
-    assert!(!lock.available);
+    assert!(
+        !lock.available,
+        "a lock the peer is not granted is unavailable to it"
+    );
     assert!(
         lock.reasons.contains(&AvailabilityReason::DeniedPeerGrant),
         "a supported lock names the peer's grant"

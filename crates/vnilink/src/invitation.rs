@@ -422,6 +422,72 @@ fn hex_value(byte: u8) -> Result<u8, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fixed wall-clock moment, so expiry is checked the same everywhere.
+    fn issued_at() -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+    }
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    #[test]
+    fn an_invitation_opens_until_its_expiry_plus_the_clock_skew() {
+        let secret = SecretKey::generate();
+        let ttl = Duration::from_secs(60);
+        let (token, ..) = issue(&secret, &[], &[], ttl, issued_at(), None).unwrap();
+        let closes = issued_at() + ttl + CLOCK_SKEW;
+        assert!(
+            open(&token, closes - ms(1)).is_ok(),
+            "a reader just inside the skew still opens it"
+        );
+        assert!(matches!(
+            open(&token, closes),
+            Err(Error::InvitationExpired)
+        ));
+        assert!(matches!(
+            open(&token, closes + ms(1)),
+            Err(Error::InvitationExpired)
+        ));
+    }
+
+    #[test]
+    fn a_reader_behind_by_more_than_the_skew_refuses_a_longest_lifetime_invitation() {
+        let secret = SecretKey::generate();
+        let (token, ..) = issue(&secret, &[], &[], MAX_TTL, issued_at(), None).unwrap();
+        assert!(
+            open(&token, issued_at() - CLOCK_SKEW).is_ok(),
+            "exactly the skew behind is allowed"
+        );
+        assert!(matches!(
+            open(&token, issued_at() - CLOCK_SKEW - ms(1)),
+            Err(Error::InvalidInvitation("lifetime is longer than allowed"))
+        ));
+    }
+
+    #[test]
+    fn a_nonce_is_forgotten_once_its_invitation_can_no_longer_be_opened() {
+        let nonce = [7u8; 16];
+        let expires_at_ms = 1_000_000u64;
+        let closes = expires_at_ms + CLOCK_SKEW.as_millis() as u64;
+        let mut cache = ReplayCache::new();
+        cache.remember(nonce, expires_at_ms, 0).unwrap();
+        assert!(
+            matches!(
+                cache.remember(nonce, expires_at_ms, closes - 1),
+                Err(Error::InvitationReplayed)
+            ),
+            "remembered while the invitation still opens"
+        );
+        cache.remember(nonce, expires_at_ms, closes).unwrap();
+        assert_eq!(
+            cache.entries().len(),
+            1,
+            "the expired entry went before the new one was kept"
+        );
+    }
+
     #[test]
     fn names_and_os_are_signed() {
         let secret = SecretKey::generate();

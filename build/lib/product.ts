@@ -26,6 +26,8 @@ interface PlatformMetadata {
 export interface Product {
 	readonly nameShort: string;
 	readonly nameLong: string;
+	/** One sentence for package metadata. */
+	readonly description: string;
 	readonly applicationName: string;
 	readonly appId: string;
 	readonly publisherName: string;
@@ -73,7 +75,7 @@ function matches(value: unknown, pattern: RegExp): value is string {
 /** Validates packaging inputs, not platform runtime support or signing credentials. */
 export function validateProduct(product: unknown): Product {
 	requireValue(record(product), 'expected an object');
-	for (const field of ['nameShort', 'nameLong', 'publisherName']) {
+	for (const field of ['nameShort', 'nameLong', 'description', 'publisherName']) {
 		requireValue(text(product[field]), `${field} is required`);
 	}
 	requireValue(matches(product.applicationName, /^[a-z][a-z0-9-]*$/), 'invalid applicationName');

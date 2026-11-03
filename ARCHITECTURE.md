@@ -49,5 +49,5 @@ One signed `.vnl` file introduces two computers. Iroh carries the authenticated 
 ## Verification
 
 - Unit tests sit beside their module. A service's behaviour across two engines belongs in its `vnilink-testkit` suite (`node build/run.ts test:service <service>`), its speed in the matching bench (`bench:service`).
-- `npm run measure:latency` measures glass-to-glass latency, and `npm run measure:impaired` measures transfers and video over impaired links in a Linux container. Each documents what its evidence proves and does not cover at the top of its task (`build/lib/latency.ts`, `build/lib/impaired.ts`).
+- `npm run measure:latency` measures glass-to-glass latency, and `npm run measure:impaired` measures transfers and video over impaired links in a Linux container. Each documents what its evidence proves and does not cover at the top of its task (`build/lib/measure/latency.ts`, `build/lib/measure/impaired.ts`).
 - A local macOS pass, a successful cross-compile or a CI configuration is not evidence that another platform works.

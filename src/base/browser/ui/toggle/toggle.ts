@@ -3,17 +3,14 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IAction } from '../../../common/actions.js';
 import { Codicon } from '../../../common/codicons.js';
 import { Emitter, Event } from '../../../common/event.js';
 import { IMarkdownString, isMarkdownString } from '../../../common/htmlContent.js';
 import { getCodiconAriaLabel, stripIcons } from '../../../common/iconLabels.js';
 import { KeyCode } from '../../../common/keyCodes.js';
 import { ThemeIcon } from '../../../common/themables.js';
-import { $, addDisposableGenericMouseDownListener, addDisposableListener, EventType, isActiveElement, isHTMLElement } from '../../dom.js';
+import { isActiveElement, isHTMLElement } from '../../dom.js';
 import { IKeyboardEvent } from '../../keyboardEvent.js';
-import { BaseActionViewItem, IActionViewItemOptions } from '../actionbar/actionViewItems.js';
-import { IActionViewItemProvider } from '../actionbar/actionbar.js';
 import { HoverStyle, IHoverLifecycleOptions } from '../hover/hover.js';
 import { getBaseLayerHoverDelegate } from '../hover/hoverDelegate2.js';
 import { Widget } from '../widget.js';
@@ -50,82 +47,12 @@ export const unthemedToggleStyles = {
 	inputActiveOptionBackground: '#0E639C50'
 };
 
-export class ToggleActionViewItem extends BaseActionViewItem {
-
-	protected readonly toggle: Toggle;
-
-	constructor(context: unknown, action: IAction, options: IActionViewItemOptions) {
-		super(context, action, options);
-
-		const title = (<IActionViewItemOptions>this.options).keybinding ?
-			`${this._action.label} (${(<IActionViewItemOptions>this.options).keybinding})` : this._action.label;
-		this.toggle = this._register(new Toggle({
-			actionClassName: this._action.class,
-			isChecked: !!this._action.checked,
-			title,
-			notFocusable: true,
-			inputActiveOptionBackground: options.toggleStyles?.inputActiveOptionBackground,
-			inputActiveOptionBorder: options.toggleStyles?.inputActiveOptionBorder,
-			inputActiveOptionForeground: options.toggleStyles?.inputActiveOptionForeground,
-		}));
-		this._register(this.toggle.onChange(() => {
-			this._action.checked = !!this.toggle && this.toggle.checked;
-		}));
-	}
-
-	override render(container: HTMLElement): void {
-		this.element = container;
-		this.element.appendChild(this.toggle.domNode);
-
-		this.updateChecked();
-		this.updateEnabled();
-	}
-
-	protected override updateEnabled(): void {
-		if (this.toggle) {
-			if (this.isEnabled()) {
-				this.toggle.enable();
-				this.element?.classList.remove('disabled');
-			} else {
-				this.toggle.disable();
-				this.element?.classList.add('disabled');
-			}
-		}
-	}
-
-	protected override updateChecked(): void {
-		this.toggle.checked = !!this._action.checked;
-	}
-
-	protected override updateLabel(): void {
-		const title = (<IActionViewItemOptions>this.options).keybinding ?
-			`${this._action.label} (${(<IActionViewItemOptions>this.options).keybinding})` : this._action.label;
-		this.toggle.setTitle(title);
-	}
-
-	override focus(): void {
-		this.toggle.domNode.tabIndex = 0;
-		this.toggle.focus();
-	}
-
-	override blur(): void {
-		this.toggle.domNode.tabIndex = -1;
-		this.toggle.domNode.blur();
-	}
-
-	override setFocusable(focusable: boolean): void {
-		this.toggle.domNode.tabIndex = focusable ? 0 : -1;
-	}
-
-}
-
 export class Toggle extends Widget {
 
 	private readonly _onChange = this._register(new Emitter<boolean>());
 	get onChange(): Event<boolean /* via keyboard */> { return this._onChange.event; }
 
 	private readonly _onKeyDown = this._register(new Emitter<IKeyboardEvent>());
-	get onKeyDown(): Event<IKeyboardEvent> { return this._onKeyDown.event; }
 
 	private readonly _opts: IToggleOpts;
 	private _title: string | IMarkdownString | HTMLElement;
@@ -227,10 +154,6 @@ export class Toggle extends Widget {
 		}
 	}
 
-	width(): number {
-		return 2 /*margin left*/ + 2 /*border*/ + 2 /*padding*/ + 16 /* icon width */;
-	}
-
 	protected applyStyles(): void {
 		if (this.domNode) {
 			if (this._checked && this._opts.inputActiveOptionBorder) {
@@ -240,22 +163,6 @@ export class Toggle extends Widget {
 			}
 			this.domNode.style.color = (this._checked && this._opts.inputActiveOptionForeground) || 'inherit';
 			this.domNode.style.backgroundColor = (this._checked && this._opts.inputActiveOptionBackground) || '';
-		}
-	}
-
-	enable(): void {
-		this.domNode.setAttribute('aria-disabled', String(false));
-		this.domNode.classList.remove('disabled');
-		if (!this._opts.notFocusable) {
-			this.domNode.tabIndex = 0;
-		}
-	}
-
-	disable(): void {
-		this.domNode.setAttribute('aria-disabled', String(true));
-		this.domNode.classList.add('disabled');
-		if (!this._opts.notFocusable) {
-			this.domNode.tabIndex = -1;
 		}
 	}
 
@@ -281,7 +188,6 @@ abstract class BaseCheckbox extends Widget {
 	static readonly CLASS_NAME = 'monaco-checkbox';
 
 	protected readonly _onChange = this._register(new Emitter<boolean>());
-	readonly onChange: Event<boolean /* via keyboard */> = this._onChange.event;
 
 	constructor(
 		protected readonly checkbox: Toggle,
@@ -303,20 +209,6 @@ abstract class BaseCheckbox extends Widget {
 
 	hasFocus(): boolean {
 		return isActiveElement(this.domNode);
-	}
-
-	enable(): void {
-		this.checkbox.enable();
-		this.applyStyles(true);
-	}
-
-	disable(): void {
-		this.checkbox.disable();
-		this.applyStyles(false);
-	}
-
-	setTitle(newTitle: string): void {
-		this.checkbox.setTitle(newTitle);
 	}
 
 	protected applyStyles(enabled = this.enabled): void {
@@ -361,187 +253,4 @@ export class Checkbox extends BaseCheckbox {
 		}
 		super.applyStyles(enabled);
 	}
-}
-
-export class TriStateCheckbox extends BaseCheckbox {
-	constructor(
-		title: string,
-		private _state: boolean | 'mixed',
-		styles: ICheckboxStyles
-	) {
-		let icon: ThemeIcon | undefined;
-		switch (_state) {
-			case true:
-				icon = Codicon.check;
-				break;
-			case 'mixed':
-				icon = Codicon.dash;
-				break;
-			case false:
-				icon = undefined;
-				break;
-		}
-		const checkbox = new Toggle({
-			title,
-			isChecked: _state === true,
-			icon,
-			actionClassName: Checkbox.CLASS_NAME,
-			hoverLifecycleOptions: styles.hoverLifecycleOptions,
-			...unthemedToggleStyles
-		});
-		super(
-			checkbox,
-			checkbox.domNode,
-			styles
-		);
-
-		this._register(checkbox);
-		this._register(this.checkbox.onChange(keyboard => {
-			this._state = this.checkbox.checked;
-			this.applyStyles();
-			this._onChange.fire(keyboard);
-		}));
-	}
-
-	get checked(): boolean | 'mixed' {
-		return this._state;
-	}
-
-	set checked(newState: boolean | 'mixed') {
-		if (this._state !== newState) {
-			this._state = newState;
-			this.checkbox.checked = newState === true;
-			this.applyStyles();
-		}
-	}
-
-	protected override applyStyles(enabled?: boolean): void {
-		switch (this._state) {
-			case true:
-				this.checkbox.setIcon(Codicon.check);
-				break;
-			case 'mixed':
-				this.checkbox.setIcon(Codicon.dash);
-				break;
-			case false:
-				this.checkbox.setIcon(undefined);
-				break;
-		}
-		super.applyStyles(enabled);
-	}
-}
-
-export interface ICheckboxActionViewItemOptions extends IActionViewItemOptions {
-	checkboxStyles: ICheckboxStyles;
-}
-
-export class CheckboxActionViewItem extends BaseActionViewItem {
-
-	protected readonly toggle: Checkbox;
-	private cssClass?: string;
-
-	constructor(context: unknown, action: IAction, options: ICheckboxActionViewItemOptions) {
-		super(context, action, options);
-
-		this.toggle = this._register(new Checkbox(this._action.label, !!this._action.checked, options.checkboxStyles));
-		this._register(this.toggle.onChange(() => this.onChange()));
-	}
-
-	override render(container: HTMLElement): void {
-		this.element = container;
-		this.element.classList.add('checkbox-action-item');
-		this.element.appendChild(this.toggle.domNode);
-		if ((<IActionViewItemOptions>this.options).label && this._action.label) {
-			const label = this.element.appendChild($('span.checkbox-label', undefined, this._action.label));
-			// Focus the checkbox when the (non-focusable) label is clicked, mirroring
-			// native `<label>` behavior. This is done on mousedown, with the default
-			// prevented, so focus does not first land on a focusable ancestor.
-			this._register(addDisposableGenericMouseDownListener(label, (e: MouseEvent) => {
-				e.preventDefault();
-
-				if (this.isEnabled()) {
-					this.focus();
-				}
-			}));
-			this._register(addDisposableListener(label, EventType.CLICK, (e: MouseEvent) => {
-				e.stopPropagation();
-				e.preventDefault();
-
-				if (this.isEnabled()) {
-					this.toggle.checked = !this.toggle.checked;
-					this.onChange();
-				}
-			}));
-		}
-
-		this.updateEnabled();
-		this.updateClass();
-		this.updateChecked();
-		this.updateTooltip();
-	}
-
-	private onChange(): void {
-		this._action.checked = !!this.toggle && this.toggle.checked;
-		this.actionRunner.run(this._action, this._context);
-	}
-
-	protected override updateEnabled(): void {
-		if (this.isEnabled()) {
-			this.toggle.enable();
-		} else {
-			this.toggle.disable();
-		}
-		if (this.action.enabled) {
-			this.element?.classList.remove('disabled');
-		} else {
-			this.element?.classList.add('disabled');
-		}
-	}
-
-	protected override updateChecked(): void {
-		this.toggle.checked = !!this._action.checked;
-	}
-
-	protected override updateClass(): void {
-		if (this.cssClass) {
-			this.toggle.domNode.classList.remove(...this.cssClass.split(' '));
-		}
-		this.cssClass = this.getClass();
-		if (this.cssClass) {
-			this.toggle.domNode.classList.add(...this.cssClass.split(' '));
-		}
-	}
-
-	override focus(): void {
-		this.toggle.domNode.tabIndex = 0;
-		this.toggle.focus();
-	}
-
-	override blur(): void {
-		this.toggle.domNode.tabIndex = -1;
-		this.toggle.domNode.blur();
-	}
-
-	override setFocusable(focusable: boolean): void {
-		this.toggle.domNode.tabIndex = focusable ? 0 : -1;
-	}
-
-}
-
-/**
- * Creates an action view item provider that renders toggles for actions with a checked state
- * and falls back to default button rendering for regular actions.
- *
- * @param toggleStyles - Optional styles to apply to toggle items
- * @returns An IActionViewItemProvider that can be used with ActionBar
- */
-export function createToggleActionViewItemProvider(toggleStyles?: IToggleStyles): IActionViewItemProvider {
-	return (action: IAction, options: IActionViewItemOptions) => {
-		// Only render as a toggle if the action has a checked property
-		if (action.checked !== undefined) {
-			return new ToggleActionViewItem(null, action, { ...options, toggleStyles });
-		}
-		// Return undefined to fall back to default button rendering
-		return undefined;
-	};
 }

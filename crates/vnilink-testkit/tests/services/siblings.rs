@@ -13,21 +13,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
-#[cfg(unix)]
-use vnilink::terminal::TerminalEvent;
 use vnilink::{
     CloseCause, Error, Grants, ServiceInfo, ServiceKind, ServicePhase, SessionPhase,
     MAX_SERVICE_RECORDS,
 };
-#[cfg(unix)]
 use vnilink_testkit::camera::{config, StandInCameras};
-#[cfg(unix)]
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::events::service_changes;
-#[cfg(unix)]
-use vnilink_testkit::terminal::{shell, SIZE};
+use vnilink_testkit::terminal::{read_until, shell, ENTER, SIZE};
 use vnilink_testkit::{traced, Pair, TestResult};
-#[cfg(unix)]
 use vnilink_testkit::{wait_for, DEFAULT_WAIT};
 
 /// Work a backend owns, which says when it was dropped.
@@ -214,7 +208,6 @@ fn the_record_limit_leaves_the_connection_as_it_was() -> TestResult {
 /// Desktop, Files, Terminal and Camera open on one services connection,
 /// each once; closing them one by one ends each on the host alone while
 /// the connection stays active and the others carry on.
-#[cfg(unix)]
 #[test]
 fn all_services_share_one_connection_and_close_independently() -> TestResult {
     let trace = traced();
@@ -278,6 +271,18 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
         "a Camera owner opens once"
     );
 
+    // The controller records a service's close when its own end of it
+    // finishes, which can come after the host's release: each close is
+    // waited for there too, so the next one follows it in the story.
+    let closed_by_owner = |id: u64| {
+        wait_for("the controller to record its close", DEFAULT_WAIT, || {
+            controller
+                .controller_service(id)
+                .ok()
+                .filter(|service| service.phase == ServicePhase::Closed(CloseCause::OwnerClose))
+        });
+    };
+
     desktop.close();
     pair.host.wait_released(Some(ServiceKind::Desktop));
     assert_eq!(
@@ -306,6 +311,7 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
 
     files.close();
     pair.host.wait_released(Some(ServiceKind::Files));
+    closed_by_owner(files_owner.id);
     assert_eq!(
         pair.host.hosted(None).len(),
         2,
@@ -323,6 +329,7 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
 
     terminal.close();
     pair.host.wait_released(Some(ServiceKind::Terminal));
+    closed_by_owner(terminal_owner.id);
     assert_eq!(
         pair.host.hosted(None).len(),
         1,
@@ -377,7 +384,6 @@ fn all_services_share_one_connection_and_close_independently() -> TestResult {
 /// A host with no capture, desktop or encoder still opens Files, Terminal
 /// and Camera on a services connection; only Desktop is refused, and that
 /// refusal fails nothing else.
-#[cfg(unix)]
 #[test]
 fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> TestResult {
     let trace = traced();
@@ -446,7 +452,6 @@ fn files_terminal_and_camera_start_without_capture_or_a_desktop_decoder() -> Tes
 
 /// A host whose capture and camera are ready never starts either for a
 /// Files service or for a terminal on a services connection.
-#[cfg(unix)]
 #[test]
 fn files_and_terminal_services_never_request_capture() -> TestResult {
     let trace = traced();
@@ -484,19 +489,19 @@ fn files_and_terminal_services_never_request_capture() -> TestResult {
     let parent = pair.connect_services();
     let owner = pair.attach(&parent, ServiceKind::Terminal);
     let terminal = controller.open_terminal_service(owner.id, owner.generation, SIZE)?;
-    terminal.input(b"echo capture-never-requested\n")?;
+    terminal.input(format!("echo capture-never-requested{ENTER}").as_bytes())?;
     let mut transcript = Vec::new();
-    wait_for("the shell's echo", DEFAULT_WAIT, || {
-        while let Some(event) = terminal.poll() {
-            if let TerminalEvent::Output(bytes) = event {
-                transcript.extend_from_slice(&bytes);
-            }
-        }
-        transcript
-            .windows(b"capture-never-requested".len())
-            .any(|window| window == b"capture-never-requested")
-            .then_some(())
-    });
+    read_until(
+        &terminal,
+        &mut transcript,
+        "the shell's echo",
+        DEFAULT_WAIT,
+        |output| {
+            output
+                .windows(b"capture-never-requested".len())
+                .any(|window| window == b"capture-never-requested")
+        },
+    );
     assert!(
         host.video_targets()?.is_empty(),
         "a terminal asks for no capture"

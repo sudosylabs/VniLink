@@ -35,6 +35,8 @@ mod pipewire_tests;
 mod pixels_tests;
 #[path = "tests/portal.rs"]
 mod portal_tests;
+#[path = "tests/syntax.rs"]
+mod syntax_tests;
 #[cfg(target_os = "linux")]
 #[path = "tests/system.rs"]
 mod system_tests;

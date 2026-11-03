@@ -53,7 +53,7 @@ export interface StimulusHold {
  */
 export function stimulusPage(cell: number, hold?: StimulusHold, busy = false): string {
 	// The page cannot import, so it carries its own copy of `cells`;
-	// `test/tooling/latency.test.mjs` keeps the copies and the reader alike.
+	// `build/lib/test/latency.test.ts` keeps the copies and the reader alike.
 	const script = `
 const VALUE_BITS = ${String(VALUE_BITS)};
 function cells(value) {

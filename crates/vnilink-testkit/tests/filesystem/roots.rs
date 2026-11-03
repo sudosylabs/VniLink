@@ -12,7 +12,7 @@
 use vnilink::{Error, FolderKind};
 use vnilink_testkit::{traced, Engine, Scratch, TestResult};
 
-use vnilink_testkit::files::{link_folder, Location};
+use vnilink_testkit::files::{link_folder, Location, OnDisk};
 use vnilink_testkit::store::Installed;
 
 use super::{deep_folder, is_message, UNSAFE_PATH};
@@ -123,7 +123,7 @@ fn places_name_home_and_its_folders_by_root() -> TestResult {
 fn deep_folders_list_and_the_depth_limit_holds() -> TestResult {
     let _trace = traced();
     let scratch = Scratch::new("filesystem");
-    let deep = deep_folder(scratch.path(), 40);
+    let deep = deep_folder(scratch.path(), 40)?;
     std::fs::write(deep.join("bottom.txt"), b"deep")?;
     let engine = Engine::start("engine");
     let core = &engine.core;
@@ -157,13 +157,10 @@ fn deep_folders_list_and_the_depth_limit_holds() -> TestResult {
 #[test]
 fn a_dropped_path_is_named_by_its_folder_and_its_own_name() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let folder = scratch.join("dropped");
-    std::fs::create_dir(&folder)?;
+    let disk = OnDisk::new("dropped")?;
+    let folder = &disk.folder;
     std::fs::write(folder.join("note.txt"), b"note")?;
-    let engine = Engine::start("engine");
-    let core = &engine.core;
-    let location = Location::of(core, &folder);
+    let (core, location) = (disk.core(), &disk.location);
     assert_eq!(
         core.locate(&folder.join("note.txt"))?,
         Some((location.root, location.path(""), "note.txt".into())),

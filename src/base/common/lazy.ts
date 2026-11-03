@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 enum LazyValueState {
@@ -18,11 +18,6 @@ export class Lazy<T> {
 	constructor(
 		private readonly executor: () => T,
 	) { }
-
-	/**
-	 * True if the lazy value has been resolved.
-	 */
-	get hasValue(): boolean { return this._state === LazyValueState.Completed; }
 
 	/**
 	 * Get the wrapped value.
@@ -49,9 +44,4 @@ export class Lazy<T> {
 		}
 		return this._value!;
 	}
-
-	/**
-	 * Get the wrapped value without forcing evaluation.
-	 */
-	get rawValue(): T | undefined { return this._value; }
 }

@@ -11,9 +11,9 @@
 
 use std::time::Duration;
 
-use vnilink_testkit::{traced, Scratch, TestResult};
+use vnilink_testkit::{traced, TestResult};
 
-use vnilink_testkit::files::{no_change, settle, wait_for_change, Location};
+use vnilink_testkit::files::{no_change, settle, wait_for_change, OnDisk};
 
 /// How long a change takes to be reported, at most.
 const REPORTED: Duration = Duration::from_secs(5);
@@ -25,12 +25,9 @@ const UNREPORTED: Duration = Duration::from_millis(1_500);
 #[test]
 fn a_watched_folder_says_when_it_changes() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let folder = scratch.join("watched");
-    std::fs::create_dir(&folder)?;
-    let engine = vnilink_testkit::Engine::start("engine");
-    let core = &engine.core;
-    let location = Location::of(core, &folder);
+    let disk = OnDisk::new("watched")?;
+    let folder = &disk.folder;
+    let (core, location) = (disk.core(), &disk.location);
     let events = core.subscribe()?;
     let watch = core.watch_folder(location.root, &location.path(""))?;
     // FSEvents may report the watch's own start; let it settle first.
@@ -60,9 +57,8 @@ fn a_watched_folder_says_when_it_changes() -> TestResult {
 #[test]
 fn temporary_entries_are_never_listed_or_watched() -> TestResult {
     let _trace = traced();
-    let scratch = Scratch::new("filesystem");
-    let folder = scratch.join("landing");
-    std::fs::create_dir(&folder)?;
+    let disk = OnDisk::new("landing")?;
+    let folder = &disk.folder;
     std::fs::write(folder.join("kept.txt"), b"kept")?;
     for name in [
         ".vnlpub.0.tmp",
@@ -75,9 +71,7 @@ fn temporary_entries_are_never_listed_or_watched() -> TestResult {
     // Names that only resemble them are the user's.
     std::fs::write(folder.join(".vnlrc"), b"mine")?;
     std::fs::write(folder.join("pairing.vnl"), b"mine")?;
-    let engine = vnilink_testkit::Engine::start("engine");
-    let core = &engine.core;
-    let location = Location::of(core, &folder);
+    let (core, location) = (disk.core(), &disk.location);
     let page = core.list_dir(location.root, &location.path(""), 0, 50)?;
     let names: Vec<&str> = page.entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(

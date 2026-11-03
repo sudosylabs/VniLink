@@ -21,16 +21,17 @@ import type { PermissionsMainService } from '../../permissions/electron-main/per
 export const IScreenHostingMainService = createDecorator<ScreenHostingMainService>('screenHostingMainService');
 
 /** The display a native host should serve, or none. */
-export type ScreenHostingTarget = NativeScreenSource | undefined;
+type ScreenHostingTarget = NativeScreenSource | undefined;
 
-/** The OS facts a screen host depends on, replaceable in tests. */
+/** The OS facts a screen host depends on. */
 export interface ScreenHostingEnvironment {
 	readonly platform: 'darwin' | 'win32' | 'linux' | 'other';
 	primaryDisplay(): ScreenHostingTarget;
 	onDidChangeDisplays(listener: () => void): () => void;
 }
 
-const electronEnvironment: ScreenHostingEnvironment = {
+/** This computer's platform and displays, as Electron's `screen` reports them. */
+export const electronScreenHostingEnvironment: ScreenHostingEnvironment = {
 	platform: isMacintosh ? 'darwin' : isWindows ? 'win32' : isLinux ? 'linux' : 'other',
 	primaryDisplay: () => {
 		const display = screen.getPrimaryDisplay();
@@ -75,11 +76,11 @@ export class ScreenHostingMainService extends Disposable {
 	private applyAgain = false;
 
 	constructor(
+		private readonly environment: ScreenHostingEnvironment,
 		@IEngineMainService private readonly engine: EngineMainService,
 		@IPermissionsMainService private readonly permissions: PermissionsMainService,
 		@ILogService private readonly logService: ILogService,
 		@IConfigurationMainService private readonly configuration: ConfigurationMainService,
-		private readonly environment: ScreenHostingEnvironment = electronEnvironment,
 	) {
 		super();
 	}

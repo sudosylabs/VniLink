@@ -7,11 +7,11 @@
 
 import { Emitter, type Event } from '../../../base/common/event.js';
 import { Disposable, toDisposable, type IDisposable } from '../../../base/common/lifecycle.js';
-import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
+import type { DataPacket } from '../../../platform/engine/common/dataChannel.js';
+import { IDataChannelService } from '../../../platform/engine/common/dataChannelService.js';
 import { engineErrorCategory, type RemoteStatus } from '../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { isFileJob, isFileJobs, isFileJobUpdate, isFilePage, isFilePlaces, type FileAnswer, type FileConflictChoice, type FileEntry, type FileJob, type FileOperation, type FilePlaces } from '../../../platform/engine/common/files.js';
-import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { ILogService } from '../../../platform/log/common/log.js';
 import type { FilesPane, FolderLocation } from '../../../platform/state/common/uiState.js';
@@ -26,12 +26,6 @@ interface FilesChannel {
 	fileOperation(operation: FileOperation): Promise<FileAnswer>;
 	close(): void;
 }
-
-export type FilesChannelOpener = (
-	request: Omit<DataChannelRequest, 'requestId'>,
-	consume: (packet: DataPacket) => Promise<void>,
-	onError: (error: Error) => void,
-) => Promise<FilesChannel>;
 
 /** What the other computer reports about Files, as a reason it can't be opened. */
 export function filesRefusal(status: RemoteStatus | undefined): FilesFailure | undefined {
@@ -349,15 +343,14 @@ export class FilesService implements IFilesService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly sessions = new Map<string, FilesSession>();
 	private readonly opening = new Map<string, Promise<{ readonly failure: FilesFailure } | { readonly session: IFilesSession }>>();
-	protected openChannel: FilesChannelOpener;
 	public readonly local: IFilesDisk;
 
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
 		@IDeviceService private readonly devices: IDeviceService,
 		@ILogService private readonly logService: ILogService,
+		@IDataChannelService private readonly dataChannels: IDataChannelService,
 	) {
-		this.openChannel = (request, consume, onError) => DataChannelClient.open(engine, request, consume, onError);
 		this.local = new LocalDisk(engine);
 	}
 
@@ -418,7 +411,7 @@ export class FilesService implements IFilesService {
 			this.logService.warn(`Files with ${deviceId} ended: ${reason}`);
 		});
 		try {
-			const channel = await this.openChannel(
+			const channel = await this.dataChannels.open(
 				{ kind: 'files', sessionId: connection.id, generation: connection.generation },
 				packet => {
 					session.consume(packet);

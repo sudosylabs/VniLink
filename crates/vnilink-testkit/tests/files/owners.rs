@@ -17,12 +17,9 @@ use std::time::Duration;
 use vnilink::probes::{ScanHooks, MAX_ACTIVE_JOBS};
 use vnilink::{Core, Error, JobState, ServicePhase};
 use vnilink_testkit::files::{drive_to_end, payload};
-use vnilink_testkit::{holds, lock, traced, wait_for, Pair, TestResult};
+use vnilink_testkit::{holds, lock, traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
 const TRANSFER: Duration = Duration::from_secs(30);
-
-/// How long the owner tests waited for the engines to settle.
-const SETTLED_WITHIN: Duration = Duration::from_secs(8);
 
 /// Transfers left interrupted when their Files owner went wait to resume
 /// and hold back nothing: with as many as may be active, one more is
@@ -54,17 +51,17 @@ fn interrupted_transfers_leave_room_for_new_ones() -> TestResult {
     drop(pipe);
     wait_for(
         "the lost owner's jobs to be interrupted",
-        SETTLED_WITHIN,
+        DEFAULT_WAIT,
         || {
             controller
                 .job_list()
-                .expect("the controller's jobs")
+                .ok()?
                 .iter()
                 .all(|job| job.state == JobState::Interrupted)
                 .then_some(())
         },
     );
-    wait_for("the host to release the lost owner", SETTLED_WITHIN, || {
+    wait_for("the host to release the lost owner", DEFAULT_WAIT, || {
         pair.host.hosted(None).is_empty().then_some(())
     });
 
@@ -260,9 +257,8 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
         "a long preparation keeps the Files owner"
     );
     release_preparations();
-    wait_for("the download to be prepared", SETTLED_WITHIN, || {
-        (controller.job_poll(job).expect("the job's poll").state != JobState::Preparing)
-            .then_some(())
+    wait_for("the download to be prepared", DEFAULT_WAIT, || {
+        (controller.job_poll(job).ok()?.state != JobState::Preparing).then_some(())
     });
     let (sent, got) = drive_to_end(host, host_job, controller, job, TRANSFER);
     assert_eq!(
@@ -291,13 +287,8 @@ fn a_long_download_preparation_shows_and_finishes() -> TestResult {
         JobState::Cancelled,
         "a preparing download can be cancelled"
     );
-    wait_for("the host to cancel its preparation", SETTLED_WITHIN, || {
-        (host
-            .job_snapshot(host_second)
-            .expect("the host's job")
-            .state
-            == JobState::Cancelled)
-            .then_some(())
+    wait_for("the host to cancel its preparation", DEFAULT_WAIT, || {
+        (host.job_snapshot(host_second).ok()?.state == JobState::Cancelled).then_some(())
     });
     holds(
         "the cancelled preparation to stay stopped",

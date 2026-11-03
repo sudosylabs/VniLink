@@ -3,22 +3,18 @@
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as browser from './browser.js';
-import { BrowserFeatures } from './canIUse.js';
-import { hasModifierKeys, IKeyboardEvent, StandardKeyboardEvent } from './keyboardEvent.js';
+import { IKeyboardEvent, StandardKeyboardEvent } from './keyboardEvent.js';
 import { IMouseEvent, StandardMouseEvent } from './mouseEvent.js';
-import { AbstractIdleValue, IntervalTimer, TimeoutTimer, _runWhenIdle, IdleDeadline } from '../common/async.js';
-import { BugIndicatingError, onUnexpectedError } from '../common/errors.js';
+import { IntervalTimer, _runWhenIdle, IdleDeadline } from '../common/async.js';
+import { onUnexpectedError } from '../common/errors.js';
 import * as event from '../common/event.js';
 import { KeyCode } from '../common/keyCodes.js';
-import { Disposable, DisposableStore, IDisposable, markAsSingleton, MutableDisposable, toDisposable } from '../common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, markAsSingleton, toDisposable } from '../common/lifecycle.js';
 import { RemoteAuthorities } from '../common/network.js';
 import * as platform from '../common/platform.js';
 import { URI } from '../common/uri.js';
 import { hash } from '../common/hash.js';
 import { CodeWindow, ensureCodeWindow, mainWindow } from './window.js';
-import { isPointWithinTriangle } from '../common/numbers.js';
-import { IObservable, derived, derivedOpts, IReader, observableValue, isObservable } from '../common/observable.js';
 
 export interface IRegisteredCodeWindow {
 	readonly window: CodeWindow;
@@ -147,38 +143,6 @@ export type ExternalFocusChecker = () => IExternalFocusInfo;
 const externalFocusCheckers = new Set<ExternalFocusChecker>();
 
 /**
- * Register a function that checks if a component outside the DOM has focus.
- * This allows `hasExternalFocus` to detect when focus is in components like browser views,
- * and `getExternalFocusWindow` to determine which window the focused component belongs to.
- *
- * @param checker A function that returns focus info for the component
- * @returns A disposable to unregister the checker
- */
-export function registerExternalFocusChecker(checker: ExternalFocusChecker): IDisposable {
-	externalFocusCheckers.add(checker);
-
-	return toDisposable(() => {
-		externalFocusCheckers.delete(checker);
-	});
-}
-
-/**
- * Check if any registered external component has focus.
- * This is used to extend focus detection beyond the normal DOM to include
- * components like Electron WebContentsViews.
- *
- * @returns true if any registered external component has focus
- */
-export function hasExternalFocus(): boolean {
-	for (const checker of externalFocusCheckers) {
-		if (checker().hasFocus) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/**
  * Get the window associated with a focused external component.
  * This is used to determine which window should receive UI like dialogs
  * when an external component (like a browser view) has focus.
@@ -193,24 +157,6 @@ export function getExternalFocusWindow(): CodeWindow | undefined {
 		}
 	}
 	return undefined;
-}
-
-/**
- * Check if the application has focus in any window, either via the normal DOM or via an
- * external component like a browser view (which exists outside the document tree).
- *
- * @returns true if the application owns the current focus
- */
-export function hasAppFocus(): boolean {
-	for (const { window } of getWindows()) {
-		if (window.document.hasFocus()) {
-			return true;
-		}
-	}
-	if (hasExternalFocus()) {
-		return true;
-	}
-	return false;
 }
 
 //#endregion
@@ -290,29 +236,6 @@ export const addStandardDisposableListener: IAddStandardDisposableListenerSignat
 	return addDisposableListener(node, type, wrapHandler, useCapture);
 };
 
-export const addStandardDisposableGenericMouseDownListener = function addStandardDisposableListener(node: HTMLElement, handler: (event: any) => void, useCapture?: boolean): IDisposable {
-	const wrapHandler = _wrapAsStandardMouseEvent(getWindow(node), handler);
-
-	return addDisposableGenericMouseDownListener(node, wrapHandler, useCapture);
-};
-
-export const addStandardDisposableGenericMouseUpListener = function addStandardDisposableListener(node: HTMLElement, handler: (event: any) => void, useCapture?: boolean): IDisposable {
-	const wrapHandler = _wrapAsStandardMouseEvent(getWindow(node), handler);
-
-	return addDisposableGenericMouseUpListener(node, wrapHandler, useCapture);
-};
-export function addDisposableGenericMouseDownListener(node: EventTarget, handler: (event: any) => void, useCapture?: boolean): IDisposable {
-	return addDisposableListener(node, platform.isIOS && BrowserFeatures.pointerEvents ? EventType.POINTER_DOWN : EventType.MOUSE_DOWN, handler, useCapture);
-}
-
-export function addDisposableGenericMouseMoveListener(node: EventTarget, handler: (event: any) => void, useCapture?: boolean): IDisposable {
-	return addDisposableListener(node, platform.isIOS && BrowserFeatures.pointerEvents ? EventType.POINTER_MOVE : EventType.MOUSE_MOVE, handler, useCapture);
-}
-
-export function addDisposableGenericMouseUpListener(node: EventTarget, handler: (event: any) => void, useCapture?: boolean): IDisposable {
-	return addDisposableListener(node, platform.isIOS && BrowserFeatures.pointerEvents ? EventType.POINTER_UP : EventType.MOUSE_UP, handler, useCapture);
-}
-
 /**
  * Execute the callback the next time the browser is idle, returning an
  * {@link IDisposable} that will cancel the callback when disposed. This wraps
@@ -337,16 +260,6 @@ export function runWhenWindowIdle(targetWindow: Window | typeof globalThis, call
 }
 
 /**
- * An implementation of the "idle-until-urgent"-strategy as introduced
- * here: https://philipwalton.com/articles/idle-until-urgent/
- */
-export class WindowIdleValue<T> extends AbstractIdleValue<T> {
-	constructor(targetWindow: Window | typeof globalThis, executor: () => T) {
-		super(targetWindow, executor);
-	}
-}
-
-/**
  * Schedule a callback to be run at the next animation frame.
  * This allows multiple parties to register callbacks that should run at the next animation frame.
  * If currently in an animation frame, `runner` will be executed immediately.
@@ -360,20 +273,6 @@ export let runAtThisOrScheduleAtNextAnimationFrame: (targetWindow: Window, runne
  * @return token that can be used to cancel the scheduled runner.
  */
 export let scheduleAtNextAnimationFrame: (targetWindow: Window, runner: () => void, priority?: number) => IDisposable;
-
-export function disposableWindowInterval(targetWindow: Window, handler: () => void | boolean /* stop interval */ | Promise<unknown>, interval: number, iterations?: number): IDisposable {
-	let iteration = 0;
-	const timer = targetWindow.setInterval(() => {
-		iteration++;
-		if ((typeof iterations === 'number' && iteration >= iterations) || handler() === true) {
-			disposable.dispose();
-		}
-	}, interval);
-	const disposable = toDisposable(() => {
-		targetWindow.clearInterval(timer);
-	});
-	return disposable;
-}
 
 export class WindowIntervalTimer extends IntervalTimer {
 
@@ -514,111 +413,6 @@ class AnimationFrameQueueItem implements IDisposable {
 	};
 })();
 
-export function measure(targetWindow: Window, callback: () => void): IDisposable {
-	return scheduleAtNextAnimationFrame(targetWindow, callback, 10000 /* must be early */);
-}
-
-export function modify(targetWindow: Window, callback: () => void): IDisposable {
-	return scheduleAtNextAnimationFrame(targetWindow, callback, -10000 /* must be late */);
-}
-
-/**
- * A scheduler that coalesces multiple `schedule()` calls into a single callback
- * at the next animation frame. Similar to `RunOnceScheduler` but uses animation frames
- * instead of timeouts.
- */
-export class AnimationFrameScheduler implements IDisposable {
-
-	private readonly runner: () => void;
-	private readonly node: Node;
-	private readonly pendingRunner = new MutableDisposable<IDisposable>();
-
-	constructor(node: Node, runner: () => void) {
-		this.node = node;
-		this.runner = runner;
-	}
-
-	dispose(): void {
-		this.pendingRunner.dispose();
-	}
-
-	/**
-	 * Cancel the currently scheduled runner (if any).
-	 */
-	cancel(): void {
-		this.pendingRunner.clear();
-	}
-
-	/**
-	 * Schedule the runner to execute at the next animation frame.
-	 * If already scheduled, this is a no-op (the existing schedule is kept).
-	 * If currently in an animation frame, the runner will execute immediately.
-	 */
-	schedule(): void {
-		if (this.pendingRunner.value) {
-			return; // Already scheduled
-		}
-
-		this.pendingRunner.value = runAtThisOrScheduleAtNextAnimationFrame(getWindow(this.node), () => {
-			this.pendingRunner.clear();
-			this.runner();
-		});
-	}
-
-	/**
-	 * Returns true if a runner is scheduled.
-	 */
-	isScheduled(): boolean {
-		return this.pendingRunner.value !== undefined;
-	}
-}
-
-/**
- * Add a throttled listener. `handler` is fired at most every 8.33333ms or with the next animation frame (if browser supports it).
- */
-export interface IEventMerger<R, E> {
-	(lastEvent: R | null, currentEvent: E): R;
-}
-
-const MINIMUM_TIME_MS = 8;
-function DEFAULT_EVENT_MERGER<T>(_lastEvent: unknown, currentEvent: T) {
-	return currentEvent;
-}
-
-class TimeoutThrottledDomListener<R, E extends Event> extends Disposable {
-
-	constructor(node: Node, type: string, handler: (event: R) => void, eventMerger: IEventMerger<R, E> = DEFAULT_EVENT_MERGER as IEventMerger<R, E>, minimumTimeMs: number = MINIMUM_TIME_MS) {
-		super();
-
-		let lastEvent: R | null = null;
-		let lastHandlerTime = 0;
-		const timeout = this._register(new TimeoutTimer());
-
-		const invokeHandler = () => {
-			lastHandlerTime = (new Date()).getTime();
-			handler(<R>lastEvent);
-			lastEvent = null;
-		};
-
-		this._register(addDisposableListener(node, type, (e) => {
-
-			lastEvent = eventMerger(lastEvent, e);
-			const elapsedTime = (new Date()).getTime() - lastHandlerTime;
-
-			if (elapsedTime >= minimumTimeMs) {
-				timeout.cancel();
-				invokeHandler();
-			} else {
-				timeout.setIfNotSet(invokeHandler, minimumTimeMs - elapsedTime);
-			}
-		}));
-	}
-}
-
-export function addDisposableThrottledListener<R, E extends Event = Event>(node: any, type: string, handler: (event: R) => void, eventMerger?: IEventMerger<R, E>, minimumTimeMs?: number): IDisposable {
-	return new TimeoutThrottledDomListener<R, E>(node, type, handler, eventMerger, minimumTimeMs);
-}
-
 export function getComputedStyle(el: HTMLElement): CSSStyleDeclaration {
 	return getWindow(el).getComputedStyle(el, null);
 }
@@ -726,24 +520,10 @@ export interface IDimension {
 
 export class Dimension implements IDimension {
 
-	static readonly None = new Dimension(0, 0);
-
 	constructor(
 		readonly width: number,
 		readonly height: number,
 	) { }
-
-	with(width: number = this.width, height: number = this.height): Dimension {
-		if (width !== this.width || height !== this.height) {
-			return new Dimension(width, height);
-		} else {
-			return this;
-		}
-	}
-
-	static is(obj: unknown): obj is IDimension {
-		return typeof obj === 'object' && typeof (<IDimension>obj).height === 'number' && typeof (<IDimension>obj).width === 'number';
-	}
 
 	static lift(obj: IDimension): Dimension {
 		if (obj instanceof Dimension) {
@@ -751,16 +531,6 @@ export class Dimension implements IDimension {
 		} else {
 			return new Dimension(obj.width, obj.height);
 		}
-	}
-
-	static equals(a: Dimension | undefined, b: Dimension | undefined): boolean {
-		if (a === b) {
-			return true;
-		}
-		if (!a || !b) {
-			return false;
-		}
-		return a.width === b.width && a.height === b.height;
 	}
 }
 
@@ -810,36 +580,6 @@ export interface IDomNodePagePosition {
 	height: number;
 }
 
-export function size(element: HTMLElement, width: number | null, height: number | null): void {
-	if (typeof width === 'number') {
-		element.style.width = `${width}px`;
-	}
-
-	if (typeof height === 'number') {
-		element.style.height = `${height}px`;
-	}
-}
-
-export function position(element: HTMLElement, top: number, right?: number, bottom?: number, left?: number, position: string = 'absolute'): void {
-	if (typeof top === 'number') {
-		element.style.top = `${top}px`;
-	}
-
-	if (typeof right === 'number') {
-		element.style.right = `${right}px`;
-	}
-
-	if (typeof bottom === 'number') {
-		element.style.bottom = `${bottom}px`;
-	}
-
-	if (typeof left === 'number') {
-		element.style.left = `${left}px`;
-	}
-
-	element.style.position = position;
-}
-
 /**
  * Returns the position of a dom node relative to the entire page.
  */
@@ -887,11 +627,6 @@ export function getContentWidth(element: HTMLElement): number {
 	return element.offsetWidth - border - padding;
 }
 
-export function getTotalScrollWidth(element: HTMLElement): number {
-	const margin = SizeUtils.getMarginLeft(element) + SizeUtils.getMarginRight(element);
-	return element.scrollWidth + margin;
-}
-
 // Adapted from WinJS
 // Gets the height of the content of the specified element. The content height does not include borders or padding.
 export function getContentHeight(element: HTMLElement): number {
@@ -907,110 +642,16 @@ export function getTotalHeight(element: HTMLElement): number {
 	return element.offsetHeight + margin;
 }
 
-// Gets the left coordinate of the specified element relative to the specified parent.
-function getRelativeLeft(element: HTMLElement, parent: HTMLElement): number {
-	if (element === null) {
-		return 0;
-	}
-
-	const elementPosition = getTopLeftOffset(element);
-	const parentPosition = getTopLeftOffset(parent);
-	return elementPosition.left - parentPosition.left;
-}
-
-export function getLargestChildWidth(parent: HTMLElement, children: HTMLElement[]): number {
-	const childWidths = children.map((child) => {
-		return Math.max(getTotalScrollWidth(child), getTotalWidth(child)) + getRelativeLeft(child, parent) || 0;
-	});
-	const maxWidth = Math.max(...childWidths);
-	return maxWidth;
-}
-
 // ----------------------------------------------------------------------------------------
 
 export function isAncestor(testChild: Node | null, testAncestor: Node | null): boolean {
 	return Boolean(testAncestor?.contains(testChild));
 }
 
-const parentFlowToDataKey = 'parentFlowToElementId';
-
-/**
- * Set an explicit parent to use for nodes that are not part of the
- * regular dom structure.
- */
-export function setParentFlowTo(fromChildElement: HTMLElement, toParentElement: Element): void {
-	fromChildElement.dataset[parentFlowToDataKey] = toParentElement.id;
-}
-
-function getParentFlowToElement(node: HTMLElement): HTMLElement | null {
-	const flowToParentId = node.dataset[parentFlowToDataKey];
-	if (typeof flowToParentId === 'string') {
-		// eslint-disable-next-line no-restricted-syntax
-		return node.ownerDocument.getElementById(flowToParentId);
-	}
-	return null;
-}
-
-/**
- * Check if `testAncestor` is an ancestor of `testChild`, observing the explicit
- * parents set by `setParentFlowTo`.
- */
-export function isAncestorUsingFlowTo(testChild: Node, testAncestor: Node): boolean {
-	let node: Node | null = testChild;
-	while (node) {
-		if (node === testAncestor) {
-			return true;
-		}
-
-		if (isHTMLElement(node)) {
-			const flowToParentElement = getParentFlowToElement(node);
-			if (flowToParentElement) {
-				node = flowToParentElement;
-				continue;
-			}
-		}
-		node = node.parentNode;
-	}
-
-	return false;
-}
-
-export function findParentWithClass(node: HTMLElement, clazz: string | readonly string[], stopAtClazzOrNode?: string | HTMLElement): HTMLElement | null {
-	while (node && node.nodeType === node.ELEMENT_NODE) {
-		if (typeof clazz === 'string' ? node.classList.contains(clazz) : clazz.every(candidate => node.classList.contains(candidate))) {
-			return node;
-		}
-
-		if (stopAtClazzOrNode) {
-			if (typeof stopAtClazzOrNode === 'string') {
-				if (node.classList.contains(stopAtClazzOrNode)) {
-					return null;
-				}
-			} else {
-				if (node === stopAtClazzOrNode) {
-					return null;
-				}
-			}
-		}
-
-		node = <HTMLElement>node.parentNode;
-	}
-
-	return null;
-}
-
-export function hasParentWithClass(node: HTMLElement, clazz: string | readonly string[], stopAtClazzOrNode?: string | HTMLElement): boolean {
-	return !!findParentWithClass(node, clazz, stopAtClazzOrNode);
-}
-
 export function isShadowRoot(node: Node): node is ShadowRoot {
 	return (
 		node && !!(<ShadowRoot>node).host && !!(<ShadowRoot>node).mode
 	);
-}
-
-export function isInShadowDOM(domNode: Node): boolean {
-	return !!getShadowRoot(domNode);
 }
 
 export function getShadowRoot(domNode: Node): ShadowRoot | null {
@@ -1046,22 +687,6 @@ export function getActiveElement(): Element | null {
  */
 export function isActiveElement(element: Element): boolean {
 	return getActiveElement() === element;
-}
-
-/**
- * Returns true if the focused window active element is contained in
- * `ancestor`. Falls back to the main window if no window has focus.
- */
-export function isAncestorOfActiveElement(ancestor: Element): boolean {
-	return isAncestor(getActiveElement(), ancestor);
-}
-
-/**
- * Returns whether the element is in the active `document`. The active
- * document has focus or will be the main windows document.
- */
-export function isActiveDocument(element: Element): boolean {
-	return element.ownerDocument === getActiveDocument();
 }
 
 /**
@@ -1152,53 +777,9 @@ export const sharedMutationObserver = new class {
 	}
 };
 
-export function createMetaElement(container: HTMLElement = mainWindow.document.head): HTMLMetaElement {
-	return createHeadElement('meta', container);
-}
-
-export function createLinkElement(container: HTMLElement = mainWindow.document.head): HTMLLinkElement {
-	return createHeadElement('link', container);
-}
-
-function createHeadElement<K extends keyof HTMLElementTagNameMap>(tagName: K, container: HTMLElement = mainWindow.document.head): HTMLElementTagNameMap[K] {
-	const element = document.createElement(tagName);
-	container.appendChild(element);
-	return element;
-}
-
 export function isHTMLElement(e: unknown): e is HTMLElement {
 	// eslint-disable-next-line no-restricted-syntax
 	return e instanceof HTMLElement || e instanceof getWindow(e as Node).HTMLElement;
-}
-
-export function isHTMLAnchorElement(e: unknown): e is HTMLAnchorElement {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof HTMLAnchorElement || e instanceof getWindow(e as Node).HTMLAnchorElement;
-}
-
-export function isHTMLSpanElement(e: unknown): e is HTMLSpanElement {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof HTMLSpanElement || e instanceof getWindow(e as Node).HTMLSpanElement;
-}
-
-export function isHTMLTextAreaElement(e: unknown): e is HTMLTextAreaElement {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof HTMLTextAreaElement || e instanceof getWindow(e as Node).HTMLTextAreaElement;
-}
-
-export function isHTMLInputElement(e: unknown): e is HTMLInputElement {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof HTMLInputElement || e instanceof getWindow(e as Node).HTMLInputElement;
-}
-
-export function isHTMLButtonElement(e: unknown): e is HTMLButtonElement {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof HTMLButtonElement || e instanceof getWindow(e as Node).HTMLButtonElement;
-}
-
-export function isHTMLDivElement(e: unknown): e is HTMLDivElement {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof HTMLDivElement || e instanceof getWindow(e as Node).HTMLDivElement;
 }
 
 export function isSVGElement(e: unknown): e is SVGElement {
@@ -1209,21 +790,6 @@ export function isSVGElement(e: unknown): e is SVGElement {
 export function isMouseEvent(e: unknown): e is MouseEvent {
 	// eslint-disable-next-line no-restricted-syntax
 	return e instanceof MouseEvent || e instanceof getWindow(e as UIEvent).MouseEvent;
-}
-
-export function isKeyboardEvent(e: unknown): e is KeyboardEvent {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof KeyboardEvent || e instanceof getWindow(e as UIEvent).KeyboardEvent;
-}
-
-export function isPointerEvent(e: unknown): e is PointerEvent {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof PointerEvent || e instanceof getWindow(e as UIEvent).PointerEvent;
-}
-
-export function isDragEvent(e: unknown): e is DragEvent {
-	// eslint-disable-next-line no-restricted-syntax
-	return e instanceof DragEvent || e instanceof getWindow(e as UIEvent).DragEvent;
 }
 
 export const EventType = {
@@ -1242,61 +808,31 @@ export const EventType = {
 	POINTER_UP: 'pointerup',
 	POINTER_DOWN: 'pointerdown',
 	POINTER_MOVE: 'pointermove',
-	POINTER_LEAVE: 'pointerleave',
 	CONTEXT_MENU: 'contextmenu',
-	WHEEL: 'wheel',
 	// Keyboard
 	KEY_DOWN: 'keydown',
-	KEY_PRESS: 'keypress',
 	KEY_UP: 'keyup',
-	// HTML Document
-	LOAD: 'load',
 	BEFORE_UNLOAD: 'beforeunload',
-	UNLOAD: 'unload',
-	PAGE_SHOW: 'pageshow',
-	PAGE_HIDE: 'pagehide',
 	PASTE: 'paste',
-	ABORT: 'abort',
-	ERROR: 'error',
 	RESIZE: 'resize',
 	SCROLL: 'scroll',
-	FULLSCREEN_CHANGE: 'fullscreenchange',
-	WK_FULLSCREEN_CHANGE: 'webkitfullscreenchange',
-	// Form
-	SELECT: 'select',
 	CHANGE: 'change',
-	SUBMIT: 'submit',
-	RESET: 'reset',
 	FOCUS: 'focus',
 	FOCUS_IN: 'focusin',
 	FOCUS_OUT: 'focusout',
 	BLUR: 'blur',
 	INPUT: 'input',
-	// Local Storage
-	STORAGE: 'storage',
 	// Drag
 	DRAG_START: 'dragstart',
-	DRAG: 'drag',
-	DRAG_ENTER: 'dragenter',
 	DRAG_LEAVE: 'dragleave',
 	DRAG_OVER: 'dragover',
 	DROP: 'drop',
-	DRAG_END: 'dragend',
-	// Animation
-	ANIMATION_START: browser.isWebKit ? 'webkitAnimationStart' : 'animationstart',
-	ANIMATION_END: browser.isWebKit ? 'webkitAnimationEnd' : 'animationend',
-	ANIMATION_ITERATION: browser.isWebKit ? 'webkitAnimationIteration' : 'animationiteration'
+	DRAG_END: 'dragend'
 } as const;
 
 export interface EventLike {
 	preventDefault(): void;
 	stopPropagation(): void;
-}
-
-export function isEventLike(obj: unknown): obj is EventLike {
-	const candidate = obj as EventLike | undefined;
-
-	return !!(candidate && typeof candidate.preventDefault === 'function' && typeof candidate.stopPropagation === 'function');
 }
 
 export const EventHelper = {
@@ -1312,25 +848,6 @@ export const EventHelper = {
 export interface IFocusTracker extends Disposable {
 	readonly onDidFocus: event.Event<void>;
 	readonly onDidBlur: event.Event<void>;
-	refreshState(): void;
-}
-
-export function saveParentsScrollTop(node: Element): number[] {
-	const r: number[] = [];
-	for (let i = 0; node && node.nodeType === node.ELEMENT_NODE; i++) {
-		r[i] = node.scrollTop;
-		node = <Element>node.parentNode;
-	}
-	return r;
-}
-
-export function restoreParentsScrollTop(node: Element, state: number[]): void {
-	for (let i = 0; node && node.nodeType === node.ELEMENT_NODE; i++) {
-		if (node.scrollTop !== state[i]) {
-			node.scrollTop = state[i];
-		}
-		node = <Element>node.parentNode;
-	}
 }
 
 class FocusTracker extends Disposable implements IFocusTracker {
@@ -1399,10 +916,6 @@ class FocusTracker extends Disposable implements IFocusTracker {
 		}
 
 	}
-
-	refreshState() {
-		this._refreshStateHandler();
-	}
 }
 
 /**
@@ -1415,11 +928,6 @@ export function trackFocus(element: HTMLElement | Window): IFocusTracker {
 	return new FocusTracker(element);
 }
 
-export function after<T extends Node>(sibling: HTMLElement, child: T): T {
-	sibling.after(child);
-	return child;
-}
-
 export function append<T extends Node>(parent: HTMLElement, child: T): T;
 export function append<T extends Node>(parent: HTMLElement, ...children: (T | string)[]): void;
 export function append<T extends Node>(parent: HTMLElement, ...children: (T | string)[]): T | void {
@@ -1427,11 +935,6 @@ export function append<T extends Node>(parent: HTMLElement, ...children: (T | st
 	if (children.length === 1 && typeof children[0] !== 'string') {
 		return children[0];
 	}
-}
-
-export function prepend<T extends Node>(parent: HTMLElement, child: T): T {
-	parent.insertBefore(child, parent.firstChild);
-	return child;
 }
 
 /**
@@ -1505,32 +1008,6 @@ $.SVG = function <T extends SVGElement>(description: string, attrs?: { [key: str
 	return _$(Namespace.SVG, description, attrs, ...children);
 };
 
-export function join(nodes: Node[], separator: Node | string): Node[] {
-	const result: Node[] = [];
-
-	nodes.forEach((node, index) => {
-		if (index > 0) {
-			if (separator instanceof Node) {
-				result.push(separator.cloneNode());
-			} else {
-				result.push(document.createTextNode(separator));
-			}
-		}
-
-		result.push(node);
-	});
-
-	return result;
-}
-
-export function setVisibility(visible: boolean, ...elements: HTMLElement[]): void {
-	if (visible) {
-		show(...elements);
-	} else {
-		hide(...elements);
-	}
-}
-
 export function show(...elements: HTMLElement[]): void {
 	for (const element of elements) {
 		element.style.display = '';
@@ -1543,224 +1020,6 @@ export function hide(...elements: HTMLElement[]): void {
 		element.style.display = 'none';
 		element.setAttribute('aria-hidden', 'true');
 	}
-}
-
-function findParentWithAttribute(node: Node | null, attribute: string): HTMLElement | null {
-	while (node && node.nodeType === node.ELEMENT_NODE) {
-		if (isHTMLElement(node) && node.hasAttribute(attribute)) {
-			return node;
-		}
-
-		node = node.parentNode;
-	}
-
-	return null;
-}
-
-export function removeTabIndexAndUpdateFocus(node: HTMLElement): void {
-	if (!node || !node.hasAttribute('tabIndex')) {
-		return;
-	}
-
-	// If we are the currently focused element and tabIndex is removed,
-	// standard DOM behavior is to move focus to the <body> element. We
-	// typically never want that, rather put focus to the closest element
-	// in the hierarchy of the parent DOM nodes.
-	if (node.ownerDocument.activeElement === node) {
-		const parentFocusable = findParentWithAttribute(node.parentElement, 'tabIndex');
-		parentFocusable?.focus();
-	}
-
-	node.removeAttribute('tabindex');
-}
-
-export function finalHandler<T extends Event>(fn: (event: T) => unknown): (event: T) => unknown {
-	return e => {
-		e.preventDefault();
-		e.stopPropagation();
-		fn(e);
-	};
-}
-
-export function domContentLoaded(targetWindow: Window): Promise<void> {
-	return new Promise<void>(resolve => {
-		const readyState = targetWindow.document.readyState;
-		if (readyState === 'complete' || (targetWindow.document && targetWindow.document.body !== null)) {
-			resolve(undefined);
-		} else {
-			const listener = () => {
-				targetWindow.window.removeEventListener('DOMContentLoaded', listener, false);
-				resolve();
-			};
-
-			targetWindow.window.addEventListener('DOMContentLoaded', listener, false);
-		}
-	});
-}
-
-/**
- * Find a value usable for a dom node size such that the likelihood that it would be
- * displayed with constant screen pixels size is as high as possible.
- *
- * e.g. We would desire for the cursors to be 2px (CSS px) wide. Under a devicePixelRatio
- * of 1.25, the cursor will be 2.5 screen pixels wide. Depending on how the dom node aligns/"snaps"
- * with the screen pixels, it will sometimes be rendered with 2 screen pixels, and sometimes with 3 screen pixels.
- */
-export function computeScreenAwareSize(window: Window, cssPx: number): number {
-	const screenPx = window.devicePixelRatio * cssPx;
-	return Math.max(1, Math.floor(screenPx)) / window.devicePixelRatio;
-}
-
-/**
- * Open safely a new window. This is the best way to do so, but you cannot tell
- * if the window was opened or if it was blocked by the browser's popup blocker.
- * If you want to tell if the browser blocked the new window, use {@link windowOpenWithSuccess}.
- *
- * See https://github.com/microsoft/monaco-editor/issues/601
- * To protect against malicious code in the linked site, particularly phishing attempts,
- * the window.opener should be set to null to prevent the linked site from having access
- * to change the location of the current page.
- * See https://mathiasbynens.github.io/rel-noopener/
- */
-export function windowOpenNoOpener(url: string): void {
-	// By using 'noopener' in the `windowFeatures` argument, the newly created window will
-	// not be able to use `window.opener` to reach back to the current page.
-	// See https://stackoverflow.com/a/46958731
-	// See https://developer.mozilla.org/en-US/docs/Web/API/Window/open#noopener
-	// However, this also doesn't allow us to realize if the browser blocked
-	// the creation of the window.
-	mainWindow.open(url, '_blank', 'noopener');
-}
-
-/**
- * Open a new window in a popup. This is the best way to do so, but you cannot tell
- * if the window was opened or if it was blocked by the browser's popup blocker.
- * If you want to tell if the browser blocked the new window, use {@link windowOpenWithSuccess}.
- *
- * Note: this does not set {@link window.opener} to null. This is to allow the opened popup to
- * be able to use {@link window.close} to close itself. Because of this, you should only use
- * this function on urls that you trust.
- *
- * In otherwords, you should almost always use {@link windowOpenNoOpener} instead of this function.
- */
-const popupWidth = 780, popupHeight = 640;
-export function windowOpenPopup(url: string): void {
-	const left = Math.floor(mainWindow.screenLeft + mainWindow.innerWidth / 2 - popupWidth / 2);
-	const top = Math.floor(mainWindow.screenTop + mainWindow.innerHeight / 2 - popupHeight / 2);
-	mainWindow.open(
-		url,
-		'_blank',
-		`width=${popupWidth},height=${popupHeight},top=${top},left=${left}`
-	);
-}
-
-let reservedExternalWindow: Window | undefined;
-
-function isUsable(candidate: Window | undefined): candidate is Window {
-	return !!candidate && !candidate.closed;
-}
-
-/**
- * Opens a blank window now, for a later {@link windowOpenWithSuccess} to navigate.
- *
- * Browsers only allow `window.open` while a click's user activation is still live.
- * Sign-in shows a dialog, activates an extension and fetches an authorization URL
- * first, so by then the gesture has expired and the window is refused — fatal in an
- * installed web app (PWA), where there is no tab to fall back to.
- *
- * Callers must consume or {@link releaseReservedWindowForExternalOpen} the
- * reservation, or a blank window is left covering the app.
- *
- * @param targetWindow the window that was clicked; activation belongs to it.
- * @param placeholder already-translated text, since `vs/base` cannot localize.
- */
-export function reserveWindowForExternalOpen(targetWindow: Window = mainWindow, placeholder?: string): void {
-	if (isUsable(reservedExternalWindow)) {
-		return;
-	}
-
-	reservedExternalWindow = targetWindow.open() ?? undefined;
-	if (!isUsable(reservedExternalWindow)) {
-		reservedExternalWindow = undefined;
-		return;
-	}
-
-	if (placeholder) {
-		showMessageInWindow(reservedExternalWindow, placeholder);
-	}
-}
-
-/** Uses `textContent` so the message cannot inject markup. */
-function showMessageInWindow(target: Window, message: string): void {
-	try {
-		const doc = target.document;
-		doc.title = message; // otherwise announced as `about:blank`
-		doc.documentElement.style.cssText = 'color-scheme:light dark';
-		doc.body.style.cssText = 'margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:Canvas;color:CanvasText;font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif';
-		doc.body.textContent = message;
-	} catch {
-		// the window may already have navigated
-	}
-}
-
-function takeReservedWindowForExternalOpen(): Window | undefined {
-	const reserved = reservedExternalWindow;
-	reservedExternalWindow = undefined;
-	return isUsable(reserved) ? reserved : undefined;
-}
-
-/**
- * Closes an unused reservation.
- *
- * @param fallbackMessage shown if the window refuses to close — an in-app browser
- * view on iOS may ignore `close()`, and a blank window covering the app is worse
- * than the problem this solves.
- */
-export function releaseReservedWindowForExternalOpen(fallbackMessage?: string): void {
-	const reserved = takeReservedWindowForExternalOpen();
-	if (!reserved) {
-		return;
-	}
-
-	try {
-		reserved.close();
-	} catch {
-		// the window may already have navigated
-	}
-
-	if (!reserved.closed && fallbackMessage) {
-		showMessageInWindow(reserved, fallbackMessage);
-	}
-}
-
-/**
- * Attempts to open a window and returns whether it succeeded. This technique is
- * not appropriate in certain contexts, like for example when the JS context is
- * executing inside a sandboxed iframe. If it is not necessary to know if the
- * browser blocked the new window, use {@link windowOpenNoOpener}.
- *
- * See https://github.com/microsoft/monaco-editor/issues/601
- * See https://github.com/microsoft/monaco-editor/issues/2474
- * See https://mathiasbynens.github.io/rel-noopener/
- *
- * @param url the url to open
- * @param noOpener whether or not to set the {@link window.opener} to null. You should leave the default
- * (true) unless you trust the url that is being opened.
- * @param targetWindow the window to open from when no window was reserved.
- * @returns boolean indicating if the {@link window.open} call succeeded
- */
-export function windowOpenWithSuccess(url: string, noOpener = true, targetWindow: Window = mainWindow): boolean {
-	const newTab = takeReservedWindowForExternalOpen() ?? targetWindow.open();
-	if (newTab) {
-		if (noOpener) {
-			// see `windowOpenNoOpener` for details on why this is important
-			// eslint-disable-next-line local/code-no-any-casts
-			(newTab as any).opener = null;
-		}
-		newTab.location.href = url;
-		return true;
-	}
-	return false;
 }
 
 export function animate(targetWindow: Window, fn: () => void): IDisposable {
@@ -1827,70 +1086,6 @@ export function triggerUpload(): Promise<FileList | undefined> {
 		// Ensure to remove the element from DOM eventually
 		setTimeout(() => input.remove());
 	});
-}
-
-export enum DetectedFullscreenMode {
-
-	/**
-	 * The document is fullscreen, e.g. because an element
-	 * in the document requested to be fullscreen.
-	 */
-	DOCUMENT = 1,
-
-	/**
-	 * The browser is fullscreen, e.g. because the user enabled
-	 * native window fullscreen for it.
-	 */
-	BROWSER
-}
-
-export interface IDetectedFullscreen {
-
-	/**
-	 * Figure out if the document is fullscreen or the browser.
-	 */
-	mode: DetectedFullscreenMode;
-
-	/**
-	 * Whether we know for sure that we are in fullscreen mode or
-	 * it is a guess.
-	 */
-	guess: boolean;
-}
-
-export function detectFullscreen(targetWindow: Window): IDetectedFullscreen | null {
-
-	// Browser fullscreen: use DOM APIs to detect
-	// eslint-disable-next-line local/code-no-any-casts
-	if (targetWindow.document.fullscreenElement || (<any>targetWindow.document).webkitFullscreenElement || (<any>targetWindow.document).webkitIsFullScreen) {
-		return { mode: DetectedFullscreenMode.DOCUMENT, guess: false };
-	}
-
-	// There is no standard way to figure out if the browser
-	// is using native fullscreen. Via checking on screen
-	// height and comparing that to window height, we can guess
-	// it though.
-
-	if (targetWindow.innerHeight === targetWindow.screen.height) {
-		// if the height of the window matches the screen height, we can
-		// safely assume that the browser is fullscreen because no browser
-		// chrome is taking height away (e.g. like toolbars).
-		return { mode: DetectedFullscreenMode.BROWSER, guess: false };
-	}
-
-	if (platform.isMacintosh || platform.isLinux) {
-		// macOS and Linux do not properly report `innerHeight`, only Windows does
-		if (targetWindow.outerHeight === targetWindow.screen.height && targetWindow.outerWidth === targetWindow.screen.width) {
-			// if the height of the browser matches the screen height, we can
-			// only guess that we are in fullscreen. It is also possible that
-			// the user has turned off taskbars in the OS and the browser is
-			// simply able to span the entire size of the screen.
-			return { mode: DetectedFullscreenMode.BROWSER, guess: true };
-		}
-	}
-
-	// Not in fullscreen
-	return null;
 }
 
 type ModifierKey = 'alt' | 'ctrl' | 'shift' | 'meta';
@@ -2037,10 +1232,6 @@ export class ModifierKeyEmitter extends event.Emitter<IModifierKeyStatus> {
 		}
 	}
 
-	get isModifierPressed(): boolean {
-		return hasModifierKeys(this._keyStatus);
-	}
-
 	/**
 	 * Allows to explicitly reset the key status based on more knowledge (#109062)
 	 */
@@ -2066,101 +1257,9 @@ export class ModifierKeyEmitter extends event.Emitter<IModifierKeyStatus> {
 		return ModifierKeyEmitter.instance;
 	}
 
-	static disposeInstance() {
-		if (ModifierKeyEmitter.instance) {
-			ModifierKeyEmitter.instance.dispose();
-			ModifierKeyEmitter.instance = undefined;
-		}
-	}
-
 	override dispose() {
 		super.dispose();
 		this._subscriptions.dispose();
-	}
-}
-
-export function getCookieValue(name: string): string | undefined {
-	const match = document.cookie.match('(^|[^;]+)\\s*' + name + '\\s*=\\s*([^;]+)'); // See https://stackoverflow.com/a/25490531
-
-	return match ? match.pop() : undefined;
-}
-
-export interface IDragAndDropObserverCallbacks {
-	readonly onDragEnter?: (e: DragEvent) => void;
-	readonly onDragLeave?: (e: DragEvent) => void;
-	readonly onDrop?: (e: DragEvent) => void;
-	readonly onDragEnd?: (e: DragEvent) => void;
-	readonly onDragStart?: (e: DragEvent) => void;
-	readonly onDrag?: (e: DragEvent) => void;
-	readonly onDragOver?: (e: DragEvent, dragDuration: number) => void;
-}
-
-export class DragAndDropObserver extends Disposable {
-
-	// A helper to fix issues with repeated DRAG_ENTER / DRAG_LEAVE
-	// calls see https://github.com/microsoft/vscode/issues/14470
-	// when the element has child elements where the events are fired
-	// repeadedly.
-	private counter: number = 0;
-
-	// Allows to measure the duration of the drag operation.
-	private dragStartTime = 0;
-
-	constructor(private readonly element: HTMLElement, private readonly callbacks: IDragAndDropObserverCallbacks) {
-		super();
-
-		this.registerListeners();
-	}
-
-	private registerListeners(): void {
-		if (this.callbacks.onDragStart) {
-			this._register(addDisposableListener(this.element, EventType.DRAG_START, (e: DragEvent) => {
-				this.callbacks.onDragStart?.(e);
-			}));
-		}
-
-		if (this.callbacks.onDrag) {
-			this._register(addDisposableListener(this.element, EventType.DRAG, (e: DragEvent) => {
-				this.callbacks.onDrag?.(e);
-			}));
-		}
-
-		this._register(addDisposableListener(this.element, EventType.DRAG_ENTER, (e: DragEvent) => {
-			this.counter++;
-			this.dragStartTime = e.timeStamp;
-
-			this.callbacks.onDragEnter?.(e);
-		}));
-
-		this._register(addDisposableListener(this.element, EventType.DRAG_OVER, (e: DragEvent) => {
-			e.preventDefault(); // needed so that the drop event fires (https://stackoverflow.com/questions/21339924/drop-event-not-firing-in-chrome)
-
-			this.callbacks.onDragOver?.(e, e.timeStamp - this.dragStartTime);
-		}));
-
-		this._register(addDisposableListener(this.element, EventType.DRAG_LEAVE, (e: DragEvent) => {
-			this.counter--;
-
-			if (this.counter === 0) {
-				this.dragStartTime = 0;
-
-				this.callbacks.onDragLeave?.(e);
-			}
-		}));
-
-		this._register(addDisposableListener(this.element, EventType.DRAG_END, (e: DragEvent) => {
-			this.counter = 0;
-			this.dragStartTime = 0;
-
-			this.callbacks.onDragEnd?.(e);
-		}));
-
-		this._register(addDisposableListener(this.element, EventType.DROP, (e: DragEvent) => {
-			this.counter = 0;
-			this.dragStartTime = 0;
-
-			this.callbacks.onDrop?.(e);
-		}));
 	}
 }
 
@@ -2274,31 +1373,6 @@ function recordDisposableResizeObserverInvocation(targetWindow: CodeWindow, name
 			context.names.add(name);
 		}
 	}
-}
-
-/**
- * If `message` looks like the ResizeObserver loop warning, return a stable
- * context string containing the wrapped observers that ran recently in
- * `targetWindow`. The names are delivery context only; the browser does not
- * expose the observer or skipped target that caused the warning. Returns
- * `undefined` for unrelated messages or when no wrapped observer has fired.
- */
-export function getRecentDisposableResizeObserverContextForLoopError(
-	message: string | undefined | null,
-	targetWindow: CodeWindow = mainWindow,
-): string | undefined {
-	if (typeof message !== 'string' || !message.includes('ResizeObserver loop')) {
-		return undefined;
-	}
-	const context = recentDisposableResizeObserverContexts.get(targetWindow);
-	if (!context) {
-		return undefined;
-	}
-	const names = Array.from(context.names).sort();
-	if (context.overflow) {
-		names.push('<overflow>');
-	}
-	return `[ResizeObserverLoopContext(${names.join(',')})] ${message}`;
 }
 
 type HTMLElementAttributeKeys<T> = Partial<{ [K in keyof T]: T[K] extends Function ? never : T[K] extends object ? HTMLElementAttributeKeys<T[K]> : T[K] }>;
@@ -2449,110 +1523,6 @@ export function h(tag: string, ...args: [] | [attributes: { $: string } & Partia
 	return result;
 }
 
-/** @deprecated This is a duplication of the h function. Needs cleanup. */
-export function svgElem<TTag extends string>
-	(tag: TTag):
-	TagToRecord<TTag> extends infer Y ? { [TKey in keyof Y]: Y[TKey] } : never;
-/** @deprecated This is a duplication of the h function. Needs cleanup. */
-export function svgElem<TTag extends string, T extends Child[]>
-	(tag: TTag, children: [...T]):
-	(ArrayToObj<T> & TagToRecord<TTag>) extends infer Y ? { [TKey in keyof Y]: Y[TKey] } : never;
-/** @deprecated This is a duplication of the h function. Needs cleanup. */
-export function svgElem<TTag extends string>
-	(tag: TTag, attributes: Partial<ElementAttributes<TagToElement<TTag>>>):
-	TagToRecord<TTag> extends infer Y ? { [TKey in keyof Y]: Y[TKey] } : never;
-/** @deprecated This is a duplication of the h function. Needs cleanup. */
-export function svgElem<TTag extends string, T extends Child[]>
-	(tag: TTag, attributes: Partial<ElementAttributes<TagToElement<TTag>>>, children: [...T]):
-	(ArrayToObj<T> & TagToRecord<TTag>) extends infer Y ? { [TKey in keyof Y]: Y[TKey] } : never;
-/** @deprecated This is a duplication of the h function. Needs cleanup. */
-export function svgElem(tag: string, ...args: [] | [attributes: { $: string } & Partial<ElementAttributes<HTMLElement>> | Record<string, any>, children?: any[]] | [children: any[]]): Record<string, HTMLElement> {
-	let attributes: { $?: string } & Partial<ElementAttributes<HTMLElement>>;
-	let children: (Record<string, HTMLElement> | HTMLElement)[] | undefined;
-
-	if (Array.isArray(args[0])) {
-		attributes = {};
-		children = args[0];
-	} else {
-		// eslint-disable-next-line local/code-no-any-casts
-		attributes = args[0] as any || {};
-		children = args[1];
-	}
-
-	const match = H_REGEX.exec(tag);
-
-	if (!match || !match.groups) {
-		throw new Error('Bad use of h');
-	}
-
-	const tagName = match.groups['tag'] || 'div';
-	// eslint-disable-next-line local/code-no-any-casts
-	const el = document.createElementNS('http://www.w3.org/2000/svg', tagName) as any as HTMLElement;
-
-	if (match.groups['id']) {
-		el.id = match.groups['id'];
-	}
-
-	const classNames = [];
-	if (match.groups['class']) {
-		for (const className of match.groups['class'].split('.')) {
-			if (className !== '') {
-				classNames.push(className);
-			}
-		}
-	}
-	if (attributes.className !== undefined) {
-		for (const className of attributes.className.split('.')) {
-			if (className !== '') {
-				classNames.push(className);
-			}
-		}
-	}
-	if (classNames.length > 0) {
-		el.className = classNames.join(' ');
-	}
-
-	const result: Record<string, HTMLElement> = {};
-
-	if (match.groups['name']) {
-		result[match.groups['name']] = el;
-	}
-
-	if (children) {
-		for (const c of children) {
-			if (isHTMLElement(c)) {
-				el.appendChild(c);
-			} else if (typeof c === 'string') {
-				el.append(c);
-			} else if ('root' in c) {
-				Object.assign(result, c);
-				el.appendChild(c.root);
-			}
-		}
-	}
-
-	for (const [key, value] of Object.entries(attributes)) {
-		if (key === 'className') {
-			continue;
-		} else if (key === 'style') {
-			for (const [cssKey, cssValue] of Object.entries(value)) {
-				el.style.setProperty(
-					camelCaseToHyphenCase(cssKey),
-					typeof cssValue === 'number' ? cssValue + 'px' : '' + cssValue
-				);
-			}
-		} else if (key === 'tabIndex') {
-			el.tabIndex = value;
-		} else {
-			el.setAttribute(camelCaseToHyphenCase(key), value.toString());
-		}
-	}
-
-	result['root'] = el;
-
-	return result;
-}
-
 function camelCaseToHyphenCase(str: string) {
 	return str.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
 }
@@ -2565,433 +1535,9 @@ export function copyAttributes(from: Element, to: Element, filter?: string[]): v
 	}
 }
 
-function copyAttribute(from: Element, to: Element, name: string): void {
-	const value = from.getAttribute(name);
-	if (value) {
-		to.setAttribute(name, value);
-	} else {
-		to.removeAttribute(name);
-	}
-}
-
-export function trackAttributes(from: Element, to: Element, filter?: string[]): IDisposable {
-	copyAttributes(from, to, filter);
-
-	const disposables = new DisposableStore();
-
-	disposables.add(sharedMutationObserver.observe(from, disposables, { attributes: true, attributeFilter: filter })(mutations => {
-		for (const mutation of mutations) {
-			if (mutation.type === 'attributes' && mutation.attributeName) {
-				copyAttribute(from, to, mutation.attributeName);
-			}
-		}
-	}));
-
-	return disposables;
-}
-
 export function isEditableElement(element: Element): boolean {
 	return element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea' || isHTMLElement(element) && !!element.editContext;
 }
-
-/**
- * Helper for calculating the "safe triangle" occluded by hovers to avoid early dismissal.
- * @see https://www.smashingmagazine.com/2023/08/better-context-menus-safe-triangles/ for example
- */
-export class SafeTriangle {
-	// 4 points (x, y), 8 length
-	private points = new Int16Array(8);
-
-	constructor(
-		private readonly originX: number,
-		private readonly originY: number,
-		target: HTMLElement
-	) {
-		const { top, left, right, bottom } = target.getBoundingClientRect();
-		const t = this.points;
-		let i = 0;
-
-		t[i++] = left;
-		t[i++] = top;
-
-		t[i++] = right;
-		t[i++] = top;
-
-		t[i++] = left;
-		t[i++] = bottom;
-
-		t[i++] = right;
-		t[i++] = bottom;
-	}
-
-	public contains(x: number, y: number) {
-		const { points, originX, originY } = this;
-		for (let i = 0; i < 4; i++) {
-			const p1 = 2 * i;
-			const p2 = 2 * ((i + 1) % 4);
-			if (isPointWithinTriangle(x, y, originX, originY, points[p1], points[p1 + 1], points[p2], points[p2 + 1])) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-}
-
-
-export namespace n {
-	function nodeNs<TMap extends Record<string, any>>(elementNs: string | undefined = undefined): DomTagCreateFn<TMap> {
-		return (tag, attributes, children) => {
-			const className = attributes.class;
-			delete attributes.class;
-			const ref = attributes.ref;
-			delete attributes.ref;
-			const obsRef = attributes.obsRef;
-			delete attributes.obsRef;
-
-			// eslint-disable-next-line local/code-no-any-casts
-			return new ObserverNodeWithElement(tag as any, ref, obsRef, elementNs, className, attributes, children);
-		};
-	}
-
-	function node<TMap extends Record<string, any>, TKey extends keyof TMap>(tag: TKey, elementNs: string | undefined = undefined): DomCreateFn<TMap[TKey], TMap[TKey]> {
-		// eslint-disable-next-line local/code-no-any-casts
-		const f = nodeNs(elementNs) as any;
-		return (attributes, children) => {
-			return f(tag, attributes, children);
-		};
-	}
-
-	export const div: DomCreateFn<HTMLDivElement, HTMLDivElement> = node<HTMLElementTagNameMap, 'div'>('div');
-
-	export const elem = nodeNs<HTMLElementTagNameMap>(undefined);
-
-	export const svg: DomCreateFn<SVGElementTagNameMap2['svg'], SVGElement> = node<SVGElementTagNameMap2, 'svg'>('svg', 'http://www.w3.org/2000/svg');
-
-	export const svgElem = nodeNs<SVGElementTagNameMap2>('http://www.w3.org/2000/svg');
-
-	export function ref<T = HTMLOrSVGElement>(): IRefWithVal<T> {
-		let value: T | undefined = undefined;
-		const result: IRef<T> = function (val: T) {
-			value = val;
-		};
-		Object.defineProperty(result, 'element', {
-			get() {
-				if (!value) {
-					throw new BugIndicatingError('Make sure the ref is set before accessing the element. Maybe wrong initialization order?');
-				}
-				return value;
-			}
-		});
-		// eslint-disable-next-line local/code-no-any-casts
-		return result as any;
-	}
-}
-type Value<T> = T | IObservable<T>;
-type ValueOrList<T> = Value<T> | ValueOrList<T>[];
-type ValueOrList2<T> = ValueOrList<T> | ValueOrList<ValueOrList<T>>;
-type HTMLOrSVGElement = HTMLElement | SVGElement;
-type SVGElementTagNameMap2 = {
-	svg: SVGElement & {
-		width: number;
-		height: number;
-		transform: string;
-		viewBox: string;
-		fill: string;
-	};
-	path: SVGElement & {
-		d: string;
-		stroke: string;
-		fill: string;
-	};
-	linearGradient: SVGElement & {
-		id: string;
-		x1: string | number;
-		x2: string | number;
-	};
-	stop: SVGElement & {
-		offset: string;
-	};
-	rect: SVGElement & {
-		x: number;
-		y: number;
-		width: number;
-		height: number;
-		fill: string;
-	};
-	defs: SVGElement;
-};
-type DomTagCreateFn<TMap extends Record<string, any>> = <TTag extends keyof TMap>(
-	tag: TTag,
-	attributes: ElementAttributeKeys<TMap[TTag]> & { class?: ValueOrList<string | false | undefined>; ref?: IRef<TMap[TTag]>; obsRef?: IRef<ObserverNodeWithElement<TMap[TTag]> | null> },
-	children?: ChildNode
-) => ObserverNode<TMap[TTag]>;
-type DomCreateFn<TAttributes, TResult extends HTMLOrSVGElement> = (
-	attributes: ElementAttributeKeys<TAttributes> & { class?: ValueOrList<string | false | undefined>; ref?: IRef<TResult>; obsRef?: IRef<ObserverNodeWithElement<TResult> | null> },
-	children?: ChildNode
-) => ObserverNode<TResult>;
-
-export type ChildNode = ValueOrList2<HTMLOrSVGElement | string | ObserverNode | undefined>;
-
-export type IRef<T> = (value: T) => void;
-
-export interface IRefWithVal<T> extends IRef<T> {
-	readonly element: T;
-}
-
-export abstract class ObserverNode<T extends HTMLOrSVGElement = HTMLOrSVGElement> {
-	private readonly _deriveds: (IObservable<any>)[] = [];
-
-	protected readonly _element: T;
-
-	constructor(
-		tag: string,
-		ref: IRef<T> | undefined,
-		obsRef: IRef<ObserverNodeWithElement<T> | null> | undefined,
-		ns: string | undefined,
-		className: ValueOrList<string | undefined | false> | undefined,
-		attributes: ElementAttributeKeys<T>,
-		children: ChildNode
-	) {
-		this._element = (ns ? document.createElementNS(ns, tag) : document.createElement(tag)) as unknown as T;
-		if (ref) {
-			ref(this._element);
-		}
-		if (obsRef) {
-			this._deriveds.push(derived((_reader) => {
-				obsRef(this as unknown as ObserverNodeWithElement<T>);
-				_reader.store.add({
-					dispose: () => {
-						obsRef(null);
-					}
-				});
-			}));
-		}
-
-		if (className) {
-			if (hasObservable(className)) {
-				this._deriveds.push(derived(this, reader => {
-					/** @description set.class */
-					setClassName(this._element, getClassName(className, reader));
-				}));
-			} else {
-				setClassName(this._element, getClassName(className, undefined));
-			}
-		}
-
-		for (const [key, value] of Object.entries(attributes)) {
-			if (key === 'style') {
-				for (const [cssKey, cssValue] of Object.entries(value)) {
-					const key = camelCaseToHyphenCase(cssKey);
-					if (isObservable(cssValue)) {
-						this._deriveds.push(derivedOpts({ owner: this, debugName: () => `set.style.${key}` }, reader => {
-							this._element.style.setProperty(key, convertCssValue(cssValue.read(reader)));
-						}));
-					} else {
-						this._element.style.setProperty(key, convertCssValue(cssValue));
-					}
-				}
-			} else if (key === 'tabIndex') {
-				if (isObservable(value)) {
-					this._deriveds.push(derived(this, reader => {
-						/** @description set.tabIndex */
-						// eslint-disable-next-line local/code-no-any-casts
-						this._element.tabIndex = value.read(reader) as any;
-					}));
-				} else {
-					this._element.tabIndex = value;
-				}
-			} else if (key.startsWith('on')) {
-				// eslint-disable-next-line local/code-no-any-casts
-				(this._element as any)[key] = value;
-			} else {
-				if (isObservable(value)) {
-					this._deriveds.push(derivedOpts({ owner: this, debugName: () => `set.${key}` }, reader => {
-						setOrRemoveAttribute(this._element, key, value.read(reader));
-					}));
-				} else {
-					setOrRemoveAttribute(this._element, key, value);
-				}
-			}
-		}
-
-		if (children) {
-			function getChildren(reader: IReader | undefined, children: ValueOrList2<HTMLOrSVGElement | string | ObserverNode | undefined>): (HTMLOrSVGElement | string)[] {
-				if (isObservable(children)) {
-					return getChildren(reader, children.read(reader));
-				}
-				if (Array.isArray(children)) {
-					return children.flatMap(c => getChildren(reader, c));
-				}
-				if (children instanceof ObserverNode) {
-					if (reader) {
-						children.readEffect(reader);
-					}
-					return [children._element];
-				}
-				if (children) {
-					return [children];
-				}
-				return [];
-			}
-
-			const d = derived(this, reader => {
-				/** @description set.children */
-				this._element.replaceChildren(...getChildren(reader, children));
-			});
-			this._deriveds.push(d);
-			if (!childrenIsObservable(children)) {
-				d.get();
-			}
-		}
-	}
-
-	readEffect(reader: IReader | undefined): void {
-		for (const d of this._deriveds) {
-			d.read(reader);
-		}
-	}
-
-	keepUpdated(store: DisposableStore): ObserverNodeWithElement<T> {
-		derived(reader => {
-			/** update */
-			this.readEffect(reader);
-		}).recomputeInitiallyAndOnChange(store);
-		return this as unknown as ObserverNodeWithElement<T>;
-	}
-
-	/**
-	 * Creates a live element that will keep the element updated as long as the returned object is not disposed.
-	*/
-	toDisposableLiveElement() {
-		const store = new DisposableStore();
-		this.keepUpdated(store);
-		return new LiveElement(this._element, store);
-	}
-
-	private _isHovered: IObservable<boolean> | undefined = undefined;
-
-	get isHovered(): IObservable<boolean> {
-		if (!this._isHovered) {
-			const hovered = observableValue<boolean>('hovered', false);
-			this._element.addEventListener('mouseenter', (_e) => hovered.set(true, undefined));
-			this._element.addEventListener('mouseleave', (_e) => hovered.set(false, undefined));
-			this._isHovered = hovered;
-		}
-		return this._isHovered;
-	}
-
-	private _didMouseMoveDuringHover: IObservable<boolean> | undefined = undefined;
-
-	get didMouseMoveDuringHover(): IObservable<boolean> {
-		if (!this._didMouseMoveDuringHover) {
-			let _hovering = false;
-			const hovered = observableValue<boolean>('didMouseMoveDuringHover', false);
-			this._element.addEventListener('mouseenter', (_e) => {
-				_hovering = true;
-			});
-			this._element.addEventListener('mousemove', (_e) => {
-				if (_hovering) {
-					hovered.set(true, undefined);
-				}
-			});
-			this._element.addEventListener('mouseleave', (_e) => {
-				_hovering = false;
-				hovered.set(false, undefined);
-			});
-			this._didMouseMoveDuringHover = hovered;
-		}
-		return this._didMouseMoveDuringHover;
-	}
-}
-
-function setClassName(domNode: HTMLOrSVGElement, className: string) {
-	if (isSVGElement(domNode)) {
-		domNode.setAttribute('class', className);
-	} else {
-		domNode.className = className;
-	}
-}
-
-function resolve<T>(value: ValueOrList<T>, reader: IReader | undefined, cb: (val: T) => void): void {
-	if (isObservable(value)) {
-		cb(value.read(reader));
-		return;
-	}
-	if (Array.isArray(value)) {
-		for (const v of value) {
-			resolve(v, reader, cb);
-		}
-		return;
-	}
-	// eslint-disable-next-line local/code-no-any-casts
-	cb(value as any);
-}
-function getClassName(className: ValueOrList<string | undefined | false> | undefined, reader: IReader | undefined): string {
-	let result = '';
-	resolve(className, reader, val => {
-		if (val) {
-			if (result.length === 0) {
-				result = val;
-			} else {
-				result += ' ' + val;
-			}
-		}
-	});
-	return result;
-}
-function hasObservable(value: ValueOrList<unknown>): boolean {
-	if (isObservable(value)) {
-		return true;
-	}
-	if (Array.isArray(value)) {
-		return value.some(v => hasObservable(v));
-	}
-	return false;
-}
-function convertCssValue(value: any): string {
-	if (typeof value === 'number') {
-		return value + 'px';
-	}
-	return value;
-}
-function childrenIsObservable(children: ValueOrList2<HTMLOrSVGElement | string | ObserverNode | undefined>): boolean {
-	if (isObservable(children)) {
-		return true;
-	}
-	if (Array.isArray(children)) {
-		return children.some(c => childrenIsObservable(c));
-	}
-	return false;
-}
-
-export class LiveElement<T extends HTMLOrSVGElement = HTMLElement> {
-	constructor(
-		public readonly element: T,
-		private readonly _disposable: IDisposable
-	) { }
-
-	dispose() {
-		this._disposable.dispose();
-	}
-}
-
-export class ObserverNodeWithElement<T extends HTMLOrSVGElement = HTMLOrSVGElement> extends ObserverNode<T> {
-	public get element() {
-		return this._element;
-	}
-}
-function setOrRemoveAttribute(element: HTMLOrSVGElement, key: string, value: unknown) {
-	if (value === null || value === undefined) {
-		element.removeAttribute(camelCaseToHyphenCase(key));
-	} else {
-		element.setAttribute(camelCaseToHyphenCase(key), String(value));
-	}
-}
-
-type ElementAttributeKeys<T> = Partial<{
-	[K in keyof T]: T[K] extends Function ? never : T[K] extends object ? ElementAttributeKeys<T[K]> : Value<number | T[K] | undefined | null>;
-}>;
 
 /**
  * A custom element that fires callbacks when connected to or disconnected from the DOM.
@@ -3007,16 +1553,6 @@ type ElementAttributeKeys<T> = Partial<{
  * ```
  */
 export class ConnectionObserverElement extends HTMLElement {
-	public onDidConnect?: () => void;
-	public onDidDisconnect?: () => void;
-
-	disconnectedCallback() {
-		this.onDidDisconnect?.();
-	}
-
-	connectedCallback() {
-		this.onDidConnect?.();
-	}
 }
 
 if (!customElements.get('connection-observer')) {

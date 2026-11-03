@@ -278,6 +278,33 @@ mod tests {
         );
     }
 
+    /// The window moves at most once a round trip, and at most once every
+    /// 50 ms on a shorter one.
+    #[test]
+    fn the_window_moves_again_only_a_round_trip_after_it_last_moved() {
+        let start = Instant::now();
+        let mut window = Window::new(FULL);
+        window.observe(MS * 100, false, 1e9, start);
+        let moved = window.window();
+        window.observe(
+            MS * 100,
+            false,
+            1e9,
+            start + MS * 100 - Duration::from_nanos(1),
+        );
+        assert_eq!(window.window(), moved, "within the round trip it holds");
+        window.observe(MS * 100, false, 1e9, start + MS * 100);
+        assert_eq!(window.window(), moved * 2, "a round trip later it moves");
+
+        let mut short = Window::new(FULL);
+        short.observe(MS * 10, false, 1e9, start);
+        let moved = short.window();
+        short.observe(MS * 10, false, 1e9, start + MS * 49);
+        assert_eq!(short.window(), moved, "a short trip still waits 50 ms");
+        short.observe(MS * 10, false, 1e9, start + MS * 50);
+        assert_eq!(short.window(), moved * 2);
+    }
+
     /// A queue ends the doubling: from then on the window grows by an
     /// eighth at most.
     #[test]

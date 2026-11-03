@@ -10,7 +10,7 @@ import { $, addDisposableListener, append, EventType } from '../../../base/brows
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 
-export type RelayMode = 'public' | 'custom';
+type RelayMode = 'public' | 'custom';
 
 let nextPickerId = 0;
 

@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 declare const globalThis: { performance: { now(): number } };
@@ -13,21 +13,8 @@ export class StopWatch {
 
 	private readonly _now: () => number;
 
-	public static create(highResolution?: boolean): StopWatch {
-		return new StopWatch(highResolution);
-	}
-
 	constructor(highResolution?: boolean) {
 		this._now = highResolution === false ? Date.now : performanceNow;
-		this._startTime = this._now();
-		this._stopTime = -1;
-	}
-
-	public stop(): void {
-		this._stopTime = this._now();
-	}
-
-	public reset(): void {
 		this._startTime = this._now();
 		this._stopTime = -1;
 	}

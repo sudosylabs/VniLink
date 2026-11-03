@@ -63,10 +63,6 @@ export interface IKeyboardEvent {
 	readonly keyCode: KeyCode;
 	readonly code: string;
 
-	/**
-	 * @internal
-	 */
-	toKeyCodeChord(): KeyCodeChord;
 	equals(keybinding: number): boolean;
 
 	preventDefault(): void;
@@ -77,49 +73,6 @@ const ctrlKeyMod = (platform.isMacintosh ? KeyMod.WinCtrl : KeyMod.CtrlCmd);
 const altKeyMod = KeyMod.Alt;
 const shiftKeyMod = KeyMod.Shift;
 const metaKeyMod = (platform.isMacintosh ? KeyMod.CtrlCmd : KeyMod.WinCtrl);
-
-export function printKeyboardEvent(e: KeyboardEvent): string {
-	const modifiers: string[] = [];
-	if (e.ctrlKey) {
-		modifiers.push(`ctrl`);
-	}
-	if (e.shiftKey) {
-		modifiers.push(`shift`);
-	}
-	if (e.altKey) {
-		modifiers.push(`alt`);
-	}
-	if (e.metaKey) {
-		modifiers.push(`meta`);
-	}
-	return `modifiers: [${modifiers.join(',')}], code: ${e.code}, keyCode: ${e.keyCode}, key: ${e.key}`;
-}
-
-export function printStandardKeyboardEvent(e: StandardKeyboardEvent): string {
-	const modifiers: string[] = [];
-	if (e.ctrlKey) {
-		modifiers.push(`ctrl`);
-	}
-	if (e.shiftKey) {
-		modifiers.push(`shift`);
-	}
-	if (e.altKey) {
-		modifiers.push(`alt`);
-	}
-	if (e.metaKey) {
-		modifiers.push(`meta`);
-	}
-	return `modifiers: [${modifiers.join(',')}], code: ${e.code}, keyCode: ${e.keyCode} ('${KeyCodeUtils.toString(e.keyCode)}')`;
-}
-
-export function hasModifierKeys(keyStatus: {
-	readonly ctrlKey: boolean;
-	readonly shiftKey: boolean;
-	readonly altKey: boolean;
-	readonly metaKey: boolean;
-}): boolean {
-	return keyStatus.ctrlKey || keyStatus.shiftKey || keyStatus.altKey || keyStatus.metaKey;
-}
 
 export class StandardKeyboardEvent implements IKeyboardEvent {
 
@@ -184,10 +137,6 @@ export class StandardKeyboardEvent implements IKeyboardEvent {
 		if (this.browserEvent && this.browserEvent.stopPropagation) {
 			this.browserEvent.stopPropagation();
 		}
-	}
-
-	public toKeyCodeChord(): KeyCodeChord {
-		return this._asKeyCodeChord;
 	}
 
 	public equals(other: number): boolean {

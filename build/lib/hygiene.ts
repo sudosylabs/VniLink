@@ -14,24 +14,18 @@
  * behaviour they implement, never a document, a skill or a plan, which can
  * stay behind when the code changes.
  */
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { git, thirdPartyDirectories } from './git.ts';
 import { noticeKindOf, readCopies } from './license.ts';
 import { isCopyrightNotice } from './licenseNotice.ts';
 import { readProduct, type Product } from './product.ts';
-
-const run = promisify(execFile);
 
 /** Home directories fixtures and docs may name. `Shared` and `Public` are macOS's and Windows's shared homes. */
 const placeholderHomes = new Set(['someone', 'Shared', 'Public']);
 
 /** The contact documents, which spell out the publisher's address and repository for people. */
 const identityFiles = new Set(['product.json', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md', 'REUSE.toml']);
-
-/** Third-party sources keep their own text. */
-const excludedDirectories = ['vendor/'];
 
 // `Users/<name>` in macOS, Windows and root-relative forms; `/home/<name>` only as a path's start,
 // so `contrib/home/...` is not a home. A name starts with a letter or digit, so `Users/..` is none.
@@ -147,12 +141,6 @@ export function findCommentViolations(path: string, text: string): HygieneFindin
 	return findings;
 }
 
-// A git hook's GIT_DIR and GIT_INDEX_FILE name the repository committing, not necessarily `root`'s.
-async function git(root: string, args: readonly string[]): Promise<string> {
-	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-	return (await run('git', ['-C', root, ...args], { env, maxBuffer: 64 * 1024 * 1024 })).stdout;
-}
-
 /** Checks every tracked or new file, outside ignored and third-party ones, and fails listing each finding. */
 export async function checkHygiene(root: string): Promise<void> {
 	const product = await readProduct(root);
@@ -160,7 +148,7 @@ export async function checkHygiene(root: string): Promise<void> {
 	const rules = hygieneRules(product, authors);
 	const copies = await readCopies(root);
 	const paths = (await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).split('\0')
-		.filter(path => path.length > 0 && !excludedDirectories.some(directory => path.startsWith(directory)));
+		.filter(path => path.length > 0 && !thirdPartyDirectories.some(directory => path.startsWith(directory)));
 	const findings: HygieneFinding[] = [];
 	for (const path of new Set(paths)) {
 		let contents: Buffer;

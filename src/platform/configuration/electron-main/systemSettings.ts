@@ -17,10 +17,10 @@ import { product } from '../../product/common/product.js';
 import { traySupported } from '../../tray/electron-main/traySupport.js';
 
 /** Passed by login items on Windows and Linux; macOS reports a login launch itself. */
-export const HIDDEN_ARGUMENT = '--hidden';
+const HIDDEN_ARGUMENT = '--hidden';
 
 /** The operating system's record of whether VniLink starts when the user signs in. */
-export interface LoginItem {
+interface LoginItem {
 	/** Whether this launch can register itself; development launches would register the development Electron. */
 	readonly supported: boolean;
 	read(): Promise<boolean>;
@@ -87,7 +87,7 @@ export function autostartEntry(executable: string): string {
 	return `[Desktop Entry]\nType=Application\nName=${product.name}\nExec="${quoted}" ${HIDDEN_ARGUMENT}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n`;
 }
 
-export function platformLoginItem(): LoginItem {
+function platformLoginItem(): LoginItem {
 	return isLinux ? new AutostartLoginItem() : new ElectronLoginItem();
 }
 

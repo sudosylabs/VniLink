@@ -11,25 +11,17 @@
  * manifest decides which files were copied; a copy that is not in it is recognised
  * by the notice it already carries.
  */
-import { execFile } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-import { recordAdaptations } from '../vscodeImport.ts';
+import { recordAdaptations } from './vscode/import.ts';
+import { readManifest } from './vscode/manifest.ts';
 import { commentStyleOf, leadingMicrosoftNotice, modificationNotice, originalNotice, renderNotice, type CommentStyle } from './licenseNotice.ts';
+import { git, thirdPartyDirectories } from './git.ts';
 import { readProduct } from './product.ts';
-
-const run = promisify(execFile);
-
-/** Third-party sources keep their own license and notice. */
-const excludedDirectories = ['vendor/'];
-
-/** Copied VS Code files that are not in the provenance manifest. */
-const verbatimDirectories = ['build/lint/vscode/'];
 
 /**
  * - `original`: written for this project.
- * - `verbatim`: VS Code's or another project's text, byte for byte; its notice stays as it is.
+ * - `verbatim`: VS Code's text, byte for byte or with whole declarations deleted; its notice stays as it is.
  * - `derived`: copied from VS Code and changed here.
  */
 export type NoticeKind = 'original' | 'verbatim' | 'derived';
@@ -46,8 +38,8 @@ interface ManifestEntry {
 
 /** The path of the pinned VS Code copies and which of them this project changed. */
 export async function readCopies(root: string): Promise<ReadonlyMap<string, ManifestEntry>> {
-	const manifest = JSON.parse(await readFile(join(root, 'build', 'vscode-source.json'), 'utf8')) as { files: ManifestEntry[] };
-	return new Map(manifest.files.map(file => [file.path, file]));
+	const manifest = await readManifest(root);
+	return new Map([...manifest.files, ...manifest.tooling].map(file => [file.path, file]));
 }
 
 /** A generated binding is the output of its header's license, not a file written here. */
@@ -61,15 +53,12 @@ function isGenerated(text: string): boolean {
  */
 export function noticeKindOf(path: string, text: string, copies: ReadonlyMap<string, ManifestEntry>): NoticeKind | undefined {
 	const style = commentStyleOf(path);
-	if (style === undefined || excludedDirectories.some(directory => path.startsWith(directory)) || text.length === 0 || isGenerated(text)) {
+	if (style === undefined || thirdPartyDirectories.some(directory => path.startsWith(directory)) || text.length === 0 || isGenerated(text)) {
 		return undefined;
 	}
 	const copy = copies.get(path);
 	if (copy) {
 		return copy.adapted ? 'derived' : 'verbatim';
-	}
-	if (verbatimDirectories.some(directory => path.startsWith(directory))) {
-		return 'verbatim';
 	}
 	return leadingMicrosoftNotice(text.slice(prelude(text, style).length), style) === undefined ? 'original' : 'derived';
 }
@@ -126,12 +115,6 @@ export function findNoticeProblem(path: string, text: string, kind: NoticeKind, 
 	} catch (error) {
 		return (error as Error).message;
 	}
-}
-
-// A git hook's GIT_DIR and GIT_INDEX_FILE name the repository committing, not necessarily `root`'s.
-async function git(root: string, args: readonly string[]): Promise<string> {
-	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-	return (await run('git', ['-C', root, ...args], { env, maxBuffer: 64 * 1024 * 1024 })).stdout;
 }
 
 async function noticeFiles(root: string): Promise<{ path: string; text: string; kind: NoticeKind }[]> {
@@ -199,7 +182,7 @@ export interface ApplyOptions {
 	/** Writes the changes; without it they are only counted. */
 	readonly write?: boolean;
 	/** Records the new contents of adapted copies in the provenance manifest. */
-	readonly record?: (paths: readonly string[]) => Promise<void>;
+	readonly record?: (root: string, paths: readonly string[]) => Promise<void>;
 }
 
 /** Adds the notice every source file needs and returns the files it changed; throws, changing nothing, if a file cannot take one. */
@@ -230,7 +213,7 @@ export async function applyLicense(root: string, options: ApplyOptions = {}): Pr
 		}
 		const adapted = changes.map(change => change.path).filter(path => copies.get(path)?.adapted);
 		if (adapted.length > 0) {
-			await (options.record ?? recordAdaptations)(adapted);
+			await (options.record ?? recordAdaptations)(root, adapted);
 		}
 	}
 	return changes.map(change => change.path);

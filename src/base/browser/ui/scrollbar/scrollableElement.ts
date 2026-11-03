@@ -29,23 +29,6 @@ let globalDefaultScrollbarSize = DEFAULT_SCROLLBAR_SIZE;
 const _onDidChangeDefaultScrollbarSizeEmitter = new Emitter<number>();
 export const onDidChangeDefaultScrollbarSize: Event<number> = _onDidChangeDefaultScrollbarSizeEmitter.event;
 
-/**
- * Update the default scrollbar size used by all scrollable elements that were
- * created without an explicit horizontal/vertical scrollbar size option.
- * Elements with explicit sizes (e.g. the editor, menus) are unaffected.
- */
-export function setGlobalDefaultScrollbarSize(size: number): void {
-	if (size !== globalDefaultScrollbarSize) {
-		globalDefaultScrollbarSize = size;
-		_onDidChangeDefaultScrollbarSizeEmitter.fire(size);
-	}
-}
-
-export interface IOverviewRulerLayoutInfo {
-	parent: HTMLElement;
-	insertBefore: HTMLElement;
-}
-
 class MouseWheelClassifierItem {
 	public timestamp: number;
 	public deltaX: number;
@@ -220,11 +203,6 @@ export abstract class AbstractScrollableElement extends Widget {
 	public get onScroll(): Event<ScrollEvent> { return this._onScroll.event; }
 
 	private readonly _onWillScroll = this._register(new Emitter<ScrollEvent>());
-	public get onWillScroll(): Event<ScrollEvent> { return this._onWillScroll.event; }
-
-	public get options(): Readonly<ScrollableElementResolvedOptions> {
-		return this._options;
-	}
 
 	protected constructor(element: HTMLElement, options: ScrollableElementCreationOptions, scrollable: Scrollable) {
 		super();
@@ -320,39 +298,12 @@ export abstract class AbstractScrollableElement extends Widget {
 		return this._domNode;
 	}
 
-	public getOverviewRulerLayoutInfo(): IOverviewRulerLayoutInfo {
-		return {
-			parent: this._domNode,
-			insertBefore: this._verticalScrollbar.domNode.domNode,
-		};
-	}
-
-	/**
-	 * Delegate a pointer down event to the vertical scrollbar.
-	 * This is to help with clicking somewhere else and having the scrollbar react.
-	 */
-	public delegateVerticalScrollbarPointerDown(browserEvent: PointerEvent): void {
-		this._verticalScrollbar.delegatePointerDown(browserEvent);
-	}
-
 	public getScrollDimensions(): IScrollDimensions {
 		return this._scrollable.getScrollDimensions();
 	}
 
 	public setScrollDimensions(dimensions: INewScrollDimensions): void {
 		this._scrollable.setScrollDimensions(dimensions, false);
-	}
-
-	/**
-	 * Update the class name of the scrollable element.
-	 */
-	public updateClassName(newClassName: string): void {
-		this._options.className = newClassName;
-		// Defaults are different on Macs
-		if (platform.isMacintosh) {
-			this._options.className += ' mac';
-		}
-		this._domNode.className = 'monaco-scrollable-element ' + this._options.className;
 	}
 
 	/**
@@ -393,14 +344,6 @@ export abstract class AbstractScrollableElement extends Widget {
 		if (!this._options.lazyRender) {
 			this._render();
 		}
-	}
-
-	public setRevealOnScroll(value: boolean) {
-		this._revealOnScroll = value;
-	}
-
-	public delegateScrollFromMouseWheelEvent(browserEvent: IMouseWheelEvent) {
-		this._onMouseWheel(new StandardWheelEvent(browserEvent));
 	}
 
 	private async _periodicSync(): Promise<void> {
@@ -589,18 +532,6 @@ export abstract class AbstractScrollableElement extends Widget {
 		}
 	}
 
-	/**
-	 * Render / mutate the DOM now.
-	 * Should be used together with the ctor option `lazyRender`.
-	 */
-	public renderNow(): void {
-		if (!this._options.lazyRender) {
-			throw new Error('Please use `lazyRender` together with `renderNow`!');
-		}
-
-		this._render();
-	}
-
 	private _render(): void {
 		if (!this._shouldRender) {
 			return;
@@ -683,10 +614,6 @@ export class ScrollableElement extends AbstractScrollableElement {
 
 	public setScrollPosition(update: INewScrollPosition): void {
 		this._scrollable.setScrollPositionNow(update);
-	}
-
-	public getScrollPosition(): IScrollPosition {
-		return this._scrollable.getCurrentScrollPosition();
 	}
 }
 

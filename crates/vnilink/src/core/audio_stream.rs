@@ -107,7 +107,7 @@ impl Core {
                 let devices:Vec<AudioDevice>=serde_json::from_slice(&read(&mut recv).await?).map_err(|_|Error::Malformed)?;
                 validate_devices(&devices)?;
                 if devices.iter().any(|d|d.kind!=kind){return Err(Error::Malformed);}
-                let _=send.finish();Ok(devices)
+                crate::ignored!(crate::trace::AUDIO,"a stream that cannot finish is closed with its link",send.finish());Ok(devices)
             });
             if *stop.borrow(){return Err(Error::NoSession);}
             tokio::select!{biased;_=stop.changed()=>Err(Error::NoSession),result=operation=>result.map_err(|_|Error::Timeout)?}
@@ -430,7 +430,10 @@ pub(super) async fn serve(
             Ok(backend)
         };
         let opened = tokio::time::timeout(TIMEOUT, opening).await;
-        if !matches!(opened, Ok(Ok(_))) {
+        // A startup its connection or service cancelled was not refused: the
+        // stream's end says what cancelled it.
+        let cancelled = *startup_parent.borrow() || *startup_stop.borrow();
+        if !cancelled && !matches!(opened, Ok(Ok(_))) {
             // A viewer asked for sound and hears none: worth seeing in an
             // ordinary log, not only a debug one.
             tracing::warn!(
@@ -563,6 +566,9 @@ pub(super) async fn serve(
         }
         result = run => result,
     };
+    if result.is_err() {
+        ending.why_cancelled(*parent.borrow(), *stop.borrow());
+    }
     // The service closed under the stream for a reason other than its
     // viewer's close: the viewer hears it was withdrawn.
     if *stop.borrow() && HostedEnd::service_closed(&shared, id) == HostedEnd::ServiceClosed {

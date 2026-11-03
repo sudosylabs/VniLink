@@ -1,12 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { IObservable } from '../base.js';
 import { TransactionImpl } from '../transaction.js';
 import { IObservableLogger, IChangeInformation, addLogger } from './logging.js';
-import { FromEventObservable } from '../observables/observableFromEvent.js';
 import { getClassName } from '../debugName.js';
 import { Derived } from '../observables/derivedImpl.js';
 import { AutorunObserver } from '../reactions/autorunImpl.js';
@@ -157,17 +156,6 @@ export class ConsoleObservableLogger implements IObservableLogger {
 		console.log(...this.textToConsoleArgs([
 			formatKind('derived cleared'),
 			styled(derived.debugName, { color: 'BlueViolet' }),
-		]));
-	}
-
-	handleFromEventObservableTriggered(observable: FromEventObservable<any, any>, info: IChangeInformation): void {
-		if (!this._isIncluded(observable)) { return; }
-
-		console.log(...this.textToConsoleArgs([
-			formatKind('observable from event triggered'),
-			styled(observable.debugName, { color: 'BlueViolet' }),
-			...this.formatInfo(info),
-			{ data: [{ fn: observable._getValue }] }
 		]));
 	}
 

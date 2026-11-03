@@ -6,15 +6,18 @@
 // ---------------------------------------------------------------------------------------------
 
 /** Assembles one host-native, unsigned Electron directory from a verified release payload. */
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import { assignExecutableUuids, darwinUsageDescriptions } from './macos/identity.ts';
+import { acquireLock } from './lock.ts';
 import { ProcessRunner } from './processes.ts';
 import { validateProduct, type Product, type ProductPlatform } from './product.ts';
-import { packageInventory, verifyReleaseFiles, type ReleaseManifest } from './verify.ts';
+import { fileSha256, packageInventory, verifyReleaseFiles, type PackageManifest, type ReleaseManifest } from './inventory.ts';
+import { isMacintosh } from './platform.ts';
 
 /** electron-builder v26 options; only what VniLink sets is described. */
 export type BuilderConfiguration = Record<string, unknown> & {
@@ -56,7 +59,8 @@ export function packageConfiguration(root: string, stage: string, output: string
 		nodeGypRebuild: false,
 		publish: null,
 		// Electron's own switches, set in the binary so no environment variable or argument can undo them:
-		// the app is never a Node interpreter, loads only its sealed archive and is not inspectable.
+		// the app is never a Node interpreter, loads only its sealed archive and takes no Node inspector.
+		// Chromium's remote debugging is not a fuse; a built app refuses it itself (`src/code/electron-main/main.ts`).
 		electronFuses: {
 			runAsNode: false,
 			enableCookieEncryption: true,
@@ -115,6 +119,12 @@ async function readJson(path: string): Promise<{ version: string }> {
 	return JSON.parse(await readFile(path, 'utf8')) as { version: string };
 }
 
+/** Runs electron-builder's command line with this Node, in `cwd`, with the assembly environment. */
+export function runElectronBuilder(processes: Pick<ProcessRunner, 'run'>, args: readonly string[], cwd: string): Promise<number> {
+	const cli = createRequire(import.meta.url).resolve('electron-builder/cli.js');
+	return processes.run(process.execPath, [cli, ...args], { cwd, env: assemblyEnvironment(process.env) });
+}
+
 /** Assembles `dist/<platform>-<arch>` from the staged release; refuses to overlap another assembly. */
 export async function packageApplication(root: string, signal: AbortSignal): Promise<string> {
 	const stage = join(root, '.build/release', `${process.platform}-${process.arch}`);
@@ -127,8 +137,7 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 	const parent = join(root, 'dist');
 	const output = join(parent, `${process.platform}-${process.arch}`);
 	await mkdir(parent, { recursive: true });
-	const lock = `${output}.lock`;
-	await mkdir(lock);
+	const releaseLock = await acquireLock(`${output}.lock`);
 	const processes = new ProcessRunner(signal);
 	let work: string | undefined;
 	try {
@@ -136,8 +145,7 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		const buildOutput = join(work, 'output');
 		const configPath = join(work, 'builder.json');
 		await writeFile(configPath, JSON.stringify(packageConfiguration(root, stage, buildOutput, product, manifest), null, 2));
-		const cli = createRequire(import.meta.url).resolve('electron-builder/cli.js');
-		await processes.run(process.execPath, [cli, '--config', configPath, '--dir', builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'], { cwd: root, env: assemblyEnvironment(process.env) });
+		await runElectronBuilder(processes, ['--config', configPath, '--dir', builderPlatformFlag(), `--${process.arch}`, '--publish', 'never'], root);
 		const candidates: string[] = [];
 		for (const entry of await readdir(buildOutput, { withFileTypes: true })) {
 			if (entry.isDirectory()) {
@@ -157,7 +165,7 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		}
 		const directory = candidates[0];
 		const layout = packagedLayout(directory, process.platform, product);
-		if (process.platform === 'darwin') {
+		if (isMacintosh) {
 			// Its own executable UUID, so local network privacy decides for VniLink
 			// alone. The fuses changed the Electron framework and the UUID the executable,
 			// so the whole bundle is sealed again, nested code first.
@@ -184,6 +192,20 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		if (work) {
 			await rm(work, { recursive: true, force: true });
 		}
-		await rm(lock, { recursive: true, force: true });
+		await releaseLock();
 	}
+}
+
+/** Checks an assembled application against its packaging manifest. */
+export async function verifyPackageFiles(directory: string, product: Product): Promise<PackageManifest> {
+	const manifest = JSON.parse(await readFile(join(directory, 'packaging-manifest.json'), 'utf8')) as PackageManifest;
+	assert.equal(manifest.appId, product.appId);
+	assert.equal(manifest.platform, process.platform);
+	assert.equal(manifest.architecture, process.arch);
+	assert.equal(manifest.signing, 'unsigned');
+	assert.deepEqual(await packageInventory(directory), manifest.files, 'Assembled application inventory differs');
+	const layout = packagedLayout(directory, process.platform, product);
+	assert.equal(await fileSha256(layout.asar), manifest.asarSha256);
+	assert.equal(await fileSha256(layout.native), manifest.nativeSha256);
+	return manifest;
 }

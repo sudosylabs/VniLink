@@ -5,12 +5,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use crate::session::{SessionPhase, SessionRole};
+use crate::sync::atomic::{AtomicU64, Ordering};
+use crate::sync::{Arc, Mutex, MutexGuard, Weak};
 
 pub(crate) const MAX_SUBSCRIBERS: usize = 8;
 
@@ -188,7 +188,7 @@ impl EventHub {
 
     /// The subscriber list is a set of channels, valid whatever a panicking
     /// thread was doing to it, so a poisoned lock is still usable.
-    fn subscribers(&self) -> std::sync::MutexGuard<'_, Vec<Subscriber>> {
+    fn subscribers(&self) -> MutexGuard<'_, Vec<Subscriber>> {
         self.subscribers
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -320,5 +320,76 @@ mod tests {
             Some(CoreEvent::HostingChanged { hosting: true })
         );
         assert_eq!(replacement.take_lagged(), 0);
+    }
+}
+
+#[cfg(all(test, vnilink_loom))]
+mod loom_events {
+    use super::*;
+
+    const ON: CoreEvent = CoreEvent::HostingChanged { hosting: true };
+    const OFF: CoreEvent = CoreEvent::HostingChanged { hosting: false };
+
+    /// Drains what the subscription holds and returns how many events that was.
+    fn drain(subscription: &EventSubscription) -> u64 {
+        let mut received = 0;
+        while subscription.try_recv().is_some() {
+            received += 1;
+        }
+        received
+    }
+
+    #[test]
+    fn an_overflow_read_while_events_are_published_is_counted_once() {
+        loom::model(|| {
+            let hub = EventHub::new(1);
+            let subscription = hub.subscribe().unwrap();
+            let publisher = {
+                let hub = hub.clone();
+                loom::thread::spawn(move || {
+                    hub.publish(ON);
+                    hub.publish(OFF);
+                    hub.publish(ON);
+                })
+            };
+            let mut lagged = subscription.take_lagged();
+            let mut received = drain(&subscription);
+            publisher.join().unwrap();
+            lagged += subscription.take_lagged();
+            received += drain(&subscription);
+            assert_eq!(
+                received + lagged,
+                3,
+                "every event is received or counted as lagged, once"
+            );
+            assert_eq!(subscription.take_lagged(), 0, "reading resets the count");
+        });
+    }
+
+    #[test]
+    fn publishers_on_two_threads_lose_no_count() {
+        loom::model(|| {
+            let hub = EventHub::new(1);
+            let subscription = hub.subscribe().unwrap();
+            let publishers: Vec<_> = [ON, OFF]
+                .into_iter()
+                .map(|event| {
+                    let hub = hub.clone();
+                    loom::thread::spawn(move || {
+                        hub.publish(event.clone());
+                        hub.publish(event);
+                    })
+                })
+                .collect();
+            for publisher in publishers {
+                publisher.join().unwrap();
+            }
+            assert_eq!(drain(&subscription), 1, "the queue holds one event");
+            assert_eq!(
+                subscription.take_lagged(),
+                3,
+                "each event the full queue turned away is counted"
+            );
+        });
     }
 }

@@ -45,14 +45,14 @@ fn a_custom_home_relay_is_what_the_peer_stores() -> TestResult {
         "the host is set up with its relay"
     );
     wait_for("the controller to store the host's relay", SETTLING, || {
-        (device(&controller.core, &host_id).relays == expected).then_some(())
+        (device(&controller.core, &host_id).ok()?.relays == expected).then_some(())
     });
     assert_eq!(
-        device(&controller.core, &host_id).grants,
+        device(&controller.core, &host_id)?.grants,
         Grants::default(),
         "the controller grants the host nothing"
     );
-    let granted = device(&host.core, &controller.endpoint()).grants;
+    let granted = device(&host.core, &controller.endpoint())?.grants;
     assert!(granted.control, "the host still grants control");
     assert!(!granted.clipboard, "the refresh grants no clipboard");
     assert!(!granted.transfer, "the refresh grants no transfer");

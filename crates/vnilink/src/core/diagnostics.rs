@@ -218,10 +218,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
             // Other engine tasks take state briefly; a snapshot holding it
             // while it waits would keep it taken throughout.
-            crate::test_support::wait_until(
+            crate::test_support::wait_for(
                 "the state lock to be free while the snapshot waits for jobs",
                 std::time::Duration::from_millis(500),
-                || core.shared.state.try_lock().is_ok(),
+                || core.shared.state.try_lock().is_ok().then_some(()),
             );
             drop(jobs);
             snapshot.join().unwrap().unwrap();

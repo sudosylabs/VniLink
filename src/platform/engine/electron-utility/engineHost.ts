@@ -13,7 +13,7 @@ import type { MessageEvent } from '../../../base/parts/sandbox/node/electronType
 import { isChannelRequest } from '../common/dataChannel.js';
 import { engineErrorCategory, record } from '../common/engine.js';
 import type { EngineEvent } from '../common/engine.js';
-import type { EngineEventBatch } from '../common/engineService.js';
+import { ENGINE_HOST_CONNECTION, type EngineEventBatch } from '../common/engineService.js';
 import { DataChannelHost } from './dataChannelHost.js';
 import type { NativeDataChannel } from './dataChannelHost.js';
 
@@ -139,7 +139,8 @@ export class EngineHost implements IClientConnectionFilter {
 			this.attachChannel(data.request, data.owner, event.ports);
 			return true;
 		}
-		return false;
+		// Only main's connection message opens an IPC connection; any other message is dropped here.
+		return data !== ENGINE_HOST_CONNECTION;
 	}
 
 	private attachChannel(request: unknown, owner: unknown, ports: readonly Electron.MessagePortMain[]): void {

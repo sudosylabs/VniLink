@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IContextMenuProvider } from '../../contextmenu.js';
-import { addDisposableListener, EventHelper, EventType, IFocusTracker, isActiveElement, reset, trackFocus, $ } from '../../dom.js';
+import { addDisposableListener, EventHelper, EventType, IFocusTracker, isActiveElement, reset, trackFocus } from '../../dom.js';
 import { StandardKeyboardEvent } from '../../keyboardEvent.js';
 import { renderMarkdown, renderAsPlaintext } from '../../markdownRenderer.js';
 import { Gesture, EventType as TouchEventType } from '../../touch.js';
@@ -13,7 +13,6 @@ import { IHoverDelegate } from '../hover/hoverDelegate.js';
 import { renderLabelWithIcons } from '../iconLabel/iconLabels.js';
 import { IAction, IActionRunner, toAction } from '../../../common/actions.js';
 import { Codicon } from '../../../common/codicons.js';
-import { Color } from '../../../common/color.js';
 import { Event as BaseEvent, Emitter } from '../../../common/event.js';
 import { IMarkdownString, isMarkdownString, markdownStringEqual } from '../../../common/htmlContent.js';
 import { KeyCode } from '../../../common/keyCodes.js';
@@ -52,18 +51,6 @@ export interface IButtonStyles {
 	readonly buttonBorder: string | undefined;
 }
 
-export const unthemedButtonStyles: IButtonStyles = {
-	buttonBackground: '#0E639C',
-	buttonHoverBackground: '#006BB3',
-	buttonSeparator: Color.white.toString(),
-	buttonForeground: Color.white.toString(),
-	buttonBorder: undefined,
-	buttonSecondaryBackground: undefined,
-	buttonSecondaryForeground: undefined,
-	buttonSecondaryHoverBackground: undefined,
-	buttonSecondaryBorder: undefined
-};
-
 export interface IButton extends IDisposable {
 	readonly element: HTMLElement;
 	readonly onDidClick: BaseEvent<Event | undefined>;
@@ -74,7 +61,6 @@ export interface IButton extends IDisposable {
 	set checked(value: boolean);
 
 	setTitle(title: string): void;
-	setAriaLabel(ariaLabel: string): void;
 
 	focus(): void;
 	hasFocus(): boolean;
@@ -116,7 +102,6 @@ export class Button extends Disposable implements IButton {
 	get onDidClick(): BaseEvent<Event> { return this._onDidClick.event; }
 
 	private _onDidEscape = this._register(new Emitter<Event>());
-	get onDidEscape(): BaseEvent<Event> { return this._onDidEscape.event; }
 
 	private focusTracker: IFocusTracker;
 
@@ -311,18 +296,6 @@ export class Button extends Disposable implements IButton {
 		return this._label;
 	}
 
-	set labelShort(value: string) {
-		if (!this.options.supportShortLabel || !this._labelShortElement) {
-			return;
-		}
-
-		if (this.options.supportIcons) {
-			reset(this._labelShortElement, ...this.getContentElements(value));
-		} else {
-			this._labelShortElement.textContent = value;
-		}
-	}
-
 	protected _setAriaLabel(): void {
 		if (typeof this.options.ariaLabel === 'string') {
 			this._element.setAttribute('aria-label', this.options.ariaLabel);
@@ -380,10 +353,6 @@ export class Button extends Disposable implements IButton {
 		} else if (this._hover) {
 			this._hover.update(title);
 		}
-	}
-
-	setAriaLabel(ariaLabel: string): void {
-		this._element.setAttribute('aria-label', ariaLabel);
 	}
 
 	focus(): void {
@@ -506,10 +475,6 @@ export class ButtonWithDropdown extends Disposable implements IButton {
 		this.primaryButton.setTitle(title);
 	}
 
-	setAriaLabel(ariaLabel: string): void {
-		this.primaryButton.setAriaLabel(ariaLabel);
-	}
-
 	focus(): void {
 		this.primaryButton.focus();
 	}
@@ -573,10 +538,6 @@ export class ButtonWithDescription implements IButtonWithDescription {
 		this._button.setTitle(title);
 	}
 
-	setAriaLabel(ariaLabel: string): void {
-		this._button.setAriaLabel(ariaLabel);
-	}
-
 	focus(): void {
 		this._button.focus();
 	}
@@ -614,11 +575,6 @@ export class ButtonBar {
 
 	get buttons(): IButton[] {
 		return this._buttons;
-	}
-
-	clear(): void {
-		this._buttonStore.clear();
-		this._buttons.length = 0;
 	}
 
 	addButton(options: IButtonOptions): IButton {
@@ -663,85 +619,5 @@ export class ButtonBar {
 			}
 
 		}));
-	}
-}
-
-/**
- * This is a Button that supports an icon to the left, and markdown to the right, with proper separation and wrapping the markdown label, which Button doesn't do.
- */
-export class ButtonWithIcon extends Button {
-	private readonly _iconElement: HTMLElement;
-	private readonly _mdlabelElement: HTMLElement;
-
-	public get labelElement() { return this._mdlabelElement; }
-
-	public get iconElement() { return this._iconElement; }
-
-	constructor(container: HTMLElement, options: IButtonOptions) {
-		super(container, options);
-
-		if (options.supportShortLabel) {
-			throw new Error('ButtonWithIcon does not support short labels');
-		}
-
-		this._element.classList.add('monaco-icon-button');
-		this._iconElement = $('');
-		this._mdlabelElement = $('.monaco-button-mdlabel');
-		this._element.append(this._iconElement, this._mdlabelElement);
-	}
-
-	override get label(): IMarkdownString | string {
-		return super.label;
-	}
-
-	override set label(value: IMarkdownString | string) {
-		if (this._label === value) {
-			return;
-		}
-
-		if (isMarkdownString(this._label) && isMarkdownString(value) && markdownStringEqual(this._label, value)) {
-			return;
-		}
-
-		this._element.classList.add('monaco-text-button');
-		if (isMarkdownString(value)) {
-			const rendered = renderMarkdown(value, buttonMarkdownRenderOptions, document.createElement('span'));
-			rendered.dispose();
-
-			// eslint-disable-next-line no-restricted-syntax
-			const root = rendered.element.querySelector('p')?.innerHTML;
-			if (root) {
-				safeSetInnerHtml(this._mdlabelElement, root, buttonSanitizerConfig);
-			} else {
-				reset(this._mdlabelElement);
-			}
-		} else {
-			if (this.options.supportIcons) {
-				reset(this._mdlabelElement, ...this.getContentElements(value));
-			} else {
-				this._mdlabelElement.textContent = value;
-			}
-		}
-
-		let title: string = '';
-		if (typeof this.options.title === 'string') {
-			title = this.options.title;
-		} else if (this.options.title) {
-			title = renderAsPlaintext(value);
-		}
-
-		this.setTitle(title);
-		this._setAriaLabel();
-		this._label = value;
-	}
-
-	override get icon(): ThemeIcon {
-		return super.icon;
-	}
-
-	override set icon(icon: ThemeIcon) {
-		this._iconElement.classList.value = '';
-		this._iconElement.classList.add(...ThemeIcon.asClassNameArray(icon));
-		this._setAriaLabel();
 	}
 }

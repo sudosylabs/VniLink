@@ -9,13 +9,14 @@ import { isDesktopAudioOperation, isDesktopAudioStatus, isDesktopCursor, isDeskt
 import type { DataChannelRequest, DataPacket, DataChannelMetrics, DesktopAudioOperation, DesktopAudioStatus, DesktopCursor, DesktopDecoderReport, DesktopMediaStatus } from '../common/dataChannel.js';
 import { Emitter } from '../../../base/common/event.js';
 import { isFileAnswer, type FileAnswer, type FileOperation } from '../common/files.js';
-import { ipcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
+import type { IpcMessagePort } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { record } from '../common/engine.js';
 import type { DesktopInputCommand } from '../common/engine.js';
 import { DATA_CHANNEL_PORT_RESPONSE, type IEngineService } from '../common/engineService.js';
+import type { IDataChannel } from '../common/dataChannelService.js';
 
 /** Owns the renderer end; payloads arrive outside contextBridge's copied values. */
-export class DataChannelClient {
+export class DataChannelClient implements IDataChannel {
 	private closed = false;
 	private readonly inputQueue: DesktopInputCommand[] = [];
 	private inputFlight = false;
@@ -70,11 +71,17 @@ export class DataChannelClient {
 		}, 2000);
 	}
 
+	/**
+	 * Asks the engine for a channel and waits for main to transfer its port
+	 * through `messagePort`: the preload's port bridge, which
+	 * `DataChannelService` passes, or a test's.
+	 */
 	public static async open(
 		engine: IEngineService,
 		request: Omit<DataChannelRequest, 'requestId'>,
 		consume: (packet: DataPacket) => void | Promise<void>,
 		onError: (error: Error) => void,
+		messagePort: IpcMessagePort,
 	): Promise<DataChannelClient> {
 		const target = { ...request, requestId: crypto.randomUUID() };
 		if (!isChannelRequest(target)) {
@@ -119,13 +126,15 @@ export class DataChannelClient {
 			};
 			window.addEventListener('message', receive);
 			try {
-				ipcMessagePort.acquire(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
+				messagePort.acquire(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
 			} catch (error) {
 				cleanup();
 				reject(error instanceof Error ? error : new Error('Channel unavailable'));
 				return;
 			}
 			void engine.openDataChannel(target).catch((error: unknown) => {
+				// Refused: no port will come, so its slot is free for the next attempt now.
+				messagePort.release(DATA_CHANNEL_PORT_RESPONSE, target.requestId);
 				cleanup();
 				reject(error instanceof Error ? error : new Error('Channel unavailable'));
 			});

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IDragAndDropData } from '../../dnd.js';
-import { Dimension, EventHelper, getActiveElement, getWindow, isActiveElement, isEditableElement, isHTMLElement, isMouseEvent } from '../../dom.js';
+import { EventHelper, getActiveElement, getWindow, isEditableElement, isHTMLElement, isMouseEvent } from '../../dom.js';
 import { createStyleSheet } from '../../domStylesheets.js';
 import { asCssValueWithDefault } from '../../cssValue.js';
 import { DomEmitter } from '../../event.js';
@@ -12,10 +12,8 @@ import { IKeyboardEvent, StandardKeyboardEvent } from '../../keyboardEvent.js';
 import { Gesture } from '../../touch.js';
 import { alert, AriaRole } from '../aria/aria.js';
 import { CombinedSpliceable } from './splice.js';
-import { ScrollableElementChangeOptions } from '../scrollbar/scrollableElementOptions.js';
 import { binarySearch, range } from '../../../common/arrays.js';
 import { timeout } from '../../../common/async.js';
-import { Color } from '../../../common/color.js';
 import { memoize } from '../../../common/decorators.js';
 import { Emitter, Event, EventBufferer } from '../../../common/event.js';
 import { matchesFuzzy2, matchesPrefix } from '../../../common/filters.js';
@@ -23,13 +21,12 @@ import { KeyCode } from '../../../common/keyCodes.js';
 import { DisposableStore, dispose, IDisposable } from '../../../common/lifecycle.js';
 import { clamp } from '../../../common/numbers.js';
 import * as platform from '../../../common/platform.js';
-import { ScrollbarVisibility, ScrollEvent } from '../../../common/scrollable.js';
 import { ISpliceable } from '../../../common/sequence.js';
 import { isNumber } from '../../../common/types.js';
 import './list.css';
 import { IIdentityProvider, IKeyboardNavigationDelegate, IKeyboardNavigationLabelProvider, IListContextMenuEvent, IListDragAndDrop, IListDragOverReaction, IListEvent, IListGestureEvent, IListMouseEvent, IListElementRenderDetails, IListRenderer, IListTouchEvent, IListVirtualDelegate, ListError, NotSelectableGroupId, NotSelectableGroupIdType } from './list.js';
 import { IListView, IListViewAccessibilityProvider, IListViewDragAndDrop, IListViewOptions, IListViewOptionsUpdate, ListViewTargetSector, ListView } from './listView.js';
-import { IMouseWheelEvent, StandardMouseEvent } from '../../mouseEvent.js';
+import { StandardMouseEvent } from '../../mouseEvent.js';
 import { autorun, constObservable, IObservable } from '../../../common/observable.js';
 
 interface ITraitChangeEvent {
@@ -268,43 +265,6 @@ export function isMonacoEditor(e: HTMLElement): boolean {
 	return isListElementDescendantOfClass(e, 'monaco-editor');
 }
 
-export function isMonacoCustomToggle(e: HTMLElement): boolean {
-	return isListElementDescendantOfClass(e, 'monaco-custom-toggle');
-}
-
-export function isActionItem(e: HTMLElement): boolean {
-	return isListElementDescendantOfClass(e, 'action-item');
-}
-
-export function isMonacoTwistie(e: HTMLElement): boolean {
-	return isListElementDescendantOfClass(e, 'monaco-tl-twistie');
-}
-
-export function isStickyScrollElement(e: HTMLElement): boolean {
-	return isListElementDescendantOfClass(e, 'monaco-tree-sticky-row');
-}
-
-export function isStickyScrollContainer(e: HTMLElement): boolean {
-	return e.classList.contains('monaco-tree-sticky-container');
-}
-
-export function isButton(e: HTMLElement): boolean {
-	if ((e.tagName === 'A' && e.classList.contains('monaco-button')) ||
-		(e.tagName === 'DIV' && e.classList.contains('monaco-button-dropdown'))) {
-		return true;
-	}
-
-	if (e.classList.contains('monaco-list')) {
-		return false;
-	}
-
-	if (!e.parentElement) {
-		return false;
-	}
-
-	return isButton(e.parentElement);
-}
-
 class KeyboardController<T> implements IDisposable {
 
 	private readonly disposables = new DisposableStore();
@@ -346,12 +306,6 @@ class KeyboardController<T> implements IDisposable {
 					}
 			}
 		}));
-	}
-
-	updateOptions(optionsUpdate: IListOptionsUpdate): void {
-		if (optionsUpdate.multipleSelectionSupport !== undefined) {
-			this.multipleSelectionSupport = optionsUpdate.multipleSelectionSupport;
-		}
 	}
 
 	private onEnter(e: StandardKeyboardEvent): void {
@@ -487,10 +441,6 @@ class TypeNavigationController<T> implements IDisposable {
 		}
 
 		this.mode = options.typeNavigationMode ?? TypeNavigationMode.Automatic;
-	}
-
-	trigger(): void {
-		this.triggered = !this.triggered;
 	}
 
 	private enable(): void {
@@ -687,7 +637,6 @@ export class MouseController<T> implements IDisposable {
 	private readonly disposables = new DisposableStore();
 
 	private readonly _onPointer = this.disposables.add(new Emitter<IListMouseEvent<T>>());
-	get onPointer() { return this._onPointer.event; }
 
 	constructor(protected list: List<T>) {
 		if (list.options.multipleSelectionSupport !== false) {
@@ -705,16 +654,6 @@ export class MouseController<T> implements IDisposable {
 		}
 
 		Event.any<IListMouseEvent<any> | IListGestureEvent<any>>(list.onMouseClick, list.onMouseMiddleClick, list.onTap)(this.onViewPointer, this, this.disposables);
-	}
-
-	updateOptions(optionsUpdate: IListOptionsUpdate): void {
-		if (optionsUpdate.multipleSelectionSupport !== undefined) {
-			this.multipleSelectionController = undefined;
-
-			if (optionsUpdate.multipleSelectionSupport) {
-				this.multipleSelectionController = this.list.options.multipleSelectionController || DefaultMultipleSelectionController;
-			}
-		}
 	}
 
 	protected isSelectionSingleChangeEvent(event: IListMouseEvent<any> | IListTouchEvent<any>): boolean {
@@ -1083,21 +1022,11 @@ export interface IListOptions<T> extends IListOptionsUpdate {
 	readonly accessibilityProvider?: IListAccessibilityProvider<T>;
 	readonly keyboardNavigationEventFilter?: IKeyboardNavigationEventFilter;
 
-	// list view options
-	readonly useShadows?: boolean;
-	readonly verticalScrollMode?: ScrollbarVisibility;
 	readonly setRowLineHeight?: boolean;
-	readonly setRowHeight?: boolean;
-	readonly supportDynamicHeights?: boolean;
 	readonly mouseSupport?: boolean;
-	readonly userSelection?: boolean;
 	readonly horizontalScrolling?: boolean;
 	readonly scrollByPage?: boolean;
-	readonly transformOptimization?: boolean;
 	readonly smoothScrolling?: boolean;
-	readonly scrollableElementChangeOptions?: ScrollableElementChangeOptions;
-	readonly alwaysConsumeMouseWheel?: boolean;
-	readonly initialSize?: Dimension;
 	readonly paddingTop?: number;
 	readonly paddingBottom?: number;
 }
@@ -1133,38 +1062,6 @@ export interface IListStyles {
 	tableColumnsBorder: string | undefined;
 	tableOddRowsBackgroundColor: string | undefined;
 }
-
-export const unthemedListStyles: IListStyles = {
-	listFocusBackground: '#7FB0D0',
-	listActiveSelectionBackground: '#0E639C',
-	listActiveSelectionForeground: '#FFFFFF',
-	listActiveSelectionIconForeground: '#FFFFFF',
-	listFocusAndSelectionOutline: '#90C2F9',
-	listFocusAndSelectionBackground: '#094771',
-	listFocusAndSelectionForeground: '#FFFFFF',
-	listInactiveSelectionBackground: '#3F3F46',
-	listInactiveSelectionIconForeground: '#FFFFFF',
-	listHoverBackground: '#2A2D2E',
-	listDropOverBackground: '#383B3D',
-	listDropBetweenBackground: '#EEEEEE',
-	treeIndentGuidesStroke: '#a9a9a9',
-	treeInactiveIndentGuidesStroke: Color.fromHex('#a9a9a9').transparent(0.4).toString(),
-	tableColumnsBorder: Color.fromHex('#cccccc').transparent(0.2).toString(),
-	tableOddRowsBackgroundColor: Color.fromHex('#cccccc').transparent(0.04).toString(),
-	listBackground: undefined,
-	listFocusForeground: undefined,
-	listInactiveSelectionForeground: undefined,
-	listInactiveFocusForeground: undefined,
-	listInactiveFocusBackground: undefined,
-	listHoverForeground: undefined,
-	listFocusOutline: undefined,
-	listInactiveFocusOutline: undefined,
-	listSelectionOutline: undefined,
-	listHoverOutline: undefined,
-	treeStickyScrollBackground: undefined,
-	treeStickyScrollBorder: undefined,
-	treeStickyScrollShadow: undefined
-};
 
 const DefaultOptions: IListOptions<any> = {
 	keyboardSupport: true,
@@ -1433,17 +1330,10 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 		return Event.map(this.eventBufferer.wrapEvent(this.selection.onChange), e => this.toListEvent(e), this.disposables);
 	}
 
-	get domId(): string { return this.view.domId; }
-	get onDidScroll(): Event<ScrollEvent> { return this.view.onDidScroll; }
 	get onMouseClick(): Event<IListMouseEvent<T>> { return this.view.onMouseClick; }
 	get onMouseDblClick(): Event<IListMouseEvent<T>> { return this.view.onMouseDblClick; }
 	get onMouseMiddleClick(): Event<IListMouseEvent<T>> { return this.view.onMouseMiddleClick; }
-	get onPointer(): Event<IListMouseEvent<T>> { return this.mouseController.onPointer; }
-	get onMouseUp(): Event<IListMouseEvent<T>> { return this.view.onMouseUp; }
 	get onMouseDown(): Event<IListMouseEvent<T>> { return this.view.onMouseDown; }
-	get onMouseOver(): Event<IListMouseEvent<T>> { return this.view.onMouseOver; }
-	get onMouseMove(): Event<IListMouseEvent<T>> { return this.view.onMouseMove; }
-	get onMouseOut(): Event<IListMouseEvent<T>> { return this.view.onMouseOut; }
 	get onTouchStart(): Event<IListTouchEvent<T>> { return this.view.onTouchStart; }
 	get onTap(): Event<IListGestureEvent<T>> { return this.view.onTap; }
 
@@ -1485,14 +1375,8 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 	}
 
 	@memoize get onKeyDown(): Event<KeyboardEvent> { return this.disposables.add(new DomEmitter(this.view.domNode, 'keydown')).event; }
-	@memoize get onKeyUp(): Event<KeyboardEvent> { return this.disposables.add(new DomEmitter(this.view.domNode, 'keyup')).event; }
-	@memoize get onKeyPress(): Event<KeyboardEvent> { return this.disposables.add(new DomEmitter(this.view.domNode, 'keypress')).event; }
-
-	@memoize get onDidFocus(): Event<void> { return Event.signal(this.disposables.add(new DomEmitter(this.view.domNode, 'focus', true)).event); }
-	@memoize get onDidBlur(): Event<void> { return Event.signal(this.disposables.add(new DomEmitter(this.view.domNode, 'blur', true)).event); }
 
 	private readonly _onDidDispose = new Emitter<void>();
-	readonly onDidDispose: Event<void> = this._onDidDispose.event;
 
 	constructor(
 		private user: string,
@@ -1586,24 +1470,6 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 		return new MouseController(this);
 	}
 
-	updateOptions(optionsUpdate: IListOptionsUpdate = {}): void {
-		this._options = { ...this._options, ...optionsUpdate };
-
-		this.typeNavigationController?.updateOptions(this._options);
-
-		if (this._options.multipleSelectionController !== undefined) {
-			if (this._options.multipleSelectionSupport) {
-				this.view.domNode.setAttribute('aria-multiselectable', 'true');
-			} else {
-				this.view.domNode.removeAttribute('aria-multiselectable');
-			}
-		}
-
-		this.mouseController.updateOptions(optionsUpdate);
-		this.keyboardController?.updateOptions(optionsUpdate);
-		this.view.updateOptions(optionsUpdate);
-	}
-
 	get options(): IListOptions<T> {
 		return this._options;
 	}
@@ -1624,48 +1490,12 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 		this.eventBufferer.bufferEvents(() => this.spliceable.splice(start, deleteCount, elements));
 	}
 
-	updateWidth(index: number): void {
-		this.view.updateWidth(index);
-	}
-
-	updateElementHeight(index: number, size: number | undefined): void {
-		this.view.updateElementHeight(index, size, null);
-	}
-
-	rerender(): void {
-		this.view.rerender();
-	}
-
 	element(index: number): T {
 		return this.view.element(index);
 	}
 
-	indexOf(element: T): number {
-		return this.view.indexOf(element);
-	}
-
-	indexAt(position: number): number {
-		return this.view.indexAt(position);
-	}
-
 	get length(): number {
 		return this.view.length;
-	}
-
-	get contentHeight(): number {
-		return this.view.contentHeight;
-	}
-
-	get contentWidth(): number {
-		return this.view.contentWidth;
-	}
-
-	get onDidChangeContentHeight(): Event<number> {
-		return this.view.onDidChangeContentHeight;
-	}
-
-	get onDidChangeContentWidth(): Event<number> {
-		return this.view.onDidChangeContentWidth;
 	}
 
 	get scrollTop(): number {
@@ -1688,22 +1518,6 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 		return this.view.scrollHeight;
 	}
 
-	get renderHeight(): number {
-		return this.view.renderHeight;
-	}
-
-	get firstVisibleIndex(): number {
-		return this.view.firstVisibleIndex;
-	}
-
-	get firstMostlyVisibleIndex(): number {
-		return this.view.firstMostlyVisibleIndex;
-	}
-
-	get lastVisibleIndex(): number {
-		return this.view.lastVisibleIndex;
-	}
-
 	get ariaLabel(): string {
 		return this._ariaLabel;
 	}
@@ -1719,10 +1533,6 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 
 	layout(height?: number, width?: number): void {
 		this.view.layout(height, width);
-	}
-
-	triggerTypeNavigation(): void {
-		this.typeNavigationController?.trigger();
 	}
 
 	setSelection(indexes: number[], browserEvent?: UIEvent): void {
@@ -1760,11 +1570,6 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 
 	getAnchor(): number | undefined {
 		return this.anchor.get().at(0);
-	}
-
-	getAnchorElement(): T | undefined {
-		const anchor = this.getAnchor();
-		return typeof anchor === 'undefined' ? undefined : this.element(anchor);
 	}
 
 	/**
@@ -1998,58 +1803,12 @@ export class List<T> implements ISpliceable<T>, IDisposable {
 		}
 	}
 
-	/**
-	 * Returns the relative position of an element rendered in the list.
-	 * Returns `null` if the element isn't *entirely* in the visible viewport.
-	 */
-	getRelativeTop(index: number, paddingTop: number = 0): number | null {
-		if (index < 0 || index >= this.length) {
-			throw new ListError(this.user, `Invalid index ${index}`);
-		}
-
-		const scrollTop = this.view.getScrollTop();
-		const elementTop = this.view.elementTop(index);
-		const elementHeight = this.view.elementHeight(index);
-
-		if (elementTop < scrollTop + paddingTop || elementTop + elementHeight > scrollTop + this.view.renderHeight) {
-			return null;
-		}
-
-		// y = mx + b
-		const m = elementHeight - this.view.renderHeight + paddingTop;
-		return Math.abs((scrollTop + paddingTop - elementTop) / m);
-	}
-
-	isDOMFocused(): boolean {
-		return isActiveElement(this.view.domNode);
-	}
-
 	getHTMLElement(): HTMLElement {
 		return this.view.domNode;
 	}
 
-	getScrollableElement(): HTMLElement {
-		return this.view.scrollableElementDomNode;
-	}
-
-	getElementID(index: number): string {
-		return this.view.getElementDomId(index);
-	}
-
-	getElementTop(index: number): number {
-		return this.view.elementTop(index);
-	}
-
-	getElementHeight(index: number): number {
-		return this.view.elementHeight(index);
-	}
-
 	style(styles: IListStyles): void {
 		this.styleController.style(styles);
-	}
-
-	delegateScrollFromMouseWheelEvent(browserEvent: IMouseWheelEvent) {
-		this.view.delegateScrollFromMouseWheelEvent(browserEvent);
 	}
 
 	private toListEvent({ indexes, browserEvent }: ITraitChangeEvent) {

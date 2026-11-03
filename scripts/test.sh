@@ -51,5 +51,4 @@ if [[ -n "$VNILINK_HEADLESS_TEST" ]]; then
 	done
 fi
 
-node build/lib/preLaunch.ts
 exec node build/run.ts test:ui "$@"

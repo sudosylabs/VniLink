@@ -37,8 +37,7 @@ export const enum SettingsRefresh {
 }
 
 /**
- * One settings page in Home, in the shape of VS Code's settings layout. The
- * class names keep each page's established look; the page renders the rest.
+ * One settings page in Home. The class names keep each page's established look; the page renders the rest.
  */
 export interface ISettingsPageDescriptor {
 	readonly id: string;

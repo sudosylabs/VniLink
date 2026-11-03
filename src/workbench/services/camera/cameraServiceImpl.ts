@@ -5,8 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { DataChannelClient } from '../../../platform/engine/electron-browser/dataChannelClient.js';
-import type { DataChannelRequest, DataPacket } from '../../../platform/engine/common/dataChannel.js';
+import { IDataChannelService } from '../../../platform/engine/common/dataChannelService.js';
 import { engineErrorCategory, type RemoteStatus } from '../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
@@ -16,19 +15,13 @@ import { INativeRuntimeService } from '../nativeRuntime/nativeRuntimeService.js'
 import { ICameraService, type CameraFailure, type CameraList, type ICameraStream } from './cameraService.js';
 import { recordingStartFailure, type RecordingStartFailure } from '../recording/sessionRecording.js';
 import { EngineCameraStream } from './engineCameraStream.js';
-import { createWebCodecsDecoder } from './webCodecsDecoder.js';
+import { IVideoDecoderService } from './videoDecoderService.js';
 
 /**
  * The picture asked of the host, which picks its camera's nearest format.
  * Fixed until there is a quality setting.
  */
 const requestedPicture = { width: 1280, height: 720, fps: 30 } as const;
-
-export type CameraChannelOpener = (
-	request: Omit<DataChannelRequest, 'requestId'>,
-	consume: (packet: DataPacket) => Promise<void>,
-	onError: (error: Error) => void,
-) => Promise<{ close(): void }>;
 
 /** What the host reports about its camera, as a reason it can't be opened. */
 export function cameraRefusal(status: RemoteStatus | undefined): CameraFailure | undefined {
@@ -55,15 +48,14 @@ export function cameraOpenFailure(error: unknown): CameraFailure {
 
 export class CameraService implements ICameraService {
 	declare public readonly _serviceBrand: undefined;
-	private readonly openChannel: CameraChannelOpener;
 
 	constructor(
 		@IEngineService private readonly engine: IEngineService,
 		@IDeviceService private readonly devices: IDeviceService,
 		@INativeRuntimeService private readonly nativeRuntime: INativeRuntimeService,
-	) {
-		this.openChannel = (request, consume, onError) => DataChannelClient.open(engine, request, consume, onError);
-	}
+		@IDataChannelService private readonly dataChannels: IDataChannelService,
+		@IVideoDecoderService private readonly videoDecoders: IVideoDecoderService,
+	) { }
 
 	public async cameras(deviceId: string): Promise<{ readonly failure: CameraFailure } | CameraList> {
 		let report;
@@ -97,9 +89,9 @@ export class CameraService implements ICameraService {
 		if (!session) {
 			return { failure: 'disconnected' };
 		}
-		const stream = new EngineCameraStream(createWebCodecsDecoder);
+		const stream = new EngineCameraStream((codec, output, error) => this.videoDecoders.createDecoder(codec, output, error));
 		try {
-			const channel = await this.openChannel(
+			const channel = await this.dataChannels.open(
 				{ kind: 'camera', sessionId: session.id, generation: session.generation, media: { type: 'camera', deviceId: cameraId, ...requestedPicture } },
 				packet => stream.consume(packet),
 				() => {

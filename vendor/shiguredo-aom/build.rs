@@ -104,10 +104,8 @@ fn download_prebuilt(out_dir: &Path) -> PathBuf {
     );
     let archive_name = format!("libaom-{}.tar.gz", target);
     let archive_url = format!("{}/{}", base_url, archive_name);
-    let sha256_url = format!("{}/{}.sha256", base_url, archive_name);
 
     let archive_path = out_dir.join("prebuilt.tar.gz");
-    let sha256_path = out_dir.join("prebuilt.sha256");
     let prebuilt_dir = out_dir.join("prebuilt");
     fs::create_dir_all(&prebuilt_dir).expect("failed to create prebuilt directory");
 
@@ -123,19 +121,9 @@ fn download_prebuilt(out_dir: &Path) -> PathBuf {
         panic!("failed to download prebuilt library: {}", archive_url);
     }
 
-    // curl で SHA256 チェックサムをダウンロード
-    let status = Command::new("curl")
-        .args(["-fsSL", "-o"])
-        .arg(&sha256_path)
-        .arg(&sha256_url)
-        .status()
-        .expect("failed to execute curl");
-    if !status.success() {
-        panic!("failed to download SHA256 checksum: {}", sha256_url);
-    }
-
     // SHA256 を検証
-    verify_sha256(&archive_path, &sha256_path);
+    // VniLink: checked against the hash recorded in Cargo.toml, not one fetched beside the archive.
+    verify_sha256(&archive_path, &pinned_prebuilt_sha256(&target));
 
     // tar で展開
     let status = Command::new("tar")
@@ -178,16 +166,10 @@ fn download_prebuilt(out_dir: &Path) -> PathBuf {
 }
 
 // SHA256 チェックサムを検証する
-fn verify_sha256(file_path: &Path, sha256_path: &Path) {
-    let expected = fs::read_to_string(sha256_path)
-        .expect("failed to read SHA256 checksum file")
-        .split_whitespace()
-        .next()
-        .expect("SHA256 checksum file is empty")
-        .to_lowercase();
+fn verify_sha256(file_path: &Path, expected: &str) {
 
     let actual = compute_sha256(file_path);
-    if actual != expected {
+    if actual != expected.to_lowercase() {
         panic!(
             "SHA256 checksum mismatch:\n  expected: {}\n  actual:   {}",
             expected, actual
@@ -689,6 +671,17 @@ fn git_clone_external_lib(build_dir: &Path) {
     if !success {
         panic!("failed to clone {LIB_NAME} repository");
     }
+    // VniLink: a tag can be moved, so the clone must be the commit recorded in Cargo.toml.
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(build_dir.join(LIB_NAME))
+        .output()
+        .expect("failed to run git rev-parse");
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    let expected = external_dependency_field("commit");
+    if head != expected {
+        panic!("{LIB_NAME} cloned at {head}, but Cargo.toml records {expected} for its tag");
+    }
 }
 
 // Cargo.toml から依存ライブラリの Git URL とバージョンタグを取得する
@@ -714,4 +707,38 @@ fn get_git_url_and_version() -> (String, String) {
             "Cargo.toml does not contain a valid [package.metadata.external-dependencies.{LIB_NAME}] table"
         );
     }
+}
+
+// VniLink: a field of [package.metadata.external-dependencies.{LIB_NAME}], which must exist.
+fn external_dependency() -> shiguredo_toml::Value {
+    let cargo_toml = shiguredo_toml::Value::Table(
+        shiguredo_toml::from_str(include_str!("Cargo.toml")).expect("failed to parse Cargo.toml"),
+    );
+    cargo_toml
+        .get("package")
+        .and_then(|v| v.get("metadata"))
+        .and_then(|v| v.get("external-dependencies"))
+        .and_then(|v| v.get(LIB_NAME))
+        .cloned()
+        .unwrap_or_else(|| panic!("Cargo.toml has no [package.metadata.external-dependencies.{LIB_NAME}] table"))
+}
+
+fn external_dependency_field(name: &str) -> String {
+    external_dependency()
+        .get(name)
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("[package.metadata.external-dependencies.{LIB_NAME}] has no {name}"))
+        .to_string()
+}
+
+// VniLink: the SHA-256 recorded for `target`'s prebuilt archive; a target without one is refused.
+fn pinned_prebuilt_sha256(target: &str) -> String {
+    external_dependency()
+        .get("prebuilt-sha256")
+        .and_then(|v| v.get(target))
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            panic!("Cargo.toml records no prebuilt SHA-256 for {LIB_NAME} on {target}; add it to [package.metadata.external-dependencies.{LIB_NAME}.prebuilt-sha256] or build it with the source-build feature")
+        })
+        .to_string()
 }

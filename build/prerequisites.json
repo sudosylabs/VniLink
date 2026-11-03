@@ -114,6 +114,16 @@
         "default": "`rustup set default-host x86_64-pc-windows-gnu`, then `rustup toolchain install`"
       }
     },
+    "rust-fuzz": {
+      "title": "Nightly Rust with cargo-fuzz",
+      "purpose": "The fuzz targets in crates/vnilink/fuzz build with nightly Rust and sanitizer flags of cargo-fuzz.",
+      "check": {
+        "custom": "rust-fuzz"
+      },
+      "fix": {
+        "default": "`rustup toolchain install nightly --profile minimal`, then `cargo +nightly install cargo-fuzz --locked`"
+      }
+    },
     "xcode-tools": {
       "title": "Xcode Command Line Tools",
       "platforms": ["darwin"],
@@ -617,6 +627,10 @@
         "liquid-glass"
       ]
     },
+    "typecheck": {
+      "description": "Typecheck the application, the tests and the build",
+      "requires": ["node"]
+    },
     "build:release": {
       "description": "Build the release payload",
       "same": "build"
@@ -625,8 +639,16 @@
       "description": "Assemble the unsigned application",
       "same": "build"
     },
+    "package:dir": {
+      "description": "Build the release payload and assemble the unsigned application from it",
+      "same": "build"
+    },
     "package:installers": {
-      "description": "Build the installers",
+      "description": "Assemble the application and build its installers",
+      "same": "package:installers:staged"
+    },
+    "package:installers:staged": {
+      "description": "Build the installers from the assembled application",
       "same": "build",
       "requires": ["rpmbuild"]
     },
@@ -666,13 +688,48 @@
       "description": "Run the UI scenarios in Electron",
       "requires": ["platform", "node", "linux-runtime-libraries", "test-display", "linux-sandbox"]
     },
+    "test": {
+      "description": "Build, then run the native bridge tests and the UI scenarios",
+      "same": "build",
+      "requires": ["linux-runtime-libraries", "test-display", "linux-sandbox"]
+    },
+    "test:native": {
+      "description": "Run the native bridge tests against the staged addon",
+      "requires": ["platform", "node"]
+    },
+    "test:tooling": {
+      "description": "Run the build's own tests",
+      "requires": ["node"]
+    },
+    "fuzz": {
+      "description": "Run the fuzz targets for a bounded time each",
+      "requires": ["rust", "rust-fuzz"]
+    },
+    "test:unit": {
+      "description": "Run the common and node unit tests under src in Node",
+      "requires": ["node"]
+    },
+    "test:unit:electron": {
+      "description": "Run the browser and electron-browser unit tests under src in Electron",
+      "requires": ["platform", "node", "linux-runtime-libraries", "test-display", "linux-sandbox"]
+    },
+    "test:windows": {
+      "description": "Run the full Windows suite",
+      "platforms": ["win32"],
+      "requires": ["platform", "node"]
+    },
     "test:rust": {
       "description": "Run the Rust tests",
       "same": "build",
       "requires": ["process-tools", "ffprobe"]
     },
+    "test:loom": {
+      "description": "Run the loom models of the core's concurrent pieces",
+      "same": "build",
+      "requires": ["process-tools"]
+    },
     "test:stress": {
-      "description": "Run a service's functional suite again and again to find an order the engines do not guarantee",
+      "description": "Run a service's functional suite again and again to find an order the engines do not guarantee; --load keeps every core busy meanwhile",
       "same": "build",
       "requires": ["process-tools"]
     },
@@ -735,6 +792,10 @@
       "description": "Check the copied VS Code sources",
       "requires": ["node"]
     },
+    "check:unused": {
+      "description": "Find declarations in src that nothing uses",
+      "requires": ["node"]
+    },
     "check:hygiene": {
       "description": "Reject personal details in the repository",
       "requires": ["node", "git"]
@@ -742,6 +803,35 @@
     "check:license": {
       "description": "Check the license notice of every source file",
       "requires": ["node", "git"]
+    },
+    "check": {
+      "description": "Run every check that needs no build: metadata, hygiene, licenses, copies, unused code, formatting, lint, types and unit tests",
+      "requires": ["node", "git"]
+    },
+    "check:rust": {
+      "description": "Check the Rust workspace's formatting and lints",
+      "requires": ["rust"]
+    },
+    "validate": {
+      "description": "Run what CI runs on this computer: the checks, the Rust checks and tests, the build and every test",
+      "same": "test",
+      "requires": ["process-tools", "ffprobe"]
+    },
+    "lint": {
+      "description": "Lint the TypeScript and the stylesheets",
+      "requires": ["node"]
+    },
+    "lint:ts": {
+      "description": "Lint the TypeScript",
+      "requires": ["node"]
+    },
+    "lint:css": {
+      "description": "Lint the stylesheets",
+      "requires": ["node"]
+    },
+    "lint:fix": {
+      "description": "Fix what the linters can",
+      "requires": ["node"]
     },
     "license:apply": {
       "description": "Add the license notice to source files that lack it",
@@ -753,6 +843,10 @@
     },
     "format": {
       "description": "Format the sources",
+      "requires": ["node"]
+    },
+    "format:check": {
+      "description": "Check that the sources are formatted",
       "requires": ["node"]
     },
     "vscode": {

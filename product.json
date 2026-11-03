@@ -1,5 +1,6 @@
 {
   "nameShort": "VniLink",
+  "description": "Cross-platform remote access through paired computers.",
   "nameLong": "VniLink",
   "applicationName": "vnilink",
   "appId": "fr.sudosy.vnilink",

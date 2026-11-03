@@ -19,10 +19,10 @@ use std::time::Duration;
 
 use expect_test::expect;
 
-use super::{sharing, Copied};
+use super::sharing;
 use vnilink::{CoreEvent, Error, HostClipboard, ServiceKind, SessionInfo};
-use vnilink_testkit::desktop::{keyframe, next_picture, InputLog};
-use vnilink_testkit::{traced, wait_for, Engine, TestResult};
+use vnilink_testkit::desktop::{keyframe, next_picture, Copied, InputLog};
+use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
 
 /// The controller's services connection to `host`, whose desktop logs the
 /// input it applies; the host does not share its clipboard yet.
@@ -88,11 +88,11 @@ fn text_copied_on_both_computers_at_once_crosses_both_ways() -> TestResult {
     let trace = traced();
     let (host, controller) = (Engine::start("host"), Engine::start("controller"));
     let connection = connected(&host, &controller)?;
-    let copied = Copied::install(&host)?;
+    let copied = Copied::install(&host.core)?;
     let desktop = controller.open_desktop(&connection)?;
     let remote = host
         .hosted_for(ServiceKind::Desktop, &controller)
-        .expect("the host serves the desktop once it opened");
+        .ok_or("the host serves the desktop once it opened")?;
     let (host, controller) = (&host.core, &controller.core);
     let info = desktop.info();
     assert_eq!(
@@ -146,7 +146,7 @@ fn text_copied_on_both_computers_at_once_crosses_both_ways() -> TestResult {
     // Presence may be told meanwhile; the clipboard's is the event asked of.
     let service = wait_for(
         "the controller to be told the host's text arrived",
-        Duration::from_secs(5),
+        DEFAULT_WAIT,
         || {
             let event = events.recv_timeout(Duration::from_millis(20))?;
             assert!(
@@ -213,7 +213,7 @@ fn withdrawing_the_grant_refuses_text_and_the_desktop_lives() -> TestResult {
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let connection = connected(&host, &controller)?;
-    let copied = Copied::install(&host)?;
+    let copied = Copied::install(&host.core)?;
     host.core.set_desktop_sharing(sharing(true))?;
     let desktop = controller.open_desktop(&connection)?;
     desktop.submit_clipboard("granted")?;
@@ -269,13 +269,13 @@ fn a_reopened_desktop_starts_without_text_and_the_closed_one_is_fenced() -> Test
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let connection = connected(&host, &controller)?;
-    let copied = Copied::install(&host)?;
+    let copied = Copied::install(&host.core)?;
     host.core.set_desktop_sharing(sharing(true))?;
     let desktop = controller.open_desktop(&connection)?;
     let info = desktop.info();
     let remote = host
         .hosted_for(ServiceKind::Desktop, &controller)
-        .expect("the host serves the desktop once it opened");
+        .ok_or("the host serves the desktop once it opened")?;
     host.core
         .publish_desktop_clipboard(remote.id, remote.generation, "host copy")?;
     assert_eq!(
@@ -354,11 +354,12 @@ fn a_reopened_desktop_starts_without_text_and_the_closed_one_is_fenced() -> Test
 }
 
 /// While the host's clipboard is stuck in a paste, the host's engine still
-/// answers, and closing the desktop ends the waiting paste; the connection
-/// is left as it was.
+/// answers, and closing the desktop ends the waiting paste as closed, not
+/// timed out; the connection is left as it was. Both answers come while
+/// the paste is still stuck.
 #[test]
 fn a_stuck_clipboard_holds_up_neither_the_engine_nor_closing_the_desktop() -> TestResult {
-    let _trace = traced();
+    let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let connection = connected(&host, &controller)?;
@@ -373,7 +374,7 @@ fn a_stuck_clipboard_holds_up_neither_the_engine_nor_closing_the_desktop() -> Te
                 .expect("the test waits for the paste");
         })
     };
-    entry.recv_timeout(Duration::from_secs(5))?;
+    entry.recv_timeout(DEFAULT_WAIT)?;
     let (snapshot_done, snapshot_taken) = mpsc::channel();
     let snapshot = {
         let host = Arc::clone(&host.core);
@@ -383,29 +384,27 @@ fn a_stuck_clipboard_holds_up_neither_the_engine_nor_closing_the_desktop() -> Te
                 .expect("the test waits for the snapshot");
         })
     };
-    let snapshot_result = snapshot_taken.recv_timeout(Duration::from_secs(1));
+    let snapshot_result = snapshot_taken.recv_timeout(DEFAULT_WAIT);
     desktop.close();
-    let request_result = result.recv_timeout(Duration::from_secs(1));
+    let request_result = result.recv_timeout(DEFAULT_WAIT);
     release.send(())?;
     request.join().expect("the paste did not panic");
     snapshot.join().expect("the snapshot did not panic");
     assert!(
-        snapshot_result
-            .expect("the host's snapshot answers within a second while its clipboard is stuck")
-            .is_ok_and(|snapshot| snapshot.capabilities.clipboard),
+        snapshot_result?.is_ok_and(|snapshot| snapshot.capabilities.clipboard),
         "the host's snapshot still reports its clipboard while that clipboard is stuck"
     );
+    let request_result = request_result?;
     assert!(
-        request_result
-            .expect("closing the desktop ends its waiting paste within a second")
-            .is_err(),
-        "a paste ended by closing its desktop fails"
+        matches!(request_result, Err(Error::NoSession)),
+        "a paste ended by closing its desktop fails as closed, not by its own timeout: {request_result:?}"
     );
     assert_eq!(
         controller.core.controller_session(connection.id)?,
         connection,
         "closing the desktop leaves the connection as it was"
     );
+    trace.assert_unrecorded("copied content", &["blocked"]);
     Ok(())
 }
 
@@ -425,7 +424,7 @@ fn each_computers_desktop_has_its_own_clipboard() -> TestResult {
         desktops.push(controller.open_desktop(&connection)?);
         owners.push(
             host.hosted_for(ServiceKind::Desktop, &controller)
-                .expect("the host serves the desktop once it opened"),
+                .ok_or("the host serves the desktop once it opened")?,
         );
     }
     assert!(
@@ -494,7 +493,7 @@ fn each_computers_desktop_has_its_own_clipboard() -> TestResult {
 #[test]
 fn an_unacknowledged_paste_times_out_with_the_one_behind_it_and_pictures_still_arrive() -> TestResult
 {
-    let _trace = traced();
+    let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
     let connection = connected(&host, &controller)?;
@@ -509,7 +508,7 @@ fn an_unacknowledged_paste_times_out_with_the_one_behind_it_and_pictures_still_a
         let desktop = Arc::clone(&desktop);
         std::thread::spawn(move || desktop.submit_clipboard("in flight"))
     };
-    entry.recv_timeout(Duration::from_secs(5))?;
+    entry.recv_timeout(DEFAULT_WAIT)?;
     let queued = {
         let desktop = Arc::clone(&desktop);
         std::thread::spawn(move || desktop.submit_clipboard("queued"))
@@ -518,7 +517,7 @@ fn an_unacknowledged_paste_times_out_with_the_one_behind_it_and_pictures_still_a
     let queued = queued.join().expect("the queued paste did not panic");
     // The pipe ends after the caller stops waiting; wait for that, not
     // merely the caller's timeout.
-    wait_for("the clipboard pipe to end", Duration::from_secs(8), || {
+    wait_for("the clipboard pipe to end", DEFAULT_WAIT, || {
         desktop.clipboard_text().is_err().then_some(())
     });
     release.send(())?;
@@ -527,17 +526,13 @@ fn an_unacknowledged_paste_times_out_with_the_one_behind_it_and_pictures_still_a
         "an unacknowledged paste times out: {in_flight:?}"
     );
     assert!(queued.is_err(), "the paste queued behind it fails too");
-    let applied = wait_for(
-        "the stuck paste to be applied",
-        Duration::from_secs(8),
-        || {
-            let applied = applied
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .clone();
-            (applied.len() == 1).then_some(applied)
-        },
-    );
+    let applied = wait_for("the stuck paste to be applied", DEFAULT_WAIT, || {
+        let applied = applied
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        (applied.len() == 1).then_some(applied)
+    });
     assert_eq!(applied, ["in flight"], "the queued paste is never applied");
     assert!(
         !desktop.is_cancelled(),
@@ -545,7 +540,7 @@ fn an_unacknowledged_paste_times_out_with_the_one_behind_it_and_pictures_still_a
     );
     let remote = host
         .hosted_for(ServiceKind::Desktop, &controller)
-        .expect("the host serves the desktop once it opened");
+        .ok_or("the host serves the desktop once it opened")?;
     let video = desktop.subscribe_video()?;
     host.core
         .publish_desktop_video(remote.id, remote.generation, keyframe(1, vec![1]))?;
@@ -559,5 +554,6 @@ fn an_unacknowledged_paste_times_out_with_the_one_behind_it_and_pictures_still_a
         connection,
         "a timed-out paste leaves the connection as it was"
     );
+    trace.assert_unrecorded("copied content", &["in flight", "queued"]);
     Ok(())
 }

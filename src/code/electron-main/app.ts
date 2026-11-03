@@ -5,14 +5,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { app, BrowserWindow, nativeTheme, net, protocol, session } from 'electron';
+import { app, BrowserWindow, nativeTheme, net, powerMonitor, protocol, session } from 'electron';
 import type { BrowserWindow as BrowserWindowType, WebContents } from 'electron';
 import { release } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { setUnexpectedErrorHandler } from '../../base/common/errors.js';
+import { onUnexpectedError, setUnexpectedErrorHandler } from '../../base/common/errors.js';
 import { Event } from '../../base/common/event.js';
-import { Disposable, DisposableStore } from '../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, toDisposable } from '../../base/common/lifecycle.js';
 import { mark } from '../../base/common/performance.js';
 import { isMacintosh } from '../../base/common/platform.js';
 import { platform } from '../../base/common/process.js';
@@ -22,14 +23,12 @@ import { validatedIpcMain } from '../../base/parts/ipc/electron-main/ipcMain.js'
 import { ConfigurationChannel } from '../../platform/configuration/electron-main/configurationChannel.js';
 import { ConfigurationMainService, IConfigurationMainService } from '../../platform/configuration/electron-main/configurationMainService.js';
 import { launchedAtLogin } from '../../platform/configuration/electron-main/systemSettings.js';
-import { IEncryptionMainService } from '../../platform/encryption/common/encryption.js';
-import { EncryptionMainService } from '../../platform/encryption/electron-main/encryptionMainService.js';
 import { ENGINE_CHANNEL_NAME } from '../../platform/engine/common/engineService.js';
 import { EngineChannel } from '../../platform/engine/electron-main/engineChannel.js';
 import { EngineMainService, IEngineMainService } from '../../platform/engine/electron-main/engineMainService.js';
 import { HostingMainService, IHostingMainService } from '../../platform/hosting/electron-main/hostingMainService.js';
-import { IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
-import { ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
+import { electronScreenHostingEnvironment, IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
+import { electronTrayEnvironment, ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
 import { ISystemActionNoticeMainService, SystemActionNoticeMainService } from '../../platform/systemActions/electron-main/systemActionNotice.js';
 import { traySupported } from '../../platform/tray/electron-main/traySupport.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
@@ -42,6 +41,10 @@ import { BufferLogger } from '../../platform/log/common/bufferLog.js';
 import { ConsoleMainLogger, ILogService, LogLevel, parseLogLevel } from '../../platform/log/common/log.js';
 import { LogService } from '../../platform/log/common/logService.js';
 import { LoggerChannel } from '../../platform/log/electron-main/logIpc.js';
+import { LOGGER_CHANNEL_NAME } from '../../platform/log/common/loggerChannel.js';
+import { WindowLoggerChannel } from '../../platform/log/electron-main/windowLoggerChannel.js';
+import { runSelfCheck } from './selfCheck.js';
+import { joinShutdown, MainWindowRequests, runsInBackground, sharesScreen, startsWithoutWindow } from './applicationStartup.js';
 import { ILoggerMainService, LoggerMainService } from '../../platform/log/electron-main/loggerService.js';
 import { logsFolderName, pruneLogs } from '../../platform/log/electron-main/logsFolder.js';
 import { installApplicationMenu, registerEditingShortcuts } from '../../platform/menubar/electron-main/menubar.js';
@@ -59,12 +62,13 @@ import { IStateService } from '../../platform/state/node/state.js';
 import { SaveStrategy, StateService } from '../../platform/state/node/stateService.js';
 import { IRecordingMainService, RecordingMainService } from '../../platform/recording/electron-main/recordingMainService.js';
 import { CONFIGURATION_CHANNEL_NAME } from '../../platform/configuration/common/configurationSnapshot.js';
+import { contentSecurityPolicy } from '../../platform/window/common/contentSecurityPolicy.js';
 import { WINDOW_CONFIGURATION_CHANNEL, type INativeWindowConfiguration } from '../../platform/window/common/windowConfiguration.js';
 import { IWindowsMainService, WindowsMainService } from '../../platform/windows/electron-main/windowsMainService.js';
 import { registerDevelopmentWindow } from './development.js';
-import { contentSecurityPolicy, secureWebContents } from './webContentsSecurity.js';
+import { secureWebContents } from './webContentsSecurity.js';
 
-export interface ApplicationOptions {
+interface ApplicationOptions {
 	readonly showWindow?: boolean;
 	readonly temporaryEngine?: boolean;
 	/** Lets the temporary engine host this computer's screen, for the latency measurement. */
@@ -72,6 +76,10 @@ export interface ApplicationOptions {
 	/** Where that engine keeps the desktop portal's grant to share the screen. */
 	readonly temporaryEngineScreenGrant?: string;
 	readonly onReady?: (window: BrowserWindowType) => Promise<void>;
+	/** Exposes the automation driver to the window; only development smoke launches ask for it. */
+	readonly automationDriver?: boolean;
+	/** Runs `--self-check` once the window is ready, then removes `profile` and exits. */
+	readonly selfCheck?: { readonly output: string; readonly profile: string };
 }
 
 /** Files the `vnilink://app/` protocol serves: the workbench and the restart notice. Everything else is not found. */
@@ -83,30 +91,35 @@ const workbenchFiles = new Set(['/index.html', '/renderer.js', '/renderer.css', 
  */
 export class VniLinkApplication extends Disposable {
 	private readonly logService: LogService;
-	/** This run's logs folder, `<userData>/logs/<started at>`, as VS Code's `logsHome`. */
+	/** This run's logs folder, `<userData>/logs/<started at>`. */
 	private readonly logsHome: URI;
 	private readonly loggerService: LoggerMainService;
+	private readonly bufferLogger: BufferLogger;
 	private readonly stateService: StateService;
 	private readonly instantiationService: InstantiationService;
 	private started: Promise<void> | undefined;
-	private restored = false;
-	private opening: Promise<void> | undefined;
 
 	constructor(private readonly options: ApplicationOptions = {}) {
 		super();
 		const logLevel = process.argv.includes('--verbose') ? LogLevel.Trace : LogLevel.Info;
 		this.logsHome = URI.file(join(app.getPath('userData'), 'logs', logsFolderName(new Date())));
 		this.loggerService = this._register(new LoggerMainService(logLevel, this.logsHome));
-		// Main logs to the console at once and to main.log from here on, as VS Code's main does.
-		const bufferLogger = new BufferLogger(logLevel);
-		this.logService = this._register(new LogService(bufferLogger, [new ConsoleMainLogger(logLevel)]));
-		bufferLogger.logger = this.loggerService.createLogger('main', { name: 'Main' });
-		void pruneLogs(join(app.getPath('userData'), 'logs'), this.logsHome.fsPath).catch((error: unknown) => {
-			this.logService.warn('Older logs could not be removed', error);
-		});
+		// Main logs to the console at once, and to main.log once this process holds the instance lock.
+		this.bufferLogger = new BufferLogger(logLevel);
+		this.logService = this._register(new LogService(this.bufferLogger, [new ConsoleMainLogger(logLevel)]));
 		setUnexpectedErrorHandler(error => {
 			this.logService.error(error instanceof Error ? error : new Error(String(error)));
 		});
+		// An error nothing caught goes to the log, not to Electron's error dialog.
+		const unexpected = (error: unknown): void => {
+			onUnexpectedError(error);
+		};
+		process.on('uncaughtException', unexpected);
+		process.on('unhandledRejection', unexpected);
+		this._register(toDisposable(() => {
+			process.off('uncaughtException', unexpected);
+			process.off('unhandledRejection', unexpected);
+		}));
 		this.stateService = this._register(new StateService(SaveStrategy.DELAYED, join(app.getPath('userData'), 'storage.json'), this.logService));
 		this.instantiationService = this._register(new InstantiationService(this.createServices(), true));
 	}
@@ -115,18 +128,17 @@ export class VniLinkApplication extends Disposable {
 		return new ServiceCollection(
 			[ILogService, this.logService],
 			[ILoggerMainService, this.loggerService],
-			[ILifecycleMainService, new SyncDescriptor(LifecycleMainService)],
+			[ILifecycleMainService, new SyncDescriptor(LifecycleMainService, [app, powerMonitor])],
 			[IWindowsMainService, new SyncDescriptor(WindowsMainService)],
 			[INativeHostMainService, new SyncDescriptor(NativeHostMainService, [this.logsHome])],
 			[IEngineMainService, new SyncDescriptor(EngineMainService)],
 			[IHostingMainService, new SyncDescriptor(HostingMainService)],
-			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService)],
-			[ITrayMainService, new SyncDescriptor(TrayMainService)],
+			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService, [electronScreenHostingEnvironment])],
+			[ITrayMainService, new SyncDescriptor(TrayMainService, [electronTrayEnvironment])],
 			[ISystemActionNoticeMainService, new SyncDescriptor(SystemActionNoticeMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
-			[IEncryptionMainService, new SyncDescriptor(EncryptionMainService)],
 			[IStateService, this.stateService],
 		);
 	}
@@ -138,19 +150,22 @@ export class VniLinkApplication extends Disposable {
 
 	private async startup(): Promise<void> {
 		mark('vnilink/mainStart');
-		app.setName('VniLink');
 		if (!app.requestSingleInstanceLock()) {
+			// A second launch only wakes the first: it writes no logs and prunes none of the first's.
 			this.dispose();
 			app.quit();
 			return;
 		}
-		protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
-		this.instantiationService.invokeFunction(accessor => {
-			this.registerListeners(accessor);
+		this.bufferLogger.logger = this.loggerService.createLogger('main', { name: 'Main' });
+		void pruneLogs(join(app.getPath('userData'), 'logs'), this.logsHome.fsPath).catch((error: unknown) => {
+			this.logService.warn('Older logs could not be removed', error);
 		});
+		protocol.registerSchemesAsPrivileged([{ scheme: 'vnilink', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+		const windowRequests = this.instantiationService.invokeFunction(accessor => this.registerListeners(accessor));
 		try {
 			await app.whenReady();
 			this.checkRunning();
+			this.instantiationService.invokeFunction(accessor => accessor.get(ILifecycleMainService)).listenForSystemShutdown();
 			installApplicationMenu();
 			// The window's native context menus, which macOS uses.
 			registerContextMenuListener();
@@ -170,9 +185,7 @@ export class VniLinkApplication extends Disposable {
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
 				accessor.get(IHostingMainService).start();
-				// A temporary engine shares the screen only when it may
-				// capture; on Linux asking shows the desktop portal's dialog.
-				if (!this.options.temporaryEngine || this.options.temporaryEngineCaptures === true) {
+				if (sharesScreen(this.options)) {
 					void accessor.get(IScreenHostingMainService).start();
 				}
 				// A paired computer may ask this one to restart or shut down; its user sees and answers it.
@@ -181,17 +194,21 @@ export class VniLinkApplication extends Disposable {
 			if (await traySupported()) {
 				this.checkRunning();
 				this.instantiationService.invokeFunction(accessor => {
-					this.createTray(accessor);
+					this.createTray(accessor, windowRequests);
 				});
 			}
-			if (!this.options.temporaryEngine && this.runsInBackground() && launchedAtLogin()) {
+			if (startsWithoutWindow(this.options.temporaryEngine ?? false, this.runsInBackground(), () => launchedAtLogin())) {
 				// Started by the login item: accept paired devices without a window until the user opens one.
-				this.restored = true;
+				windowRequests.startedWithoutWindow();
 				return;
 			}
 			const window = await this.openWindow();
-			this.restored = true;
+			windowRequests.openedAtStartup();
 			mark('vnilink/windowReady');
+			if (this.options.selfCheck) {
+				await this.runSelfCheck(window, this.options.selfCheck);
+				return;
+			}
 			await this.options.onReady?.(window);
 		} catch (error) {
 			const lifecycle = this.instantiationService.invokeFunction(accessor => accessor.get(ILifecycleMainService));
@@ -205,6 +222,17 @@ export class VniLinkApplication extends Disposable {
 		}
 	}
 
+	private async runSelfCheck(window: BrowserWindowType, { output, profile }: { readonly output: string; readonly profile: string }): Promise<void> {
+		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
+		const lifecycle = this.instantiationService.invokeFunction(accessor => accessor.get(ILifecycleMainService));
+		const result = await runSelfCheck(window, engine, output);
+		process.stdout.write(`${JSON.stringify(result)}\n`);
+		await lifecycle.runShutdown();
+		this.dispose();
+		await rm(profile, { recursive: true, force: true }).catch(() => undefined);
+		app.exit(result.passed ? 0 : 1);
+	}
+
 	private checkRunning(): void {
 		const lifecycle = this.instantiationService.invokeFunction(accessor => accessor.get(ILifecycleMainService));
 		if (lifecycle.quitting || this._store.isDisposed) {
@@ -212,64 +240,44 @@ export class VniLinkApplication extends Disposable {
 		}
 	}
 
-	private registerListeners(accessor: ServicesAccessor): void {
+	/** Registers the application's listeners and returns what answers requests to see the window. */
+	private registerListeners(accessor: ServicesAccessor): MainWindowRequests {
 		const lifecycle = accessor.get(ILifecycleMainService);
 		const windows = accessor.get(IWindowsMainService);
 		const engine = accessor.get(IEngineMainService);
 		const configuration = accessor.get(IConfigurationMainService);
 		const state = accessor.get(IStateService);
-		this._register(lifecycle.onWillShutdown(event => {
-			event.join('engine', engine.stop());
-			event.join('configuration', configuration.flush());
-			event.join('state', state.close());
-		}));
+		const windowRequests = new MainWindowRequests(windows, lifecycle, () => this.openWindow(), this.logService);
+		this._register(joinShutdown(lifecycle.onWillShutdown, { engine, configuration, state }));
 		this._register(Event.fromNodeEventEmitter<WebContents>(app, 'web-contents-created', (_event: unknown, contents: WebContents) => contents)(secureWebContents));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
 			this.dispose();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'second-instance')(() => {
-			this.showWindow(windows, lifecycle);
+			windowRequests.request();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'activate')(() => {
-			this.showWindow(windows, lifecycle);
+			windowRequests.request();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'window-all-closed')(() => {
 			if (!this.runsInBackground()) {
 				app.quit();
 			}
 		}));
+		return windowRequests;
 	}
 
-	/** Whether closing the window leaves the application running; see `application.runInBackground`, restricted where no tray icon shows. */
 	private runsInBackground(): boolean {
 		const configuration = this.instantiationService.invokeFunction(accessor => accessor.get(IConfigurationMainService));
-		return !configuration.snapshot.restricted.includes('application.runInBackground') && configuration.getValue('application.runInBackground') !== false;
+		return runsInBackground(configuration.snapshot.restricted, configuration.getValue('application.runInBackground'));
 	}
 
-	private createTray(accessor: ServicesAccessor): void {
+	private createTray(accessor: ServicesAccessor, windowRequests: MainWindowRequests): void {
 		const tray = accessor.get(ITrayMainService);
-		const windows = accessor.get(IWindowsMainService);
-		const lifecycle = accessor.get(ILifecycleMainService);
 		this._register(tray.onDidRequestWindow(() => {
-			this.showWindow(windows, lifecycle);
+			windowRequests.request();
 		}));
 		tray.create();
-	}
-
-	/** Focuses the window, or opens it when the application runs without one. */
-	private showWindow(windows: WindowsMainService, lifecycle: LifecycleMainService): void {
-		if (!this.restored || lifecycle.quitting) {
-			return;
-		}
-		if (windows.getMainWindow()) {
-			windows.focusMainWindow();
-			return;
-		}
-		this.opening ??= this.openWindow().then(() => undefined, (error: unknown) => {
-			this.logService.error(error instanceof Error ? error : new Error(String(error)));
-		}).finally(() => {
-			this.opening = undefined;
-		});
 	}
 
 	private applyAppearance(accessor: ServicesAccessor): void {
@@ -283,9 +291,8 @@ export class VniLinkApplication extends Disposable {
 	}
 
 	/**
-	 * The application's own logs follow `diagnostics.applicationLog`, as VS
-	 * Code's Set Log Level does; `--verbose` keeps everything. The engine's
-	 * log has its own setting.
+	 * The application's own logs follow `diagnostics.applicationLog`;
+	 * `--verbose` keeps everything. The engine's log has its own setting.
 	 */
 	private applyLogLevel(accessor: ServicesAccessor): void {
 		if (process.argv.includes('--verbose')) {
@@ -340,7 +347,14 @@ export class VniLinkApplication extends Disposable {
 		}));
 		server.registerChannel(ENGINE_CHANNEL_NAME, disposables.add(new EngineChannel(engine, windows, nativeHost, permissions)));
 		server.registerChannel(PERMISSIONS_CHANNEL_NAME, new PermissionsChannel(permissions));
-		server.registerChannel('logger', disposables.add(new LoggerChannel(this.loggerService)));
+		server.registerChannel(LOGGER_CHANNEL_NAME, new WindowLoggerChannel(disposables.add(new LoggerChannel(this.loggerService)), this.logsHome));
+		// A closed window's loggers, and their open files, go with it.
+		disposables.add(windows.onDidOpenWindow(window => {
+			const windowId = window.id;
+			window.once('closed', () => {
+				this.loggerService.deregisterLoggers(windowId);
+			});
+		}));
 		server.registerChannel(CONFIGURATION_CHANNEL_NAME, new ConfigurationChannel(configuration));
 		server.registerChannel(UI_STATE_CHANNEL_NAME, new UIStateChannel(accessor.get(IStateService)));
 		server.registerChannel(RECORDING_CHANNEL_NAME, ProxyChannel.fromService({
@@ -348,7 +362,7 @@ export class VniLinkApplication extends Disposable {
 			createDestination: () => recording.createDestination(),
 			savePicture: (name: unknown, png: unknown) => recording.savePicture(name, png),
 		}, disposables, { disableMarshalling: true }));
-		// The preload resolves this before any IPC client exists, as VS Code's window configuration does.
+		// The preload resolves this before any IPC client exists.
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		validatedIpcMain.handle(WINDOW_CONFIGURATION_CHANNEL, event => Promise.resolve(this.windowConfiguration(event.sender, engine.available)));
 		disposables.add({
@@ -370,7 +384,7 @@ export class VniLinkApplication extends Disposable {
 			platform,
 			version: app.getVersion(),
 			engineAvailable,
-			enableSmokeTestDriver: this.options.temporaryEngine === true,
+			enableSmokeTestDriver: this.options.automationDriver === true,
 			logsPath: this.logsHome.fsPath,
 			logLevel: this.loggerService.getLogLevel(),
 		};
@@ -379,13 +393,19 @@ export class VniLinkApplication extends Disposable {
 	private async startEngine(): Promise<void> {
 		const engine = this.instantiationService.invokeFunction(accessor => accessor.get(IEngineMainService));
 		const temporary = this.options.temporaryEngine ?? false;
+		engine.setRestartHandler(() => this.initializeEngine(temporary));
 		try {
-			engine.setRestartHandler(() => this.initializeEngine(temporary));
 			await engine.start(temporary, temporary && this.options.temporaryEngineCaptures === true, this.options.temporaryEngineScreenGrant);
+		} catch (error) {
+			// The engine tries again by itself; its restart handler configures it then.
+			this.logService.error('The engine could not be started; it will be tried again.', error);
+			return;
+		}
+		try {
 			await this.initializeEngine(temporary);
 			mark('vnilink/engineReady');
 		} catch (error) {
-			this.logService.error('VniLink engine unavailable; secure installation could not be opened.', error);
+			this.logService.error('The engine started, but main could not configure it.', error);
 		}
 	}
 

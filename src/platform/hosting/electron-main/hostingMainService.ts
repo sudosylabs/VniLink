@@ -19,7 +19,7 @@ import { ILogService } from '../../log/common/log.js';
 export const IHostingMainService = createDecorator<HostingMainService>('hostingMainService');
 
 /** A paired device connected to this computer. */
-export interface HostedPeer {
+interface HostedPeer {
 	readonly id: string;
 	readonly name: string;
 	readonly phase: SessionPhase;
@@ -36,7 +36,7 @@ export interface HostingStatus {
 	readonly sessions: readonly HostedPeer[];
 }
 
-export const ACCEPT_CONNECTIONS_SETTING = 'application.acceptConnections';
+const ACCEPT_CONNECTIONS_SETTING = 'application.acceptConnections';
 
 const statusEvents = new Set<EngineEvent['type']>(['hostingChanged', 'sessionChanged', 'hostedServiceChanged', 'devicePaired', 'deviceUnpaired', 'peerRenamed']);
 

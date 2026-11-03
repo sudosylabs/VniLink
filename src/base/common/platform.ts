@@ -1,7 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: the sandboxed process comes from the `vnilink` global; no locale is read from VS Code's environment.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import * as nls from '../../nls.js';
 
@@ -21,7 +28,6 @@ let _isMobile = false;
 let _locale: string | undefined = undefined;
 let _language: string = LANGUAGE_DEFAULT;
 let _platformLocale: string = LANGUAGE_DEFAULT;
-let _translationsConfigFile: string | undefined = undefined;
 let _userAgent: string | undefined = undefined;
 
 export interface IProcessEnvironment {
@@ -53,9 +59,9 @@ declare const process: INodeProcess;
 const $globalThis: any = globalThis;
 
 let nodeProcess: INodeProcess | undefined = undefined;
-if (typeof $globalThis.vscode !== 'undefined' && typeof $globalThis.vscode.process !== 'undefined') {
+if (typeof $globalThis.vnilink !== 'undefined' && typeof $globalThis.vnilink.process !== 'undefined') {
 	// Native environment (sandboxed)
-	nodeProcess = $globalThis.vscode.process;
+	nodeProcess = $globalThis.vnilink.process;
 } else if (typeof process !== 'undefined' && typeof process?.versions?.node === 'string') {
 	// Native environment (non-sandboxed)
 	nodeProcess = process;
@@ -81,17 +87,6 @@ if (typeof nodeProcess === 'object') {
 	_isCI = !!nodeProcess.env['CI'] || !!nodeProcess.env['BUILD_ARTIFACTSTAGINGDIRECTORY'] || !!nodeProcess.env['GITHUB_WORKSPACE'];
 	_locale = LANGUAGE_DEFAULT;
 	_language = LANGUAGE_DEFAULT;
-	const rawNlsConfig = nodeProcess.env['VSCODE_NLS_CONFIG'];
-	if (rawNlsConfig) {
-		try {
-			const nlsConfig: nls.INLSConfiguration = JSON.parse(rawNlsConfig);
-			_locale = nlsConfig.userLocale;
-			_platformLocale = nlsConfig.osLocale;
-			_language = nlsConfig.resolvedLanguage || LANGUAGE_DEFAULT;
-			_translationsConfigFile = nlsConfig.languagePack?.translationsConfigFile;
-		} catch (e) {
-		}
-	}
 	_isNative = true;
 }
 
@@ -121,16 +116,6 @@ export const enum Platform {
 	Linux,
 	Windows
 }
-export type PlatformName = 'Web' | 'Windows' | 'Mac' | 'Linux';
-
-export function PlatformToString(platform: Platform): PlatformName {
-	switch (platform) {
-		case Platform.Web: return 'Web';
-		case Platform.Mac: return 'Mac';
-		case Platform.Linux: return 'Linux';
-		case Platform.Windows: return 'Windows';
-	}
-}
 
 let _platform: Platform = Platform.Web;
 if (_isMacintosh) {
@@ -144,71 +129,13 @@ if (_isMacintosh) {
 export const isWindows = _isWindows;
 export const isMacintosh = _isMacintosh;
 export const isLinux = _isLinux;
-export const isLinuxSnap = _isLinuxSnap;
 export const isChromeOS = _isChromeOS;
 export const isNative = _isNative;
-export const isElectron = _isElectron;
 export const isWeb = _isWeb;
 export const isWebWorker = (_isWeb && typeof $globalThis.importScripts === 'function');
 export const webWorkerOrigin = isWebWorker ? $globalThis.origin : undefined;
 export const isIOS = _isIOS;
-export const isMobile = _isMobile;
-/**
- * Whether we run inside a CI environment, such as
- * GH actions or Azure Pipelines.
- */
-export const isCI = _isCI;
-export const platform = _platform;
 export const userAgent = _userAgent;
-
-/**
- * The language used for the user interface. The format of
- * the string is all lower case (e.g. zh-tw for Traditional
- * Chinese or de for German)
- */
-export const language = _language;
-
-export namespace Language {
-
-	export function value(): string {
-		return language;
-	}
-
-	export function isDefaultVariant(): boolean {
-		if (language.length === 2) {
-			return language === 'en';
-		} else if (language.length >= 3) {
-			return language[0] === 'e' && language[1] === 'n' && language[2] === '-';
-		} else {
-			return false;
-		}
-	}
-
-	export function isDefault(): boolean {
-		return language === 'en';
-	}
-}
-
-/**
- * Desktop: The OS locale or the locale specified by --locale or `argv.json`.
- * Web: matches `platformLocale`.
- *
- * The UI is not necessarily shown in the provided locale.
- */
-export const locale = _locale;
-
-/**
- * This will always be set to the OS/browser's locale regardless of
- * what was specified otherwise. The format of the string is all
- * lower case (e.g. zh-tw for Traditional Chinese). The UI is not
- * necessarily shown in the provided locale.
- */
-export const platformLocale = _platformLocale;
-
-/**
- * The translations that are available through language packs.
- */
-export const translationsConfigFile = _translationsConfigFile;
 
 export const setTimeout0IsFaster = (typeof $globalThis.postMessage === 'function' && !$globalThis.importScripts);
 
@@ -258,26 +185,10 @@ export const enum OperatingSystem {
 }
 export const OS = (_isMacintosh || _isIOS ? OperatingSystem.Macintosh : (_isWindows ? OperatingSystem.Windows : OperatingSystem.Linux));
 
-let _isLittleEndian = true;
-let _isLittleEndianComputed = false;
-export function isLittleEndian(): boolean {
-	if (!_isLittleEndianComputed) {
-		_isLittleEndianComputed = true;
-		const test = new Uint8Array(2);
-		test[0] = 1;
-		test[1] = 2;
-		const view = new Uint16Array(test.buffer);
-		_isLittleEndian = (view[0] === (2 << 8) + 1);
-	}
-	return _isLittleEndian;
-}
-
 export const isChrome = !!(userAgent && userAgent.indexOf('Chrome') >= 0);
 export const isFirefox = !!(userAgent && userAgent.indexOf('Firefox') >= 0);
 export const isSafari = !!(!isChrome && (userAgent && userAgent.indexOf('Safari') >= 0));
 export const isEdge = !!(userAgent && userAgent.indexOf('Edg/') >= 0);
-export const isAndroid = !!(userAgent && userAgent.indexOf('Android') >= 0);
-export const hasElectronUserAgent = !!(userAgent && userAgent.indexOf('Electron') >= 0);
 
 export function isTahoeOrNewer(osVersion: string): boolean {
 	return parseFloat(osVersion) >= 25;

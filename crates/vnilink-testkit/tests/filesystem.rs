@@ -46,11 +46,12 @@ fn read(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-/// Every name in `dir`.
+/// Every name in `dir`; a name that is not text shows as it can.
 fn names_in(dir: &Path) -> Vec<String> {
     std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .unwrap_or_else(|error| panic!("list {}: {error}", dir.display()))
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect()
 }
 
@@ -60,31 +61,45 @@ fn names_in(dir: &Path) -> Vec<String> {
 /// creation time is what tells the two apart, and on a kernel with coarse
 /// inode timestamps a file made in the same tick would carry it too. A
 /// probe made in `probes`, on the same file system, shows the tick.
-fn past_the_tick_of(original: &Path, probes: &Path) {
-    let made = std::fs::metadata(original)
-        .and_then(|meta| meta.modified())
-        .expect("the original's time");
+fn past_the_tick_of(original: &Path, probes: &Path) -> std::io::Result<()> {
+    past_the_tick(original, probes, std::fs::Metadata::modified)
+}
+
+/// As [`past_the_tick_of`], for the creation time: a volume that keeps it
+/// coarser than it keeps the modification time (FAT's even second) gives a
+/// file made again in that tick the original's.
+fn past_the_creation_tick_of(original: &Path, probes: &Path) -> std::io::Result<()> {
+    past_the_tick(original, probes, std::fs::Metadata::created)
+}
+
+/// Waits until a probe made in `probes` has a later `time` than `original`.
+fn past_the_tick(
+    original: &Path,
+    probes: &Path,
+    time: fn(&std::fs::Metadata) -> std::io::Result<std::time::SystemTime>,
+) -> std::io::Result<()> {
+    let made = time(&std::fs::metadata(original)?)?;
     let probe = probes.join("clock-probe");
     wait_for(
         "the file system's clock to pass the original's tick",
         DEFAULT_WAIT,
         || {
-            std::fs::write(&probe, b"tick").expect("a probe");
-            let now = std::fs::metadata(&probe)
-                .and_then(|meta| meta.modified())
-                .expect("the probe's time");
+            // Made anew each time, so it has a creation time of its own.
+            let _ = std::fs::remove_file(&probe);
+            std::fs::write(&probe, b"tick").ok()?;
+            let now = time(&std::fs::metadata(&probe).ok()?).ok()?;
             (now > made).then_some(())
         },
     );
-    std::fs::remove_file(&probe).expect("the probe removed");
+    std::fs::remove_file(&probe)
 }
 
 /// A tree of folders `levels` deep below `top`, each named `level-<n>`.
-fn deep_folder(top: &Path, levels: usize) -> PathBuf {
+fn deep_folder(top: &Path, levels: usize) -> std::io::Result<PathBuf> {
     let mut deep = top.to_path_buf();
     for level in 0..levels {
         deep.push(format!("level-{level}"));
     }
-    std::fs::create_dir_all(&deep).unwrap();
-    deep
+    std::fs::create_dir_all(&deep)?;
+    Ok(deep)
 }

@@ -11,7 +11,6 @@
 // ---------------------------------------------------------------------------------------------
 
 import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
-import type { NativeScreenSource } from '../../engine/common/engine.js';
 import type { Event } from '../../../base/common/event.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import type { MessageBoxOptions, MessageBoxReturnValue } from '../../../base/parts/sandbox/common/electronTypes.js';
@@ -48,10 +47,8 @@ export interface INativeHostService {
 	readonly onDidChangeWindowState: Event<IWindowState>;
 	getWindowState(): Promise<IWindowState>;
 	focusWindow(options?: ITargetWindowOptions): Promise<void>;
-	minimizeWindow(options?: ITargetWindowOptions): Promise<void>;
 	maximizeWindow(options?: ITargetWindowOptions): Promise<void>;
 	unmaximizeWindow(options?: ITargetWindowOptions): Promise<void>;
-	closeWindow(options?: ITargetWindowOptions): Promise<void>;
 	setFullScreen(fullscreen: boolean, options?: ITargetWindowOptions): Promise<void>;
 	/**
 	 * Whether a remote desktop in this window has the keyboard, so the
@@ -60,9 +57,8 @@ export interface INativeHostService {
 	setRemoteKeyboard(owned: boolean): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
 	pickFolder(defaultPath: string): Promise<string | null>;
-	/** A native message box over the window, as VS Code's desktop dialogs are. */
+	/** A native message box over the window. */
 	showMessageBox(options: MessageBoxOptions & ITargetWindowOptions): Promise<MessageBoxReturnValue>;
-	getCaptureDisplays(): Promise<NativeScreenSource[]>;
 	openExternal(url: string): Promise<void>;
 
 	// Clipboard
@@ -111,7 +107,6 @@ export type NativeHostMethod =
 	| 'updateWindowControls'
 	| 'pickFolder'
 	| 'showMessageBox'
-	| 'getCaptureDisplays'
 	| 'openExternal'
 	| 'readClipboardText'
 	| 'writeClipboardText'
@@ -135,35 +130,6 @@ export function isPng(value: unknown): value is VSBuffer {
 
 function isClipboardType(value: unknown): boolean {
 	return value === undefined || value === 'selection' || value === 'clipboard';
-}
-
-export function isWindowState(value: unknown): value is IWindowState {
-	if (typeof value !== 'object' || value === null) {
-		return false;
-	}
-	return (
-		'windowId' in value &&
-		Number.isSafeInteger(value.windowId) &&
-		Number(value.windowId) > 0 &&
-		'revision' in value &&
-		Number.isSafeInteger(value.revision) &&
-		Number(value.revision) >= 0 &&
-		'focused' in value &&
-		typeof value.focused === 'boolean' &&
-		'maximized' in value &&
-		typeof value.maximized === 'boolean' &&
-		'fullscreen' in value &&
-		typeof value.fullscreen === 'boolean' &&
-		'alwaysOnTop' in value &&
-		typeof value.alwaysOnTop === 'boolean' &&
-		'zoomFactor' in value &&
-		typeof value.zoomFactor === 'number' &&
-		Number.isFinite(value.zoomFactor) &&
-		value.zoomFactor >= 0.25 &&
-		value.zoomFactor <= 5 &&
-		'backgroundMaterial' in value &&
-		(value.backgroundMaterial === 'none' || value.backgroundMaterial === 'vibrancy' || value.backgroundMaterial === 'glass' || value.backgroundMaterial === 'mica')
-	);
 }
 
 const messageBoxKeys = ['message', 'detail', 'type', 'buttons', 'defaultId', 'cancelId', 'title', 'noLink', 'checkboxLabel', 'checkboxChecked', 'targetWindowId'];
@@ -194,7 +160,7 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	if (typeof method !== 'string' || !Array.isArray(args) || !Number.isSafeInteger(args[0]) || args[0] <= 0) {
 		return false;
 	}
-	if (method === 'getWindowState' || method === 'getCaptureDisplays' || method === 'relaunch' || method === 'openLogsFolder' || method === 'readLogTails') {
+	if (method === 'getWindowState' || method === 'relaunch' || method === 'openLogsFolder' || method === 'readLogTails') {
 		return args.length === 1;
 	}
 	if (method === 'readClipboardText') {

@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 export class Node<T> {
@@ -60,10 +60,6 @@ export class Graph<T> {
 		}
 
 		return node;
-	}
-
-	lookup(data: T): Node<T> | undefined {
-		return this._nodes.get(this._hashFn(data));
 	}
 
 	isEmpty(): boolean {

@@ -185,41 +185,55 @@ fn upload_big(pair: &Pair) -> Result<(Files, u64, u64), Box<dyn std::error::Erro
 /// side, until the receiver ends; the receiver's last state. It is not
 /// scoped, so a parked publication that never returns fails the test at
 /// its bound rather than hanging it.
-fn drive_receiver(pair: &Pair, job: u64, receiver: u64) -> JoinHandle<JobState> {
+fn drive_receiver(
+    pair: &Pair,
+    job: u64,
+    receiver: u64,
+) -> JoinHandle<Result<JobState, vnilink::Error>> {
     let host = Arc::clone(&pair.host.core);
     let controller = Arc::clone(&pair.controller.core);
     std::thread::spawn(move || {
-        let mut sent = controller.job_snapshot(job).expect("the sender's job");
-        let mut got = host.job_snapshot(receiver).expect("the receiver's job");
+        let mut sent = controller.job_snapshot(job)?;
+        let mut got = host.job_snapshot(receiver)?;
         for _ in 0..500 {
             if !got.state.is_terminal() {
-                got = host.job_poll(receiver).expect("the receiver's poll");
+                got = host.job_poll(receiver)?;
             }
             if !sent.state.is_terminal() {
-                sent = controller.job_poll(job).expect("the sender's poll");
+                sent = controller.job_poll(job)?;
             }
             if got.state.is_terminal() {
                 break;
             }
         }
-        got.state
+        Ok(got.state)
     })
 }
 
+/// How the job `driver` drove ended.
+fn ended(
+    driver: JoinHandle<Result<JobState, vnilink::Error>>,
+) -> Result<JobState, Box<dyn std::error::Error>> {
+    Ok(driver.join().map_err(|_| "the job's driver panicked")??)
+}
+
 /// Runs `call` on `core` and fails naming `what` if it does not return
-/// within [`UNBLOCKED_WITHIN`]: a lock the parked publication holds.
-fn unblocked(what: &str, core: &Arc<Core>, call: impl FnOnce(&Core) + Send + 'static) {
+/// within [`UNBLOCKED_WITHIN`]: a lock the parked publication holds. A call
+/// that returns fails the test with its error.
+fn unblocked<T>(
+    what: &str,
+    core: &Arc<Core>,
+    call: impl FnOnce(&Core) -> Result<T, vnilink::Error> + Send + 'static,
+) -> TestResult {
     let core = Arc::clone(core);
     let (done, completed) = std::sync::mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        call(&core);
-        let _ = done.send(());
+    std::thread::spawn(move || {
+        let _ = done.send(call(&core).map(|_| ()));
     });
-    assert!(
-        completed.recv_timeout(UNBLOCKED_WITHIN).is_ok(),
-        "{what} blocked while publication was parked"
-    );
-    worker.join().expect("the engine call");
+    match completed.recv_timeout(UNBLOCKED_WITHIN) {
+        Ok(answered) => Ok(answered?),
+        Err(_) => Err(format!("{what} blocked while publication was parked").into()),
+    }
 }
 
 /// The host stops sharing files with the controller.
@@ -286,13 +300,11 @@ fn revoked_cross_volume_publish_never_lands_and_locks_stay_free() -> TestResult 
     unblocked(
         "a snapshot during the parked copy",
         &pair.host.core,
-        |core| {
-            core.snapshot().expect("a snapshot");
-        },
-    );
+        |core| core.snapshot(),
+    )?;
     revoke(&pair)?;
     COPY.release();
-    let ended = driver.join().expect("the job's driver");
+    let ended = ended(driver)?;
     drop(parked);
     assert_eq!(
         ended,
@@ -330,23 +342,23 @@ fn parked_mkdir_and_stage_sync_leave_locks_free() -> TestResult {
     PARENTS.wait_reached("the publication to park making parent folders");
     let host = &pair.host.core;
     unblocked("a snapshot while making parents", host, |core| {
-        core.snapshot().expect("a snapshot");
-    });
+        core.snapshot()
+    })?;
     unblocked("a job snapshot while making parents", host, move |core| {
-        core.job_snapshot(receiver).expect("a job snapshot");
-    });
+        core.job_snapshot(receiver)
+    })?;
     unblocked("the shared roots while making parents", host, |core| {
-        core.file_roots().expect("the shared roots");
-    });
+        core.file_roots()
+    })?;
     PARENTS.release();
 
     SYNC.wait_reached("the publication to park at its final sync");
     unblocked("a snapshot during the final sync", host, |core| {
-        core.snapshot().expect("a snapshot");
-    });
+        core.snapshot()
+    })?;
     revoke(&pair)?;
     SYNC.release();
-    let ended = driver.join().expect("the job's driver");
+    let ended = ended(driver)?;
     drop(parked);
     assert_eq!(
         ended,

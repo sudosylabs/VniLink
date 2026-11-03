@@ -12,22 +12,19 @@
  * Code's `.build/electron`, the stock distribution is copied once with the
  * product's name and artwork, in the layout of the packaged application.
  */
-import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
-import { ProcessRunner } from './processes.ts';
+import { processOutput, ProcessRunner } from './processes.ts';
 import { assignExecutableUuids, darwinUsageDescriptions, executableUuids } from './macos/identity.ts';
 import { linuxSandbox, linuxSandboxProfile, systemProbe } from './prerequisites.ts';
 import { loadProduct, type Product } from './product.ts';
-import { fileSha256, releaseInventory } from './verify.ts';
+import { fileSha256, releaseInventory } from './inventory.ts';
+import { isLinux, isMacintosh, isWindows } from './platform.ts';
 
 const require = createRequire(import.meta.url);
-
-const run = promisify(execFile);
 
 interface Branding {
 	/** The distribution directory or bundle copied from the `electron` package. */
@@ -50,7 +47,7 @@ export interface ElectronOptions {
  */
 export async function electronExecutable(root: string, signal: AbortSignal, options: ElectronOptions = {}): Promise<string> {
 	const executable = await preparedElectron(root, signal);
-	if (process.platform === 'linux' && options.sandboxed !== false) {
+	if (isLinux && options.sandboxed !== false) {
 		await assertLinuxSandbox(root);
 	}
 	return executable;
@@ -86,7 +83,7 @@ async function preparedElectron(root: string, signal: AbortSignal): Promise<stri
 function platformBranding(root: string, product: Product, signal: AbortSignal): Branding {
 	// The `electron` package's main export is its executable.
 	const stock = require('electron') as string;
-	if (process.platform === 'darwin') {
+	if (isMacintosh) {
 		const bundle = `${product.nameLong}.app`;
 		return {
 			source: join(stock, '../../..'),
@@ -95,11 +92,11 @@ function platformBranding(root: string, product: Product, signal: AbortSignal): 
 			brand: (output, work) => brandDarwin(root, product, join(output, bundle), work, signal),
 		};
 	}
-	if (process.platform === 'win32') {
+	if (isWindows) {
 		const executable = `${product.platforms.win32.executableName}.exe`;
 		return { source: dirname(stock), target: '.', executable, brand: output => brandWin32(root, product, output, executable) };
 	}
-	if (process.platform === 'linux') {
+	if (isLinux) {
 		const executable = product.platforms.linux.executableName;
 		return { source: dirname(stock), target: '.', executable, brand: output => brandLinux(root, product, output, executable) };
 	}
@@ -114,7 +111,7 @@ async function brandingFingerprint(root: string, product: Product): Promise<Reco
 		icons[platform.icon] = (await stat(path)).isDirectory() ? JSON.stringify(await releaseInventory(path)) : await fileSha256(path);
 	}
 	// macOS: what the bundle asks for and the executable UUIDs it identifies by.
-	const darwin: Record<string, string> = process.platform === 'darwin'
+	const darwin: Record<string, string> = isMacintosh
 		? { usage: JSON.stringify(darwinUsageDescriptions), uuids: JSON.stringify(await executableUuids(require('electron') as string, developmentBundleIdentifier(product))) }
 		: {};
 	return { electron, platform: `${process.platform}-${process.arch}`, product: JSON.stringify(product), icons: JSON.stringify(icons), ...darwin };
@@ -149,15 +146,15 @@ async function brandDarwin(root: string, product: Product, bundle: string, work:
 		...Object.entries(darwinUsageDescriptions),
 	];
 	for (const [key, value] of values) {
-		await run('plutil', ['-replace', key, '-string', value, plist], { signal });
+		await processOutput('plutil', ['-replace', key, '-string', value, plist], { signal });
 	}
 	// Its own executable UUID, so local network privacy decides for this bundle alone.
 	const executable = join(bundle, 'Contents/MacOS/Electron');
 	await assignExecutableUuids(executable, developmentBundleIdentifier(product));
 	// The executable and Info.plist changed, which breaks their ad-hoc seals;
 	// nested helpers keep their own signatures.
-	await run('codesign', ['--force', '--sign', '-', executable], { signal });
-	await run('codesign', ['--force', '--sign', '-', bundle], { signal });
+	await processOutput('codesign', ['--force', '--sign', '-', executable], { signal });
+	await processOutput('codesign', ['--force', '--sign', '-', bundle], { signal });
 }
 
 /** Compiles the Icon Composer asset with `actool`; without Xcode, falls back to the flat artwork. */
@@ -165,7 +162,7 @@ async function compileIcon(root: string, product: Product, resources: string, wo
 	const { icon, minimumSystemVersion, fallbackIconSource } = product.platforms.darwin;
 	const name = 'AppIcon';
 	try {
-		await run('xcrun', ['actool', join(root, icon), '--compile', resources, '--app-icon', name, '--include-all-app-icons', '--output-partial-info-plist', join(work, 'icon.plist'), '--platform', 'macosx', '--target-device', 'mac', '--minimum-deployment-target', minimumSystemVersion, '--enable-on-demand-resources', 'NO', '--development-region', 'en', '--output-format', 'human-readable-text'], { signal });
+		await processOutput('xcrun', ['actool', join(root, icon), '--compile', resources, '--app-icon', name, '--include-all-app-icons', '--output-partial-info-plist', join(work, 'icon.plist'), '--platform', 'macosx', '--target-device', 'mac', '--minimum-deployment-target', minimumSystemVersion, '--enable-on-demand-resources', 'NO', '--development-region', 'en', '--output-format', 'human-readable-text'], { signal });
 		await stat(join(resources, `${name}.icns`));
 		return name;
 	} catch (error) {
@@ -177,10 +174,10 @@ async function compileIcon(root: string, product: Product, resources: string, wo
 	for (const size of [16, 32, 128, 256, 512]) {
 		for (const scale of [1, 2]) {
 			const suffix = scale === 2 ? '@2x' : '';
-			await run('sips', ['-z', String(size * scale), String(size * scale), join(root, fallbackIconSource), '--out', join(iconset, `icon_${String(size)}x${String(size)}${suffix}.png`)], { signal });
+			await processOutput('sips', ['-z', String(size * scale), String(size * scale), join(root, fallbackIconSource), '--out', join(iconset, `icon_${String(size)}x${String(size)}${suffix}.png`)], { signal });
 		}
 	}
-	await run('iconutil', ['-c', 'icns', iconset, '-o', join(resources, `${name}.icns`)], { signal });
+	await processOutput('iconutil', ['-c', 'icns', iconset, '-o', join(resources, `${name}.icns`)], { signal });
 	return name;
 }
 
@@ -217,7 +214,7 @@ async function assertLinuxSandbox(root: string): Promise<void> {
  * `.build/electron` again because it names the path.
  */
 export async function allowLinuxSandbox(root: string, signal: AbortSignal): Promise<void> {
-	if (process.platform !== 'linux') {
+	if (!isLinux) {
 		throw new Error('sandbox:linux allows the development Electron on Linux');
 	}
 	const product = await loadProduct(root);

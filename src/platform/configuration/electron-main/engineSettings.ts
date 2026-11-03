@@ -9,9 +9,9 @@ import * as nls from '../../../nls.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { deepFreeze } from '../../../base/common/objects.js';
-import type { PowerPolicy, RelayInput, SharingPolicy, SystemPolicy, SystemSupport, TerminalPolicy } from '../../engine/common/engine.js';
+import type { EngineCommand, PowerPolicy, RelayInput, SharingPolicy, SystemPolicy, SystemSupport, TerminalPolicy } from '../../engine/common/engine.js';
 import { validateRelays } from '../../engine/common/relayValidation.js';
-import type { EngineMainService } from '../../engine/electron-main/engineMainService.js';
+import type { IEngineSettingsService } from '../../engine/electron-main/engineMainService.js';
 import { settingSource, validateTerminalLimits, type ConfigurationSource } from '../common/configurationSchema.js';
 
 type EngineSource = Exclude<ConfigurationSource, 'user' | 'system'>;
@@ -24,8 +24,8 @@ interface PolicyState {
 
 /** How one engine policy maps to settings. */
 interface PolicyBinding {
-	read(engine: EngineMainService): Promise<PolicyState>;
-	write(engine: EngineMainService, key: string, value: unknown, current: PolicyState): Promise<void>;
+	read(engine: IEngineSettingsService): Promise<PolicyState>;
+	write(engine: IEngineSettingsService, key: string, value: unknown, current: PolicyState): Promise<void>;
 	readonly messages: { readonly unavailable: string; readonly readFailed: string; readonly writeFailed: string; readonly readbackFailed: string };
 }
 
@@ -34,7 +34,7 @@ class SettingValidationError extends Error { }
 
 const engineUnavailable = nls.localize('terminal.unavailable', 'The connection engine is unavailable. Restart VniLink to try again.');
 
-async function expectDone(engine: EngineMainService, command: Parameters<EngineMainService['execute']>[0]): Promise<void> {
+async function expectDone(engine: IEngineSettingsService, command: EngineCommand): Promise<void> {
 	const reply = await engine.execute(command);
 	if (reply.type !== 'done') {
 		throw new Error(`Engine refused ${command.type}`);
@@ -258,7 +258,7 @@ export class EngineSettings extends Disposable {
 	private readonly changed = this._register(new Emitter<void>());
 	public readonly onDidChange = this.changed.event;
 
-	constructor(private readonly engine: EngineMainService) {
+	constructor(private readonly engine: IEngineSettingsService) {
 		super();
 		for (const source of engineSources) {
 			this.errors.set(source, bindings[source].messages.unavailable);

@@ -52,8 +52,6 @@ export interface MarkdownRenderOptions {
  * Subset of options passed to `Marked` for rendering markdown.
  */
 export interface MarkdownRendererMarkedOptions {
-	readonly gfm?: boolean;
-	readonly breaks?: boolean;
 }
 
 export interface MarkdownSanitizerConfig {

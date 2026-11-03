@@ -815,10 +815,13 @@ mod listing_tests {
         if STALE_PARKED.swap(true, Ordering::SeqCst) {
             return;
         }
-        crate::test_support::wait_until(
+        crate::test_support::wait_for(
             "the parked listing to be released or cancelled",
             Duration::from_secs(30),
-            || STALE_RELEASED.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire),
+            || {
+                (STALE_RELEASED.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire))
+                    .then_some(())
+            },
         );
     }
 
@@ -918,10 +921,10 @@ mod listing_tests {
                 });
             });
             // Wait for the park: the worker reached the pre-access probe.
-            crate::test_support::wait_until(
+            crate::test_support::wait_for(
                 "the list worker to park",
                 Duration::from_secs(8),
-                || STALE_PARKED.load(Ordering::SeqCst),
+                || STALE_PARKED.load(Ordering::SeqCst).then_some(()),
             );
             // Sibling progress while parked: the async path is free and no
             // shared lock is held, so a full second listing completes.

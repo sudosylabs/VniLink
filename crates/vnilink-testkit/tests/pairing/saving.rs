@@ -223,12 +223,7 @@ fn a_failed_save_keeps_the_previous_record() -> TestResult {
         "the revocation to end the session",
         Duration::from_secs(5),
         || {
-            let phase = host
-                .core
-                .snapshot()
-                .expect("the host's snapshot")
-                .incoming?
-                .phase;
+            let phase = host.core.snapshot().ok()?.incoming?.phase;
             (phase == SessionPhase::Closed).then_some(())
         },
     );
@@ -462,7 +457,7 @@ fn an_uncertain_control_approval_fences_before_the_peer_is_saved() -> TestResult
     let trace = traced();
     let host = Installed::faulty("host");
     let controller = Engine::start("controller");
-    exchange(&host.core, &controller.core, true);
+    exchange(&host.core, &controller.core, true)?;
     host.core.start_hosting()?;
     let controller_events = controller.core.subscribe()?;
     let _pending = controller

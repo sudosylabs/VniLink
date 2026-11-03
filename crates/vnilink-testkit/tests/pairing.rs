@@ -41,10 +41,10 @@ use vnilink::{
     SessionRole, SharingPolicy,
 };
 use vnilink_testkit::events::drain;
-use vnilink_testkit::session::{wait_closed, wait_control_check, wait_request};
-use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::session::wait_closed;
+use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
-const FILE_LIFETIME: Duration = Duration::from_secs(60);
+use support::{ask, Answer, FILE_LIFETIME};
 
 /// How many devices `events` says were paired and authorized; pairing
 /// publishes nothing else besides a session's lifecycle and what a connect
@@ -118,33 +118,29 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
 
     host.core.start_hosting()?;
     let host_events = host.core.subscribe()?;
-    let controller_events = controller.core.subscribe()?;
-    let session = std::thread::scope(|scope| {
-        let connecting = scope.spawn(|| controller.connect_services(&host));
-        let request = wait_request(&host.core, Duration::from_secs(5));
-        assert_eq!(
-            request.endpoint_id,
-            controller.endpoint(),
-            "the host asks about the controller"
-        );
-        let shown = wait_control_check(&controller_events, Duration::from_secs(5));
-        assert_eq!(
-            shown.len(),
-            6,
-            "the controller shows six digits from its connection"
-        );
-        let granted = host
-            .core
-            .confirm_control_request(&shown)
-            .expect("the approval");
-        assert!(
-            !granted.grants.control && !granted.grants.clipboard && !granted.grants.transfer,
-            "approving grants nothing: {:?}",
-            granted.grants
-        );
-        connecting.join().expect("the connecting thread")
-    })?;
-    assert_eq!(session.role, SessionRole::Controller);
+    let approved = ask(&host, &controller, Answer::Digits)?;
+    assert_eq!(
+        approved.request.endpoint_id,
+        controller.endpoint(),
+        "the host asks about the controller"
+    );
+    assert_eq!(
+        approved.shown.len(),
+        6,
+        "the controller shows six digits from its connection"
+    );
+    let granted = approved.answered?.ok_or("the approved controller")?;
+    assert!(
+        !granted.grants.control && !granted.grants.clipboard && !granted.grants.transfer,
+        "approving grants nothing: {:?}",
+        granted.grants
+    );
+    let session = approved.connected?;
+    assert_eq!(
+        session.role,
+        SessionRole::Controller,
+        "the controller's connection is its own"
+    );
     assert_eq!(
         session.phase,
         SessionPhase::Active,
@@ -277,26 +273,32 @@ fn mismatched_digits_save_nothing() -> TestResult {
 
 /// A damaged file is refused and says so; a file pairs only once.
 #[test]
-fn a_damaged_file_is_refused_and_a_file_pairs_once() {
+fn a_damaged_file_is_refused_and_a_file_pairs_once() -> TestResult {
     let trace = traced();
     let host = Engine::start("host");
     let controller = Engine::start("controller");
-    let file = host.core.export_pairing_file(FILE_LIFETIME, false).unwrap();
+    let file = host.core.export_pairing_file(FILE_LIFETIME, false)?;
     let mut damaged = file.bytes.clone();
     // The file ends in the signature's hex digits: another digit there
     // reads as a file and fails its signature, the same way every run.
     let last = damaged.len() - 1;
     damaged[last] = if damaged[last] == b'0' { b'1' } else { b'0' };
-    assert!(controller.core.open_pairing_file(&damaged).is_err());
-    let preview = controller.core.open_pairing_file(&file.bytes).unwrap();
-    controller
-        .core
-        .confirm_pairing(&preview, &file.check)
-        .unwrap();
-    assert!(matches!(
-        controller.core.confirm_pairing(&preview, &file.check),
-        Err(Error::InvitationReplayed)
-    ));
+    assert!(
+        matches!(
+            controller.core.open_pairing_file(&damaged),
+            Err(Error::InvalidInvitation(_))
+        ),
+        "a file whose signature does not match is refused"
+    );
+    let preview = controller.core.open_pairing_file(&file.bytes)?;
+    controller.core.confirm_pairing(&preview, &file.check)?;
+    assert!(
+        matches!(
+            controller.core.confirm_pairing(&preview, &file.check),
+            Err(Error::InvitationReplayed)
+        ),
+        "a file pairs once"
+    );
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
@@ -309,6 +311,7 @@ fn a_damaged_file_is_refused_and_a_file_pairs_once() {
     "#]],
         || trace.story(&["pairing"]),
     );
+    Ok(())
 }
 
 /// What is not a pairing file, or only its start, is refused as such, and
@@ -365,11 +368,11 @@ fn a_file_that_is_not_one_or_is_ones_own_is_refused() -> TestResult {
 /// A host that forgets its controller ends their connection, and the
 /// controller cannot connect again.
 #[test]
-fn a_forgotten_controller_is_disconnected_and_cannot_return() {
+fn a_forgotten_controller_is_disconnected_and_cannot_return() -> TestResult {
     let trace = traced();
-    let pair = vnilink_testkit::Pair::for_desktop();
+    let pair = Pair::for_desktop();
     let session = pair.connect_services();
-    pair.host.core.unpair(&pair.controller.endpoint()).unwrap();
+    pair.host.core.unpair(&pair.controller.endpoint())?;
     wait_for("the connection to end", DEFAULT_WAIT, || {
         let phase = pair
             .controller
@@ -379,7 +382,11 @@ fn a_forgotten_controller_is_disconnected_and_cannot_return() {
             .phase;
         (phase != SessionPhase::Active).then_some(())
     });
-    assert!(pair.controller.connect_services(&pair.host).is_err());
+    let refused = pair.controller.connect_services(&pair.host);
+    assert!(
+        matches!(refused, Err(Error::Unauthorized)),
+        "a forgotten controller cannot connect again: {refused:?}"
+    );
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:
@@ -392,4 +399,5 @@ fn a_forgotten_controller_is_disconnected_and_cannot_return() {
     "#]],
         || trace.story(&["pairing"]),
     );
+    Ok(())
 }

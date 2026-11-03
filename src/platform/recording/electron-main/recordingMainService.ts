@@ -21,10 +21,14 @@ export const IRecordingMainService = createDecorator<RecordingMainService>('reco
 export class RecordingMainService implements Omit<IRecordingService, '_serviceBrand'> {
 	declare public readonly _serviceBrand: undefined;
 
-	constructor(@IConfigurationMainService private readonly configuration: ConfigurationMainService) { }
+	/** `picturesFolder` is the operating system's Pictures folder, read when first needed. */
+	constructor(
+		@IConfigurationMainService private readonly configuration: ConfigurationMainService,
+		private readonly picturesFolder: () => string = () => app.getPath('pictures'),
+	) { }
 
 	public getDefaultDirectory(): Promise<string> {
-		return Promise.resolve(join(app.getPath('pictures'), 'VniLink'));
+		return Promise.resolve(join(this.picturesFolder(), 'VniLink'));
 	}
 
 	public async createDestination(): Promise<string> {

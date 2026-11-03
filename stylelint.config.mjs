@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { upstreamIgnores } from './build/sourceScope.ts';
+import { upstreamIgnores } from './build/lib/sourceScope.ts';
 
 export default {
 	ignoreFiles: upstreamIgnores,

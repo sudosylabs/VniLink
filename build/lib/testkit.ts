@@ -1,0 +1,211 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The test kit's tasks (`vnilink-testkit`): its service suites, stress runs
+ * and benches, here or against a second computer's agent (`--peer`), and the
+ * agent and the measurement sides it starts.
+ */
+import { readdir } from 'node:fs/promises';
+import { availableParallelism } from 'node:os';
+import { join } from 'node:path';
+import { launchLatencySide } from './measure/latencyAgent.ts';
+import { nativeCargo } from './native.ts';
+import { ProcessRunner } from './processes.ts';
+import { agentPeer } from './remote.ts';
+
+/** The services `crates/vnilink-testkit` has a suite of `kind` for: its `tests/<service>.rs` or `benches/<service>.rs`. */
+export async function testkitServices(root: string, kind: 'tests' | 'benches'): Promise<string[]> {
+	const files = await readdir(join(root, 'crates/vnilink-testkit', kind));
+	return files.filter(file => file.endsWith('.rs')).map(file => file.slice(0, -'.rs'.length)).sort();
+}
+
+/** The services named in `args`, every one when none is; a name without a suite is refused. */
+export function selectServices(available: readonly string[], args: readonly string[]): string[] {
+	const unknown = args.filter(name => !available.includes(name));
+	if (unknown.length > 0) {
+		throw new Error(`No suite for ${unknown.join(', ')}. Services: ${available.join(', ')}`);
+	}
+	return args.length > 0 ? [...args] : [...available];
+}
+
+/** A suite's run against the test agent on another computer, out of its arguments: `--peer <file.vnl>` and `--peer-check <digits>`. */
+export interface PeerSelection {
+	/** The arguments that name services. */
+	readonly services: string[];
+	/** What tells the suite about the agent: `VNILINK_PEER` and `VNILINK_PEER_CHECK`, empty without `--peer`. */
+	readonly env: Readonly<Record<string, string>>;
+}
+
+/** Takes `--peer` and `--peer-check` out of `args`; each needs a value, and one needs the other. */
+export function selectPeer(args: readonly string[], cwd = process.cwd()): PeerSelection {
+	const services: string[] = [];
+	let file: string | undefined;
+	let check: string | undefined;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg !== '--peer' && arg !== '--peer-check') {
+			services.push(arg);
+			continue;
+		}
+		const value = args.at(++index);
+		if (value === undefined || value.startsWith('--')) {
+			throw new Error(`${arg} needs a value: --peer <the agent's .vnl file> --peer-check <the digits the agent printed>`);
+		}
+		if (arg === '--peer') {
+			file = value;
+		} else {
+			check = value;
+		}
+	}
+	// The same rules as the measurements' `--peer`.
+	const peer = agentPeer(file, check, cwd);
+	return { services, env: peer ? { VNILINK_PEER: peer.file, VNILINK_PEER_CHECK: peer.check } : {} };
+}
+
+/** Runs the functional suites of the named services, each alone with its engines on this computer, or against the agent named by `--peer`. */
+export async function testService(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const peer = selectPeer(args);
+	const services = selectServices(await testkitServices(root, 'tests'), peer.services);
+	await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])], { env: peer.env });
+}
+
+/** How many times `test:stress` runs a suite when `--times` does not say. */
+const defaultStressRuns = 25;
+
+/**
+ * Takes `--times <n>`, a positive whole number of runs, and `--load` out of
+ * `args`; the rest names services.
+ */
+export function selectRuns(args: readonly string[]): { readonly times: number; readonly load: boolean; readonly services: string[] } {
+	const load = args.includes('--load');
+	const rest = args.filter(arg => arg !== '--load');
+	const index = rest.indexOf('--times');
+	if (index < 0) {
+		return { times: defaultStressRuns, load, services: rest };
+	}
+	const value = rest.at(index + 1);
+	if (value === undefined || !/^[1-9]\d*$/.test(value)) {
+		throw new Error('--times needs a positive whole number of runs');
+	}
+	return { times: Number(value), load, services: rest.filter((_, position) => position !== index && position !== index + 1) };
+}
+
+/**
+ * Keeps every core of this computer busy until the returned runner stops:
+ * twice as many spinning processes as cores, so an engine's threads wait
+ * for one and the moments between its steps stretch, as on a loaded machine.
+ */
+function loadCores(signal: AbortSignal): ProcessRunner {
+	const load = new ProcessRunner(signal);
+	for (let core = 0; core < availableParallelism() * 2; core++) {
+		load.start(process.execPath, ['-e', 'for (;;) {}'], { stdio: 'ignore' });
+	}
+	return load;
+}
+
+/**
+ * Runs the functional suites of the named services again and again, each run
+ * alone, and stops at the first failure: an order the engines do not
+ * guarantee shows in a few runs where one run passes by luck. `--load` runs
+ * them with every core kept busy, where those orders show far sooner: a
+ * cancel lands mid-step, a sender finishes before its receiver's cancel.
+ */
+export async function stressService(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const { times, load, services: named } = selectRuns(args);
+	const services = selectServices(await testkitServices(root, 'tests'), named);
+	const busy = load ? loadCores(signal) : undefined;
+	try {
+		for (let run = 1; run <= times; run++) {
+			signal.throwIfAborted();
+			console.log(`Stress run ${String(run)} of ${String(times)}${load ? ' under load' : ''}: ${services.join(', ')}`);
+			await runTestkit(root, signal, ['test', ...services.flatMap(name => ['--test', name])]);
+		}
+	} finally {
+		await busy?.stop();
+	}
+}
+
+/**
+ * Runs the performance suites of the named services. Each run is saved under
+ * `.build/bench` and compared with the previous one; a regression fails the task.
+ * With `--peer` a run measures against the agent on another computer, is saved
+ * apart and only reports regressions.
+ */
+export async function benchService(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const peer = selectPeer(args);
+	const services = selectServices(await testkitServices(root, 'benches'), peer.services);
+	await runTestkit(root, signal, ['bench', ...services.flatMap(name => ['--bench', name])], { env: { VNILINK_BENCH_DIR: join(root, '.build/bench'), ...peer.env } });
+}
+
+/**
+ * Runs the test agent (`vnilink-testkit agent`), the host half of suites and
+ * measurements run with `--peer` on another computer: it writes a pairing
+ * file, by default `.build/testkit/agent.vnl`, prints its digits and asks on
+ * this terminal for the digits that computer's suite prints.
+ */
+export async function runTestkitAgent(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const out = args.includes('--out') ? [] : ['--out', join(root, '.build/testkit/agent.vnl')];
+	// Measurements need the optimized build that bench:service runs. A
+	// measurement's side starts through this Node (`testkit:launch`).
+	await runTestkit(root, signal, ['run', '--release', '--bin', 'vnilink-testkit', '--', 'agent', ...out, ...args], { typing: true, env: { VNILINK_AGENT_NODE: process.execPath } });
+}
+
+/** The measurement sides the test agent starts from this checkout (`testkit:launch <side>`). */
+export const agentSides = ['latency-host', 'latency-viewer'] as const;
+
+/**
+ * Starts one side of a measurement for the test agent, which runs this task
+ * from its own checkout with the side's folders in its environment, and
+ * stops it when the agent closes this task's input.
+ */
+export async function launchAgentSide(root: string, signal: AbortSignal, args: readonly string[]): Promise<void> {
+	const [side, ...rest] = args;
+	if (!agentSides.includes(side as (typeof agentSides)[number]) || rest.length > 0) {
+		throw new Error(`testkit:launch takes one of ${agentSides.join(', ')}`);
+	}
+	const stopped = new Promise<void>(resolve => {
+		process.stdin.once('end', resolve);
+		process.stdin.once('close', resolve);
+		process.stdin.resume();
+	});
+	try {
+		await launchLatencySide(root, signal, side === 'latency-host' ? 'host' : 'viewer', stopped);
+	} finally {
+		process.stdin.destroy();
+	}
+}
+
+interface TestkitOptions {
+	readonly env?: Readonly<Record<string, string>>;
+	/** Passes this terminal's typing on: the process runs in a process group of its own, which the terminal would stop when it reads. */
+	readonly typing?: boolean;
+}
+
+/** Cargo on the test kit with the addon's target and toolchain, as `testRust` runs it. */
+async function runTestkit(root: string, signal: AbortSignal, command: readonly string[], options: TestkitOptions = {}): Promise<void> {
+	const processes = new ProcessRunner(signal);
+	try {
+		const [verb, ...suites] = command;
+		const testkit = nativeCargo(verb, ['-p', 'vnilink-testkit', ...suites]);
+		const launched = processes.start('cargo', testkit.args, {
+			cwd: root,
+			env: { ...testkit.env, ...options.env },
+			...options.typing ? { stdio: ['pipe', 'inherit', 'inherit'] } : {},
+		});
+		if (options.typing && launched.child.stdin) {
+			process.stdin.pipe(launched.child.stdin);
+		}
+		await launched.result;
+	} finally {
+		if (options.typing) {
+			process.stdin.unpipe();
+			process.stdin.pause();
+		}
+		await processes.stop();
+	}
+}

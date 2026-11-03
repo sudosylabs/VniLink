@@ -9,8 +9,7 @@ import { Disposable } from '../base/common/lifecycle.js';
 import type { IThemeService } from '../platform/theme/common/themeService.js';
 
 /**
- * A region of the workbench, in the shape of VS Code's `Part`: the workbench
- * creates it into a container, it builds its content there, and it restyles
+ * A region of the workbench: the workbench creates it into a container, it builds its content there, and it restyles
  * itself whenever the theme changes. Parts own their DOM and listeners.
  */
 export abstract class Part extends Disposable {

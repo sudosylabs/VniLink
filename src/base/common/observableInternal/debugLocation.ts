@@ -1,16 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 export type DebugLocation = DebugLocationImpl | undefined;
 
 export namespace DebugLocation {
 	let enabled = false;
-
-	export function enable(): void {
-		enabled = true;
-	}
 
 	export function ofCaller(): DebugLocation {
 		if (!enabled) {

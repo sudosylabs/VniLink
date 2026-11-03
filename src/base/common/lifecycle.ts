@@ -1,15 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { compareBy, numberComparator } from './arrays.js';
 import { groupBy } from './collections.js';
-import { SetMap, ResourceMap } from './map.js';
-import { URI } from './uri.js';
-import { createSingleCallFunction } from './functional.js';
+import { SetMap } from './map.js';
 import { Iterable } from './iterator.js';
-import { BugIndicatingError, onUnexpectedError } from './errors.js';
 
 // #region Disposable Tracking
 
@@ -44,34 +41,6 @@ export interface IDisposableTracker {
 	 * Indicates that the given object is a singleton which does not need to be disposed.
 	*/
 	markAsSingleton(disposable: IDisposable): void;
-}
-
-export class GCBasedDisposableTracker implements IDisposableTracker {
-
-	private readonly _registry = new FinalizationRegistry<string>(heldValue => {
-		console.warn(`[LEAKED DISPOSABLE] ${heldValue}`);
-	});
-
-	trackDisposable(disposable: IDisposable): void {
-		const stack = new Error('CREATED via:').stack!;
-		this._registry.register(disposable, stack, disposable);
-	}
-
-	setParent(child: IDisposable, parent: IDisposable | null): void {
-		if (parent) {
-			this._registry.unregister(child);
-		} else {
-			this.trackDisposable(child);
-		}
-	}
-
-	markAsDisposed(disposable: IDisposable): void {
-		this._registry.unregister(disposable);
-	}
-
-	markAsSingleton(disposable: IDisposable): void {
-		this._registry.unregister(disposable);
-	}
 }
 
 export interface DisposableInfo {
@@ -126,16 +95,6 @@ export class DisposableTracker implements IDisposableTracker {
 		const result = data.parent ? this.getRootParent(this.getDisposableData(data.parent), cache) : data;
 		cache.set(data, result);
 		return result;
-	}
-
-	getTrackedDisposables(): IDisposable[] {
-		const rootParentCache = new Map<DisposableInfo, DisposableInfo>();
-
-		const leaking = [...this.livingDisposables.entries()]
-			.filter(([, v]) => v.source !== null && !this.getRootParent(v, rootParentCache).isSingleton)
-			.flatMap(([k]) => k);
-
-		return leaking;
 	}
 
 	computeLeakingDisposables(maxReported = 10, preComputedLeaks?: DisposableInfo[]): { leaks: DisposableInfo[]; details: string } | undefined {
@@ -356,15 +315,6 @@ export function dispose<T extends IDisposable>(arg: T | Iterable<T> | undefined)
 	}
 }
 
-export function disposeIfDisposable<T extends IDisposable | object>(disposables: Array<T>): Array<T> {
-	for (const d of disposables) {
-		if (isDisposable(d)) {
-			d.dispose();
-		}
-	}
-	return [];
-}
-
 /**
  * Combine multiple disposable values into a single {@link IDisposable}.
  */
@@ -498,24 +448,6 @@ export class DisposableStore implements IDisposable {
 		this._toDispose.delete(o);
 		o.dispose();
 	}
-
-	/**
-	 * Deletes the value from the store, but does not dispose it.
-	 */
-	public deleteAndLeak<T extends IDisposable>(o: T): void {
-		if (!o) {
-			return;
-		}
-		if (this._toDispose.delete(o)) {
-			setParentOfDisposable(o, null);
-		}
-	}
-
-	public assertNotDisposed(): void {
-		if (this._isDisposed) {
-			onUnexpectedError(new BugIndicatingError('Object disposed'));
-		}
-	}
 }
 
 /**
@@ -614,141 +546,6 @@ export class MutableDisposable<T extends IDisposable> implements IDisposable {
 		this._value?.dispose();
 		this._value = undefined;
 	}
-
-	/**
-	 * Clears the value, but does not dispose it.
-	 * The old value is returned.
-	*/
-	clearAndLeak(): T | undefined {
-		const oldValue = this._value;
-		this._value = undefined;
-		if (oldValue) {
-			setParentOfDisposable(oldValue, null);
-		}
-		return oldValue;
-	}
-}
-
-/**
- * Manages the lifecycle of a disposable value that may be changed like {@link MutableDisposable}, but the value must
- * exist and cannot be undefined.
- */
-export class MandatoryMutableDisposable<T extends IDisposable> implements IDisposable {
-	private readonly _disposable = new MutableDisposable<T>();
-	private _isDisposed = false;
-
-	constructor(initialValue: T) {
-		this._disposable.value = initialValue;
-	}
-
-	get value(): T {
-		return this._disposable.value!;
-	}
-
-	set value(value: T) {
-		if (this._isDisposed || value === this._disposable.value) {
-			return;
-		}
-		this._disposable.value = value;
-	}
-
-	dispose() {
-		this._isDisposed = true;
-		this._disposable.dispose();
-	}
-}
-
-export class RefCountedDisposable {
-
-	private _counter: number = 1;
-
-	constructor(
-		private readonly _disposable: IDisposable,
-	) { }
-
-	acquire() {
-		this._counter++;
-		return this;
-	}
-
-	release() {
-		if (--this._counter === 0) {
-			this._disposable.dispose();
-		}
-		return this;
-	}
-}
-
-export interface IReference<T> extends IDisposable {
-	readonly object: T;
-}
-
-export abstract class ReferenceCollection<T> {
-
-	private readonly references: Map<string, { readonly object: T; counter: number }> = new Map();
-
-	acquire(key: string, ...args: unknown[]): IReference<T> {
-		let reference = this.references.get(key);
-
-		if (!reference) {
-			reference = { counter: 0, object: this.createReferencedObject(key, ...args) };
-			this.references.set(key, reference);
-		}
-
-		const { object } = reference;
-		const dispose = createSingleCallFunction(() => {
-			if (--reference.counter === 0) {
-				this.destroyReferencedObject(key, reference.object);
-				this.references.delete(key);
-			}
-		});
-
-		reference.counter++;
-
-		return { object, dispose };
-	}
-
-	protected abstract createReferencedObject(key: string, ...args: unknown[]): T;
-	protected abstract destroyReferencedObject(key: string, object: T): void;
-}
-
-/**
- * Unwraps a reference collection of promised values. Makes sure
- * references are disposed whenever promises get rejected.
- */
-export class AsyncReferenceCollection<T> {
-
-	constructor(private referenceCollection: ReferenceCollection<Promise<T>>) { }
-
-	async acquire(key: string, ...args: unknown[]): Promise<IReference<T>> {
-		const ref = this.referenceCollection.acquire(key, ...args);
-
-		try {
-			const object = await ref.object;
-
-			return {
-				object,
-				dispose: () => ref.dispose()
-			};
-		} catch (error) {
-			ref.dispose();
-			throw error;
-		}
-	}
-}
-
-export class ImmortalReference<T> implements IReference<T> {
-	constructor(public object: T) { }
-	dispose(): void { /* noop */ }
-}
-
-export function disposeOnReturn(fn: (store: DisposableStore) => void): void {
-	const store = new DisposableStore();
-	try {
-		fn(store);
-	} finally {
-		store.dispose();
-	}
 }
 
 /**
@@ -798,10 +595,6 @@ export class DisposableMap<K, V extends IDisposable = IDisposable> implements ID
 		return this._store.size;
 	}
 
-	get(key: K): V | undefined {
-		return this._store.get(key);
-	}
-
 	set(key: K, value: V, skipDisposeOnOverwrite = false): void {
 		if (this._isDisposed) {
 			console.warn(new Error('Trying to add a disposable to a DisposableMap that has already been disposed of. The added object will be leaked!').stack);
@@ -815,160 +608,7 @@ export class DisposableMap<K, V extends IDisposable = IDisposable> implements ID
 		setParentOfDisposable(value, this);
 	}
 
-	/**
-	 * Delete the value stored for `key` from this map and also dispose of it.
-	 */
-	deleteAndDispose(key: K): void {
-		this._store.get(key)?.dispose();
-		this._store.delete(key);
-	}
-
-	/**
-	 * Delete the value stored for `key` from this map but return it. The caller is
-	 * responsible for disposing of the value.
-	 */
-	deleteAndLeak(key: K): V | undefined {
-		const value = this._store.get(key);
-		if (value) {
-			setParentOfDisposable(value, null);
-		}
-		this._store.delete(key);
-		return value;
-	}
-
-	keys(): IterableIterator<K> {
-		return this._store.keys();
-	}
-
-	values(): IterableIterator<V> {
-		return this._store.values();
-	}
-
 	[Symbol.iterator](): IterableIterator<[K, V]> {
 		return this._store[Symbol.iterator]();
-	}
-}
-
-/**
- * A set that manages the lifecycle of the values that it stores.
- */
-export class DisposableSet<V extends IDisposable = IDisposable> implements IDisposable {
-
-	private readonly _store: Set<V>;
-	private _isDisposed = false;
-
-	constructor(store: Set<V> = new Set<V>()) {
-		this._store = store;
-		trackDisposable(this);
-	}
-
-	/**
-	 * Disposes of all stored values and mark this object as disposed.
-	 *
-	 * Trying to use this object after it has been disposed of is an error.
-	 */
-	dispose(): void {
-		markAsDisposed(this);
-		this._isDisposed = true;
-		this.clearAndDisposeAll();
-	}
-
-	/**
-	 * Disposes of all stored values and clear the set, but DO NOT mark this object as disposed.
-	 */
-	clearAndDisposeAll(): void {
-		if (!this._store.size) {
-			return;
-		}
-
-		try {
-			dispose(this._store.values());
-		} finally {
-			this._store.clear();
-		}
-	}
-
-	has(value: V): boolean {
-		return this._store.has(value);
-	}
-
-	get size(): number {
-		return this._store.size;
-	}
-
-	add(value: V): void {
-		if (this._isDisposed) {
-			console.warn(new Error('Trying to add a disposable to a DisposableSet that has already been disposed of. The added object will be leaked!').stack);
-		}
-
-		this._store.add(value);
-		setParentOfDisposable(value, this);
-	}
-
-	/**
-	 * Delete the value from this set and also dispose of it.
-	 */
-	deleteAndDispose(value: V): void {
-		if (this._store.delete(value)) {
-			value.dispose();
-		}
-	}
-
-	/**
-	 * Delete the value from this set but return it. The caller is
-	 * responsible for disposing of the value.
-	 */
-	deleteAndLeak(value: V): V | undefined {
-		if (this._store.delete(value)) {
-			setParentOfDisposable(value, null);
-			return value;
-		}
-		return undefined;
-	}
-
-	values(): IterableIterator<V> {
-		return this._store.values();
-	}
-
-	[Symbol.iterator](): IterableIterator<V> {
-		return this._store[Symbol.iterator]();
-	}
-}
-
-/**
- * Call `then` on a Promise, unless the returned disposable is disposed.
- */
-export function thenIfNotDisposed<T>(promise: Promise<T>, then: (result: T) => void): IDisposable {
-	let disposed = false;
-	promise.then(result => {
-		if (disposed) {
-			return;
-		}
-		then(result);
-	});
-	return toDisposable(() => {
-		disposed = true;
-	});
-}
-
-/**
- * Call `then` on a promise that resolves to a {@link IDisposable}, then either register the
- * disposable or register it to the {@link DisposableStore}, depending on whether the store is
- * disposed or not.
- */
-export function thenRegisterOrDispose<T extends IDisposable>(promise: Promise<T>, store: DisposableStore): Promise<T> {
-	return promise.then(disposable => {
-		if (store.isDisposed) {
-			disposable.dispose();
-		} else {
-			store.add(disposable);
-		}
-		return disposable;
-	});
-}
-
-export class DisposableResourceMap<V extends IDisposable = IDisposable> extends DisposableMap<URI, V> {
-	constructor() {
-		super(new ResourceMap());
 	}
 }

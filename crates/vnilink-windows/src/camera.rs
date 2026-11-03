@@ -188,8 +188,11 @@ impl HostCameraFactory for WindowsCameraFactory {
             .name("vnilink-camera-mf".into())
             .spawn(move || {
                 if run(config, source.clone(), &ready, &worker_startup).is_err() {
-                    let _ =
-                        ready.try_send(Err(Error::Unsupported("Windows camera capture failed")));
+                    vnilink::ignored!(
+                        vnilink::trace::CAMERA,
+                        "the caller stopped waiting for its camera, or was already answered",
+                        ready.try_send(Err(Error::Unsupported("Windows camera capture failed")))
+                    );
                     source.fail();
                 }
                 source.close();

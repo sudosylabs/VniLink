@@ -63,7 +63,8 @@ pub(super) async fn client_send(
         }
         // Where the pointer came to rest is said reliably: the datagram that
         // said it may have been lost, and nothing follows it to correct that.
-        if let Some((event, _)) = unrepeated.filter(|(_, at)| at.elapsed() >= POINTER_SETTLE) {
+        let settled = unrepeated.filter(|(_, at)| pointer_settled(*at, std::time::Instant::now()));
+        if let Some((event, _)) = settled {
             let message = ControlMessage::Input {
                 stamp: desktop.stamp,
                 event,
@@ -227,7 +228,7 @@ pub(super) async fn client_send(
                     let path_changed = last_path.is_some_and(|previous| previous != path.id());
                     last_path = Some(path.id());
                     let host = lock(&desktop.host_feedback).as_ref()
-                        .filter(|(_, at)| now.saturating_duration_since(*at) <= Duration::from_secs(3))
+                        .filter(|(_, at)| still_current(*at, now))
                         .map(|(feedback, _)| *feedback);
                     let current = *lock(&desktop.quality);
                     let feedback = crate::adaptation::Feedback {
@@ -236,7 +237,7 @@ pub(super) async fn client_send(
                         rtt_ms: path.rtt().as_millis().min(u64::MAX as u128) as u64,
                         path_changed,
                         decode_us: lock(&desktop.decode_duration).as_ref()
-                            .filter(|(_, at)| now.saturating_duration_since(*at) <= Duration::from_secs(3))
+                            .filter(|(_, at)| still_current(*at, now))
                             .map(|(us, _)| *us),
                     };
                     let (next, signals) = {

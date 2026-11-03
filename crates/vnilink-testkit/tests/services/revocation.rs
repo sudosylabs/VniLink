@@ -223,7 +223,7 @@ fn withdrawing_files_closes_it_for_every_viewer_and_sharing_again_revives_nothin
             files.is_cancelled().then_some(())
         });
         assert_eq!(
-            phase(viewer, owner),
+            phase(viewer, owner)?,
             ServicePhase::Closed(CloseCause::PeerClose),
             "the viewer's Files closes as the peer's close"
         );

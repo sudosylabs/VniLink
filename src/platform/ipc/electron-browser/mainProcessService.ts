@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { IChannel, IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
+import { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { Client as IPCElectronClient } from '../../../base/parts/ipc/electron-browser/ipc.electron.js';
 import { IMainProcessService } from '../common/mainProcessService.js';
 
@@ -27,9 +27,5 @@ export class ElectronIPCMainProcessService extends Disposable implements IMainPr
 
 	getChannel(channelName: string): IChannel {
 		return this.mainProcessConnection.getChannel(channelName);
-	}
-
-	registerChannel(channelName: string, channel: IServerChannel<string>): void {
-		this.mainProcessConnection.registerChannel(channelName, channel);
 	}
 }

@@ -23,7 +23,7 @@ const end = '<!-- prerequisites:end -->';
 const coreTasks = ['build', 'start', 'test:ui', 'test:rust'];
 
 /** Tasks whose extra needs are listed separately. */
-const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'package:installers', 'assets:tray', 'sandbox:linux'];
+const otherTasks = ['test:linux', 'measure:impaired', 'measure:impaired:linux', 'measure:latency', 'package:installers:staged', 'assets:tray', 'sandbox:linux'];
 
 function applies(requirement: Requirement, platform: Platform): boolean {
 	return !requirement.platforms || requirement.platforms.includes(platform);
@@ -94,7 +94,7 @@ function architectureLine(manifest: Manifest, platform: Platform): string {
 		.join('; ');
 }
 
-function otherTaskLines(manifest: Manifest, platform: Platform, core: ReadonlySet<string>): string[] {
+function otherTaskLines(manifest: Manifest, platform: Platform, core: ReadonlySet<string>, scripts: ReadonlySet<string>): string[] {
 	const lines: string[] = [];
 	for (const task of otherTasks) {
 		const entry = manifest.tasks[task];
@@ -112,7 +112,9 @@ function otherTaskLines(manifest: Manifest, platform: Platform, core: ReadonlySe
 			const title = `${requirement.title}${requirement.optional ? ' (optional)' : ''}`;
 			return how ? `${title}: ${how}` : title;
 		});
-		lines.push(`| \`npm run ${task}\` | ${needs.join('; ')} |`);
+		// A task without an npm script of its own is run directly.
+		const command = scripts.has(task) ? `npm run ${task}` : `node build/run.ts ${task}`;
+		lines.push(`| \`${command}\` | ${needs.join('; ')} |`);
 	}
 	return lines.length ? ['', 'Some tasks need more:', '', '| Task | Also needs |', '| --- | --- |', ...lines] : [];
 }
@@ -127,7 +129,7 @@ function linuxPackageLines(manifest: Manifest, tasks: readonly string[]): string
 }
 
 /** The generated section, between its markers. */
-export function renderPrerequisites(manifest: Manifest, node: string, rust: string): string {
+export function renderPrerequisites(manifest: Manifest, node: string, rust: string, scripts: ReadonlySet<string>): string {
 	const core = unique(coreTasks.flatMap(task => taskRequirements(manifest, task)));
 	const coreSet = new Set(core);
 	const linux = manifest.platforms.linux;
@@ -144,7 +146,7 @@ export function renderPrerequisites(manifest: Manifest, node: string, rust: stri
 		`Architectures: ${architectureLine(manifest, 'darwin')}.`,
 		'',
 		...requirementLines(manifest, core, 'darwin'),
-		...otherTaskLines(manifest, 'darwin', coreSet),
+		...otherTaskLines(manifest, 'darwin', coreSet, scripts),
 		'',
 		'### Windows',
 		'',
@@ -152,7 +154,7 @@ export function renderPrerequisites(manifest: Manifest, node: string, rust: stri
 		+ 'Visual Studio and the MSVC toolchain are not needed when rustup\'s host is GNU.',
 		'',
 		...requirementLines(manifest, core, 'win32'),
-		...otherTaskLines(manifest, 'win32', coreSet),
+		...otherTaskLines(manifest, 'win32', coreSet, scripts),
 		'',
 		'### Linux',
 		'',
@@ -165,7 +167,7 @@ export function renderPrerequisites(manifest: Manifest, node: string, rust: stri
 			return Boolean(requirement.check.custom && requirement.fix) && !['node', 'rust', 'platform'].includes(id);
 		}), 'linux'),
 		'- **UI tests without a display**: `scripts/test.sh` runs them on Xvfb with Openbox and a temporary keyring.',
-		...otherTaskLines(manifest, 'linux', coreSet),
+		...otherTaskLines(manifest, 'linux', coreSet, scripts),
 		'',
 		'The first native build downloads, once:',
 		'',
@@ -179,7 +181,8 @@ async function rendered(root: string): Promise<string> {
 	const manifest = await loadManifest();
 	const node = (await readFile(join(root, manifest.node.versionFile), 'utf8')).trim();
 	const rust = rustChannel(await readFile(join(root, manifest.rust.toolchainFile), 'utf8')) ?? 'stable';
-	return renderPrerequisites(manifest, node, rust);
+	const { scripts } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+	return renderPrerequisites(manifest, node, rust, new Set(Object.keys(scripts)));
 }
 
 /** The contributor guide with the section replaced by the current rendering. */

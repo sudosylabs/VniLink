@@ -1,14 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IObservableWithChange, IObserver, IReader, IObservable } from '../base.js';
-import { DisposableStore } from '../commonFacade/deps.js';
+import { IObservableWithChange, IObserver } from '../base.js';
 import { DebugLocation } from '../debugLocation.js';
-import { DebugOwner, getFunctionName } from '../debugName.js';
 import { debugGetObservableGraph } from '../logging/debugGetDependencyGraph.js';
-import { getLogger, logObservable } from '../logging/logging.js';
+import { getLogger } from '../logging/logging.js';
 import type { keepObserved, recomputeInitiallyAndOnChange } from '../utils/utils.js';
 import { derivedOpts } from './derived.js';
 
@@ -48,102 +46,7 @@ export abstract class ConvenientObservable<T, TChange> implements IObservableWit
 	public abstract addObserver(observer: IObserver): void;
 	public abstract removeObserver(observer: IObserver): void;
 
-	/** @sealed */
-	public read(reader: IReader | undefined): T {
-		if (reader) {
-			return reader.readObservable(this);
-		} else {
-			return this.get();
-		}
-	}
-
-	/** @sealed */
-	public map<TNew>(fn: (value: T, reader: IReader) => TNew): IObservable<TNew>;
-	public map<TNew>(owner: DebugOwner, fn: (value: T, reader: IReader) => TNew): IObservable<TNew>;
-	public map<TNew>(fnOrOwner: DebugOwner | ((value: T, reader: IReader) => TNew), fnOrUndefined?: (value: T, reader: IReader) => TNew, debugLocation: DebugLocation = DebugLocation.ofCaller()): IObservable<TNew> {
-		const owner = fnOrUndefined === undefined ? undefined : fnOrOwner as DebugOwner;
-		const fn = fnOrUndefined === undefined ? fnOrOwner as (value: T, reader: IReader) => TNew : fnOrUndefined;
-
-		return _derived(
-			{
-				owner,
-				debugName: () => {
-					const name = getFunctionName(fn);
-					if (name !== undefined) {
-						return name;
-					}
-
-					// regexp to match `x => x.y` or `x => x?.y` where x and y can be arbitrary identifiers (uses backref):
-					const regexp = /^\s*\(?\s*([a-zA-Z_$][a-zA-Z_$0-9]*)\s*\)?\s*=>\s*\1(?:\??)\.([a-zA-Z_$][a-zA-Z_$0-9]*)\s*$/;
-					const match = regexp.exec(fn.toString());
-					if (match) {
-						return `${this.debugName}.${match[2]}`;
-					}
-					if (!owner) {
-						return `${this.debugName} (mapped)`;
-					}
-					return undefined;
-				},
-				debugReferenceFn: fn,
-			},
-			(reader) => fn(this.read(reader), reader),
-			debugLocation,
-		);
-	}
-
-	public abstract log(): IObservableWithChange<T, TChange>;
-
-	/**
-	 * @sealed
-	 * Converts an observable of an observable value into a direct observable of the value.
-	*/
-	public flatten<TNew>(this: IObservable<IObservableWithChange<TNew, any>>): IObservable<TNew> {
-		return _derived(
-			{
-				owner: undefined,
-				debugName: () => `${this.debugName} (flattened)`,
-			},
-			(reader) => this.read(reader).read(reader)
-		);
-	}
-
-	public recomputeInitiallyAndOnChange(store: DisposableStore, handleValue?: (value: T) => void): IObservable<T> {
-		store.add(_recomputeInitiallyAndOnChange!(this, handleValue));
-		return this;
-	}
-
-	/**
-	 * Ensures that this observable is observed. This keeps the cache alive.
-	 * However, in case of deriveds, it does not force eager evaluation (only when the value is read/get).
-	 * Use `recomputeInitiallyAndOnChange` for eager evaluation.
-	 */
-	public keepObserved(store: DisposableStore): IObservable<T> {
-		store.add(_keepObserved!(this));
-		return this;
-	}
-
 	public abstract get debugName(): string;
-
-	protected get debugValue() {
-		return this.get();
-	}
-
-	get debug(): DebugHelper {
-		return new DebugHelper(this);
-	}
-}
-
-class DebugHelper {
-	constructor(public readonly observable: IObservableWithChange<any, any>) {
-	}
-
-	getDependencyGraph(): string {
-		return _debugGetObservableGraph(this.observable, { type: 'dependencies' });
-	}
-
-	getObserverGraph(): string {
-		return _debugGetObservableGraph(this.observable, { type: 'observers' });
-	}
 }
 
 export abstract class BaseObservable<T, TChange = void> extends ConvenientObservable<T, TChange> {
@@ -177,15 +80,6 @@ export abstract class BaseObservable<T, TChange = void> extends ConvenientObserv
 
 	protected onFirstObserverAdded(): void { }
 	protected onLastObserverRemoved(): void { }
-
-	public override log(): IObservableWithChange<T, TChange> {
-		const hadLogger = !!getLogger();
-		logObservable(this);
-		if (!hadLogger) {
-			getLogger()?.handleObservableCreated(this, DebugLocation.ofCaller());
-		}
-		return this;
-	}
 
 	public debugGetObservers() {
 		return this._observers;

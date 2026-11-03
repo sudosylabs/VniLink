@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { handleBugIndicatingErrorRecovery, IObservable, IObserver, ITransaction } from './base.js';
@@ -21,34 +21,9 @@ export function transaction(fn: (tx: ITransaction) => void, getDebugName?: () =>
 		tx.finish();
 	}
 }
-let _globalTransaction: ITransaction | undefined = undefined;
 
-export function globalTransaction(fn: (tx: ITransaction) => void) {
-	if (_globalTransaction) {
-		fn(_globalTransaction);
-	} else {
-		const tx = new TransactionImpl(fn, undefined);
-		_globalTransaction = tx;
-		try {
-			fn(tx);
-		} finally {
-			tx.finish(); // During finish, more actions might be added to the transaction.
-
-			// Which is why we only clear the global transaction after finish.
-			_globalTransaction = undefined;
-		}
-	}
-}
 /** @deprecated */
 
-export async function asyncTransaction(fn: (tx: ITransaction) => Promise<void>, getDebugName?: () => string): Promise<void> {
-	const tx = new TransactionImpl(fn, getDebugName);
-	try {
-		await fn(tx);
-	} finally {
-		tx.finish();
-	}
-}
 /**
  * Allows to chain transactions.
  */
@@ -104,10 +79,6 @@ export function subtransaction(tx: ITransaction | undefined, fn: (tx: ITransacti
 		// Prevent anyone from updating observers from now on.
 		this._updatingObservers = null;
 		getLogger()?.handleEndTransaction(this);
-	}
-
-	public debugGetUpdatingObservers() {
-		return this._updatingObservers;
 	}
 }
 

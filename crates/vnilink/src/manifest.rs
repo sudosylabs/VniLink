@@ -1186,10 +1186,10 @@ mod tests {
         if SCAN_PARKED.swap(true, Seq::SeqCst) {
             return;
         }
-        crate::test_support::wait_until(
+        crate::test_support::wait_for(
             "the parked scan to be cancelled",
             Duration::from_secs(30),
-            || cancelled.load(Seq::Acquire),
+            || cancelled.load(Seq::Acquire).then_some(()),
         );
     }
 
@@ -1271,8 +1271,8 @@ mod tests {
         });
         // The worker must reach the parked probe; on the old inline path no
         // probe exists and this times out.
-        crate::test_support::wait_until("the scan worker to park", Duration::from_secs(8), || {
-            SCAN_PARKED.load(Ordering::SeqCst)
+        crate::test_support::wait_for("the scan worker to park", Duration::from_secs(8), || {
+            SCAN_PARKED.load(Ordering::SeqCst).then_some(())
         });
         // Sibling progress while parked: the async worker is free and no
         // shared lock is held, so a full second scan completes.

@@ -1,0 +1,46 @@
+name: fuzz
+
+# Every fuzz target for a bounded time, nightly and on demand: the parsers of
+# what a peer or a pairing file sends (`vnilink::fuzzing`). A crash fails the
+# run and its input is kept as an artifact, to become a regression test
+# beside the parser.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install Ubuntu packages
+        run: |
+          sudo apt-get update
+          node build/lib/prerequisites.ts packages debian build | xargs sudo apt-get install -y --no-install-recommends
+      - run: npm ci
+      - name: Install nightly Rust and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly install cargo-fuzz --version 0.13.2 --locked
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: fuzz
+          workspaces: crates/vnilink/fuzz
+      - run: npm run doctor -- --require fuzz
+      - run: npm run fuzz -- --seconds 60
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts
+          path: crates/vnilink/fuzz/artifacts
+          if-no-files-found: ignore

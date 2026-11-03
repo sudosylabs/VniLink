@@ -32,8 +32,7 @@ fn neutral_desktop_stream_fallback_cursor_and_files_are_independent() -> TestRes
     let here = pair.host.location();
     let (root, folder) = (here.root, here.path(""));
     host.set_service_sharing(ServiceKind::Files, true)?;
-    let connection = pair.connect_services();
-    let desktop = pair.controller.open_desktop(&connection)?;
+    let (connection, desktop) = pair.open_desktop()?;
     let (_, files) = pair.controller.open_files(&connection)?;
     let remote = pair
         .host
@@ -111,8 +110,7 @@ fn neutral_desktop_stream_fallback_keeps_flowing_past_the_unacknowledged_limit()
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     host.set_capture(Box::new(MonitorCapture::new(SCREEN)))?;
-    let connection = pair.connect_services();
-    let desktop = pair.controller.open_desktop(&connection)?;
+    let (_, desktop) = pair.open_desktop()?;
     let remote = pair
         .host
         .hosted_for(ServiceKind::Desktop, &pair.controller)

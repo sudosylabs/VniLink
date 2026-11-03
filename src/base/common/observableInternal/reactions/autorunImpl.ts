@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { IObservable, IObservableWithChange, IObserver, IReaderWithStore } from '../base.js';
@@ -229,30 +229,8 @@ export class AutorunObserver<TChangeSummary = any> implements IObserver, IReader
 	}
 
 	private _store: DisposableStore | undefined = undefined;
-	get store(): DisposableStore {
-		this._ensureNoRunning();
-		if (this._disposed) {
-			throw new BugIndicatingError('Cannot access store after dispose');
-		}
-
-		if (this._store === undefined) {
-			this._store = new DisposableStore();
-		}
-		return this._store;
-	}
 
 	private _delayedStore: DisposableStore | undefined = undefined;
-	get delayedStore(): DisposableStore {
-		this._ensureNoRunning();
-		if (this._disposed) {
-			throw new BugIndicatingError('Cannot access store after dispose');
-		}
-
-		if (this._delayedStore === undefined) {
-			this._delayedStore = new DisposableStore();
-		}
-		return this._delayedStore;
-	}
 
 	public debugGetState() {
 		return {
@@ -262,14 +240,6 @@ export class AutorunObserver<TChangeSummary = any> implements IObserver, IReader
 			state: this._state,
 			stateStr: autorunStateToString(this._state),
 		};
-	}
-
-	public debugRerun(): void {
-		if (!this._isRunning) {
-			this._run();
-		} else {
-			this._state = AutorunState.stale;
-		}
 	}
 
 	private _checkIterations(): boolean {

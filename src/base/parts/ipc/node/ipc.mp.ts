@@ -31,10 +31,6 @@ class Protocol implements IMessagePassingProtocol {
 	send(message: VSBuffer): void {
 		this.port.postMessage(message.buffer);
 	}
-
-	disconnect(): void {
-		this.port.close();
-	}
 }
 
 export interface IClientConnectionFilter {
@@ -90,20 +86,4 @@ export class Server extends IPCServer {
 	constructor(filter?: IClientConnectionFilter) {
 		super(Server.getOnDidClientConnect(filter));
 	}
-}
-
-interface INodeMessagePortFragment {
-	on(event: 'message', listener: (messageEvent: MessageEvent) => void): this;
-	removeListener(event: 'message', listener: (messageEvent: MessageEvent) => void): this;
-}
-
-export function once(port: INodeMessagePortFragment, message: unknown, callback: () => void): void {
-	const listener = (e: MessageEvent) => {
-		if (e.data === message) {
-			port.removeListener('message', listener);
-			callback();
-		}
-	};
-
-	port.on('message', listener);
 }

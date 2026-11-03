@@ -7,7 +7,6 @@ import * as dom from '../../dom.js';
 import * as cssJs from '../../cssValue.js';
 import { DomEmitter } from '../../event.js';
 import { renderFormattedText, renderText } from '../../formattedTextRenderer.js';
-import { IHistoryNavigationWidget } from '../../history.js';
 import { ActionBar, IActionViewItemProvider } from '../actionbar/actionbar.js';
 import * as aria from '../aria/aria.js';
 import { AnchorAlignment, IContextViewProvider } from '../contextview/contextview.js';
@@ -16,7 +15,6 @@ import { ScrollableElement } from '../scrollbar/scrollableElement.js';
 import { Widget } from '../widget.js';
 import { IAction } from '../../../common/actions.js';
 import { Emitter, Event } from '../../../common/event.js';
-import { HistoryNavigator, IHistory } from '../../../common/history.js';
 import { equals } from '../../../common/objects.js';
 import { ScrollbarVisibility } from '../../../common/scrollable.js';
 import './inputBox.css';
@@ -39,7 +37,6 @@ export interface IInputOptions {
 	readonly actions?: ReadonlyArray<IAction>;
 	readonly actionViewItemProvider?: IActionViewItemProvider;
 	readonly inputBoxStyles: IInputBoxStyles;
-	readonly history?: IHistory<string>;
 	readonly hideHoverOnValueChange?: boolean;
 }
 
@@ -82,21 +79,6 @@ export interface IRange {
 	start: number;
 	end: number;
 }
-
-export const unthemedInboxStyles: IInputBoxStyles = {
-	inputBackground: '#3C3C3C',
-	inputForeground: '#CCCCCC',
-	inputValidationInfoBorder: '#55AAFF',
-	inputValidationInfoBackground: '#063B49',
-	inputValidationWarningBorder: '#B89500',
-	inputValidationWarningBackground: '#352A05',
-	inputValidationErrorBorder: '#BE1100',
-	inputValidationErrorBackground: '#5A1D1D',
-	inputBorder: undefined,
-	inputValidationErrorForeground: undefined,
-	inputValidationInfoForeground: undefined,
-	inputValidationWarningForeground: undefined
-};
 
 export class InputBox extends Widget {
 	private contextViewProvider?: IContextViewProvider;
@@ -218,24 +200,6 @@ export class InputBox extends Widget {
 		this.applyStyles();
 	}
 
-	public setActions(actions: ReadonlyArray<IAction> | undefined, actionViewItemProvider?: IActionViewItemProvider): void {
-		if (this.actionbar) {
-			this.actionbar.clear();
-			if (actions) {
-				this.actionbar.push(actions, { icon: true, label: false });
-			}
-		} else if (actions) {
-			this.actionbar = this._register(new ActionBar(this.element, {
-				actionViewItemProvider: actionViewItemProvider ?? this.options.actionViewItemProvider
-			}));
-			this.actionbar.push(actions, { icon: true, label: false });
-		}
-	}
-
-	public get actionsWidth(): number {
-		return this.actionbar?.getContainer().offsetWidth ?? 0;
-	}
-
 	protected onBlur(): void {
 		this._hideMessage();
 		if (this.options.showPlaceholderOnFocus) {
@@ -267,24 +231,6 @@ export class InputBox extends Widget {
 		}
 	}
 
-	public setAriaLabel(label: string): void {
-		this.ariaLabel = label;
-
-		if (label) {
-			this.input.setAttribute('aria-label', this.ariaLabel);
-		} else {
-			this.input.removeAttribute('aria-label');
-		}
-	}
-
-	public getAriaLabel(): string {
-		return this.ariaLabel;
-	}
-
-	public get mirrorElement(): HTMLElement | undefined {
-		return this.mirror;
-	}
-
 	public get inputElement(): HTMLInputElement {
 		return this.input;
 	}
@@ -298,14 +244,6 @@ export class InputBox extends Widget {
 			this.input.value = newValue;
 			this.onValueChange();
 		}
-	}
-
-	public get step(): string {
-		return this.input.step;
-	}
-
-	public set step(newValue: string) {
-		this.input.step = newValue;
 	}
 
 	public get height(): number {
@@ -335,22 +273,6 @@ export class InputBox extends Widget {
 		}
 	}
 
-	public isSelectionAtEnd(): boolean {
-		return this.input.selectionEnd === this.input.value.length && this.input.selectionStart === this.input.selectionEnd;
-	}
-
-	public getSelection(): IRange | null {
-		const selectionStart = this.input.selectionStart;
-		if (selectionStart === null) {
-			return null;
-		}
-		const selectionEnd = this.input.selectionEnd ?? selectionStart;
-		return {
-			start: selectionStart,
-			end: selectionEnd,
-		};
-	}
-
 	public enable(): void {
 		this.input.removeAttribute('disabled');
 	}
@@ -359,14 +281,6 @@ export class InputBox extends Widget {
 		this.blur();
 		this.input.disabled = true;
 		this._hideMessage();
-	}
-
-	public setEnabled(enabled: boolean): void {
-		if (enabled) {
-			this.enable();
-		} else {
-			this.disable();
-		}
 	}
 
 	public get width(): number {
@@ -389,15 +303,6 @@ export class InputBox extends Widget {
 
 		if (this.mirror) {
 			this.mirror.style.width = width + 'px';
-		}
-	}
-
-	public set paddingRight(paddingRight: number) {
-		// Set width to avoid hint text overlapping buttons
-		this.input.style.width = `calc(100% - ${paddingRight}px)`;
-
-		if (this.mirror) {
-			this.mirror.style.paddingRight = paddingRight + 'px';
 		}
 	}
 
@@ -446,10 +351,6 @@ export class InputBox extends Widget {
 
 		this._hideMessage();
 		this.applyStyles();
-	}
-
-	public isInputValid(): boolean {
-		return !!this.validation && !this.validation(this.value);
 	}
 
 	public validate(): MessageType | undefined {
@@ -657,19 +558,6 @@ export class InputBox extends Widget {
 		this.layoutMessage();
 	}
 
-	public insertAtCursor(text: string): void {
-		const inputElement = this.inputElement;
-		const start = inputElement.selectionStart;
-		const end = inputElement.selectionEnd;
-		const content = inputElement.value;
-
-		if (start !== null && end !== null) {
-			this.value = content.substr(0, start) + text + content.substr(end);
-			inputElement.setSelectionRange(start + 1, start + 1);
-			this.layout();
-		}
-	}
-
 	public override dispose(): void {
 		this._hideMessage();
 
@@ -678,191 +566,5 @@ export class InputBox extends Widget {
 		this.actionbar?.dispose();
 
 		super.dispose();
-	}
-}
-
-export interface IHistoryInputOptions extends IInputOptions {
-	readonly showHistoryHint?: () => boolean;
-}
-
-export class HistoryInputBox extends InputBox implements IHistoryNavigationWidget {
-
-	private readonly history: HistoryNavigator<string>;
-	private observer: MutationObserver | undefined;
-
-	private readonly _onDidFocus = this._register(new Emitter<void>());
-	readonly onDidFocus = this._onDidFocus.event;
-
-	private readonly _onDidBlur = this._register(new Emitter<void>());
-	readonly onDidBlur = this._onDidBlur.event;
-
-	constructor(container: HTMLElement, contextViewProvider: IContextViewProvider | undefined, options: IHistoryInputOptions) {
-		const NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_NO_PARENS = nls.localize({
-			key: 'history.inputbox.hint.suffix.noparens',
-			comment: ['Text is the suffix of an input field placeholder coming after the action the input field performs, this will be used when the input field ends in a closing parenthesis ")", for example "Filter (e.g. text, !exclude)". The character inserted into the final string is \u21C5 to represent the up and down arrow keys.']
-		}, ' or {0} for history', `\u21C5`);
-		const NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_IN_PARENS = nls.localize({
-			key: 'history.inputbox.hint.suffix.inparens',
-			comment: ['Text is the suffix of an input field placeholder coming after the action the input field performs, this will be used when the input field does NOT end in a closing parenthesis (eg. "Find"). The character inserted into the final string is \u21C5 to represent the up and down arrow keys.']
-		}, ' ({0} for history)', `\u21C5`);
-
-		super(container, contextViewProvider, options);
-		this.history = this._register(new HistoryNavigator<string>(options.history, 100));
-
-		// Function to append the history suffix to the placeholder if necessary
-		const addSuffix = () => {
-			if (options.showHistoryHint && options.showHistoryHint() && !this.placeholder.endsWith(NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_NO_PARENS) && !this.placeholder.endsWith(NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_IN_PARENS) && this.history.getHistory().length) {
-				const suffix = this.placeholder.endsWith(')') ? NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_NO_PARENS : NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_IN_PARENS;
-				const suffixedPlaceholder = this.placeholder + suffix;
-				if (options.showPlaceholderOnFocus && !dom.isActiveElement(this.input)) {
-					this.placeholder = suffixedPlaceholder;
-				}
-				else {
-					this.setPlaceHolder(suffixedPlaceholder);
-				}
-			}
-		};
-
-		// Spot the change to the textarea class attribute which occurs when it changes between non-empty and empty,
-		// and add the history suffix to the placeholder if not yet present
-		this.observer = new MutationObserver((mutationList: MutationRecord[], observer: MutationObserver) => {
-			mutationList.forEach((mutation: MutationRecord) => {
-				if (!mutation.target.textContent) {
-					addSuffix();
-				}
-			});
-		});
-		this.observer.observe(this.input, { attributeFilter: ['class'] });
-
-		this.onfocus(this.input, () => addSuffix());
-		this.onblur(this.input, () => {
-			const resetPlaceholder = (historyHint: string) => {
-				if (!this.placeholder.endsWith(historyHint)) {
-					return false;
-				}
-				else {
-					const revertedPlaceholder = this.placeholder.slice(0, this.placeholder.length - historyHint.length);
-					if (options.showPlaceholderOnFocus) {
-						this.placeholder = revertedPlaceholder;
-					}
-					else {
-						this.setPlaceHolder(revertedPlaceholder);
-					}
-					return true;
-				}
-			};
-			if (!resetPlaceholder(NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_IN_PARENS)) {
-				resetPlaceholder(NLS_PLACEHOLDER_HISTORY_HINT_SUFFIX_NO_PARENS);
-			}
-		});
-	}
-
-	override dispose() {
-		super.dispose();
-		if (this.observer) {
-			this.observer.disconnect();
-			this.observer = undefined;
-		}
-	}
-
-	public addToHistory(always?: boolean): void {
-		if (this.value && (always || this.value !== this.getCurrentValue())) {
-			this.history.add(this.value);
-		}
-	}
-
-	public prependHistory(restoredHistory: string[]): void {
-		const newHistory = this.getHistory();
-		this.clearHistory();
-
-		restoredHistory.forEach((item) => {
-			this.history.add(item);
-		});
-
-		newHistory.forEach(item => {
-			this.history.add(item);
-		});
-	}
-
-	public getHistory(): string[] {
-		return this.history.getHistory();
-	}
-
-	public isAtFirstInHistory(): boolean {
-		return this.history.isFirst();
-	}
-
-	public isAtLastInHistory(): boolean {
-		return this.history.isLast();
-	}
-
-	public isNowhereInHistory(): boolean {
-		return this.history.isNowhere();
-	}
-
-	public showNextValue(): void {
-		if (!this.history.has(this.value)) {
-			this.addToHistory();
-		}
-
-		let next = this.getNextValue();
-		if (next) {
-			next = next === this.value ? this.getNextValue() : next;
-		}
-
-		this.value = next ?? '';
-		aria.status(this.value ? this.value : nls.localize('clearedInput', "Cleared Input"));
-	}
-
-	public showPreviousValue(): void {
-		if (!this.history.has(this.value)) {
-			this.addToHistory();
-		}
-
-		let previous = this.getPreviousValue();
-		if (previous) {
-			previous = previous === this.value ? this.getPreviousValue() : previous;
-		}
-
-		if (previous) {
-			this.value = previous;
-			aria.status(this.value);
-		}
-	}
-
-	public clearHistory(): void {
-		this.history.clear();
-	}
-
-	public override setPlaceHolder(placeHolder: string): void {
-		super.setPlaceHolder(placeHolder);
-		this.setTooltip(placeHolder);
-	}
-
-	protected override onBlur(): void {
-		super.onBlur();
-		this._onDidBlur.fire();
-	}
-
-	protected override onFocus(): void {
-		super.onFocus();
-		this._onDidFocus.fire();
-	}
-
-	private getCurrentValue(): string | null {
-		let currentValue = this.history.current();
-		if (!currentValue) {
-			currentValue = this.history.last();
-			this.history.next();
-		}
-		return currentValue;
-	}
-
-	private getPreviousValue(): string | null {
-		return this.history.previous() || this.history.first();
-	}
-
-	private getNextValue(): string | null {
-		return this.history.next();
 	}
 }

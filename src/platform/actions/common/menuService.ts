@@ -42,15 +42,6 @@ export class MenuService extends Disposable implements IMenuService {
 	getMenuActions(id: MenuId, contextKeyService: IContextKeyService, options?: IMenuActionOptions): [string, Array<MenuItemAction | SubmenuItemAction>][] {
 		return createMenuActionGroups(id, options, this._hiddenStates, this._commandService, contextKeyService);
 	}
-
-	getMenuContexts(id: MenuId): ReadonlySet<string> {
-		const menuInfo = new MenuInfoSnapshot(id, false);
-		return new Set<string>([...menuInfo.structureContextKeys, ...menuInfo.preconditionContextKeys, ...menuInfo.toggledContextKeys]);
-	}
-
-	resetHiddenStates(ids?: MenuId[]): void {
-		this._hiddenStates.reset(ids);
-	}
 }
 
 class PersistedMenuHideState implements IDisposable {
@@ -115,22 +106,6 @@ class PersistedMenuHideState implements IDisposable {
 			}
 		}
 		this._persist();
-	}
-
-	reset(menus?: MenuId[]): void {
-		if (menus === undefined) {
-			// reset all
-			this._data = Object.create(null);
-			this._persist();
-		} else {
-			// reset only for a specific menu
-			for (const { id } of menus) {
-				if (this._data[id]) {
-					delete this._data[id];
-				}
-			}
-			this._persist();
-		}
 	}
 
 	private _persist(): void {

@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { isApplicationFile } from './build/sourceScope.ts';
+import { isApplicationFile } from './build/lib/sourceScope.ts';
 
 function scoped(commands) {
 	return files => {

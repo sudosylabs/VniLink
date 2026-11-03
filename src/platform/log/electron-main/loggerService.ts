@@ -26,8 +26,6 @@ export interface ILoggerMainService extends ILoggerService {
 
 	registerLogger(resource: ILoggerResource, windowId?: number): void;
 
-	getGlobalLoggers(): ILoggerResource[];
-
 	deregisterLoggers(windowId: number): void;
 
 }
@@ -58,16 +56,6 @@ export class LoggerMainService extends LoggerService implements ILoggerMainServi
 	override deregisterLogger(resource: URI): void {
 		this.loggerResourcesByWindow.delete(resource);
 		super.deregisterLogger(resource);
-	}
-
-	getGlobalLoggers(): ILoggerResource[] {
-		const resources: ILoggerResource[] = [];
-		for (const resource of super.getRegisteredLoggers()) {
-			if (!this.loggerResourcesByWindow.has(resource.resource)) {
-				resources.push(resource);
-			}
-		}
-		return resources;
 	}
 
 	getOnDidChangeLogLevelEvent(windowId: number): Event<LogLevel | [URI, LogLevel]> {

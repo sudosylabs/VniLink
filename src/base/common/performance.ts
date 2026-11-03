@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/base/common/performance.ts.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -125,8 +126,6 @@ function _define() {
 
 interface IMarkService {
 	mark(name: string, markOptions?: { startTime?: number }): void;
-	clearMarks(name?: string): void;
-	getMarks(): PerformanceMark[];
 }
 
 function isMarkService(value: unknown): value is IMarkService {
@@ -153,24 +152,4 @@ const perf = _factory(globalThis);
 
 export function mark(name: string, markOptions?: { startTime?: number }): void {
 	perf.mark(name, markOptions);
-}
-
-/**
- * Clears performance marks. If a name is given, only marks with that exact
- * name are removed. If no name is given, all marks are removed.
- */
-export function clearMarks(name?: string): void {
-	perf.clearMarks(name);
-}
-
-export interface PerformanceMark {
-	readonly name: string;
-	readonly startTime: number;
-}
-
-/**
- * Returns all marks, sorted by `startTime`.
- */
-export function getMarks(): PerformanceMark[] {
-	return perf.getMarks();
 }

@@ -34,7 +34,11 @@ fn peers_exchange_display_names_on_connect() -> TestResult {
     let host_events = host.subscribe()?;
     let controller_events = controller.subscribe()?;
     let session = pair.connect_services();
-    assert_eq!(session.phase, SessionPhase::Active);
+    assert_eq!(
+        session.phase,
+        SessionPhase::Active,
+        "the paired controller connects"
+    );
     assert_eq!(
         controller.peer_hostname(&pair.host.endpoint())?.as_deref(),
         Some("host"),
@@ -73,7 +77,7 @@ fn peers_exchange_display_names_on_connect() -> TestResult {
 /// A computer that is not paired has no name, and an id that is not one
 /// is refused.
 #[test]
-fn unknown_devices_have_no_name() {
+fn unknown_devices_have_no_name() -> TestResult {
     let _trace = traced();
     let core = Engine::start("host");
     let other = Engine::start("controller");
@@ -91,6 +95,7 @@ fn unknown_devices_have_no_name() {
         ),
         "an id that is not one is refused"
     );
+    Ok(())
 }
 
 /// The name a computer learnt survives its restart.
@@ -129,7 +134,8 @@ fn unpairing_drops_the_name_with_the_device() -> TestResult {
     pair.connect_services();
     assert_eq!(
         controller.peer_hostname(&pair.host.endpoint())?.as_deref(),
-        Some("host")
+        Some("host"),
+        "connecting teaches the controller the host's name"
     );
     host.unpair(&pair.controller.endpoint())?;
     assert_eq!(
@@ -175,7 +181,7 @@ fn pairing_learns_names_before_connect_and_local_names_survive_refresh() -> Test
     let id = controller.endpoint();
     host.core.set_peer_pet_name(&id, Some("  Work laptop  "))?;
     assert_eq!(
-        device(&host.core, &id).pet_name.as_deref(),
+        device(&host.core, &id)?.pet_name.as_deref(),
         Some("Work laptop"),
         "a nickname is kept trimmed"
     );

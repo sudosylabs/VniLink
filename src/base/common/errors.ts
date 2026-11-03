@@ -1,14 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 export interface ErrorListenerCallback {
 	(error: any): void;
-}
-
-export interface ErrorListenerUnbind {
-	(): void;
 }
 
 // Avoid circular dependency on EventEmitter by implementing a subset of the interface.
@@ -35,22 +31,10 @@ export class ErrorHandler {
 		};
 	}
 
-	addListener(listener: ErrorListenerCallback): ErrorListenerUnbind {
-		this.listeners.push(listener);
-
-		return () => {
-			this._removeListener(listener);
-		};
-	}
-
 	private emit(e: any): void {
 		this.listeners.forEach((listener) => {
 			listener(e);
 		});
-	}
-
-	private _removeListener(listener: ErrorListenerCallback): void {
-		this.listeners.splice(this.listeners.indexOf(listener), 1);
 	}
 
 	setUnexpectedErrorHandler(newUnexpectedErrorHandler: (e: any) => void): void {
@@ -80,21 +64,6 @@ export function setUnexpectedErrorHandler(newUnexpectedErrorHandler: (e: any) =>
 }
 
 /**
- * Returns if the error is a SIGPIPE error. SIGPIPE errors should generally be
- * logged at most once, to avoid a loop.
- *
- * @see https://github.com/microsoft/vscode-remote-release/issues/6481
- */
-export function isSigPipeError(e: unknown): e is Error {
-	if (!e || typeof e !== 'object') {
-		return false;
-	}
-
-	const cast = e as Record<string, string | undefined>;
-	return cast.code === 'EPIPE' && cast.syscall?.toUpperCase() === 'WRITE';
-}
-
-/**
  * This function should only be called with errors that indicate a bug in the product.
  * E.g. buggy extensions/invalid user-input/network issues should not be able to trigger this code path.
  * If they are, this indicates there is also a bug in the product.
@@ -120,95 +89,6 @@ export function onUnexpectedExternalError(e: any): undefined {
 	return undefined;
 }
 
-type ObjectWithCode = {
-	readonly code: unknown;
-};
-
-function hasErrorCode(error: object): error is ObjectWithCode {
-	return Object.hasOwn(error, 'code');
-}
-
-export function getErrorCode(error: unknown): string | undefined {
-	if (!error || typeof error !== 'object' || !hasErrorCode(error)) {
-		return undefined;
-	}
-	const code = error.code;
-	return typeof code === 'string' || typeof code === 'number' ? String(code) : undefined;
-}
-
-export interface SerializedError {
-	readonly $isError: true;
-	readonly name: string;
-	readonly message: string;
-	readonly stack: string;
-	readonly noTelemetry: boolean;
-	readonly code?: string;
-	readonly cause?: SerializedError;
-}
-
-type ErrorWithCode = Error & {
-	code: string | undefined;
-};
-
-export function transformErrorForSerialization(error: Error): SerializedError;
-export function transformErrorForSerialization(error: any): any;
-export function transformErrorForSerialization(error: any): any {
-	if (error instanceof Error) {
-		const { name, message, cause } = error;
-		// eslint-disable-next-line local/code-no-any-casts
-		const stack: string = (<any>error).stacktrace || (<any>error).stack;
-		return {
-			$isError: true,
-			name,
-			message,
-			stack,
-			noTelemetry: ErrorNoTelemetry.isErrorNoTelemetry(error),
-			cause: cause ? transformErrorForSerialization(cause) : undefined,
-			code: (<ErrorWithCode>error).code
-		};
-	}
-
-	// return as is
-	return error;
-}
-
-export function transformErrorFromSerialization(data: SerializedError): Error {
-	let error: Error;
-	if (data.noTelemetry) {
-		error = new ErrorNoTelemetry();
-	} else {
-		error = new Error();
-		error.name = data.name;
-	}
-	error.message = data.message;
-	error.stack = data.stack;
-	if (data.code) {
-		(<ErrorWithCode>error).code = data.code;
-	}
-	if (data.cause) {
-		error.cause = transformErrorFromSerialization(data.cause);
-	}
-	return error;
-}
-
-// see https://github.com/v8/v8/wiki/Stack%20Trace%20API#basic-stack-traces
-export interface V8CallSite {
-	getThis(): unknown;
-	getTypeName(): string | null;
-	getFunction(): Function | undefined;
-	getFunctionName(): string | null;
-	getMethodName(): string | null;
-	getFileName(): string | null;
-	getLineNumber(): number | null;
-	getColumnNumber(): number | null;
-	getEvalOrigin(): string | undefined;
-	isToplevel(): boolean;
-	isEval(): boolean;
-	isNative(): boolean;
-	isConstructor(): boolean;
-	toString(): string;
-}
-
 export const canceledName = 'Canceled';
 
 /**
@@ -230,29 +110,6 @@ export class CancellationError extends Error {
 	}
 }
 
-export class PendingMigrationError extends Error {
-
-	private static readonly _name = 'PendingMigrationError';
-
-	static is(error: unknown): error is PendingMigrationError {
-		return error instanceof PendingMigrationError || (error instanceof Error && error.name === PendingMigrationError._name);
-	}
-
-	constructor(message: string) {
-		super(message);
-		this.name = PendingMigrationError._name;
-	}
-}
-
-/**
- * @deprecated use {@link CancellationError `new CancellationError()`} instead
- */
-export function canceled(): Error {
-	const error = new Error(canceledName);
-	error.name = error.message;
-	return error;
-}
-
 export function illegalArgument(name?: string): Error {
 	if (name) {
 		return new Error(`Illegal argument: ${name}`);
@@ -269,50 +126,6 @@ export function illegalState(name?: string): Error {
 	}
 }
 
-export class ReadonlyError extends TypeError {
-	constructor(name?: string) {
-		super(name ? `${name} is read-only and cannot be changed` : 'Cannot change read-only property');
-	}
-}
-
-export function getErrorMessage(err: any): string {
-	if (!err) {
-		return 'Error';
-	}
-
-	if (err.message) {
-		return err.message;
-	}
-
-	if (err.stack) {
-		return err.stack.split('\n')[0];
-	}
-
-	return String(err);
-}
-
-export class NotImplementedError extends Error {
-	constructor(message?: string) {
-		super('NotImplemented');
-		if (message) {
-			this.message = message;
-		}
-	}
-}
-
-export class NotSupportedError extends Error {
-	constructor(message?: string) {
-		super('NotSupported');
-		if (message) {
-			this.message = message;
-		}
-	}
-}
-
-export class ExpectedError extends Error {
-	readonly isExpected = true;
-}
-
 /**
  * Error that when thrown won't be logged in telemetry as an unhandled error.
  */
@@ -322,17 +135,6 @@ export class ErrorNoTelemetry extends Error {
 	constructor(msg?: string) {
 		super(msg);
 		this.name = 'CodeExpectedError';
-	}
-
-	public static fromError(err: Error): ErrorNoTelemetry {
-		if (err instanceof ErrorNoTelemetry) {
-			return err;
-		}
-
-		const result = new ErrorNoTelemetry();
-		result.message = err.message;
-		result.stack = err.stack;
-		return result;
 	}
 
 	public static isErrorNoTelemetry(err: Error): err is ErrorNoTelemetry {

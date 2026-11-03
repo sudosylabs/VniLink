@@ -21,6 +21,10 @@ license = "AGPL-3.0-only"
 version = "0.1.0"
 rust-version = "1.91"
 
+[workspace.lints.rust]
+# `vnilink`'s loom models build with `--cfg vnilink_loom` (`node build/run.ts test:loom`).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(vnilink_loom)"] }
+
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "warn"
 

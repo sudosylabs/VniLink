@@ -16,14 +16,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use vnilink::{
-    AdaptationReason, Condition, DesktopControlState, DesktopEnd, DisplayInfo, EncodedFrame,
-    EncoderImplementation, Error, Grants, InputEvent, ServiceInfo, ServiceKind, StreamEnd,
-    StreamFailure, VideoCodecCaps,
+    AdaptationReason, Condition, DesktopControlState, DisplayInfo, EncodedFrame,
+    EncoderImplementation, Error, Grants, InputEvent, ServiceInfo, ServiceKind, StreamFailure,
+    VideoCodecCaps,
 };
-use vnilink_testkit::desktop::{input_failed, keyframe, next_picture, InputLog, MonitorCapture};
+use vnilink_testkit::desktop::{
+    check_ending, input_failed, keyframe, next_picture, Ending, InputLog, MonitorCapture,
+};
 use vnilink_testkit::drops::{DropPoint, SeededDrops};
 use vnilink_testkit::{
-    holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED,
+    traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT, SEEN_AND_CONTROLLED,
 };
 
 /// The size of the host's screens.
@@ -176,9 +178,7 @@ fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> 
     let pair = Pair::for_desktop();
     InputLog::install(&pair.host, SCREEN)?;
     let second = pair.add_viewer("second");
-    let slow = pair
-        .controller
-        .open_desktop(&pair.controller.connect_services(&pair.host)?)?;
+    let (_, slow) = pair.open_desktop()?;
     let slow_host = pair.host.serving(ServiceKind::Desktop, &pair.controller);
     let fast = second.open_desktop(&second.connect_services(&pair.host)?)?;
     let fast_host = pair.host.serving(ServiceKind::Desktop, &second);
@@ -193,8 +193,6 @@ fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> 
         keyframe(1, vec![31; 1000]),
     )?;
 
-    let budget = Duration::from_secs(8);
-    let started = Instant::now();
     let mut paced = Paced::new();
     let mut timestamp = 2;
     let mut stream_fast = |payload: u8| {
@@ -218,10 +216,15 @@ fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> 
         );
         timestamp += 1;
     };
-    wait_for("the slow viewer to adapt to its pressure", budget, || {
-        stream_fast(42);
-        (slow.desktop_info().ok()?.quality.max_frame_rate != initial.max_frame_rate).then_some(())
-    });
+    wait_for(
+        "the slow viewer to adapt to its pressure",
+        DEFAULT_WAIT,
+        || {
+            stream_fast(42);
+            (slow.desktop_info().ok()?.quality.max_frame_rate != initial.max_frame_rate)
+                .then_some(())
+        },
+    );
     let changed = slow.desktop_info()?.quality;
     assert!(
         changed.max_frame_rate < initial.max_frame_rate,
@@ -253,16 +256,12 @@ fn receiver_pressure_adapts_only_its_owner_and_the_sibling_keeps_streaming() -> 
     );
     // Host feedback and receiver sampling have independent one-second
     // ticks: the sibling learns the timings at its own next sample.
-    let learned = wait_for(
-        "the fast viewer to learn the timings",
-        budget.saturating_sub(started.elapsed()),
-        || {
-            stream_fast(42);
-            let status = fast.media_status().ok()?;
-            ((status.encode_us, status.capture_us, status.decode_us) == (29, 17, 1000))
-                .then_some(status)
-        },
-    );
+    let learned = wait_for("the fast viewer to learn the timings", DEFAULT_WAIT, || {
+        stream_fast(42);
+        let status = fast.media_status().ok()?;
+        ((status.encode_us, status.capture_us, status.decode_us) == (29, 17, 1000))
+            .then_some(status)
+    });
     assert!(
         learned.received_fps > 0,
         "the fast viewer measures what it receives"
@@ -329,8 +328,7 @@ fn twin_sources_stream_independently_with_exact_stamps() -> TestResult {
     let applied_events = InputLog::install(&pair.host, SCREEN)?;
     // Twins: identical geometry, distinct ids.
     host.set_topology(5, &[display(1, 0, 1920, 5), display(2, 1920, 1920, 5)])?;
-    let connection = pair.connect_services();
-    let desktop_a = pair.controller.open_desktop(&connection)?;
+    let (connection, desktop_a) = pair.open_desktop()?;
     let desktop_b = pair.controller.open_desktop(&connection)?;
     wait_for("both owners to learn the twins", DEFAULT_WAIT, || {
         (desktop_a.topology().ok()?.len() == 2 && desktop_b.topology().ok()?.len() == 2)
@@ -476,8 +474,7 @@ fn host_and_decoder_reports_become_the_viewers_conditions() -> TestResult {
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     InputLog::install(&pair.host, SCREEN)?;
-    let connection = pair.connect_services();
-    let viewer = pair.controller.open_desktop(&connection)?;
+    let (_, viewer) = pair.open_desktop()?;
     let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
     let video = viewer.subscribe_video()?;
     host.report_desktop_encoder(
@@ -563,169 +560,102 @@ fn host_and_decoder_reports_become_the_viewers_conditions() -> TestResult {
     Ok(())
 }
 
-/// How a picture ends in [`picture_ended_by`].
-#[derive(Clone, Copy, Debug)]
-enum Ending {
-    HostCloses,
-    HostFails(StreamFailure),
-    HostStopsSharing,
-    ViewerCloses,
-}
-
-/// Opens a picture, ends it by `ending`, and says what end its viewer
-/// learned.
-fn picture_ended_by(pair: &Pair, ending: Ending) -> Result<Option<DesktopEnd>, Error> {
-    let host = &pair.host.core;
-    InputLog::install(&pair.host, SCREEN)?;
-    let connection = pair.connect_services();
-    let viewer = pair.controller.open_desktop(&connection)?;
-    let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
-    assert_eq!(viewer.end(), None, "a live picture has no end");
-    match ending {
-        Ending::HostCloses => host.close_hosted_service(remote.id, remote.generation)?,
-        Ending::HostFails(failure) => {
-            host.fail_hosted_service(remote.id, remote.generation, failure)?
-        }
-        Ending::HostStopsSharing => host.set_service_sharing(ServiceKind::Desktop, false)?,
-        Ending::ViewerCloses => viewer.close(),
-    }
-    wait_for("the viewer's picture to end", DEFAULT_WAIT, || {
-        viewer.is_cancelled().then_some(())
-    });
-    match ending {
-        // The host has let the service go, and an end it sent by mistake
-        // has the original's 300 ms to reach the viewer.
-        Ending::ViewerCloses => {
-            wait_for("the host to let the picture go", DEFAULT_WAIT, || {
-                pair.host
-                    .hosted(Some(ServiceKind::Desktop))
-                    .is_empty()
-                    .then_some(())
-            });
-            holds(
-                "the viewer's closed picture having no end",
-                Duration::from_millis(300),
-                || viewer.end().is_none(),
-            );
-        }
-        _ => wait_for("the viewer to learn why", DEFAULT_WAIT, || {
-            viewer.end().is_some().then_some(())
-        }),
-    }
-    Ok(viewer.end())
-}
-
 /// A host that closes the picture tells its viewer it stopped.
 #[test]
 fn the_viewer_learns_the_host_stopped_its_picture() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_desktop();
-    assert_eq!(
-        picture_ended_by(&pair, Ending::HostCloses)?,
-        Some(DesktopEnd::Host(StreamEnd::Stopped)),
-        "a host's close reaches the viewer as stopped"
-    );
-    vnilink_testkit::assert_story(
+    check_ending(
+        &trace,
+        Ending::HostCloses,
         expect![[r#"
+        viewer learned: Some(Host(Stopped))
         controller:
+          session: session phase from=connecting generation=1 role=Controller session=1 to=active
+          session: desktop ended hosted=false reason=hostStopped service=1
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
+          session: desktop ended hosted=true reason=hostStopped service=1
     "#]],
-        || trace.story(&["service"]),
-    );
-    Ok(())
+    )
 }
 
 /// A host whose encoder failed tells its viewer so.
 #[test]
 fn the_viewer_learns_the_hosts_encoder_failed() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_desktop();
-    assert_eq!(
-        picture_ended_by(&pair, Ending::HostFails(StreamFailure::Encoder))?,
-        Some(DesktopEnd::Host(StreamEnd::Failed(StreamFailure::Encoder))),
-        "an encoder failure reaches the viewer as itself"
-    );
-    vnilink_testkit::assert_story(
+    check_ending(
+        &trace,
+        Ending::HostFails(StreamFailure::Encoder),
         expect![[r#"
-        controller:
-          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-        host:
-          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Failed(Encoder)
-    "#]],
-        || trace.story(&["service"]),
-    );
-    Ok(())
+            viewer learned: Some(Host(Failed(Encoder)))
+            controller:
+              session: session phase from=connecting generation=1 role=Controller session=1 to=active
+              session: desktop ended hosted=false reason=hostEncoderFailed service=1
+              service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+            host:
+              service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Failed(Encoder)
+              session: desktop ended hosted=true reason=hostEncoderFailed service=1
+        "#]],
+    )
 }
 
 /// A host refused permission to capture tells its viewer so.
 #[test]
 fn the_viewer_learns_the_host_lacks_permission() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_desktop();
-    assert_eq!(
-        picture_ended_by(&pair, Ending::HostFails(StreamFailure::Permission))?,
-        Some(DesktopEnd::Host(StreamEnd::Failed(
-            StreamFailure::Permission
-        ))),
-        "a permission failure reaches the viewer as itself"
-    );
-    vnilink_testkit::assert_story(
+    check_ending(
+        &trace,
+        Ending::HostFails(StreamFailure::Permission),
         expect![[r#"
-        controller:
-          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
-        host:
-          service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Failed(Permission)
-    "#]],
-        || trace.story(&["service"]),
-    );
-    Ok(())
+            viewer learned: Some(Host(Failed(Permission)))
+            controller:
+              session: session phase from=connecting generation=1 role=Controller session=1 to=active
+              session: desktop ended hosted=false reason=hostPermission service=1
+              service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
+            host:
+              service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Failed(Permission)
+              session: desktop ended hosted=true reason=hostPermission service=1
+        "#]],
+    )
 }
 
 /// A host that stops sharing its desktop tells its viewer it was revoked.
 #[test]
 fn the_viewer_learns_the_host_stopped_sharing() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_desktop();
-    assert_eq!(
-        picture_ended_by(&pair, Ending::HostStopsSharing)?,
-        Some(DesktopEnd::Host(StreamEnd::Revoked)),
-        "a withdrawn share reaches the viewer as revoked"
-    );
-    vnilink_testkit::assert_story(
+    check_ending(
+        &trace,
+        Ending::HostStopsSharing,
         expect![[r#"
+        viewer learned: Some(Host(Revoked))
         controller:
+          session: session phase from=connecting generation=1 role=Controller session=1 to=active
+          session: desktop ended hosted=false reason=revoked service=1
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: Revoked
+          session: desktop ended hosted=true reason=revoked service=1
     "#]],
-        || trace.story(&["service"]),
-    );
-    Ok(())
+    )
 }
 
 /// A picture this computer closed has no end from the host.
 #[test]
 fn a_picture_the_viewer_closed_has_no_host_end() -> TestResult {
     let trace = traced();
-    let pair = Pair::for_desktop();
-    assert_eq!(
-        picture_ended_by(&pair, Ending::ViewerCloses)?,
-        None,
-        "the viewer's own close carries no reason from the host"
-    );
-    vnilink_testkit::assert_story(
+    check_ending(
+        &trace,
+        Ending::ViewerCloses,
         expect![[r#"
+        viewer learned: None
         controller:
           session: session phase from=connecting generation=1 role=Controller session=1 to=active
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
     "#]],
-        || trace.story(&["service", "session"]),
-    );
-    Ok(())
+    )
 }
 
 /// Pictures a host publishes to a viewer's Desktop reach it in order,
@@ -770,7 +700,7 @@ fn encoded_frames_reach_the_controller_in_order() -> TestResult {
         "a desktop adds keyboard and pointer: {with_desktop:?}"
     );
 
-    let desktop = pair.controller.open_desktop(&pair.connect_services())?;
+    let (_, desktop) = pair.open_desktop()?;
     let video = desktop.subscribe_video()?;
     let info = desktop.desktop_info()?;
     assert_eq!(
@@ -882,7 +812,7 @@ fn a_zero_capture_size_falls_back_to_the_desktop() -> TestResult {
         capabilities.desktop_capture && capabilities.keyboard && capabilities.monitors == 1,
         "the host still offers its one monitor: {capabilities:?}"
     );
-    let desktop = pair.controller.open_desktop(&pair.connect_services())?;
+    let (_, desktop) = pair.open_desktop()?;
     let info = desktop.desktop_info()?;
     assert_eq!(
         (info.monitor_width, info.monitor_height),
@@ -926,7 +856,7 @@ fn a_lost_picture_is_made_good(point: DropPoint) -> Result<usize, Box<dyn std::e
     let pair = Pair::for_desktop();
     let host = &pair.host.core;
     InputLog::install(&pair.host, SCREEN)?;
-    let desktop = pair.controller.open_desktop(&pair.connect_services())?;
+    let (_, desktop) = pair.open_desktop()?;
     let video = desktop.subscribe_video()?;
     let remote = pair.host.serving(ServiceKind::Desktop, &pair.controller);
     host.publish_desktop_video(remote.id, remote.generation, keyframe(1, vec![1; 200]))?;

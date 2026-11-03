@@ -40,7 +40,7 @@ interface SettingRow {
 
 /**
  * A settings page rendered from its layout. Each control applies its setting
- * as soon as the edit is valid, as VS Code's settings editor does; a refused
+ * as soon as the edit is valid; a refused
  * change is reported in the section's status, and engine-owned settings are
  * disabled with the reason while the engine cannot provide them.
  */

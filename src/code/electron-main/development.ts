@@ -9,7 +9,7 @@ import type { BrowserWindow } from 'electron';
 import { isMacintosh } from '../../base/common/platform.js';
 import { isBuilt } from '../../platform/environment/electron-main/environment.js';
 
-/** Matches VS Code's development-only Reload Window and Toggle Developer Tools shortcuts. */
+/** Reload Window and Toggle Developer Tools shortcuts, in development launches only. */
 export function registerDevelopmentWindow(window: BrowserWindow): void {
 	if (isBuilt() || process.env.VNILINK_DEV !== '1') {
 		return;

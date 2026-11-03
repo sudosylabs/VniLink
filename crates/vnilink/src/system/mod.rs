@@ -287,6 +287,26 @@ pub(crate) struct Notice {
     pub wake: std::sync::Arc<tokio::sync::Notify>,
 }
 
+/// The longest a countdown waits before it looks again, so it notices an
+/// asker that went away.
+pub(crate) const NOTICE_LOOK: std::time::Duration = std::time::Duration::from_millis(500);
+
+impl Notice {
+    /// The notice left at `now`, in whole milliseconds.
+    pub fn remaining_ms(&self, now: std::time::Instant) -> u32 {
+        u32::try_from(self.deadline.saturating_duration_since(now).as_millis()).unwrap_or(u32::MAX)
+    }
+
+    /// How long the countdown waits at `now` before it looks again; `None`
+    /// once the action is due.
+    pub fn wait(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        if self.run_now || now >= self.deadline {
+            return None;
+        }
+        Some((self.deadline - now).min(NOTICE_LOOK))
+    }
+}
+
 /// Single global privacy/input-block holder. Only the holding System owner
 /// can change it; close, revoke, parent loss and shutdown restore it.
 /// The lease retains the backend that applied the restriction: restoration
@@ -328,6 +348,65 @@ pub(crate) fn truncate_detail(detail: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    fn notice(deadline: Instant) -> Notice {
+        Notice {
+            deadline,
+            run_now: false,
+            wake: std::sync::Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    #[test]
+    fn a_countdown_runs_at_its_deadline_and_looks_again_in_short_waits_before_it() {
+        let start = Instant::now();
+        let notice = notice(start + Duration::from_secs(30));
+        assert_eq!(
+            notice.wait(start),
+            Some(NOTICE_LOOK),
+            "a long notice is waited out in short steps"
+        );
+        let near = notice.deadline - Duration::from_millis(120);
+        assert_eq!(notice.wait(near), Some(Duration::from_millis(120)));
+        assert_eq!(
+            notice.wait(notice.deadline - Duration::from_nanos(1)),
+            Some(Duration::from_nanos(1))
+        );
+        assert_eq!(notice.wait(notice.deadline), None, "due at the deadline");
+        assert_eq!(notice.wait(notice.deadline + Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn running_a_notice_now_ends_its_countdown() {
+        let start = Instant::now();
+        let mut notice = notice(start + Duration::from_secs(30));
+        notice.run_now = true;
+        assert_eq!(notice.wait(start), None);
+    }
+
+    #[test]
+    fn the_notice_left_counts_down_in_whole_milliseconds_to_zero() {
+        let start = Instant::now();
+        let notice = notice(start + Duration::from_secs(30));
+        assert_eq!(notice.remaining_ms(start), 30_000);
+        assert_eq!(
+            notice.remaining_ms(start + Duration::from_micros(29_999_001)),
+            0,
+            "a part of a millisecond left reads as none"
+        );
+        assert_eq!(notice.remaining_ms(notice.deadline), 0);
+        assert_eq!(
+            notice.remaining_ms(notice.deadline + Duration::from_secs(5)),
+            0
+        );
+        let far = self::notice(start + Duration::from_secs(u64::from(u32::MAX)));
+        assert_eq!(
+            far.remaining_ms(start),
+            u32::MAX,
+            "a notice too long to say saturates"
+        );
+    }
 
     #[test]
     fn operation_detail_truncates_on_char_boundaries() {

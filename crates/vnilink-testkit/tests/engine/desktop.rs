@@ -188,6 +188,8 @@ fn a_picture_for_a_desktop_the_engine_does_not_serve_is_refused() -> TestResult 
     Ok(())
 }
 
+/// A window lists each codec it decodes once: a codec listed twice is
+/// refused, once is taken.
 #[test]
 fn a_window_lists_each_codec_once() -> TestResult {
     let _trace = traced();

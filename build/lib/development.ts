@@ -56,7 +56,6 @@ export class DevelopmentSession {
 			}
 			const tsc = require.resolve('typescript/bin/tsc');
 			this.#worker(process.execPath, [tsc, '--noEmit', '--watch', '--preserveWatchOutput']);
-			this.#worker(process.execPath, [tsc, '-p', 'src/tsconfig.json', '--noEmit', '--watch', '--preserveWatchOutput']);
 			if (!watchOnly) {
 				this.#electron();
 			}

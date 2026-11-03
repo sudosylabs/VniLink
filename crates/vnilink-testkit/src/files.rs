@@ -203,6 +203,204 @@ pub fn download(pair: &Pair, files: &Files, from: &str, to: &str) -> Result<u64,
     )
 }
 
+/// Which way a job moves files: the controller sends to the host, or
+/// fetches from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Way {
+    Upload,
+    Download,
+}
+
+/// One job of a Files service, as each side holds it: the controller's,
+/// which submitted it, and the host's.
+#[derive(Clone, Copy, Debug)]
+pub struct Job {
+    pub way: Way,
+    pub controller: u64,
+    pub host: u64,
+}
+
+impl Job {
+    /// Submits `from`, a path in the sending side's folder, to `to` in the
+    /// receiving side's, as a job of `files`; once the host holds its side.
+    pub fn submit(
+        pair: &Pair,
+        files: &Files,
+        way: Way,
+        from: &str,
+        to: &str,
+    ) -> Result<Self, vnilink::Error> {
+        let controller = match way {
+            Way::Upload => upload(pair, files, from, to)?,
+            Way::Download => download(pair, files, from, to)?,
+        };
+        Ok(Self {
+            way,
+            controller,
+            host: received(&pair.host.core),
+        })
+    }
+
+    /// The sending side's engine and job.
+    pub fn sender<'a>(&self, pair: &'a Pair) -> (&'a Core, u64) {
+        match self.way {
+            Way::Upload => (&pair.controller.core, self.controller),
+            Way::Download => (&pair.host.core, self.host),
+        }
+    }
+
+    /// The receiving side's engine and job.
+    pub fn receiver<'a>(&self, pair: &'a Pair) -> (&'a Core, u64) {
+        match self.way {
+            Way::Upload => (&pair.host.core, self.host),
+            Way::Download => (&pair.controller.core, self.controller),
+        }
+    }
+
+    /// Drives the job by hand until the receiver asks a question or both
+    /// sides ended ([`drive_to_end`]); the sender's and the receiver's last
+    /// snapshots.
+    pub fn drive_to_end(&self, pair: &Pair, within: Duration) -> (JobSnapshot, JobSnapshot) {
+        let (sender, sent) = self.sender(pair);
+        let (receiver, got) = self.receiver(pair);
+        drive_to_end(sender, sent, receiver, got, within)
+    }
+
+    /// Waits until the engines' own job drivers ([`drive`]) ended both
+    /// sides; the sender's and the receiver's last snapshots.
+    pub fn finished(&self, pair: &Pair, within: Duration) -> (JobSnapshot, JobSnapshot) {
+        let (sender, sent) = self.sender(pair);
+        let (receiver, got) = self.receiver(pair);
+        let got = finished(receiver, got, within);
+        (finished(sender, sent, within), got)
+    }
+}
+
+/// What [`check`] moves: a tree written below `from` in the sending side's
+/// folder, and where it lands in the receiving side's.
+pub struct Moving<'a> {
+    pub way: Way,
+    /// Files below `from`, by relative path with `/`, and their sizes.
+    pub files: &'a [(&'a str, usize)],
+    /// Folders below `from` made though they hold no file.
+    pub folders: &'a [&'a str],
+    pub from: &'a str,
+    /// Where `from` lands, as a folder of the same name.
+    pub to: &'a str,
+    /// Whether the engines' own job drivers move it, as in the
+    /// application, or the test polls it by hand ([`Job::drive_to_end`]).
+    pub drivers: bool,
+}
+
+/// A job [`check`] moved and how each side ended it.
+pub struct Moved {
+    pub job: Job,
+    pub sent: JobSnapshot,
+    pub got: JobSnapshot,
+}
+
+/// Writes `moving`'s tree, moves it over `pair`'s Files and asserts that
+/// both sides complete, that the tree lands exactly, that no record holds
+/// a moved file's name, and that the engines told the story `expect` of
+/// their files, files moved side by side in any order. What a test checks
+/// beyond that it checks on the [`Moved`] returned.
+#[track_caller]
+pub fn check(
+    trace: &crate::Traced,
+    pair: &Pair,
+    moving: Moving<'_>,
+    expect: expect_test::Expect,
+) -> Result<Moved, Box<dyn std::error::Error>> {
+    let (sending, receiving) = match moving.way {
+        Way::Upload => (&pair.controller, &pair.host),
+        Way::Download => (&pair.host, &pair.controller),
+    };
+    let source = sending.folder().join(moving.from);
+    write_files(&source, moving.files);
+    for folder in moving.folders {
+        std::fs::create_dir_all(source.join(folder))?;
+    }
+    if moving.drivers {
+        drive(pair);
+    }
+    let files = pair.open_files();
+    let job = Job::submit(pair, &files, moving.way, moving.from, moving.to)?;
+    let (sent, got) = if moving.drivers {
+        job.finished(pair, TRANSFER)
+    } else {
+        job.drive_to_end(pair, TRANSFER)
+    };
+    assert_eq!(
+        got.state,
+        vnilink::JobState::Complete,
+        "the receiver completes: {got:?}"
+    );
+    assert_eq!(
+        sent.state,
+        vnilink::JobState::Complete,
+        "the sender completes: {sent:?}"
+    );
+    let name = Path::new(moving.from)
+        .file_name()
+        .ok_or("a source with a name")?;
+    assert_eq!(
+        tree(&receiving.folder().join(moving.to).join(name)),
+        tree(&source),
+        "the tree lands exactly"
+    );
+    trace.wait_for_records("job state", 2);
+    crate::assert_story(expect, || trace.concurrent_story(&["files"]));
+    let names: Vec<&str> = moving
+        .files
+        .iter()
+        .filter_map(|(path, _)| path.rsplit('/').next())
+        .collect();
+    trace.assert_unrecorded("a file's name", &names);
+    Ok(Moved { job, sent, got })
+}
+
+/// How long a job a suite moves has to end.
+pub const TRANSFER: Duration = Duration::from_secs(60);
+
+/// One engine sharing its whole disk, and a new folder of the test's own on
+/// it as the engine names it: the scene of a change made in place.
+pub struct OnDisk {
+    pub engine: Engine,
+    /// The folder, empty when made.
+    pub folder: std::path::PathBuf,
+    pub location: Location,
+    /// Holds the folder; removed after the engine stops.
+    pub scratch: crate::Scratch,
+}
+
+impl OnDisk {
+    /// The folder `name` in a new scratch folder, or for `""` the scratch
+    /// folder itself.
+    pub fn new(name: &str) -> std::io::Result<Self> {
+        let scratch = crate::Scratch::new("filesystem");
+        let folder = if name.is_empty() {
+            scratch.path().to_path_buf()
+        } else {
+            let folder = scratch.join(name);
+            std::fs::create_dir_all(&folder)?;
+            folder
+        };
+        let engine = Engine::start("engine");
+        let location = Location::of(&engine.core, &folder);
+        Ok(Self {
+            engine,
+            folder,
+            location,
+            scratch,
+        })
+    }
+
+    /// The engine's core.
+    pub fn core(&self) -> &Core {
+        &self.engine.core
+    }
+}
+
 /// The one job `core` holds, as the peer's side of a job just submitted.
 pub fn only_job(core: &Core) -> Result<u64, vnilink::Error> {
     let jobs = core.job_list()?;

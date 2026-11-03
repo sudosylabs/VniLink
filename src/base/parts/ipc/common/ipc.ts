@@ -1,20 +1,19 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { getRandomElement } from '../../../common/arrays.js';
-import { CancelablePromise, createCancelablePromise, timeout } from '../../../common/async.js';
+import { CancelablePromise, createCancelablePromise } from '../../../common/async.js';
 import { VSBuffer } from '../../../common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../common/cancellation.js';
 import { memoize } from '../../../common/decorators.js';
 import { CancellationError, ErrorNoTelemetry } from '../../../common/errors.js';
-import { Emitter, Event, EventMultiplexer, Relay } from '../../../common/event.js';
+import { Emitter, Event } from '../../../common/event.js';
 import { createSingleCallFunction } from '../../../common/functional.js';
 import { DisposableStore, dispose, IDisposable, toDisposable } from '../../../common/lifecycle.js';
 import { revive } from '../../../common/marshalling.js';
 import * as strings from '../../../common/strings.js';
-import { isFunction, isUndefinedOrNull } from '../../../common/types.js';
+import { isUndefinedOrNull } from '../../../common/types.js';
 
 /**
  * An `IChannel` is an abstraction over a collection of commands.
@@ -99,10 +98,6 @@ interface IHandler {
 export interface IMessagePassingProtocol {
 	send(buffer: VSBuffer): void;
 	readonly onMessage: Event<VSBuffer>;
-	/**
-	 * Wait for the write buffer (if applicable) to become empty.
-	 */
-	drain?(): Promise<void>;
 }
 
 enum State {
@@ -137,16 +132,6 @@ export interface IConnectionHub<TContext> {
 }
 
 /**
- * An `IClientRouter` is responsible for routing calls to specific
- * channels, in scenarios in which there are multiple possible
- * channels (each from a separate client) to pick from.
- */
-export interface IClientRouter<TContext = string> {
-	routeCall(hub: IConnectionHub<TContext>, command: string, arg?: any, cancellationToken?: CancellationToken): Promise<Client<TContext>>;
-	routeEvent(hub: IConnectionHub<TContext>, event: string, arg?: any): Promise<Client<TContext>>;
-}
-
-/**
  * Similar to the `IChannelClient`, you can get channels from this
  * collection of channels. The difference being that in the
  * `IRoutingChannelClient`, there are multiple clients providing
@@ -154,7 +139,6 @@ export interface IClientRouter<TContext = string> {
  * order to pick the right one.
  */
 export interface IRoutingChannelClient<TContext = string> {
-	getChannel<T extends IChannel>(channelName: string, router?: IClientRouter<TContext>): T;
 }
 
 interface IReader {
@@ -878,110 +862,6 @@ export class IPCServer<TContext = string> implements IChannelServer<TContext>, I
 		}));
 	}
 
-	/**
-	 * Get a channel from a remote client. When passed a router,
-	 * one can specify which client it wants to call and listen to/from.
-	 * Otherwise, when calling without a router, a random client will
-	 * be selected and when listening without a router, every client
-	 * will be listened to.
-	 */
-	getChannel<T extends IChannel>(channelName: string, router: IClientRouter<TContext>): T;
-	getChannel<T extends IChannel>(channelName: string, clientFilter: (client: Client<TContext>) => boolean): T;
-	getChannel<T extends IChannel>(channelName: string, routerOrClientFilter: IClientRouter<TContext> | ((client: Client<TContext>) => boolean)): T {
-		const that = this;
-
-		// eslint-disable-next-line local/code-no-dangerous-type-assertions
-		return {
-			call(command: string, arg?: any, cancellationToken?: CancellationToken): Promise<T> {
-				let connectionPromise: Promise<Client<TContext>>;
-
-				if (isFunction(routerOrClientFilter)) {
-					// when no router is provided, we go random client picking
-					const connection = getRandomElement(that.connections.filter(routerOrClientFilter));
-
-					connectionPromise = connection
-						// if we found a client, let's call on it
-						? Promise.resolve(connection)
-						// else, let's wait for a client to come along
-						: Event.toPromise(Event.filter(that.onDidAddConnection, routerOrClientFilter));
-				} else {
-					connectionPromise = routerOrClientFilter.routeCall(that, command, arg);
-				}
-
-				const channelPromise = connectionPromise
-					.then(connection => (connection as Connection<TContext>).channelClient.getChannel(channelName));
-
-				return getDelayedChannel(channelPromise)
-					.call(command, arg, cancellationToken);
-			},
-			listen(event: string, arg: any): Event<T> {
-				if (isFunction(routerOrClientFilter)) {
-					return that.getMulticastEvent(channelName, routerOrClientFilter, event, arg);
-				}
-
-				const channelPromise = routerOrClientFilter.routeEvent(that, event, arg)
-					.then(connection => (connection as Connection<TContext>).channelClient.getChannel(channelName));
-
-				return getDelayedChannel(channelPromise)
-					.listen(event, arg);
-			}
-		} as T;
-	}
-
-	private getMulticastEvent<T extends IChannel>(channelName: string, clientFilter: (client: Client<TContext>) => boolean, eventName: string, arg: any): Event<T> {
-		const that = this;
-		let disposables: DisposableStore | undefined;
-
-		// Create an emitter which hooks up to all clients
-		// as soon as first listener is added. It also
-		// disconnects from all clients as soon as the last listener
-		// is removed.
-		const emitter = new Emitter<T>({
-			onWillAddFirstListener: () => {
-				disposables = new DisposableStore();
-
-				// The event multiplexer is useful since the active
-				// client list is dynamic. We need to hook up and disconnection
-				// to/from clients as they come and go.
-				const eventMultiplexer = new EventMultiplexer<T>();
-				const map = new Map<Connection<TContext>, IDisposable>();
-
-				const onDidAddConnection = (connection: Connection<TContext>) => {
-					const channel = connection.channelClient.getChannel(channelName);
-					const event = channel.listen<T>(eventName, arg);
-					const disposable = eventMultiplexer.add(event);
-
-					map.set(connection, disposable);
-				};
-
-				const onDidRemoveConnection = (connection: Connection<TContext>) => {
-					const disposable = map.get(connection);
-
-					if (!disposable) {
-						return;
-					}
-
-					disposable.dispose();
-					map.delete(connection);
-				};
-
-				that.connections.filter(clientFilter).forEach(onDidAddConnection);
-				Event.filter(that.onDidAddConnection, clientFilter)(onDidAddConnection, undefined, disposables);
-				that.onDidRemoveConnection(onDidRemoveConnection, undefined, disposables);
-				eventMultiplexer.event(emitter.fire, emitter, disposables);
-
-				disposables.add(eventMultiplexer);
-			},
-			onDidRemoveLastListener: () => {
-				disposables?.dispose();
-				disposables = undefined;
-			}
-		});
-		that.disposables.add(emitter);
-
-		return emitter.event;
-	}
-
 	registerChannel(channelName: string, channel: IServerChannel<TContext>): void {
 		this.channels.set(channelName, channel);
 
@@ -1041,78 +921,6 @@ export class IPCClient<TContext = string> implements IChannelClient, IChannelSer
 	dispose(): void {
 		this.channelClient.dispose();
 		this.channelServer.dispose();
-	}
-}
-
-export function getDelayedChannel<T extends IChannel>(promise: Promise<T>): T {
-	// eslint-disable-next-line local/code-no-dangerous-type-assertions
-	return {
-		call(command: string, arg?: any, cancellationToken?: CancellationToken): Promise<T> {
-			return promise.then(c => c.call<T>(command, arg, cancellationToken));
-		},
-
-		listen<T>(event: string, arg?: any): Event<T> {
-			const relay = new Relay<any>();
-			void promise.then(
-				c => relay.input = c.listen(event, arg),
-				() => relay.dispose(),
-			);
-			return relay.event;
-		}
-	} as T;
-}
-
-export function getNextTickChannel<T extends IChannel>(channel: T): T {
-	let didTick = false;
-
-	// eslint-disable-next-line local/code-no-dangerous-type-assertions
-	return {
-		call<T>(command: string, arg?: any, cancellationToken?: CancellationToken): Promise<T> {
-			if (didTick) {
-				return channel.call(command, arg, cancellationToken);
-			}
-
-			return timeout(0)
-				.then(() => didTick = true)
-				.then(() => channel.call<T>(command, arg, cancellationToken));
-		},
-		listen<T>(event: string, arg?: any): Event<T> {
-			if (didTick) {
-				return channel.listen<T>(event, arg);
-			}
-
-			const relay = new Relay<T>();
-
-			timeout(0)
-				.then(() => didTick = true)
-				.then(() => relay.input = channel.listen<T>(event, arg));
-
-			return relay.event;
-		}
-	} as T;
-}
-
-export class StaticRouter<TContext = string> implements IClientRouter<TContext> {
-
-	constructor(private fn: (ctx: TContext) => boolean | Promise<boolean>) { }
-
-	routeCall(hub: IConnectionHub<TContext>): Promise<Client<TContext>> {
-		return this.route(hub);
-	}
-
-	routeEvent(hub: IConnectionHub<TContext>): Promise<Client<TContext>> {
-		return this.route(hub);
-	}
-
-	private async route(hub: IConnectionHub<TContext>): Promise<Client<TContext>> {
-		for (const connection of hub.connections) {
-			if (await Promise.resolve(this.fn(connection.ctx))) {
-				return Promise.resolve(connection);
-			}
-		}
-
-		await Event.toPromise(hub.onDidAddConnection);
-		return await this.route(hub);
 	}
 }
 
@@ -1296,65 +1104,5 @@ export namespace ProxyChannel {
 	function propertyIsDynamicEvent(name: string): boolean {
 		// Assume a property is a dynamic event (a method that returns an event) if it has a form of "onDynamicSomething"
 		return /^onDynamic/.test(name) && strings.isUpperAsciiLetter(name.charCodeAt(9));
-	}
-}
-
-const colorTables = [
-	['#2977B1', '#FC802D', '#34A13A', '#D3282F', '#9366BA'],
-	['#8B564C', '#E177C0', '#7F7F7F', '#BBBE3D', '#2EBECD']
-];
-
-function prettyWithoutArrays(data: unknown): any {
-	if (Array.isArray(data)) {
-		return data;
-	}
-	if (data && typeof data === 'object' && typeof data.toString === 'function') {
-		const result = data.toString();
-		if (result !== '[object Object]') {
-			return result;
-		}
-	}
-	return data;
-}
-
-function pretty(data: unknown): any {
-	if (Array.isArray(data)) {
-		return data.map(prettyWithoutArrays);
-	}
-	return prettyWithoutArrays(data);
-}
-
-function logWithColors(direction: string, totalLength: number, msgLength: number, req: number, initiator: RequestInitiator, str: string, data: any): void {
-	data = pretty(data);
-
-	const colorTable = colorTables[initiator];
-	const color = colorTable[req % colorTable.length];
-	let args = [`%c[${direction}]%c[${String(totalLength).padStart(7, ' ')}]%c[len: ${String(msgLength).padStart(5, ' ')}]%c${String(req).padStart(5, ' ')} - ${str}`, 'color: darkgreen', 'color: grey', 'color: grey', `color: ${color}`];
-	if (/\($/.test(str)) {
-		args = args.concat(data);
-		args.push(')');
-	} else {
-		args.push(data);
-	}
-	console.log.apply(console, args as [string, ...string[]]);
-}
-
-export class IPCLogger implements IIPCLogger {
-	private _totalIncoming = 0;
-	private _totalOutgoing = 0;
-
-	constructor(
-		private readonly _outgoingPrefix: string,
-		private readonly _incomingPrefix: string,
-	) { }
-
-	public logOutgoing(msgLength: number, requestId: number, initiator: RequestInitiator, str: string, data?: any): void {
-		this._totalOutgoing += msgLength;
-		logWithColors(this._outgoingPrefix, this._totalOutgoing, msgLength, requestId, initiator, str, data);
-	}
-
-	public logIncoming(msgLength: number, requestId: number, initiator: RequestInitiator, str: string, data?: any): void {
-		this._totalIncoming += msgLength;
-		logWithColors(this._incomingPrefix, this._totalIncoming, msgLength, requestId, initiator, str, data);
 	}
 }

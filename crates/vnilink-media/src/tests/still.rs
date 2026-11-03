@@ -70,7 +70,7 @@ fn a_still_keeps_coloured_text_sharp_within_its_budget() {
 /// makes it, and the crop of its source where 4:2:0 loses most.
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../test/browser/fixtures/still.json"
+    "/../../src/workbench/contrib/remoteDesktop/test/browser/fixtures/still.json"
 );
 const FIXTURE_SIZE: (u16, u16) = (640, 360);
 const CROP: (usize, usize) = (64, 32);
@@ -141,7 +141,7 @@ fn unbase64(text: &str) -> Vec<u8> {
 
 /// Writes the fixture: `cargo test -p vnilink-media --lib write_still_fixture -- --ignored`.
 #[test]
-#[ignore = "writes test/browser/fixtures/still.json"]
+#[ignore = "writes src/workbench/contrib/remoteDesktop/test/browser/fixtures/still.json"]
 fn write_still_fixture() {
     let page = colour_text_page(FIXTURE_SIZE.0, FIXTURE_SIZE.1, 0);
     let still = StillEncoder::new()

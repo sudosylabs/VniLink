@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: window controls and state, folder picking, message boxes, displays, allowlisted links, clipboard, logs and remote keyboard.
+ *  Adapted for VniLink: window controls and state, folder picking, message boxes, displays, allowlisted links, clipboard, logs and remote keyboard;
+ *  the shell and clipboards it uses are given to it.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -32,6 +33,36 @@ import { WindowMaterial } from '../../windows/electron-main/windowMaterial.js';
 
 export const INativeHostMainService = createDecorator<NativeHostMainService>('nativeHostMainService');
 
+/** A clipboard as the service reads and writes text. */
+export type TextClipboard = Pick<Electron.Clipboard, 'readText' | 'writeText'>;
+
+/** The operating system's shell and clipboards, as the service uses them. */
+export interface INativeShell {
+	readonly clipboard: TextClipboard;
+	/** The selection clipboard, which only Linux has. */
+	readonly selectionClipboard: TextClipboard | undefined;
+	writeClipboardPng(png: Uint8Array<ArrayBuffer>): Promise<void>;
+	openExternal(url: string): Promise<void>;
+	showItemInFolder(path: string): void;
+}
+
+/** Electron's shell and clipboards, read when first used. */
+const electronShell: INativeShell = {
+	get clipboard() {
+		return clipboard;
+	},
+	get selectionClipboard() {
+		// Electron exposes the selection clipboard as its own object, on Linux only.
+		const selection: TextClipboard | undefined = clipboard.selection;
+		return selection;
+	},
+	writeClipboardPng: png => clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]),
+	openExternal: url => shell.openExternal(url),
+	showItemInFolder: path => {
+		shell.showItemInFolder(path);
+	},
+};
+
 export class NativeHostMainService extends Disposable {
 	declare public readonly _serviceBrand: undefined;
 	private readonly stateChanged = this._register(new Emitter<IWindowState>());
@@ -41,10 +72,11 @@ export class NativeHostMainService extends Disposable {
 	private readonly remoteKeyboards = new Set<number>();
 	private readonly materials = new Map<number, WindowMaterial>();
 
-	/** `logsHome` is this run's logs folder. */
+	/** `logsHome` is this run's logs folder; `nativeShell` is Electron's unless a test gives its own. */
 	constructor(
 		private readonly logsHome: URI,
 		@IWindowsMainService private readonly windowsMainService: WindowsMainService,
+		private readonly nativeShell: INativeShell = electronShell,
 	) {
 		super();
 		this._register(windowsMainService.onDidOpenWindow(window => {
@@ -174,7 +206,7 @@ export class NativeHostMainService extends Disposable {
 		return result.canceled ? null : result.filePaths[0] ?? null;
 	}
 
-	/** A native message box over the window, as VS Code's dialog service shows one. */
+	/** A native message box over the window. */
 	public async showMessageBox(windowId: number, options: MessageBoxOptions): Promise<MessageBoxReturnValue> {
 		const { response, checkboxChecked } = await dialog.showMessageBox(this.window(windowId), {
 			message: options.message,
@@ -209,7 +241,7 @@ export class NativeHostMainService extends Disposable {
 	/** Opens a link from {@link allowedExternalLinks} in the system browser. */
 	public openLogsFolder(windowId: number): Promise<void> {
 		this.window(windowId);
-		shell.showItemInFolder(join(this.logsHome.fsPath, 'main.log'));
+		this.nativeShell.showItemInFolder(join(this.logsHome.fsPath, 'main.log'));
 		return Promise.resolve();
 	}
 
@@ -246,29 +278,28 @@ export class NativeHostMainService extends Disposable {
 		if (!allowedExternalLinks.includes(url)) {
 			throw new Error('Link is not allowed');
 		}
-		await shell.openExternal(url);
+		await this.nativeShell.openExternal(url);
 	}
 
 	public async writeClipboardPicture(windowId: number, png: VSBuffer): Promise<void> {
 		this.window(windowId);
-		await clipboard.write([new ClipboardItem({ 'image/png': new Blob([Uint8Array.from(png.buffer)], { type: 'image/png' }) })]);
+		await this.nativeShell.writeClipboardPng(Uint8Array.from(png.buffer));
 	}
 
 	public async readClipboardText(windowId: number, type?: 'selection' | 'clipboard'): Promise<string> {
 		this.window(windowId);
-		return clipboardFor(type).readText();
+		return this.clipboardFor(type).readText();
 	}
 
 	public async writeClipboardText(windowId: number, text: string, type?: 'selection' | 'clipboard'): Promise<void> {
 		this.window(windowId);
-		return clipboardFor(type).writeText(text);
+		return this.clipboardFor(type).writeText(text);
 	}
-}
 
-/** Electron exposes the selection clipboard as its own object, on Linux only. */
-function clipboardFor(type?: 'selection' | 'clipboard'): Electron.Clipboard {
-	// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- undefined off Linux.
-	return type === 'selection' ? clipboard.selection ?? clipboard : clipboard;
+	/** The selection clipboard falls back to the system one where there is none. */
+	private clipboardFor(type?: 'selection' | 'clipboard'): TextClipboard {
+		return type === 'selection' ? this.nativeShell.selectionClipboard ?? this.nativeShell.clipboard : this.nativeShell.clipboard;
+	}
 }
 
 /** The only pages the workbench may open outside the application. */

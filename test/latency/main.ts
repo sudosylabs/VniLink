@@ -20,8 +20,8 @@ import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } f
 import { join } from 'node:path';
 import { isLinux } from '../../src/base/common/platform.js';
 import { isEngineReply, record } from '../../src/platform/engine/common/engine.js';
-import { TestApplication } from '../automation/application.js';
-import type { WindowDriver } from '../automation/driver.js';
+import { TestApplication } from '../automation/src/application.js';
+import type { WindowDriver } from '../automation/src/driver.js';
 import { ACROSS_SHARING, assertSeenOnly, readRequest } from './across.js';
 import { CELLS, stimulusPage } from './stimulus.js';
 

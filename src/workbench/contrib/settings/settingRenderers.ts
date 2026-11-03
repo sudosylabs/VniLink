@@ -17,8 +17,7 @@ import { Registry } from '../../../platform/registry/common/platform.js';
 import './media/settingsControls.css';
 
 /**
- * The control for one setting, in the shape of VS Code's setting renderers.
- * The page owns the value: a control reports edits through `onDidChange`, and
+ * The control for one setting. The page owns the value: a control reports edits through `onDidChange`, and
  * shows whatever the page last gave it through `setValue`.
  */
 export interface ISettingControl extends IDisposable {
@@ -36,7 +35,7 @@ export interface ISettingControl extends IDisposable {
 }
 
 /** A setting control's constructor: the setting and its schema, then injected services. */
-export type SettingControlCtor = IConstructorSignature<ISettingControl, [key: string, schema: ISettingSchema]>;
+type SettingControlCtor = IConstructorSignature<ISettingControl, [key: string, schema: ISettingSchema]>;
 
 export const Extensions = {
 	SettingControls: 'workbench.registry.settingControls',
@@ -62,7 +61,7 @@ class SettingControlsRegistry implements ISettingControlsRegistry {
 		if (this.controls.has(key)) {
 			throw new Error(`Setting control for '${key}' is already registered`);
 		}
-		// As VS Code's editor contributions do: services are resolved by the instantiation service.
+		// The instantiation service resolves the services the constructor declares.
 		this.controls.set(key, ctor as SettingControlCtor);
 	}
 
@@ -76,7 +75,7 @@ Registry.add(Extensions.SettingControls, new SettingControlsRegistry());
 let nextRowId = 0;
 
 /** The parts of a setting row a control fills in. */
-export interface ISettingRow {
+interface ISettingRow {
 	readonly element: HTMLElement;
 	/** One line under the title; empty hides it. */
 	readonly help: HTMLElement;

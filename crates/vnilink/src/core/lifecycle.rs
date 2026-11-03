@@ -742,17 +742,17 @@ mod tests {
             host.set_desktop_sharing(all_grants()),
             Err(Error::StoreRecoveryRequired)
         ));
-        crate::test_support::wait_until(
+        crate::test_support::wait_for(
             "the blocked teardown to leave its first phase",
             Duration::from_secs(2),
-            || host.teardown_phase() != 1,
+            || (host.teardown_phase() != 1).then_some(()),
         );
         assert_eq!(host.teardown_phase(), 0);
         assert!(!host.endpoint_is_closed());
         assert!(matches!(host.start_hosting(), Err(Error::ShutDown)));
         host.shutdown();
-        crate::test_support::wait_until("the endpoint to close", Duration::from_secs(2), || {
-            host.endpoint_is_closed()
+        crate::test_support::wait_for("the endpoint to close", Duration::from_secs(2), || {
+            host.endpoint_is_closed().then_some(())
         });
         assert!(host.endpoint_is_closed());
         assert_eq!(host.teardown_phase(), 2);

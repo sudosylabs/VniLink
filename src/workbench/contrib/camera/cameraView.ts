@@ -11,12 +11,12 @@ import { Button } from '../../../base/browser/ui/button/button.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { Icons, type IconId } from '../../../base/common/icons.js';
-import { Disposable, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import type { RecordingStatus } from '../../../platform/engine/common/engine.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { IRecordingService } from '../../../platform/recording/common/recording.js';
 import { defaultButtonStyles } from '../../../platform/theme/browser/defaultStyles.js';
-import { ICameraService, type CameraChoice, type CameraEnd, type CameraFailure, type ICameraStream } from '../../services/camera/cameraService.js';
+import { ICameraService, type CameraChoice, type CameraEnd, type CameraFailure } from '../../services/camera/cameraService.js';
 import type { DeviceSummary } from '../../services/devices/deviceService.js';
 import { INativeRuntimeService } from '../../services/nativeRuntime/nativeRuntimeService.js';
 import { formatElapsed, SessionRecording, type RecordingStartFailure } from '../../services/recording/sessionRecording.js';
@@ -117,7 +117,8 @@ export class CameraView extends Disposable implements WorkbenchTab {
 	private readonly fit: HTMLButtonElement;
 	private readonly fullScreenButton: HTMLButtonElement;
 	private readonly notice: HTMLElement;
-	private readonly stream = this._register(new MutableDisposable<ICameraStream>());
+	/** The open stream with the listeners on it, released together. */
+	private readonly stream = this._register(new MutableDisposable<DisposableStore>());
 	private readonly idleTimer = this._register(new MutableDisposable());
 	private readonly noticeTimer = this._register(new MutableDisposable());
 	private readonly recording: SessionRecording;
@@ -282,17 +283,18 @@ export class CameraView extends Disposable implements WorkbenchTab {
 			this.showProblem(result.failure);
 			return;
 		}
-		const stream = result.stream;
-		stream.onFrame(frame => {
+		const stream = new DisposableStore();
+		stream.add(result.stream);
+		stream.add(result.stream.onFrame(frame => {
 			if (!this.playing) {
 				this.hideMessage();
 				this.setPlaying(true);
 			}
 			this.draw(frame);
-		});
-		stream.onEnd(end => {
+		}));
+		stream.add(result.stream.onEnd(end => {
 			this.showProblem(end);
-		});
+		}));
 		this.stream.value = stream;
 	}
 

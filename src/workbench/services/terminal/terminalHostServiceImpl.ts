@@ -10,7 +10,7 @@ import type { TerminalShells } from '../../../platform/engine/common/engine.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { ITerminalHostService } from './terminalHostService.js';
 
-export class TerminalHostService implements ITerminalHostService {
+class TerminalHostService implements ITerminalHostService {
 	declare public readonly _serviceBrand: undefined;
 
 	constructor(@IEngineService private readonly engine: IEngineService) { }

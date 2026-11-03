@@ -5,9 +5,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-import { app } from 'electron';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
+import { isLinux } from '../../../base/common/platform.js';
 import { isBuilt } from '../../environment/electron-main/environment.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { ILogService } from '../../log/common/log.js';
@@ -19,8 +19,14 @@ export interface ShutdownEvent {
 	join(id: string, promise: Promise<unknown>): void;
 }
 
+/** How long quitting waits for the participants; one that hangs does not keep the process alive. */
+const shutdownDeadline = 20_000;
+
 /** Exit code that asks the development runner to start the application again. */
-export const DEVELOPMENT_RELAUNCH_EXIT_CODE = 42;
+const DEVELOPMENT_RELAUNCH_EXIT_CODE = 42;
+
+/** Electron's `app` as quitting uses it: its quit events, `quit`, `relaunch` and `exit`. */
+export type LifecycleApplication = Event.NodeEventEmitter & Pick<Electron.App, 'quit' | 'relaunch' | 'exit'>;
 
 /**
  * Owns quitting and relaunching. Services that hold external resources join
@@ -35,10 +41,37 @@ export class LifecycleMainService extends Disposable {
 	private relaunching = false;
 	private shutdown: Promise<void> | undefined;
 
-	constructor(@ILogService private readonly logService: ILogService) {
+	/**
+	 * @param app Electron's `app`.
+	 * @param powerMonitor Electron's `powerMonitor`, which announces a Linux shutdown.
+	 */
+	constructor(
+		private readonly app: LifecycleApplication,
+		private readonly powerMonitor: Event.NodeEventEmitter,
+		@ILogService private readonly logService: ILogService,
+	) {
 		super();
 		this._register(Event.fromNodeEventEmitter<Electron.Event>(app, 'before-quit')(event => {
 			this.onBeforeQuit(event);
+		}));
+		// Windows logging off or shutting down emits this instead of `before-quit`.
+		this._register(Event.fromNodeEventEmitter<unknown>(app, 'session-end')(() => {
+			void this.runShutdown();
+		}));
+	}
+
+	/**
+	 * Quits when Linux is about to shut down, holding the system back until
+	 * the participants are done. macOS asks the application to quit itself;
+	 * Windows ends the session (see the constructor). Call once the app is ready.
+	 */
+	public listenForSystemShutdown(): void {
+		if (!isLinux) {
+			return;
+		}
+		this._register(Event.fromNodeEventEmitter<Electron.Event>(this.powerMonitor, 'shutdown')(event => {
+			event.preventDefault();
+			this.app.quit();
 		}));
 	}
 
@@ -53,9 +86,9 @@ export class LifecycleMainService extends Disposable {
 		}
 		this.relaunching = true;
 		if (!this.isDevelopmentRunner()) {
-			app.relaunch();
+			this.app.relaunch();
 		}
-		app.quit();
+		this.app.quit();
 	}
 
 	/** Runs shutdown participants once; used directly when startup fails. */
@@ -76,9 +109,9 @@ export class LifecycleMainService extends Disposable {
 		void this.runShutdown().finally(() => {
 			this.shutdownComplete = true;
 			if (this.relaunching && this.isDevelopmentRunner()) {
-				app.exit(DEVELOPMENT_RELAUNCH_EXIT_CODE);
+				this.app.exit(DEVELOPMENT_RELAUNCH_EXIT_CODE);
 			} else {
-				app.quit();
+				this.app.quit();
 			}
 		});
 	}
@@ -86,12 +119,22 @@ export class LifecycleMainService extends Disposable {
 	private async joinParticipants(): Promise<void> {
 		const participants: { id: string; promise: Promise<unknown> }[] = [];
 		this.willShutdown.fire({ join: (id, promise) => participants.push({ id, promise }) });
-		const results = await Promise.allSettled(participants.map(participant => participant.promise));
-		results.forEach((result, index) => {
-			if (result.status === 'rejected') {
-				this.logService.error(`Shutdown participant ${participants[index].id} failed`, result.reason);
-			}
+		const pending = new Set(participants.map(participant => participant.id));
+		const settled = participants.map(({ id, promise }) => promise.then(() => {
+			pending.delete(id);
+		}, (error: unknown) => {
+			pending.delete(id);
+			this.logService.error(`Shutdown participant ${id} failed`, error);
+		}));
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const deadline = new Promise<void>(resolve => {
+			timer = setTimeout(resolve, shutdownDeadline);
 		});
+		await Promise.race([Promise.all(settled), deadline]);
+		clearTimeout(timer);
+		if (pending.size) {
+			this.logService.error(`Quitting without waiting longer for ${[...pending].join(', ')}, still running after ${String(shutdownDeadline / 1000)} seconds`);
+		}
 	}
 
 	private isDevelopmentRunner(): boolean {

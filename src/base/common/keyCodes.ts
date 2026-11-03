@@ -461,12 +461,6 @@ const scanCodeIntToStr: string[] = [];
 const scanCodeStrToInt: { [code: string]: number } = Object.create(null);
 const scanCodeLowerCaseStrToInt: { [code: string]: number } = Object.create(null);
 
-export const ScanCodeUtils = {
-	lowerCaseToEnum: (scanCode: string) => scanCodeLowerCaseStrToInt[scanCode] || ScanCode.None,
-	toEnum: (scanCode: string) => scanCodeStrToInt[scanCode] || ScanCode.None,
-	toString: (scanCode: ScanCode) => scanCodeIntToStr[scanCode] || 'None'
-};
-
 /**
  * -1 if a ScanCode => KeyCode mapping depends on kb layout.
  */
@@ -775,45 +769,6 @@ export namespace KeyCodeUtils {
 	export function fromString(key: string): KeyCode {
 		return uiMap.strToKeyCode(key);
 	}
-
-	export function toUserSettingsUS(keyCode: KeyCode): string {
-		return userSettingsUSMap.keyCodeToStr(keyCode);
-	}
-	export function toUserSettingsGeneral(keyCode: KeyCode): string {
-		return userSettingsGeneralMap.keyCodeToStr(keyCode);
-	}
-	export function fromUserSettings(key: string): KeyCode {
-		return userSettingsUSMap.strToKeyCode(key) || userSettingsGeneralMap.strToKeyCode(key);
-	}
-
-	export function toElectronAccelerator(keyCode: KeyCode): string | null {
-		if (keyCode >= KeyCode.Numpad0 && keyCode <= KeyCode.NumpadDivide) {
-			// [Electron Accelerators] Electron is able to parse numpad keys, but unfortunately it
-			// renders them just as regular keys in menus. For example, num0 is rendered as "0",
-			// numdiv is rendered as "/", numsub is rendered as "-".
-			//
-			// This can lead to incredible confusion, as it makes numpad based keybindings indistinguishable
-			// from keybindings based on regular keys.
-			//
-			// We therefore need to fall back to custom rendering for numpad keys.
-			return null;
-		}
-
-		switch (keyCode) {
-			case KeyCode.UpArrow:
-				return 'Up';
-			case KeyCode.DownArrow:
-				return 'Down';
-			case KeyCode.LeftArrow:
-				return 'Left';
-			case KeyCode.RightArrow:
-				return 'Right';
-			case KeyCode.Delete:
-				return 'Delete';
-		}
-
-		return uiMap.keyCodeToStr(keyCode);
-	}
 }
 
 export const enum KeyMod {
@@ -821,11 +776,6 @@ export const enum KeyMod {
 	Shift = (1 << 10) >>> 0,
 	Alt = (1 << 9) >>> 0,
 	WinCtrl = (1 << 8) >>> 0,
-}
-
-export function KeyChord(firstPart: number, secondPart: number): number {
-	const chordPart = ((secondPart & 0x0000FFFF) << 16) >>> 0;
-	return (firstPart | chordPart) >>> 0;
 }
 
 export function isModifierKey(keyCode: KeyCode): boolean {

@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DisposableStore, onUnexpectedError } from './commonFacade/deps.js';
+import { onUnexpectedError } from './commonFacade/deps.js';
 
 /**
  * Represents an observable value.
@@ -55,40 +55,6 @@ export interface IObservableWithChange<T, TChange = unknown> {
 	removeObserver(observer: IObserver): void;
 
 	// #region These members have a standard implementation and are only part of the interface for convenience.
-
-	/**
-	 * Reads the current value and subscribes the reader to this observable.
-	 *
-	 * Calls {@link IReader.readObservable} if a reader is given, otherwise {@link IObservable.get}
-	 * (see {@link ConvenientObservable.read} for the implementation).
-	 */
-	read(reader: IReader | undefined): T;
-
-	/**
-	 * Makes sure this value is computed eagerly.
-	 */
-	recomputeInitiallyAndOnChange(store: DisposableStore, handleValue?: (value: T) => void): IObservable<T>;
-
-	/**
-	 * Makes sure this value is cached.
-	 */
-	keepObserved(store: DisposableStore): IObservable<T>;
-
-	/**
-	 * Creates a derived observable that depends on this observable.
-	 * Use the reader to read other observables
-	 * (see {@link ConvenientObservable.map} for the implementation).
-	 */
-	map<TNew>(fn: (value: T, reader: IReader) => TNew): IObservable<TNew>;
-	map<TNew>(owner: object, fn: (value: T, reader: IReader) => TNew): IObservable<TNew>;
-
-	flatten<TNew>(this: IObservable<IObservable<TNew>>): IObservable<TNew>;
-
-	/**
-	 * ONLY FOR DEBUGGING!
-	 * Logs computations of this derived.
-	*/
-	log(): IObservableWithChange<T, TChange>;
 
 	/**
 	 * A human-readable name for debugging purposes.
@@ -160,14 +126,6 @@ export interface IReader {
 }
 
 export interface ISettable<T, TChange = void> {
-	/**
-	 * Sets the value of the observable.
-	 * Use a transaction to batch multiple changes (with a transaction, observers only react at the end of the transaction).
-	 *
-	 * @param transaction When given, value changes are handled on demand or when the transaction ends.
-	 * @param change Describes how or why the value changed.
-	 */
-	set(value: T, transaction: ITransaction | undefined, change: TChange): void;
 }
 
 export interface ITransaction {
@@ -194,17 +152,4 @@ export interface ISettableObservable<T, TChange = void> extends IObservableWithC
 }
 
 export interface IReaderWithStore extends IReader {
-	/**
-	 * Items in this store get disposed just before the observable recomputes/reruns or when it becomes unobserved.
-	*/
-	get store(): DisposableStore;
-
-	/**
-	 * Items in this store get disposed just after the observable recomputes/reruns or when it becomes unobserved.
-	 * This is important if the current run needs the undisposed result from the last run.
-	 *
-	 * Warning: Items in this store might still get disposed before dependents (that read the now disposed value in the past) are recomputed with the new (undisposed) value!
-	 * A clean solution for this is ref counting.
-	*/
-	get delayedStore(): DisposableStore;
 }

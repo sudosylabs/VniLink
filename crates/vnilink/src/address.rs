@@ -284,6 +284,25 @@ mod tests {
         );
     }
 
+    /// Found by the `address_announcement` fuzz target: an announcement with
+    /// a port-0 address decodes without it, to a canonical announcement.
+    #[test]
+    fn a_port_zero_address_is_dropped_from_an_announcement() {
+        let bytes = [6, 0, 2, 4, 0, 0, 173, 237, 173, 173, 4, 2, 0, 0, 0, 0, 0];
+        let announcement = decode(&bytes).unwrap();
+        assert_eq!(
+            announcement.direct,
+            vec![SocketAddr::from(([0, 0, 173, 237], 44461))],
+            "a port-0 address is not one this computer can be asked to dial"
+        );
+        let again = encode(&announcement.relays, &announcement.direct);
+        assert_eq!(
+            decode(&again).unwrap(),
+            announcement,
+            "what is kept is canonical"
+        );
+    }
+
     #[test]
     fn an_announcement_round_trips_and_keeps_grants() {
         let relays = vec!["https://relay.example.com".to_string()];

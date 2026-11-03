@@ -66,7 +66,7 @@ export interface FileJob {
 }
 
 /** The folder a transfer lands in, and each file or folder arriving there by the name it arrives under. */
-export interface FileLanding {
+interface FileLanding {
 	readonly root: string;
 	readonly path: string;
 	/** `folder` is known once the sending computer has listed what it sends. */
@@ -74,7 +74,7 @@ export interface FileLanding {
 }
 
 /** The most items one transfer copies: as many as the engine lets one transfer hold. */
-export const MAX_TRANSFER_ITEMS = 50_000;
+const MAX_TRANSFER_ITEMS = 50_000;
 
 export type FileConflictChoice = 'skip' | 'replace' | 'keepBoth';
 
@@ -215,7 +215,7 @@ function itemNames(value: unknown): value is readonly string[] {
 		&& value.every(isFileName) && new Set(value).size === value.length;
 }
 
-export function isFileLanding(value: unknown): value is FileLanding {
+function isFileLanding(value: unknown): value is FileLanding {
 	return record(value) && keys(value, ['root', 'path', 'items']) && decimal(value.root) && isFilePath(value.path)
 		&& Array.isArray(value.items) && value.items.length <= MAX_TRANSFER_ITEMS
 		&& value.items.every((item: unknown) => record(item) && keys(item, ['name', 'folder']) && isFileName(item.name) && typeof item.folder === 'boolean');

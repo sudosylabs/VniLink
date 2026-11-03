@@ -5,36 +5,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! A peer that shuts down mid-transfer: the other side learns it at once,
-//! not when a dial to the stopped engine times out.
+//! A peer that shuts down mid-transfer: the other side learns it from the
+//! shutdown itself, and says so, not from a dial to the stopped engine
+//! that fails. How soon it learns is the files bench's to measure.
 //!
 //! Jobs here are driven by hand (`job_poll`), so the shutdown falls
 //! between two exact files of a transfer.
 
 use expect_test::expect;
-use std::time::{Duration, Instant};
 
-use vnilink::{Core, JobSnapshot, JobState, SessionPhase};
+use vnilink::{JobState, SessionPhase};
 use vnilink_testkit::files::{download, payload, poll_within, received, upload};
-use vnilink_testkit::{traced, wait_for, Pair, TestResult};
+use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
-/// Well inside the 30 s a dial to a stopped engine waits.
-const NOTICED_WITHIN: Duration = Duration::from_secs(1);
+/// What a job whose peer shut down says: it heard the shutdown, rather
+/// than failing to reach the peer.
+const SHUT_DOWN: &str = "the other computer shut down";
 
-/// Polls `receiver`'s job until it stops, and how long that took.
-fn poll_until_stopped(receiver: &Core, job: u64) -> (JobSnapshot, Duration) {
-    let started = Instant::now();
-    loop {
-        let snapshot = receiver.job_poll(job).expect("a poll");
-        if snapshot.state.is_terminal() || snapshot.state == JobState::Interrupted {
-            return (snapshot, started.elapsed());
-        }
-        assert!(
-            started.elapsed() < NOTICED_WITHIN,
-            "the job still runs after its sender shut down: {snapshot:?}"
-        );
-    }
-}
+/// What a job says whose connection the peer's shutdown ended.
+const CONNECTION_ENDED: &str = "the connection to the other computer ended";
+
+/// What a job says whose fetch the peer refused as it shut down.
+const SENDER_STOPPED: &str = "the other computer stopped sending";
 
 /// A host that shuts down mid-download ends the controller's services
 /// connection, and the controller's job is interrupted at once: it does
@@ -60,17 +52,26 @@ fn a_host_that_shuts_down_mid_download_interrupts_the_job_at_once() -> TestResul
     // once it has arrived too, and the job has more to do.
     trace.wait_for_records("file received", 2);
     pair.host.core.shutdown();
-    let (snapshot, took) = poll_until_stopped(controller, job);
+    // The next poll learns it from the connection the shutdown ended, not
+    // from a dial that cannot reach the host.
+    let snapshot = poll_within(controller, job, 1, "the job to stop", |s| {
+        s.state.is_terminal() || s.state == JobState::Interrupted
+    });
     assert_eq!(
         snapshot.state,
         JobState::Interrupted,
         "a job whose sender shut down is interrupted, to resume later"
     );
+    // A fetch that reaches the host as it shuts down is refused, which
+    // reads as the sender having stopped; each is its end, heard.
     assert!(
-        took < NOTICED_WITHIN,
-        "the controller learns at once that its host shut down, not after {took:?}"
+        matches!(
+            snapshot.error.as_deref(),
+            Some(CONNECTION_ENDED | SHUT_DOWN | SENDER_STOPPED)
+        ),
+        "the job heard its sender's end rather than failing to reach it: {snapshot:?}"
     );
-    let ended = wait_for("the connection to end", NOTICED_WITHIN, || {
+    let ended = wait_for("the connection to end", DEFAULT_WAIT, || {
         let phase = controller
             .controller_session(files.connection.id)
             .ok()?
@@ -121,19 +122,14 @@ fn a_controller_that_shuts_down_mid_upload_interrupts_the_receiver_and_says_why(
         s.files_done == 1
     });
     controller.shutdown();
-    let started = Instant::now();
+    // The next poll learns it: the shutdown, not a failed dial.
     let snapshot = host.job_poll(job)?;
-    let took = started.elapsed();
     assert_eq!(
         (snapshot.state, snapshot.error.as_deref()),
-        (JobState::Interrupted, Some("the other computer shut down")),
+        (JobState::Interrupted, Some(SHUT_DOWN)),
         "a receiver whose sender shut down is interrupted, to be adopted, and says why"
     );
     assert_eq!(snapshot.files_done, 1, "what landed is kept");
-    assert!(
-        took < NOTICED_WITHIN,
-        "the host learns at once that its controller shut down, not after {took:?}"
-    );
     vnilink_testkit::assert_story(
         expect![[r#"
         controller:

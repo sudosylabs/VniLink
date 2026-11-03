@@ -126,8 +126,7 @@ export async function doctor(root: string, args: readonly string[], probe: Probe
 	}
 	const failed = reports.filter(report => options.required.includes(report.name) && report.status !== 'ready');
 	if (failed.length) {
-		process.exitCode = 1;
-		console.error(`\nNot ready: ${failed.map(report => report.name).join(', ')}`);
+		throw new Error(`Not ready: ${failed.map(report => report.name).join(', ')}`);
 	}
 	return reports;
 }

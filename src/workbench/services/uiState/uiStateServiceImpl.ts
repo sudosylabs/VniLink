@@ -11,7 +11,7 @@ import { IMainProcessService } from '../../../platform/ipc/common/mainProcessSer
 import { isUIStateValue, UI_STATE_CHANNEL_NAME, type UIStateKey, type UIStateValues } from '../../../platform/state/common/uiState.js';
 import { IUIStateService } from './uiStateService.js';
 
-export class UIStateService implements IUIStateService {
+class UIStateService implements IUIStateService {
 	declare public readonly _serviceBrand: undefined;
 	private readonly channel: IChannel;
 

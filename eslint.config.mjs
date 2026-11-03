@@ -14,7 +14,7 @@ import imports from './build/lint/imports.ts';
 import synchronousFs from './build/lint/synchronousFs.ts';
 import workbenchDom from './build/lint/workbenchDom.ts';
 import buildClasses from './build/lint/buildClasses.ts';
-import { upstreamIgnores } from './build/sourceScope.ts';
+import { upstreamIgnores } from './build/lib/sourceScope.ts';
 import mustUseSuperDispose from './build/lint/vscode/code-must-use-super-dispose.ts';
 import declareServiceBrand from './build/lint/vscode/code-declare-service-brand.ts';
 import noDangerousTypeAssertions from './build/lint/vscode/code-no-dangerous-type-assertions.ts';
@@ -22,6 +22,9 @@ import noPotentiallyUnsafeDisposables from './build/lint/vscode/code-no-potentia
 import parameterPropertiesAccessibility from './build/lint/vscode/code-parameter-properties-must-have-explicit-accessibility.ts';
 import noAccessorAfterAwait from './build/lint/vscode/code-no-accessor-after-await.ts';
 import noLocalizationTemplateLiterals from './build/lint/vscode/code-no-localization-template-literals.ts';
+import ensureNoDisposablesLeakInTest from './build/lint/vscode/code-ensure-no-disposables-leak-in-test.ts';
+import noTestOnly from './build/lint/vscode/code-no-test-only.ts';
+import noTestAsyncSuite from './build/lint/vscode/code-no-test-async-suite.ts';
 
 // Rules ported verbatim from VS Code's `.eslint-plugin-local`; see build/lint/vscode.
 const vscodeRules = {
@@ -35,7 +38,7 @@ const vscodeRules = {
 };
 
 export default [
-	{ ignores: ['node_modules/**', 'out/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', 'build/lint/vscode/**', '.claude/**', ...upstreamIgnores] },
+	{ ignores: ['node_modules/**', 'out/**', 'out.next/**', 'dist/**', 'target/**', 'vendor/**', 'crates/**', 'docs/**', 'assets/**', 'build/lint/vscode/**', '.claude/**', ...upstreamIgnores] },
 	{ ...js.configs.recommended, files: ['**/*.mjs'] },
 	...[...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked].map(config => ({ ...config, files: ['src/**/*.ts', 'test/**/*.ts', 'build/**/*.ts'] })),
 	{
@@ -75,12 +78,44 @@ export default [
 		rules: {
 			'@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
 			'@typescript-eslint/explicit-member-accessibility': ['error', { accessibility: 'explicit', overrides: { constructors: 'no-public' } }],
-			'@typescript-eslint/no-floating-promises': 'error',
+			// node:test runs a suite or test from its call; it is awaited by the runner, not the test file.
+			'@typescript-eslint/no-floating-promises': ['error', { allowForKnownSafeCalls: [{ from: 'package', package: 'node:test', name: ['suite', 'test'] }] }],
 			'@typescript-eslint/switch-exhaustiveness-check': 'error',
-			'vnilink/build-classes': ['error', { allow: ['build/lib/processes.ts', 'build/lib/watch.ts', 'build/lib/development.ts', 'build/lib/devtools.ts'] }],
+			'vnilink/build-classes': ['error', { allow: ['build/lib/processes.ts', 'build/lib/watch.ts', 'build/lib/development.ts'] }],
 		},
 	},
-	{ files: ['src/**/*.ts'], rules: { 'vnilink/no-sync-fs': 'error' } },
+	{
+		// These run before or without node_modules: the install, the launchers' checkout preparation and the prerequisite checks.
+		files: ['build/npm/preinstall.ts', 'build/npm/installState.ts'],
+		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\.\\./lib/prerequisites\\.ts$)', message: 'The install runs before node_modules exists: import only Node modules and prerequisites.ts.' }] }] },
+	},
+	{
+		// preLaunch installs the dependencies, so it and what it imports use only Node's modules.
+		files: ['build/lib/preLaunch.ts', 'build/lib/processes.ts', 'build/lib/platform.ts'],
+		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\./(native|platform|processes)\\.ts$)', message: 'preLaunch installs the dependencies: import only Node modules, native.ts, platform.ts and processes.ts.' }] }] },
+	},
+	{
+		files: ['build/lib/prerequisites.ts', 'build/lib/native.ts'],
+		rules: { '@typescript-eslint/no-restricted-imports': ['error', { patterns: [{ allowTypeImports: true, regex: '^(?!node:|\\./prerequisites\\.ts$)', message: 'The prerequisite checks run without node_modules and alone in the Linux image: import only Node modules and prerequisites.ts.' }] }] },
+	},
+	{
+		files: ['src/**/*.ts', 'build/**/*.ts'],
+		// The preflight checks run before npm ci, alone in the Linux image, and compute Cargo's
+		// environment synchronously from the tools they find.
+		ignores: ['build/lib/prerequisites.ts', 'build/lib/native.ts'],
+		rules: { 'vnilink/no-sync-fs': 'error' },
+	},
+	{
+		// Application code reads the platform through base/common/platform.ts; the primitives below define it.
+		files: ['src/**/*.ts'],
+		ignores: ['src/base/common/path.ts', 'src/base/common/process.ts', 'src/base/parts/sandbox/electron-browser/globals.ts', 'src/base/parts/sandbox/electron-browser/preloadGlobals.ts'],
+		rules: {
+			'no-restricted-syntax': ['error',
+				{ selector: 'TSAsExpression > TSAsExpression', message: 'Avoid chained type assertions; validate unknown data with a type guard.' },
+				{ selector: "MemberExpression[object.name='process'][property.name='platform']", message: 'Read the platform through isLinux, isMacintosh and isWindows from src/base/common/platform.ts.' },
+			],
+		},
+	},
 	{
 		files: ['src/workbench/**/*.ts'],
 		rules: { 'vnilink/workbench-dom': 'error' },
@@ -89,6 +124,17 @@ export default [
 		files: ['src/**/*.ts', 'test/**/*.ts'],
 		plugins: { local: { rules: vscodeRules } },
 		rules: Object.fromEntries(Object.keys(vscodeRules).map(name => [`local/${name}`, 'error'])),
+	},
+	{
+		// Unit tests, as VS Code checks them: every suite fails on a leaked disposable,
+		// none is left focused, and suite callbacks are synchronous.
+		files: ['src/**/test/**/*.ts'],
+		plugins: { 'local-test': { rules: { 'code-ensure-no-disposables-leak-in-test': ensureNoDisposablesLeakInTest, 'code-no-test-only': noTestOnly, 'code-no-test-async-suite': noTestAsyncSuite } } },
+		rules: {
+			'local-test/code-ensure-no-disposables-leak-in-test': ['error', { exclude: [] }],
+			'local-test/code-no-test-only': 'error',
+			'local-test/code-no-test-async-suite': 'error',
+		},
 	},
 	{
 		// Upstream-faithful adaptive copy: the async contract methods are

@@ -240,3 +240,66 @@ fn keyframes_come_only_when_asked_and_a_retune_makes_none() {
     );
     assert!(session.encode(moving(300), true).unwrap().keyframe());
 }
+
+/// A coded buffer holds the larger of a byte per coded pixel and rate
+/// control's buffer, with room for headers besides: constant bitrate pads a
+/// tiny picture to its share of the bitrate, more than its area.
+#[test]
+fn a_coded_buffer_holds_a_small_picture_padded_to_its_bitrate() {
+    use crate::vaapi::{coded_buffer_bytes, RateControl};
+
+    let rate = RateControl::new(500_000, 30);
+    let padded = rate.bitrate_bps as usize / 30 / 8;
+    assert!(coded_buffer_bytes(32, 32, rate.buffer_bits()) > padded);
+    assert!(coded_buffer_bytes(64, 32, rate.buffer_bits()) >= rate.buffer_bits() as usize / 8);
+    assert!(coded_buffer_bytes(3840, 2160, rate.buffer_bits()) > 3840 * 2160);
+}
+
+/// A tiny window, or a quality that scales the capture to a tiny picture,
+/// encodes at an ordinary bitrate, and keeps encoding after a retune raises
+/// the bitrate; a size the driver cannot encode is refused when the session
+/// opens, not as a rejected picture.
+#[test]
+fn small_pictures_encode_at_any_bitrate_or_are_refused_on_open() {
+    use crate::vaapi::{Input, Session, VaCodec};
+
+    for codec in [VaCodec::H264 { high: false }, VaCodec::H265] {
+        let Some(node) = crate::vaapi::offering(codec) else {
+            continue;
+        };
+        for (width, height) in [(2, 2), (16, 16), (32, 32), (62, 30)] {
+            let session = match Session::open(
+                &node,
+                codec,
+                width,
+                height,
+                30,
+                500_000,
+                vnilink::YuvMatrix::Bt709,
+            ) {
+                Ok(session) => session,
+                Err(vnilink_media::Error::Unsupported(_)) => continue,
+                Err(error) => panic!("{codec:?} {width}x{height} failed to open: {error}"),
+            };
+            let picture = || {
+                let pixels = [0, 0, 255, 255].repeat(usize::from(width) * usize::from(height));
+                let frame = vnilink_media::RawFrame::bgra(width, height, 0, pixels).unwrap();
+                let (y, uv) = vnilink_media::bgra_to_nv12(&frame, vnilink::YuvMatrix::Bt709)
+                    .unwrap()
+                    .into_planes();
+                Input::Nv12 { y, uv }
+            };
+            for index in 0..3 {
+                if index == 2 {
+                    session.retune(20_000_000, 30).unwrap();
+                }
+                let sample = session
+                    .encode(picture(), index == 0)
+                    .unwrap_or_else(|error| {
+                        panic!("{codec:?} {width}x{height} picture {index}: {error}")
+                    });
+                assert_eq!(sample.keyframe(), index == 0);
+            }
+        }
+    }
+}

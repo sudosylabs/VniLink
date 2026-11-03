@@ -10,13 +10,10 @@
  * the other artwork; run `node build/run.ts assets:tray` after changing the
  * mark or these compositions. Rendering needs `rsvg-convert` (librsvg).
  */
-import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-
-const run = promisify(execFile);
+import { processOutput } from './processes.ts';
 
 export type TrayState = 'idle' | 'active' | 'paused';
 
@@ -81,7 +78,7 @@ export async function renderTrayAssets(root: string, signal: AbortSignal): Promi
 				for (const scale of variant.scales) {
 					const pixels = String(Math.round(variant.size * scale));
 					try {
-						await run('rsvg-convert', ['-w', pixels, '-h', pixels, '-o', join(root, 'assets/tray', trayFileName(variant, state, scale)), svg], { signal });
+						await processOutput('rsvg-convert', ['-w', pixels, '-h', pixels, '-o', join(root, 'assets/tray', trayFileName(variant, state, scale)), svg], { signal });
 					} catch (error) {
 						signal.throwIfAborted();
 						throw new Error('Rendering tray icons needs rsvg-convert (librsvg: `brew install librsvg` or `apt install librsvg2-bin`).', { cause: error });

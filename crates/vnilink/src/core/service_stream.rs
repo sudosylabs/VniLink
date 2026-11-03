@@ -915,6 +915,19 @@ impl HostedEnding {
         lock(&self.end).get_or_insert(end);
     }
 
+    /// Notes the cancel that ended the stream's work, when `parent` (its
+    /// connection ended) or `stop` (its service closed) is set. The work
+    /// watches both itself and can see one flip within the poll that ran it,
+    /// after the serve's own arms for them found nothing: the end is the
+    /// cancel's whichever saw it first.
+    pub(super) fn why_cancelled(&self, parent: bool, stop: bool) {
+        if parent {
+            self.why(HostedEnd::ConnectionEnded);
+        } else if stop {
+            self.why(HostedEnd::service_closed(&self.shared, self.id));
+        }
+    }
+
     /// Records the end and names the service's cause, once: the end noted,
     /// else `failure`, the error the stream ended with, else that the
     /// engine dropped it.

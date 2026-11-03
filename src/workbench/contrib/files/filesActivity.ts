@@ -20,13 +20,13 @@ import { isUnfinished, type IFilesSession } from '../../services/files/filesServ
 import { arrivalStatus, folderOn, formatSize, jobProgress, jobStatus } from './filesText.js';
 
 /** How each side is named, and its folders. */
-export interface ActivitySides {
+interface ActivitySides {
 	readonly local: { readonly computer: string; readonly places: FilePlaces | undefined };
 	readonly remote: { readonly computer: string; readonly places: FilePlaces | undefined };
 }
 
 /** How a transfer's row reads at a glance: under way, waiting on you, stopped, failed, or just arrived. */
-export type ArrivalTone = 'active' | 'pending' | 'stopped' | 'failed' | 'landed';
+type ArrivalTone = 'active' | 'pending' | 'stopped' | 'failed' | 'landed';
 
 /** A transfer as the folder it lands in shows it, at the name it lands under. */
 export interface FilesArrival {
@@ -44,7 +44,7 @@ export interface FilesArrival {
 	readonly action: TransferAction | undefined;
 }
 
-export type TransferAction = 'choose' | 'cancel' | 'resume' | 'retry';
+type TransferAction = 'choose' | 'cancel' | 'resume' | 'retry';
 
 /** Something done to a transfer from where it lands. */
 export type TransferRequest =

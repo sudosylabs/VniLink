@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted from VS Code 1.141.0 src/vs/base/common/errorMessage.ts.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -12,7 +13,6 @@
 import * as arrays from './arrays.js';
 import * as types from './types.js';
 import * as nls from '../../nls.js';
-import type { IAction } from './actions.js';
 
 /**
  * The `unknown` thrown values this module formats. Every member stays
@@ -118,24 +118,4 @@ export function toErrorMessage(error: unknown = null, verbose = false): string {
 		return candidate.message as string;
 	}
 	return nls.localize('error.defaultMessage', 'An unknown error occurred. Please consult the log for more details.');
-}
-
-export interface IErrorWithActions extends Error {
-	actions: IAction[];
-}
-
-export function isErrorWithActions(obj: unknown): obj is IErrorWithActions {
-	const candidate = obj as IErrorWithActions | undefined;
-	return candidate instanceof Error && Array.isArray(candidate.actions);
-}
-
-export function createErrorWithActions(messageOrError: string | Error, actions: IAction[]): IErrorWithActions {
-	let error: IErrorWithActions;
-	if (typeof messageOrError === 'string') {
-		error = new Error(messageOrError) as IErrorWithActions;
-	} else {
-		error = messageOrError as IErrorWithActions;
-	}
-	error.actions = actions;
-	return error;
 }

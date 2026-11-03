@@ -11,18 +11,19 @@
 //! gave was used and ended.
 
 use expect_test::expect;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use vnilink::power::{HostPowerFactory, PowerInhibitor, PowerKind, PowerPhase, PowerPolicy};
 use vnilink::{
-    usage, BackendStartup, CoreEvent, DesktopControlState, Error, HostSessionState,
-    HostSystemActions, InputEvent, RemoteDesktopService, ServiceKind, SessionPhase, SystemSupport,
+    usage, BackendStartup, CoreEvent, DesktopControlState, Error, HostSystemActions, InputEvent,
+    RemoteDesktopService, ServiceKind, SessionPhase, SystemSupport,
 };
 use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture, SCREEN};
 use vnilink_testkit::events::next_event;
 use vnilink_testkit::power::{active, lease, status, Counts, Leases, Refusing};
+use vnilink_testkit::system::FakeSystem;
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 /// A host that may be seen and controlled, capturing one monitor, and a
@@ -184,9 +185,8 @@ fn cancelled_native_acquisition_drops_late_success_and_shutdown_releases_live_le
         ..Default::default()
     })?;
     let desktop = open(host, controller)?;
-    entering
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the controller asks its OS for a display lease");
+    // The controller asks its OS for a display lease.
+    entering.recv_timeout(DEFAULT_WAIT)?;
     desktop.close();
     wait_for(
         "the controller to stop wanting a lease",
@@ -416,63 +416,11 @@ fn actual_input_refreshes_only_its_hosted_desktop_idle_clock() -> TestResult {
     Ok(())
 }
 
-/// An OS that can lock and counts its locks, or refuses them.
-#[derive(Default)]
-struct LockCounter {
-    locks: AtomicUsize,
-    fail: AtomicBool,
-}
-
-impl LockCounter {
-    fn locks(&self) -> usize {
-        self.locks.load(Ordering::SeqCst)
-    }
-}
-
-impl HostSystemActions for LockCounter {
-    fn support(&self) -> SystemSupport {
-        SystemSupport {
-            lock: true,
-            restart: false,
-            shutdown: false,
-            privacy: false,
-            input_block: false,
-        }
-    }
-    fn lock_workstation(&self) -> Result<(), Error> {
-        if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::Unsupported("the lock was refused by the OS"));
-        }
-        self.locks.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-    fn restart(&self) -> Result<(), Error> {
-        Err(Error::Unsupported("this OS only locks"))
-    }
-    fn shutdown(&self) -> Result<(), Error> {
-        Err(Error::Unsupported("this OS only locks"))
-    }
-    fn set_display_private(&self, _: bool) -> Result<(), Error> {
-        Err(Error::Unsupported("this OS only locks"))
-    }
-    fn set_input_blocked(&self, _: bool) -> Result<(), Error> {
-        Err(Error::Unsupported("this OS only locks"))
-    }
-    fn session_state(&self) -> HostSessionState {
-        HostSessionState {
-            locked: Some(false),
-            login_screen: Some(false),
-            headless: false,
-            session: "fake".into(),
-        }
-    }
-}
-
 /// A host that locks itself after control, with an OS that counts its
 /// locks and a desktop that records the input it applies.
 struct LockHost {
     pair: Pair,
-    system: Arc<LockCounter>,
+    system: Arc<FakeSystem>,
     applied: InputLog,
 }
 
@@ -481,7 +429,11 @@ impl LockHost {
         let pair = seen()?;
         let engine = &pair.host;
         let applied = InputLog::install(engine, SCREEN)?;
-        let system = Arc::new(LockCounter::default());
+        // An OS that only locks, counting each lock.
+        let system = Arc::new(FakeSystem::supporting(SystemSupport {
+            lock: true,
+            ..SystemSupport::default()
+        }));
         engine
             .core
             .set_system_actions(Some(Arc::clone(&system) as Arc<dyn HostSystemActions>))?;
@@ -547,13 +499,13 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() -> TestResult {
     holds(
         "control never used does not lock",
         Duration::from_millis(300),
-        || host.system.locks() == 0,
+        || host.system.calls().locks == 0,
     );
     let desktop = host.open(&host.pair.controller)?;
     host.use_control(&desktop)?;
     desktop.close();
     wait_for("the host to lock", DEFAULT_WAIT, || {
-        (host.system.locks() == 1).then_some(())
+        (host.system.calls().locks == 1).then_some(())
     });
     next_event(
         &events,
@@ -569,7 +521,7 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() -> TestResult {
     wait_for(
         "the host to lock when control is given up",
         DEFAULT_WAIT,
-        || (host.system.locks() == 2).then_some(()),
+        || (host.system.calls().locks == 2).then_some(()),
     );
     viewing.close();
     // A disabled policy never fires.
@@ -581,14 +533,14 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() -> TestResult {
     holds(
         "a disabled policy does not lock",
         Duration::from_millis(300),
-        || host.system.locks() == 2,
+        || host.system.calls().locks == 2,
     );
     // An OS failure reports locked:false exactly once per edge.
     host.host().core.set_power_policy(PowerPolicy {
         lock_after_control: true,
         ..Default::default()
     })?;
-    host.system.fail.store(true, Ordering::SeqCst);
+    host.system.calls().fail_lock = true;
     let fourth = host.pair.add_viewer("fourth");
     let failed = host.open(&fourth)?;
     host.use_control(&failed)?;
@@ -602,7 +554,7 @@ fn lock_after_control_fires_on_close_yield_and_reports_failure() -> TestResult {
     holds(
         "a refused lock is not tried again",
         Duration::from_millis(200),
-        || host.system.locks() == 2,
+        || host.system.calls().locks == 2,
     );
     Ok(())
 }
@@ -627,7 +579,7 @@ fn lock_after_control_counts_a_delivered_picture_as_use() -> TestResult {
     next_picture(&video, "the picture to reach the viewer");
     desktop.close();
     wait_for("the host to lock", DEFAULT_WAIT, || {
-        (host.system.locks() == 1).then_some(())
+        (host.system.calls().locks == 1).then_some(())
     });
     Ok(())
 }
@@ -662,7 +614,7 @@ fn lock_after_control_waits_when_the_parent_is_gone() -> TestResult {
                     return false;
                 }
             }
-            host.system.locks() == 0
+            host.system.calls().locks == 0
         },
     );
     drop(desktop);

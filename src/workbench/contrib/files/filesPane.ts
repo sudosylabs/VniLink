@@ -15,8 +15,8 @@ import { DomScrollableElement } from '../../../base/browser/ui/scrollbar/scrolla
 import { ListDragOverEffectType, type IListDragAndDrop, type IListDragOverReaction, type IListRenderer, type IListVirtualDelegate } from '../../../base/browser/ui/list/list.js';
 import { List, type IStyleController } from '../../../base/browser/ui/list/listWidget.js';
 import { NativeDragAndDropData } from '../../../base/browser/ui/list/listView.js';
-import { webUtils } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { Separator, toAction, type IAction } from '../../../base/common/actions.js';
+import { onUnexpectedError } from '../../../base/common/errors.js';
 import { Emitter } from '../../../base/common/event.js';
 import { Icons, type IconId } from '../../../base/common/icons.js';
 import { KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
@@ -70,7 +70,7 @@ type SortColumn = 'name' | 'modified' | 'size';
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** Folders first, then by the chosen column, names in natural order. */
-export function sortEntries(entries: readonly FileEntry[], column: SortColumn, descending: boolean): FileEntry[] {
+function sortEntries(entries: readonly FileEntry[], column: SortColumn, descending: boolean): FileEntry[] {
 	const folder = (entry: FileEntry) => entry.kind === 'dir' ? 0 : 1;
 	const compare = (a: FileEntry, b: FileEntry): number => {
 		switch (column) {
@@ -83,7 +83,7 @@ export function sortEntries(entries: readonly FileEntry[], column: SortColumn, d
 }
 
 /** A name not yet in `taken`: "New Folder", then "New Folder 2". */
-export function freshName(base: string, taken: readonly string[]): string {
+function freshName(base: string, taken: readonly string[]): string {
 	const names = new Set(taken.map(name => name.toLocaleLowerCase()));
 	if (!names.has(base.toLocaleLowerCase())) {
 		return base;
@@ -320,10 +320,14 @@ class PaneDragAndDrop implements IListDragAndDrop<PaneRow> {
 			return;
 		}
 		if (data instanceof NativeDragAndDropData && this.pane.side === 'remote') {
-			const paths = [...event.dataTransfer?.files ?? []].map(file => webUtils.getPathForFile(file)).filter(path => path !== '');
-			if (paths.length) {
-				this.pane.droppedFromSystem(paths, into);
-			}
+			const files = [...event.dataTransfer?.files ?? []];
+			// The preload's bridge is reached when files are dropped, so the pane is built without it.
+			import('../../../base/parts/sandbox/electron-browser/globals.js').then(({ webUtils }) => {
+				const paths = files.map(file => webUtils.getPathForFile(file)).filter(path => path !== '');
+				if (paths.length) {
+					this.pane.droppedFromSystem(paths, into);
+				}
+			}).catch(onUnexpectedError);
 		} else if (source && source.pane !== this.pane) {
 			this.pane.dropped(source.items, into);
 		}
@@ -434,7 +438,7 @@ export class FilesPaneView extends Disposable {
 		append(this.nameButton, renderIcon(os === 'windows' ? Icons.windows : os === 'linux' ? Icons.linux : os === 'macos' ? Icons.apple : Icons.computers), $('span', undefined, computer), chevron);
 		this.nameButton.title = nls.localize('files.places', 'Go to a place on {0}', computer);
 		this.crumbs = $('nav.files-crumbs', { 'aria-label': nls.localize('files.path', 'Location') });
-		// As VS Code's breadcrumbs: a long path scrolls sideways, with the wheel too, and never squeezes its names.
+		// A long path scrolls sideways, with the wheel too, and never squeezes its names.
 		this.crumbScroll = this._register(new DomScrollableElement(this.crumbs, {
 			vertical: ScrollbarVisibility.Hidden,
 			horizontal: ScrollbarVisibility.Auto,
@@ -590,7 +594,10 @@ export class FilesPaneView extends Disposable {
 			this.onKey(new StandardKeyboardEvent(event));
 		}));
 		const resize = new ResizeObserver(() => {
-			this.list.layout(this.listContainer.clientHeight, this.listContainer.clientWidth);
+			// clientHeight rounds a fractional box up, which would lay the list half a pixel taller
+			// than it shows and put its last row partly under the status bar.
+			const box = this.listContainer.getBoundingClientRect();
+			this.list.layout(Math.floor(box.height), Math.floor(box.width));
 			this.revealLastCrumb();
 		});
 		resize.observe(this.listContainer);
@@ -697,6 +704,10 @@ export class FilesPaneView extends Disposable {
 		}, 150);
 		try {
 			const listing = await disk.list(folder);
+			// A pane closed while the folder was read watches nothing.
+			if (this._store.isDisposed) {
+				return false;
+			}
 			if (revision !== this.revision) {
 				return true;
 			}
@@ -797,7 +808,9 @@ export class FilesPaneView extends Disposable {
 		});
 		let done = false;
 		const finish = (commit: boolean): void => {
-			if (done) {
+			// A pane closed mid-rename takes its box with it, which blurs it: there is
+			// no list left to show the folder in, and the rename is dropped with it.
+			if (done || this._store.isDisposed) {
 				return;
 			}
 			done = true;

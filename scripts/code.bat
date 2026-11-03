@@ -17,11 +17,6 @@ title VniLink Dev
 
 pushd %~dp0\..
 
-node build/lib/preLaunch.ts || (
-	echo Failed to prepare VniLink for launch ^(build/lib/preLaunch.ts^). 1>&2
-	goto :failed
-)
-
 node build/run.ts dev %*
 set EXIT_CODE=%ERRORLEVEL%
 popd

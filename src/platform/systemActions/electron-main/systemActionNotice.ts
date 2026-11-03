@@ -14,10 +14,11 @@ import { IEngineMainService, type EngineMainService } from '../../engine/electro
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { NoticeContent } from '../common/notice.js';
 import { windowPrompt } from './noticeWindow.js';
+import { ILifecycleMainService, type LifecycleMainService } from '../../lifecycle/electron-main/lifecycleMainService.js';
 import { ILogService } from '../../log/common/log.js';
 
 /** The engine as the notice uses it. */
-export interface NoticeEngine {
+interface NoticeEngine {
 	readonly available: boolean;
 	readonly onDidChangeAvailability: Event<boolean>;
 	readonly onDidReceiveEvents: Event<EngineEventBatch>;
@@ -40,6 +41,7 @@ const nowButton = 1;
  */
 export class SystemActionNotices extends Disposable {
 	private readonly open = new Map<string, AbortController>();
+	private closed = false;
 
 	constructor(
 		private readonly engine: NoticeEngine,
@@ -67,15 +69,25 @@ export class SystemActionNotices extends Disposable {
 		}));
 		this._register({
 			dispose: () => {
-				for (const controller of this.open.values()) {
-					controller.abort();
-				}
-				this.open.clear();
+				this.close();
 			},
 		});
 		if (engine.available) {
 			void this.resync();
 		}
+	}
+
+	/**
+	 * Closes every open notice, unanswered, and shows no more. The notice
+	 * window cannot be closed by the system, so one left open cancels the
+	 * application's quit on macOS.
+	 */
+	public close(): void {
+		this.closed = true;
+		for (const controller of this.open.values()) {
+			controller.abort();
+		}
+		this.open.clear();
 	}
 
 	/** Shows any countdown already running, such as one that began while events lapsed. */
@@ -93,7 +105,7 @@ export class SystemActionNotices extends Disposable {
 	}
 
 	private async show(id: string, action: 'restart' | 'shutdown', endpointId: string, remainingMs: number): Promise<void> {
-		if (this.open.has(id)) {
+		if (this.closed || this.open.has(id)) {
 			return;
 		}
 		const controller = new AbortController();
@@ -155,6 +167,7 @@ export class SystemActionNoticeMainService extends Disposable {
 
 	constructor(
 		@IEngineMainService private readonly engine: EngineMainService,
+		@ILifecycleMainService private readonly lifecycle: LifecycleMainService,
 		@ILogService private readonly logService: ILogService,
 	) {
 		super();
@@ -165,8 +178,12 @@ export class SystemActionNoticeMainService extends Disposable {
 			return;
 		}
 		this.started = true;
-		this._register(new SystemActionNotices(this.engine, windowPrompt, error => {
+		const notices = this._register(new SystemActionNotices(this.engine, windowPrompt, error => {
 			this.logService.error('System action notice failed.', error);
+		}));
+		// Before the windows close: an open notice would cancel the quit.
+		this._register(this.lifecycle.onWillShutdown(() => {
+			notices.close();
 		}));
 	}
 }

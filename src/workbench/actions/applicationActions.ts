@@ -123,7 +123,7 @@ function engineLogTail(reply: EngineReply): { path: string; events: unknown[] } 
 	}
 }
 
-/** Shows this run's logs folder, as VS Code's Open Logs Folder does. */
+/** Shows this run's logs folder in the system's file manager. */
 export class OpenLogsFolderAction extends Action2 {
 	public static readonly ID = 'workbench.action.openLogsFolder';
 

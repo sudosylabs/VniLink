@@ -11,8 +11,7 @@ import { Part } from '../../part.js';
 import { ITabService } from '../../services/tabs/tabService.js';
 
 /**
- * Shows the active tab's view, in the role of VS Code's editor part. Every
- * open tab keeps its element here; only the active one is visible.
+ * Shows the active tab's view. Every open tab keeps its element here; only the active one is visible.
  */
 export class ViewsPart extends Part {
 	private host: HTMLElement | undefined;

@@ -19,20 +19,7 @@ mod privacy;
 #[path = "system/restoring.rs"]
 mod restoring;
 
-use std::sync::Arc;
-
-use vnilink::{Error, HostSystemActions, ServiceKind, SystemPolicy};
-use vnilink_testkit::Pair;
-
-/// A host sharing its system actions, with `system` as its operating
-/// system, and a controller paired with it.
-fn sharing(system: &Arc<impl HostSystemActions + 'static>) -> Result<Pair, Error> {
-    let pair = Pair::for_services(&[ServiceKind::System]);
-    pair.host
-        .core
-        .set_system_actions(Some(Arc::clone(system) as Arc<dyn HostSystemActions>))?;
-    Ok(pair)
-}
+use vnilink::SystemPolicy;
 
 /// The host's policy allows privacy and nothing else.
 const PRIVACY: SystemPolicy = SystemPolicy {

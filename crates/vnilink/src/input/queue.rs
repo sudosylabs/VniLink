@@ -9,12 +9,12 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::Mutex;
 
 use tokio::sync::Notify;
 
 use crate::error::Error;
 use crate::protocol::Quality;
+use crate::sync::Mutex;
 
 use super::events::{check_key_text, InputEvent, PointerButton};
 use super::{INPUT_QUEUE, RELEASE_RESERVE};
@@ -802,5 +802,68 @@ mod tests {
             outbox.drain(),
             vec![crate::input::Outbound::Displays(vec![1])]
         );
+    }
+}
+
+#[cfg(all(test, vnilink_loom))]
+mod loom_queue {
+    use super::*;
+    use crate::input::usage;
+    use crate::sync::Arc;
+
+    /// A queue one place short of full.
+    fn nearly_full() -> Arc<InputOutbox> {
+        let outbox = Arc::new(InputOutbox::new());
+        for usage_code in 0..(INPUT_QUEUE as u16 - 1) {
+            outbox.push(InputEvent::key_down(usage_code)).unwrap();
+        }
+        outbox
+    }
+
+    #[test]
+    fn a_release_racing_a_press_for_the_last_place_always_gets_in() {
+        loom::model(|| {
+            let outbox = nearly_full();
+            let presser = {
+                let outbox = Arc::clone(&outbox);
+                loom::thread::spawn(move || outbox.push(InputEvent::key_down(usage::A)).is_ok())
+            };
+            outbox
+                .push(InputEvent::key_up(0))
+                .expect("a release always fits, in the reserve if a press took the last place");
+            let pressed = presser.join().unwrap();
+            let drained = outbox.drain();
+            let presses = drained
+                .iter()
+                .filter(|item| matches!(item, Outbound::Event(InputEvent::Key { down: true, .. })))
+                .count();
+            assert!(presses <= INPUT_QUEUE, "a press never takes the reserve");
+            assert_eq!(
+                drained.len(),
+                INPUT_QUEUE + usize::from(pressed),
+                "every admitted item is queued"
+            );
+            assert!(drained.contains(&Outbound::Event(InputEvent::key_up(0))));
+        });
+    }
+
+    #[test]
+    fn a_pointer_pushed_while_the_queue_is_cleared_is_sent_again_or_still_queued() {
+        loom::model(|| {
+            let outbox = Arc::new(InputOutbox::new());
+            let point = InputEvent::pointer(1, 2, 1, 1);
+            let pusher = {
+                let outbox = Arc::clone(&outbox);
+                loom::thread::spawn(move || outbox.push(point).unwrap())
+            };
+            outbox.clear();
+            pusher.join().unwrap();
+            outbox.push(point).unwrap();
+            assert_eq!(
+                outbox.drain(),
+                vec![Outbound::Event(point)],
+                "a cleared pointer is never remembered as sent"
+            );
+        });
     }
 }

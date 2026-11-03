@@ -17,6 +17,7 @@ Preserve VS Code's separation by responsibility and execution environment. `work
 | `src/workbench/actions` | Workbench-wide `Action2` commands. |
 | `src/main.ts`, `src/renderer.ts`, `src/preload.ts` | Thin entry points and the isolated renderer bridge. |
 | `src/typings` | Ambient declarations; runtime contracts belong beside their service. |
+| `<area>/test/<layer>/` | The area's unit tests and test doubles, in the layer the subject runs in; they keep that layer's import boundaries (plus `assert`), and no application code imports them. `test/AGENTS.md` says how they are written and run. |
 
 A feature is wired by registration, never by editing another feature: Home renders pages from `HomePagesRegistry`, toolbar buttons come from `ViewActionsMenu` items with `when` clauses on context keys (`src/workbench/contextkeys.ts`), and startup work is a `registerWorkbenchContribution2` at the right `WorkbenchPhase`. A new service or contribution file is imported from `workbench.desktop.main.ts`.
 

@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IObservable, IObservableWithChange, IObserver, IReaderWithStore, ISettableObservable, ITransaction, } from '../base.js';
+import { IObservable, IObservableWithChange, IObserver, IReaderWithStore, } from '../base.js';
 import { BaseObservable } from './baseObservable.js';
 import { DebugNameData } from '../debugName.js';
 import { BugIndicatingError, DisposableStore, EqualityComparer, assertFn, onBugIndicatingError } from '../commonFacade/deps.js';
@@ -12,10 +12,6 @@ import { IChangeTracker } from '../changeTracker.js';
 import { DebugLocation } from '../debugLocation.js';
 
 export interface IDerivedReader<TChange = void> extends IReaderWithStore {
-	/**
-	 * Call this to report a change delta or to force report a change, even if the new value is the same as the old value.
-	*/
-	reportChange(change: TChange): void;
 }
 
 export const enum DerivedState {
@@ -348,34 +344,6 @@ export class Derived<T, TChangeSummary = any, TChange = void> extends BaseObserv
 		return value;
 	}
 
-	public reportChange(change: TChange): void {
-		this._ensureReaderValid();
-
-		this._didReportChange = true;
-		// TODO add logging
-		for (const r of this._observers) {
-			r.handleChange(this, change);
-		}
-	}
-
-	get store(): DisposableStore {
-		this._ensureReaderValid();
-
-		if (this._store === undefined) {
-			this._store = new DisposableStore();
-		}
-		return this._store;
-	}
-
-	get delayedStore(): DisposableStore {
-		this._ensureReaderValid();
-
-		if (this._delayedStore === undefined) {
-			this._delayedStore = new DisposableStore();
-		}
-		return this._delayedStore;
-	}
-
 	public override addObserver(observer: IObserver): void {
 		const shouldCallBeginUpdate = !this._observers.has(observer) && this._updateCount > 0;
 		super.addObserver(observer);
@@ -406,54 +374,5 @@ export class Derived<T, TChangeSummary = any, TChange = void> extends BaseObserv
 			dependencies: this._dependencies,
 			value: this._value,
 		};
-	}
-
-	public debugSetValue(newValue: unknown) {
-		// eslint-disable-next-line local/code-no-any-casts
-		this._value = newValue as any;
-	}
-
-	public debugRecompute(): void {
-		this.beginUpdate(this);
-		try {
-			if (!this._isComputing) {
-				this._recompute();
-			} else {
-				this._state = DerivedState.stale;
-			}
-		} finally {
-			this.endUpdate(this);
-		}
-	}
-
-	public setValue(newValue: T, tx: ITransaction, change: TChange): void {
-		this._value = newValue;
-		const observers = this._observers;
-		tx.updateObserver(this, this);
-		for (const d of observers) {
-			d.handleChange(this, change);
-		}
-	}
-}
-
-
-export class DerivedWithSetter<T, TChangeSummary = any, TOutChanges = any> extends Derived<T, TChangeSummary, TOutChanges> implements ISettableObservable<T, TOutChanges> {
-	constructor(
-		debugNameData: DebugNameData,
-		computeFn: (reader: IDerivedReader<TOutChanges>, changeSummary: TChangeSummary) => T,
-		changeTracker: IChangeTracker<TChangeSummary> | undefined,
-		handleLastObserverRemoved: (() => void) | undefined = undefined,
-		equalityComparator: EqualityComparer<T>,
-		public readonly set: (value: T, tx: ITransaction | undefined, change: TOutChanges) => void,
-		debugLocation: DebugLocation,
-	) {
-		super(
-			debugNameData,
-			computeFn,
-			changeTracker,
-			handleLastObserverRemoved,
-			equalityComparator,
-			debugLocation,
-		);
 	}
 }

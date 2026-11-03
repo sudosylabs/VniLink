@@ -18,7 +18,7 @@ import { Disposable } from '../../../base/common/lifecycle.js';
 import { getFlatContextMenuActions } from '../../actions/browser/menuEntryActionViewItem.js';
 import { IMenuService, MenuId } from '../../actions/common/actions.js';
 import { IContextKeyService } from '../../contextkey/common/contextkey.js';
-import { ContextMenuHandler, IContextMenuHandlerOptions } from './contextMenuHandler.js';
+import { ContextMenuHandler } from './contextMenuHandler.js';
 import { IContextMenuMenuDelegate, IContextMenuService, IContextViewService } from './contextView.js';
 
 export class ContextMenuService extends Disposable implements IContextMenuService {
@@ -35,10 +35,8 @@ export class ContextMenuService extends Disposable implements IContextMenuServic
 	}
 
 	private readonly _onDidShowContextMenu = this._store.add(new Emitter<void>());
-	readonly onDidShowContextMenu = this._onDidShowContextMenu.event;
 
 	private readonly _onDidHideContextMenu = this._store.add(new Emitter<void>());
-	readonly onDidHideContextMenu = this._onDidHideContextMenu.event;
 
 	constructor(
 		@IContextViewService private readonly contextViewService: IContextViewService,
@@ -46,10 +44,6 @@ export class ContextMenuService extends Disposable implements IContextMenuServic
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 	) {
 		super();
-	}
-
-	configure(options: IContextMenuHandlerOptions): void {
-		this.contextMenuHandler.configure(options);
 	}
 
 	// ContextMenu

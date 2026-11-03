@@ -8,7 +8,7 @@
 /** Build identity couples source inputs, target/profile and the staged napi binary. */
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, win32 } from 'node:path';
 import { glassPrebuild, mingwCandidates } from './prerequisites.ts';
 import type { ProcessRunner } from './processes.ts';
@@ -28,6 +28,30 @@ export interface NativeIdentity {
 	readonly platform: NodeJS.Platform;
 	readonly architecture: string;
 	readonly minimumSystemVersion?: string;
+}
+
+/**
+ * Where everything built with the addon's target and toolchain lands. Sharing
+ * it lets the addon, the Rust tests, the test kit and the latency reader
+ * reuse one build of the vendored codecs.
+ */
+export const nativeTargetDirectory = 'target/electron';
+
+/** Cargo's `command` with the addon's target, target directory and environment, then `args`. */
+export function nativeCargo(
+	command: string,
+	args: readonly string[],
+	options: NativeOptions = defaultNativeOptions(),
+	environment: NodeJS.ProcessEnv = process.env,
+	exists?: (path: string) => boolean,
+): { readonly args: string[]; readonly env: NodeJS.ProcessEnv } {
+	const target = options.target ? ['--target', options.target] : [];
+	return { args: [command, '--locked', '--target-dir', nativeTargetDirectory, ...target, ...args], env: nativeEnvironment(options, environment, exists) };
+}
+
+/** Where `nativeCargo` puts an artifact: `relative` under the target's `debug` or `release` folder. */
+export function nativeArtifact(root: string, options: NativeOptions, profile: 'debug' | 'release', relative: string): string {
+	return join(root, nativeTargetDirectory, options.target ?? '', profile, relative);
 }
 
 /** The host's default addon target: Windows builds with the GNU toolchain. */
@@ -151,10 +175,8 @@ export function nativeEnvironment(
 export async function compileNative(root: string, processes: Pick<ProcessRunner, 'run'>, options: NativeOptions): Promise<NativeIdentity> {
 	assertHostTarget(options.target);
 	const before = await nativeIdentity(root, options);
-	const target = options.target ? ['--target', options.target] : [];
-	const release = options.profile === 'release' ? ['--release'] : [];
-	const env = nativeEnvironment(options);
-	await processes.run('cargo', ['build', '--locked', '--target-dir', 'target/electron', ...target, ...release, '-p', 'vnilink-node'], { cwd: root, env });
+	const build = nativeCargo('build', [...options.profile === 'release' ? ['--release'] : [], '-p', 'vnilink-node'], options);
+	await processes.run('cargo', build.args, { cwd: root, env: build.env });
 	return before;
 }
 
@@ -165,7 +187,7 @@ export async function stageNative(root: string, outputDirectory: string, options
 		throw new Error('Native sources changed during build; rebuild before launching');
 	}
 	const filename = process.platform === 'win32' ? 'vnilink_node.dll' : process.platform === 'darwin' ? 'libvnilink_node.dylib' : 'libvnilink_node.so';
-	const source = join(root, 'target/electron', options.target ?? '', options.profile === 'release' ? 'release' : 'debug', filename);
+	const source = nativeArtifact(root, options, options.profile === 'release' ? 'release' : 'debug', filename);
 	const output = join(outputDirectory, 'native/vnilink.node');
 	await cp(source, output);
 	const binary = createHash('sha256').update(await readFile(output)).digest('hex');
@@ -199,7 +221,7 @@ export const SPDLOG_DIRECTORY = 'native/spdlog';
 export async function stageSpdlog(root: string, outputDirectory: string): Promise<boolean> {
 	const source = join(root, 'node_modules/@vscode/spdlog');
 	const addon = join(source, 'build/Release/spdlog.node');
-	if (!existsSync(addon)) {
+	if (!await access(addon).then(() => true, () => false)) {
 		return false;
 	}
 	const target = join(outputDirectory, SPDLOG_DIRECTORY);

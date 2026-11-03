@@ -6,7 +6,6 @@
 import { DataTransfers, IDragAndDropData } from '../../dnd.js';
 import { addDisposableListener, animate, Dimension, getActiveElement, getContentHeight, getContentWidth, getDocument, getTopLeftOffset, getWindow, isAncestor, isHTMLElement, isSVGElement, scheduleAtNextAnimationFrame } from '../../dom.js';
 import { DomEmitter } from '../../event.js';
-import { IMouseWheelEvent } from '../../mouseEvent.js';
 import { EventType as TouchEventType, Gesture, GestureEvent } from '../../touch.js';
 import { SmoothScrollableElement } from '../scrollbar/scrollableElement.js';
 import { distinct, equals, splice } from '../../../common/arrays.js';
@@ -22,7 +21,6 @@ import { IRangeMap, RangeMap, shift } from './rangeMap.js';
 import { IRow, RowCache } from './rowCache.js';
 import { BugIndicatingError } from '../../../common/errors.js';
 import { AriaRole } from '../aria/aria.js';
-import { ScrollableElementChangeOptions } from '../scrollbar/scrollableElementOptions.js';
 import { clamp } from '../../../common/numbers.js';
 import { applyDragImage } from '../dnd/dnd.js';
 
@@ -239,20 +237,11 @@ class ListViewAccessibilityProvider<T> implements Required<IListViewAccessibilit
 export interface IListView<T> extends ISpliceable<T>, IDisposable {
 	readonly domId: string;
 	readonly domNode: HTMLElement;
-	readonly containerDomNode: HTMLElement;
-	readonly scrollableElementDomNode: HTMLElement;
 	readonly length: number;
 	readonly contentHeight: number;
-	readonly contentWidth: number;
-	readonly onDidChangeContentHeight: Event<number>;
-	readonly onDidChangeContentWidth: Event<number>;
 	readonly renderHeight: number;
 	readonly scrollHeight: number;
-	readonly firstVisibleIndex: number;
-	readonly firstMostlyVisibleIndex: number;
-	readonly lastVisibleIndex: number;
 	onDidScroll: Event<ScrollEvent>;
-	onWillScroll: Event<ScrollEvent>;
 	onMouseClick: Event<IListMouseEvent<T>>;
 	onMouseDblClick: Event<IListMouseEvent<T>>;
 	onMouseMiddleClick: Event<IListMouseEvent<T>>;
@@ -269,19 +258,12 @@ export interface IListView<T> extends ISpliceable<T>, IDisposable {
 	getElementDomId(index: number): string;
 	elementHeight(index: number): number;
 	elementTop(index: number): number;
-	indexOf(element: T): number;
 	indexAt(position: number): number;
 	indexAfter(position: number): number;
-	updateOptions(options: IListViewOptionsUpdate): void;
 	getScrollTop(): number;
 	setScrollTop(scrollTop: number, reuseAnimation?: boolean): void;
 	getScrollLeft(): number;
 	setScrollLeft(scrollLeft: number): void;
-	delegateScrollFromMouseWheelEvent(browserEvent: IMouseWheelEvent): void;
-	delegateVerticalScrollbarPointerDown(browserEvent: PointerEvent): void;
-	updateWidth(index: number): void;
-	updateElementHeight(index: number, size: number | undefined, anchorIndex: number | null): void;
-	rerender(): void;
 	layout(height?: number, width?: number): void;
 }
 
@@ -342,15 +324,9 @@ export class ListView<T> implements IListView<T> {
 
 	private readonly _onDidChangeContentHeight = this.disposables.add(new Emitter<number>());
 	private readonly _onDidChangeContentWidth = this.disposables.add(new Emitter<number>());
-	readonly onDidChangeContentHeight: Event<number> = Event.latch(this._onDidChangeContentHeight.event, undefined, this.disposables);
-	readonly onDidChangeContentWidth: Event<number> = Event.latch(this._onDidChangeContentWidth.event, undefined, this.disposables);
 	get contentHeight(): number { return this.rangeMap.size; }
-	get contentWidth(): number { return this.scrollWidth ?? 0; }
 
 	get onDidScroll(): Event<ScrollEvent> { return this.scrollableElement.onScroll; }
-	get onWillScroll(): Event<ScrollEvent> { return this.scrollableElement.onWillScroll; }
-	get containerDomNode(): HTMLElement { return this.rowsContainer; }
-	get scrollableElementDomNode(): HTMLElement { return this.scrollableElement.getDomNode(); }
 
 	private _horizontalScrolling: boolean = false;
 	private get horizontalScrolling(): boolean { return this._horizontalScrolling; }
@@ -504,116 +480,6 @@ export class ListView<T> implements IListView<T> {
 		if (topOffset < 0) {
 			// Scroll up
 			this.setScrollTop(this.scrollTop + topOffset);
-		}
-	}
-
-	updateOptions(options: IListViewOptionsUpdate) {
-		if (options.paddingBottom !== undefined) {
-			this.paddingBottom = options.paddingBottom;
-			this.scrollableElement.setScrollDimensions({ scrollHeight: this.scrollHeight });
-		}
-
-		if (options.smoothScrolling !== undefined) {
-			this.scrollable.setSmoothScrollDuration(options.smoothScrolling ? 125 : 0);
-		}
-
-		if (options.horizontalScrolling !== undefined) {
-			this.horizontalScrolling = options.horizontalScrolling;
-		}
-
-		let scrollableOptions: ScrollableElementChangeOptions | undefined;
-
-		if (options.scrollByPage !== undefined) {
-			scrollableOptions = { ...(scrollableOptions ?? {}), scrollByPage: options.scrollByPage };
-		}
-
-		if (options.mouseWheelScrollSensitivity !== undefined) {
-			scrollableOptions = { ...(scrollableOptions ?? {}), mouseWheelScrollSensitivity: options.mouseWheelScrollSensitivity };
-		}
-
-		if (options.fastScrollSensitivity !== undefined) {
-			scrollableOptions = { ...(scrollableOptions ?? {}), fastScrollSensitivity: options.fastScrollSensitivity };
-		}
-
-		if (scrollableOptions) {
-			this.scrollableElement.updateOptions(scrollableOptions);
-		}
-
-		if (options.paddingTop !== undefined && options.paddingTop !== this.rangeMap.paddingTop) {
-			// trigger a rerender
-			const lastRenderRange = this.getRenderRange(this.lastRenderTop, this.lastRenderHeight);
-			const offset = options.paddingTop - this.rangeMap.paddingTop;
-			this.rangeMap.paddingTop = options.paddingTop;
-
-			this.render(lastRenderRange, Math.max(0, this.lastRenderTop + offset), this.lastRenderHeight, undefined, undefined, true);
-			this.setScrollTop(this.lastRenderTop);
-
-			this.eventuallyUpdateScrollDimensions();
-
-			if (this.supportDynamicHeights) {
-				this._rerender(this.lastRenderTop, this.lastRenderHeight);
-			}
-		}
-	}
-
-	delegateScrollFromMouseWheelEvent(browserEvent: IMouseWheelEvent) {
-		this.scrollableElement.delegateScrollFromMouseWheelEvent(browserEvent);
-	}
-
-	delegateVerticalScrollbarPointerDown(browserEvent: PointerEvent) {
-		this.scrollableElement.delegateVerticalScrollbarPointerDown(browserEvent);
-	}
-
-	updateElementHeight(index: number, size: number | undefined, anchorIndex: number | null): void {
-		if (index < 0 || index >= this.items.length) {
-			return;
-		}
-
-		const originalSize = this.items[index].size;
-
-		if (typeof size === 'undefined') {
-			if (!this.supportDynamicHeights) {
-				console.warn('Dynamic heights not supported', new Error().stack);
-				return;
-			}
-
-			this.items[index].lastDynamicHeightWidth = undefined;
-			size = originalSize + this.probeDynamicHeight(index);
-		}
-
-		if (originalSize === size) {
-			return;
-		}
-
-		const lastRenderRange = this.getRenderRange(this.lastRenderTop, this.lastRenderHeight);
-
-		let heightDiff = 0;
-
-		if (index < lastRenderRange.start) {
-			// do not scroll the viewport if resized element is out of viewport
-			heightDiff = size - originalSize;
-		} else {
-			if (anchorIndex !== null && anchorIndex > index && anchorIndex < lastRenderRange.end) {
-				// anchor in viewport
-				// resized element in viewport and above the anchor
-				heightDiff = size - originalSize;
-			} else {
-				heightDiff = 0;
-			}
-		}
-
-		this.rangeMap.splice(index, 1, [{ size: size }]);
-		this.items[index].size = size;
-
-		this.render(lastRenderRange, Math.max(0, this.lastRenderTop + heightDiff), this.lastRenderHeight, undefined, undefined, true);
-		this.setScrollTop(this.lastRenderTop);
-
-		this.eventuallyUpdateScrollDimensions();
-
-		if (this.supportDynamicHeights) {
-			this._rerender(this.lastRenderTop, this.lastRenderHeight);
-		} else {
-			this._onDidChangeContentHeight.fire(this.contentHeight); // otherwise fired in _rerender()
 		}
 	}
 
@@ -796,33 +662,6 @@ export class ListView<T> implements IListView<T> {
 		this._onDidChangeContentWidth.fire(this.scrollWidth);
 	}
 
-	updateWidth(index: number): void {
-		if (!this.horizontalScrolling || typeof this.scrollWidth === 'undefined') {
-			return;
-		}
-
-		const item = this.items[index];
-		this.measureItemWidths([item]);
-
-		if (typeof item.width !== 'undefined' && item.width > this.scrollWidth) {
-			this.scrollWidth = item.width;
-			this.scrollableElement.setScrollDimensions({ scrollWidth: this.scrollWidth + 10 });
-			this._onDidChangeContentWidth.fire(this.scrollWidth);
-		}
-	}
-
-	rerender(): void {
-		if (!this.supportDynamicHeights) {
-			return;
-		}
-
-		for (const item of this.items) {
-			item.lastDynamicHeightWidth = undefined;
-		}
-
-		this._rerender(this.lastRenderTop, this.lastRenderHeight);
-	}
-
 	get length(): number {
 		return this.items.length;
 	}
@@ -832,36 +671,8 @@ export class ListView<T> implements IListView<T> {
 		return scrollDimensions.height;
 	}
 
-	get firstVisibleIndex(): number {
-		const range = this.getVisibleRange(this.lastRenderTop, this.lastRenderHeight);
-		return range.start;
-	}
-
-	get firstMostlyVisibleIndex(): number {
-		const firstVisibleIndex = this.firstVisibleIndex;
-		const firstElTop = this.rangeMap.positionAt(firstVisibleIndex);
-		const nextElTop = this.rangeMap.positionAt(firstVisibleIndex + 1);
-		if (nextElTop !== -1) {
-			const firstElMidpoint = (nextElTop - firstElTop) / 2 + firstElTop;
-			if (firstElMidpoint < this.scrollTop) {
-				return firstVisibleIndex + 1;
-			}
-		}
-
-		return firstVisibleIndex;
-	}
-
-	get lastVisibleIndex(): number {
-		const range = this.getRenderRange(this.lastRenderTop, this.lastRenderHeight);
-		return range.end - 1;
-	}
-
 	element(index: number): T {
 		return this.items[index].element;
-	}
-
-	indexOf(element: T): number {
-		return this.items.findIndex(item => item.element === element);
 	}
 
 	domElement(index: number): HTMLElement | null {
@@ -1707,60 +1518,6 @@ export class ListView<T> implements IListView<T> {
 		} finally {
 			this.disposeDynamicHeightMeasurements(retainedMeasurements);
 		}
-	}
-
-	private probeDynamicHeight(index: number): number {
-		const item = this.items[index];
-		return this.probeDynamicHeightForItem(item, index);
-	}
-
-	private probeDynamicHeightForItem(item: IItem<T>, index: number): number {
-		const delegateHeightDiff = this.probeDynamicHeightFromDelegate(item);
-		if (delegateHeightDiff !== undefined) {
-			return delegateHeightDiff;
-		}
-
-		if (!this.shouldProbeDynamicHeight(item)) {
-			return 0;
-		}
-
-		const size = item.size;
-
-		if (item.row) {
-			item.row.domNode.style.height = '';
-			item.size = item.row.domNode.offsetHeight;
-			if (item.size === 0) {
-				if (!isAncestor(item.row.domNode, getWindow(item.row.domNode).document.body)) {
-					console.warn('Measuring item node that is not in DOM! Add ListView to the DOM before measuring row height!', new Error().stack);
-				} else {
-					console.warn('Measured item node at 0px- ensure that ListView is not display:none before measuring row height!', new Error().stack);
-				}
-			}
-			item.lastDynamicHeightWidth = this.renderWidth;
-			this.publishDynamicHeight(item);
-			return item.size - size;
-		}
-
-		const { row } = this.cache.alloc(item.templateId);
-		row.domNode.style.height = '';
-		this.rowsContainer.appendChild(row.domNode);
-
-		const renderer = this.renderers.get(item.templateId);
-
-		if (!renderer) {
-			throw new BugIndicatingError('Missing renderer for templateId: ' + item.templateId);
-		}
-
-		renderer.renderElement(item.element, index, row.templateData);
-		item.size = row.domNode.offsetHeight;
-		renderer.disposeElement?.(item.element, index, row.templateData);
-
-		item.lastDynamicHeightWidth = this.renderWidth;
-		this.publishDynamicHeight(item);
-		row.domNode.remove();
-		this.cache.release(row);
-
-		return item.size - size;
 	}
 
 	private probeDynamicHeights(range: IRange, retainedMeasurements: Map<number, IDynamicHeightMeasurement<T>>): number[] {

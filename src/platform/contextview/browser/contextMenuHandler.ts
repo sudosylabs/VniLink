@@ -36,10 +36,6 @@ export class ContextMenuHandler {
 		private contextViewService: IContextViewService,
 	) { }
 
-	configure(options: IContextMenuHandlerOptions): void {
-		this.options = options;
-	}
-
 	showContextMenu(delegate: IContextMenuDelegate): void {
 		const actions = delegate.getActions();
 		if (!actions.length) {

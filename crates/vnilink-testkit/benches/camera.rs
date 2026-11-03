@@ -154,7 +154,9 @@ fn percentile_ms(samples: &mut [f64], percent: usize) -> f64 {
 fn main() {
     let mut remote = Remote::from_env();
     let mut report = Report::new("camera");
-    let host = remote.is_none().then(CameraHost::start);
+    let host = remote
+        .is_none()
+        .then(|| CameraHost::start().expect("a host sharing its camera"));
     let mut bound_us: Option<u64> = None;
     for (name, bytes) in [("picture", 30 * 1024), ("large picture", 400 * 1024)] {
         let (mut latency, arrived) = match (remote.as_mut(), host.as_ref()) {

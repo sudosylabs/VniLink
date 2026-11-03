@@ -71,8 +71,4 @@ export class ContextViewHandler extends Disposable implements IContextViewProvid
 export class ContextViewService extends ContextViewHandler implements IContextViewService {
 
 	declare readonly _serviceBrand: undefined;
-
-	getContextViewElement(): HTMLElement {
-		return this.contextView.getViewElement();
-	}
 }

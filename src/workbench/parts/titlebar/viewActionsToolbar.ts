@@ -22,7 +22,7 @@ import { ITabService } from '../../services/tabs/tabService.js';
 export const ViewActionsMenu = new MenuId('ViewActions');
 
 /** What a view action receives when run from the toolbar: the button, so it can anchor a popover. */
-export interface ViewActionContext {
+interface ViewActionContext {
 	readonly anchor: HTMLElement;
 }
 

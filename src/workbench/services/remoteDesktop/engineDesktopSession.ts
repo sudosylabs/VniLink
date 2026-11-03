@@ -114,7 +114,7 @@ export interface DesktopVideoChannel {
 }
 
 /** The two channels of a session: the picture, and for control the input. */
-export interface DesktopChannels {
+interface DesktopChannels {
 	video: DesktopVideoChannel;
 	input: { input(command: DesktopInputCommand): void; close(): void } | undefined;
 }
@@ -171,13 +171,21 @@ export class EngineDesktopSession extends Disposable implements IDesktopSession 
 	/** Whether the current decoder fell back to software. */
 	private software = false;
 
+	/** `cantShow` hears the codec of pictures this window could not show, when that ends the session. */
 	constructor(
 		public readonly control: boolean,
 		private readonly session: { readonly id: string; readonly generation: string },
 		private readonly createDecoder: CameraDecoderFactory,
 		private readonly readDisplays: () => Promise<readonly DisplayInfo[]>,
+		cantShow: (codec: VideoCodec) => void = () => undefined,
 	) {
 		super();
+		this._register(this.onEnd(end => {
+			const codec = this.shownCodec;
+			if (end === 'cantShow' && codec) {
+				cantShow(codec);
+			}
+		}));
 	}
 
 	/** The codec of the pictures being decoded, once one arrived. */

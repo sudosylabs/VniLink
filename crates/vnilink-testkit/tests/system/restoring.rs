@@ -13,55 +13,31 @@
 use expect_test::expect;
 use std::sync::Arc;
 
-use vnilink::{HostSystemActions, PrivacyState};
-use vnilink_testkit::system::FakeSystem;
+use vnilink::PrivacyState;
+use vnilink_testkit::system::{check_giving_back, FakeSystem, Giving, GivingBack, SystemSession};
 use vnilink_testkit::{traced, wait_for, TestResult, DEFAULT_WAIT};
 
-use super::{sharing, PRIVACY};
+use super::PRIVACY;
 
 /// Removing the host's backend while privacy is held gives privacy back
 /// on that backend, exactly once per facility.
 #[test]
 fn backend_removal_restores_original_privacy_exactly_once() -> TestResult {
     let trace = traced();
-    let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
-    system.set_privacy(true, true)?;
-    host.set_system_actions(None)?;
-    wait_for("privacy to be given back", DEFAULT_WAIT, || {
-        (host.system_privacy().ok()? == PrivacyState::default()).then_some(())
-    });
-    let calls = fake.calls();
-    assert!(
-        !calls.display.restricted && !calls.input.restricted,
-        "the removed backend still restricts: display={}, input={}",
-        calls.display.restricted,
-        calls.input.restricted
-    );
-    assert_eq!(
-        calls.display.done(),
-        2,
-        "the display is restricted once and restored once"
-    );
-    assert_eq!(
-        calls.input.done(),
-        2,
-        "input is blocked once and restored once"
-    );
-    drop(calls);
-    trace.wait_for_records("privacy restored", 1);
-    vnilink_testkit::assert_story(
+    check_giving_back(
+        &trace,
+        Giving {
+            system: FakeSystem::full(),
+            display: true,
+            input: true,
+            back: GivingBack::RemoveBackend,
+        },
         expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
     "#]],
-        || trace.story(&["system"]),
-    );
+    )?;
     Ok(())
 }
 
@@ -71,45 +47,20 @@ fn backend_removal_restores_original_privacy_exactly_once() -> TestResult {
 #[test]
 fn backend_replacement_restores_original_and_leaves_new_untouched() -> TestResult {
     let trace = traced();
-    let fake = Arc::new(FakeSystem::full());
-    let pair = sharing(&fake)?;
-    let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
-    system.set_privacy(true, true)?;
-    let replacement = Arc::new(FakeSystem::full());
-    host.set_system_actions(Some(Arc::clone(&replacement) as Arc<dyn HostSystemActions>))?;
-    wait_for("privacy to be given back", DEFAULT_WAIT, || {
-        (host.system_privacy().ok()? == PrivacyState::default()).then_some(())
-    });
-    let calls = fake.calls();
-    assert!(
-        !calls.display.restricted && !calls.input.restricted,
-        "the original backend still restricts: display={}, input={}",
-        calls.display.restricted,
-        calls.input.restricted
-    );
-    assert_eq!(calls.display.done(), 2, "original display restore count");
-    assert_eq!(calls.input.done(), 2, "original input restore count");
-    drop(calls);
-    let fresh = replacement.calls();
-    assert_eq!(
-        fresh.display.done(),
-        0,
-        "the replacement's display is touched"
-    );
-    assert_eq!(fresh.input.done(), 0, "the replacement's input is touched");
-    drop(fresh);
-    trace.wait_for_records("privacy restored", 1);
-    vnilink_testkit::assert_story(
+    check_giving_back(
+        &trace,
+        Giving {
+            system: FakeSystem::full(),
+            display: true,
+            input: true,
+            back: GivingBack::ReplaceBackend,
+        },
         expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=true input_blocked=true input_ok=true
           system: privacy restored connection=1 display=true input=true
     "#]],
-        || trace.story(&["system"]),
-    );
+    )?;
     Ok(())
 }
 
@@ -125,11 +76,12 @@ fn failed_native_restore_keeps_lease_and_reports_held() -> TestResult {
         calls.display.refuse_restore = true;
         calls.input.refuse_restore = true;
     }
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     host.set_system_actions(None)?;
     // The teardown restore fails: wait for the attempt, then the host must
@@ -166,7 +118,10 @@ fn failed_native_restore_keeps_lease_and_reports_held() -> TestResult {
         (host.system_privacy().ok()? == PrivacyState::default()).then_some(())
     });
     let calls = fake.calls();
-    assert!(!calls.display.restricted && !calls.input.restricted);
+    assert!(
+        !calls.display.restricted && !calls.input.restricted,
+        "nothing is left restricted"
+    );
     assert_eq!(
         (calls.display.done(), calls.input.done()),
         (2, 2),
@@ -196,11 +151,12 @@ fn refused_enable_applies_nothing_and_reports_default() -> TestResult {
         calls.input.refuse_apply = true;
         calls.input.refuse_restore = true;
     }));
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     assert!(
         system.set_privacy(true, true).is_err(),
         "privacy the OS refuses in part fails"
@@ -245,11 +201,12 @@ fn stuck_fresh_apply_retains_acknowledged_remainder() -> TestResult {
         calls.display.refuse_restore = true;
         calls.input.refuse_apply = true;
     }));
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     assert!(
         system.set_privacy(true, true).is_err(),
         "privacy the OS refuses in part fails"
@@ -287,41 +244,20 @@ fn stuck_fresh_apply_retains_acknowledged_remainder() -> TestResult {
 #[test]
 fn input_only_owner_close_restores_without_touching_display() -> TestResult {
     let trace = traced();
-    let fake = Arc::new(FakeSystem::windows_like());
-    let pair = sharing(&fake)?;
-    let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
-    system.set_privacy(false, true)?;
-    system.close();
-    wait_for("input to be given back", DEFAULT_WAIT, || {
-        (fake.calls().input.calls.len() > 1).then_some(())
-    });
-    assert_eq!(
-        fake.calls().display.calls.len(),
-        0,
-        "the display facility is never asked"
-    );
-    assert_eq!(
-        fake.calls().input.asked(),
-        vec![true, false],
-        "input is blocked once and given back once"
-    );
-    assert_eq!(
-        host.system_privacy()?,
-        PrivacyState::default(),
-        "the host reports privacy given back"
-    );
-    trace.wait_for_records("privacy restored", 1);
-    vnilink_testkit::assert_story(
+    check_giving_back(
+        &trace,
+        Giving {
+            system: FakeSystem::windows_like(),
+            display: false,
+            input: true,
+            back: GivingBack::Close,
+        },
         expect![[r#"
         host:
           system: privacy applied connection=1 display_ok=true display_private=false input_blocked=true input_ok=true
           system: privacy restored connection=1 display=false input=true
     "#]],
-        || trace.story(&["system"]),
-    );
+    )?;
     Ok(())
 }
 
@@ -334,11 +270,12 @@ fn partial_restore_keeps_remainder_and_repeated_narrowing_retries() -> TestResul
     let fake = Arc::new(FakeSystem::unobserved(|calls| {
         calls.display.refuse_restore = true;
     }));
-    let pair = sharing(&fake)?;
+    let SystemSession {
+        pair,
+        connection: _,
+        service: system,
+    } = SystemSession::open(fake.clone(), Some(PRIVACY))?;
     let host = &pair.host.core;
-    host.set_system_policy(PRIVACY)?;
-    let connection = pair.connect_services();
-    let system = pair.controller.open_system(&connection)?;
     system.set_privacy(true, true)?;
     let narrowed = vnilink::SystemPolicy {
         allow_privacy: false,

@@ -127,6 +127,7 @@ mod relay;
 mod service;
 mod session;
 mod sidestream;
+mod sync;
 pub mod system;
 pub mod terminal;
 pub mod trace;

@@ -17,7 +17,7 @@ export interface ICodeInputStyles {
 	readonly focusBorder: string;
 }
 
-export interface ICodeInputOptions extends ICodeInputStyles {
+interface ICodeInputOptions extends ICodeInputStyles {
 	/** How many digits the code has; one box each. */
 	readonly length: number;
 	/** Names the whole code for assistive technology. */

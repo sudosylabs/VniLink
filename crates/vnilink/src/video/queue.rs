@@ -68,10 +68,8 @@ impl VideoQueue {
         self
     }
 
-    pub(crate) fn push(&mut self, frame: EncodedFrame) -> VideoPush {
-        self.push_at(frame, Instant::now())
-    }
-    pub(crate) fn push_at(&mut self, frame: EncodedFrame, now: Instant) -> VideoPush {
+    /// Queues `frame`, which arrived at `now`.
+    pub(crate) fn push(&mut self, frame: EncodedFrame, now: Instant) -> VideoPush {
         self.received_frames = self.received_frames.saturating_add(1);
         self.received_bytes = self
             .received_bytes
@@ -194,7 +192,7 @@ impl VideoOutbox {
     }
 
     pub(crate) fn push(&self, frame: EncodedFrame) -> VideoPush {
-        let result = lock(&self.queue).push(frame);
+        let result = lock(&self.queue).push(frame, Instant::now());
         if matches!(result, VideoPush::Queued) {
             self.notify.notify_one();
         }
@@ -271,7 +269,7 @@ impl VideoInbox {
         if self.closed.load(Ordering::Acquire) {
             return VideoPush::StillNeedsKeyframe;
         }
-        let result = queue.push(frame);
+        let result = queue.push(frame, Instant::now());
         drop(queue);
         if matches!(result, VideoPush::Queued) {
             self.wake.notify_one();
@@ -500,8 +498,8 @@ mod telemetry_tests {
         let mut queue = VideoQueue::new();
         let now = Instant::now();
         let frame = |keyframe| EncodedFrame::h264(keyframe, u64::MAX, vec![1, 2, 3]).unwrap();
-        queue.push_at(frame(true), now);
-        queue.push_at(frame(false), now + Duration::from_millis(20));
+        queue.push(frame(true), now);
+        queue.push(frame(false), now + Duration::from_millis(20));
         let sample = queue.telemetry(now + Duration::from_millis(50));
         assert_eq!(
             sample,
@@ -519,7 +517,7 @@ mod telemetry_tests {
             30
         );
         for _ in 0..20 {
-            queue.push_at(frame(false), now + Duration::from_millis(60));
+            queue.push(frame(false), now + Duration::from_millis(60));
         }
         let sample = queue.telemetry(now + Duration::from_millis(80));
         assert_eq!(sample.received_frames, 22);
@@ -604,12 +602,13 @@ mod tests {
 
     #[test]
     fn a_still_waits_in_turn_and_owes_nothing() {
+        let start = Instant::now();
         let picture = |keyframe, at| EncodedFrame::h264(keyframe, at, vec![1]).unwrap();
         let still = |at| EncodedFrame::still(at, vec![2]).unwrap();
         let mut queue = VideoQueue::new();
-        assert_eq!(queue.push(picture(true, 1)), VideoPush::Queued);
+        assert_eq!(queue.push(picture(true, 1), start), VideoPush::Queued);
         assert_eq!(
-            queue.push(still(2)),
+            queue.push(still(2), start),
             VideoPush::Queued,
             "behind the picture before it"
         );
@@ -617,18 +616,21 @@ mod tests {
         assert_eq!(queue.pop().unwrap().role, FrameRole::Still);
         // A full queue leaves a still out rather than drop the stream's frames.
         for at in 0..crate::video::VIDEO_QUEUE as u64 {
-            queue.push(picture(at == 0, 10 + at));
+            queue.push(picture(at == 0, 10 + at), start);
         }
-        assert_eq!(queue.push(still(30)), VideoPush::Skipped);
+        assert_eq!(queue.push(still(30), start), VideoPush::Skipped);
         while queue.pop().is_some() {}
         // A loss leaves the stream waiting for a keyframe; a still neither
         // answers it nor lets the predicted frames through.
         queue.lost();
-        assert_eq!(queue.push(still(4)), VideoPush::Queued);
-        assert_eq!(queue.push(picture(false, 5)), VideoPush::StillNeedsKeyframe);
+        assert_eq!(queue.push(still(4), start), VideoPush::Queued);
+        assert_eq!(
+            queue.push(picture(false, 5), start),
+            VideoPush::StillNeedsKeyframe
+        );
         // A keyframe replaces a still waiting before it, uncounted.
         let dropped = queue.dropped();
-        assert_eq!(queue.push(picture(true, 6)), VideoPush::Queued);
+        assert_eq!(queue.push(picture(true, 6), start), VideoPush::Queued);
         assert_eq!(queue.dropped(), dropped);
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.pop().unwrap().timestamp_us, 6);
@@ -650,50 +652,61 @@ mod tests {
 
     #[test]
     fn an_overflow_episode_requests_one_keyframe_until_it_arrives() {
+        let start = Instant::now();
         let mut queue = VideoQueue::new();
-        assert_eq!(queue.push(frame(true, 1)), VideoPush::Queued);
+        assert_eq!(queue.push(frame(true, 1), start), VideoPush::Queued);
         // Fill to the bound with predicted frames.
         for index in 0..VIDEO_QUEUE - 1 {
             assert_eq!(
-                queue.push(frame(false, 2 + index as u64)),
+                queue.push(frame(false, 2 + index as u64), start),
                 VideoPush::Queued
             );
         }
         // The next predicted frame overflows: exactly one keyframe request for
         // the whole episode, then silence until the keyframe arrives.
-        assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
+        assert_eq!(
+            queue.push(frame(false, 99), start),
+            VideoPush::KeyframeNeeded
+        );
         for timestamp in 100..110u64 {
             assert_eq!(
-                queue.push(frame(false, timestamp)),
+                queue.push(frame(false, timestamp), start),
                 VideoPush::StillNeedsKeyframe
             );
         }
-        assert_eq!(queue.push(frame(true, 110)), VideoPush::Queued);
+        assert_eq!(queue.push(frame(true, 110), start), VideoPush::Queued);
         assert_eq!(queue.pop().unwrap().timestamp_us, 110);
     }
 
     #[test]
     fn predicted_frames_drop_until_the_next_keyframe() {
+        let start = Instant::now();
         let mut queue = VideoQueue::new();
-        assert_eq!(queue.push(frame(true, 1)), VideoPush::Queued);
+        assert_eq!(queue.push(frame(true, 1), start), VideoPush::Queued);
         for index in 0..VIDEO_QUEUE - 1 {
             assert_eq!(
-                queue.push(frame(false, 2 + index as u64)),
+                queue.push(frame(false, 2 + index as u64), start),
                 VideoPush::Queued
             );
         }
         assert_eq!(queue.len(), VIDEO_QUEUE);
-        assert_eq!(queue.push(frame(false, 99)), VideoPush::KeyframeNeeded);
+        assert_eq!(
+            queue.push(frame(false, 99), start),
+            VideoPush::KeyframeNeeded
+        );
         assert_eq!(queue.len(), 1);
         let kept = queue.pop().unwrap();
         assert!(kept.keyframe);
         assert_eq!(kept.timestamp_us, 1);
         assert!(queue.dropped() >= 1);
-        assert_eq!(queue.push(frame(false, 100)), VideoPush::StillNeedsKeyframe);
-        assert_eq!(queue.push(frame(true, 101)), VideoPush::Queued);
+        assert_eq!(
+            queue.push(frame(false, 100), start),
+            VideoPush::StillNeedsKeyframe
+        );
+        assert_eq!(queue.push(frame(true, 101), start), VideoPush::Queued);
         assert_eq!(queue.len(), 1);
         let dropped = queue.dropped();
-        assert_eq!(queue.push(frame(true, 102)), VideoPush::Queued);
+        assert_eq!(queue.push(frame(true, 102), start), VideoPush::Queued);
         assert!(queue.dropped() > dropped);
         assert_eq!(queue.len(), 1);
         let only = queue.pop().unwrap();
@@ -707,29 +720,50 @@ mod tests {
         let start = Instant::now();
         let frame = |keyframe| EncodedFrame::h264(keyframe, 1, vec![0x41]).unwrap();
         let mut queue = VideoQueue::new().with_max_age(crate::video::INBOX_MAX_AGE);
-        assert_eq!(queue.push_at(frame(true), start), VideoPush::Queued);
+        assert_eq!(queue.push(frame(true), start), VideoPush::Queued);
         assert_eq!(
-            queue.push_at(frame(false), start + Duration::from_millis(300)),
+            queue.push(frame(false), start + Duration::from_millis(300)),
             VideoPush::Queued,
             "a reader that lags 300 ms catches up by decoding: no keyframe"
         );
         // The window has not taken the first frame for longer than the budget:
         // the predicted frames go, and a keyframe is wanted.
         assert_eq!(
-            queue.push_at(frame(false), start + Duration::from_millis(1001)),
+            queue.push(frame(false), start + Duration::from_millis(1001)),
             VideoPush::KeyframeNeeded
         );
         assert_eq!(queue.len(), 1, "the buffered keyframe stays");
         assert_eq!(
-            queue.push_at(frame(true), start + Duration::from_millis(160)),
+            queue.push(frame(true), start + Duration::from_millis(160)),
             VideoPush::Queued
         );
         // A queue without a budget is bounded by depth only.
         let mut deep = VideoQueue::new();
-        deep.push_at(frame(true), start);
+        deep.push(frame(true), start);
         assert_eq!(
-            deep.push_at(frame(false), start + Duration::from_secs(5)),
+            deep.push(frame(false), start + Duration::from_secs(5)),
             VideoPush::Queued
+        );
+    }
+
+    #[test]
+    fn a_viewer_queue_keeps_its_frames_until_the_oldest_is_past_its_budget() {
+        let start = Instant::now();
+        let frame = |keyframe| EncodedFrame::h264(keyframe, 1, vec![0x41]).unwrap();
+        let mut queue = VideoQueue::new().with_max_age(INBOX_MAX_AGE);
+        assert_eq!(queue.push(frame(true), start), VideoPush::Queued);
+        assert_eq!(
+            queue.push(frame(false), start + INBOX_MAX_AGE),
+            VideoPush::Queued,
+            "a frame exactly the budget old is still in time"
+        );
+        assert_eq!(
+            queue.push(
+                frame(false),
+                start + INBOX_MAX_AGE + Duration::from_nanos(1)
+            ),
+            VideoPush::KeyframeNeeded,
+            "past the budget the predicted frames go"
         );
     }
 

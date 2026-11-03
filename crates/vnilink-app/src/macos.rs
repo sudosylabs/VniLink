@@ -1908,9 +1908,11 @@ fn follow_pointer(
                     bgra: image.bgra.clone(),
                 }),
             };
-            // A shape the engine refuses is skipped; the next one may fit.
-            let _ =
-                publish_host_cursor(core, display_id, capture_size, logical_size, &cache, update);
+            vnilink::ignored!(
+                vnilink::trace::INPUT,
+                "a cursor shape the engine refuses is skipped; the next one may fit",
+                publish_host_cursor(core, display_id, capture_size, logical_size, &cache, update)
+            );
             position = Some(at);
             sent = std::time::Instant::now();
             if image.is_some() {

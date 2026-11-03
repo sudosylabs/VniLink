@@ -24,7 +24,7 @@ import { IThemeService } from '../../../platform/theme/common/themeService.js';
  * Upstream `getXtermScaledDimensions` (contrib/terminal/browser/xterm/xtermTerminal.ts),
  * with VniLink's fixed letter spacing and line height.
  */
-export function getXtermScaledDimensions(
+function getXtermScaledDimensions(
 	w: Window,
 	charWidth: number,
 	charHeight: number,
@@ -85,14 +85,26 @@ const themeTokens: readonly (readonly [keyof ITheme, string])[] = [
 	['brightWhite', '--terminal-ansi-bright-white'],
 ];
 
+/**
+ * xterm writes its scrollbar's colours into a style element, which the window's CSP admits only
+ * by the hash of its text (`webContentsSecurity.ts`). Fixed here, the text never changes;
+ * `terminal.css` paints the scrollbar from the workbench palette instead.
+ */
+const scrollbarTheme = {
+	scrollbarSliderBackground: '#00000000',
+	scrollbarSliderHoverBackground: '#00000000',
+	scrollbarSliderActiveBackground: '#00000000',
+} satisfies ITheme;
+
 const fontFamily = isMacintosh ? 'ui-monospace, SFMono-Regular, Menlo, monospace'
 	: isWindows ? '"Cascadia Mono", Consolas, monospace'
 		: '"DejaVu Sans Mono", "Ubuntu Mono", monospace';
 
 /**
  * One xterm.js terminal, a slim form of VS Code's `XtermTerminal`: WebGL
- * rendering (the window's CSP refuses the DOM renderer's style elements),
- * Unicode 11 widths, the workbench palette and the system clipboard.
+ * rendering only (the window's CSP refuses the DOM renderer's style
+ * elements), Unicode 11 widths, the workbench palette and the system
+ * clipboard.
  */
 export class XtermTerminal extends Disposable {
 	public readonly raw: Terminal;
@@ -134,16 +146,18 @@ export class XtermTerminal extends Disposable {
 			this.probe.remove();
 		}));
 		this.applyTheme();
+		// Loaded before `open`, WebGL is the only renderer xterm creates. xterm owns loaded addons
+		// and disposes them with the terminal.
+		const webgl = new WebglAddon();
+		this._register(webgl.onContextLoss(() => {
+			webgl.dispose();
+			this.lostRenderer.fire();
+		}));
+		this.raw.loadAddon(webgl);
 		this.raw.open(container);
-		// xterm owns loaded addons and disposes them with the terminal.
-		try {
-			const webgl = new WebglAddon();
-			this._register(webgl.onContextLoss(() => {
-				webgl.dispose();
-				this.lostRenderer.fire();
-			}));
-			this.raw.loadAddon(webgl);
-		} catch {
+		// xterm swallows a WebGL renderer that fails to start and draws with its DOM renderer
+		// instead; only a started renderer has a texture atlas.
+		if (!webgl.textureAtlas) {
 			this.lostRenderer.fire();
 		}
 	}
@@ -166,7 +180,7 @@ export class XtermTerminal extends Disposable {
 		if (!this.container) {
 			return;
 		}
-		const theme: Record<string, string> = {};
+		const theme: Record<string, string> = { ...scrollbarTheme };
 		for (const [slot, token] of themeTokens) {
 			this.probe.style.color = `var(${token})`;
 			theme[slot] = getComputedStyle(this.probe).color;

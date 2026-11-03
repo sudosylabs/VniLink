@@ -1,0 +1,124 @@
+// ---------------------------------------------------------------------------------------------
+// Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only
+// ---------------------------------------------------------------------------------------------
+
+/** Isolated application profile, diagnostics and total smoke-run cleanup. */
+import { app, session, type BrowserWindow } from 'electron';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { isLinux } from '../../../src/base/common/platform.js';
+import { VniLinkApplication } from '../../../src/code/electron-main/app.js';
+import { product } from '../../../src/platform/product/common/product.js';
+import { WindowDriver } from './driver.js';
+
+export interface TestApplicationOptions {
+	/** Show the workbench window, for a run that measures what is on screen. */
+	readonly showWindow?: boolean;
+	/**
+	 * Prepare the temporary engine's native video, as an installed engine
+	 * does: it decodes a screen it views, and hosts this computer's screen
+	 * once screen sharing is turned on.
+	 */
+	readonly nativeVideo?: boolean;
+	/** Where that engine keeps the desktop portal's grant to share the screen, so a run asks once. */
+	readonly screenGrant?: string;
+	readonly timeoutMs?: number;
+}
+
+export class TestApplication {
+	public readonly profile = process.env.VNILINK_TEST_PROFILE ?? mkdtempSync(join(tmpdir(), 'vnilink-test-'));
+	public readonly output = join(__dirname, '../.build/test-runs', `${String(Date.now())}-${String(process.pid)}`);
+	private timer: ReturnType<typeof setTimeout> | undefined;
+	private readonly container = isLinux && process.env.VNILINK_TEST_CONTAINER === '1';
+
+	public get args(): string[] {
+		// Electron retains launch switches in argv; they are not scenario names.
+		const args = process.argv.slice(2);
+		return this.container ? args.filter(arg => arg !== '--no-sandbox') : args;
+	}
+
+	constructor(private readonly options: TestApplicationOptions = {}) {
+		// The scenarios wait on animation frames and timers. Chromium stops
+		// both for a window macOS reports as covered or off screen, as when
+		// the display sleeps during a run, so a test window renders as if seen.
+		for (const flag of ['disable-backgrounding-occluded-windows', 'disable-renderer-backgrounding', 'disable-background-timer-throttling']) {
+			app.commandLine.appendSwitch(flag);
+		}
+		// Identity as VniLinkMain sets it, which test launches bypass.
+		app.setName(product.name);
+		app.setPath('userData', this.profile);
+		mkdirSync(this.output, { recursive: true });
+		writeFileSync(join(this.output, 'environment.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, versions: process.versions, chromiumSandbox: !this.container }, null, 2));
+	}
+
+	public async run(verify: (window: BrowserWindow, driver: WindowDriver) => Promise<void>): Promise<void> {
+		const timeout = this.options.timeoutMs ?? 120000;
+		this.timer = setTimeout(() => {
+			// Said, so a hang is not mistaken for a crash.
+			const message = `The scenarios did not finish within ${String(timeout / 1000)} s; the last screenshot shows how far they got.`;
+			appendFileSync(join(this.output, 'failure.log'), message);
+			console.error(message);
+			this.cleanup();
+			app.exit(1);
+		}, timeout);
+		app.once('quit', () => {
+			this.cleanup();
+		});
+		app.on('web-contents-created', (_event, contents) => {
+			contents.on('did-fail-load', (_event, code, description, url) => {
+				appendFileSync(join(this.output, 'navigation.log'), `${String(code)} ${description} ${url}\n`);
+			});
+			contents.on('console-message', details => {
+				if (details.level === 'error') {
+					appendFileSync(join(this.output, 'console.log'), `${details.message}\n`);
+				}
+			});
+		});
+		app.once('ready', () => {
+			session.defaultSession.webRequest.onErrorOccurred(details => {
+				appendFileSync(join(this.output, 'network.log'), `${details.error} ${details.url}\n`);
+			});
+		});
+		await new VniLinkApplication({
+			showWindow: this.options.showWindow ?? false,
+			temporaryEngine: true,
+			automationDriver: true,
+			temporaryEngineCaptures: this.options.nativeVideo ?? false,
+			temporaryEngineScreenGrant: this.options.screenGrant,
+			onReady: async window => {
+				const driver = new WindowDriver(window, this.output);
+				try {
+					// macOS and Windows draw a hidden window. On Linux a window
+					// never mapped gets no frames: its animation frames never
+					// come and a page capture fails. It is shown unfocused, and
+					// the scenarios start once it has drawn twice.
+					if (isLinux && !window.isVisible()) {
+						window.showInactive();
+						await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+					}
+					await driver.ready();
+					await verify(window, driver);
+					console.log(`PASS: test scenarios; artifacts: ${this.output}`);
+				} catch (error) {
+					appendFileSync(join(this.output, 'failure.log'), error instanceof Error ? error.stack ?? error.message : String(error));
+					await driver.screenshot('failure').catch(() => undefined);
+					throw error;
+				} finally {
+					driver.dispose();
+				}
+				app.quit();
+			}
+		}).start();
+	}
+
+	private cleanup(): void {
+		clearTimeout(this.timer);
+		if (!process.env.VNILINK_TEST_PROFILE) {
+			rmSync(this.profile, { recursive: true, force: true });
+		}
+	}
+}

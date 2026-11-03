@@ -7,8 +7,9 @@
 
 /** The application's bundles and resources, shared by the one-shot, release and watch builds. */
 import { build, type BuildOptions } from 'esbuild';
-import { cp, mkdir, readFile, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
+import { basename, dirname, join, relative } from 'node:path';
+import { acquireLock } from './lock.ts';
 import { compileNative, defaultNativeOptions, stageGlass, stageSpdlog, stageNative, type NativeIdentity, type NativeOptions } from './native.ts';
 import { ProcessRunner } from './processes.ts';
 import { define, execute, parallel, series } from './task.ts';
@@ -33,10 +34,10 @@ export function bundleOptions(root: string, { production = false, outputDirector
 		node('src/preload.ts', 'preload.cjs'),
 		// The restart notice: its own page, bundle and preload, apart from the workbench's IPC.
 		node('src/noticePreload.ts', 'noticePreload.cjs'),
-		...(!production ? [node('test/smoke/main.ts', 'smoke.cjs'), node('test/latency/main.ts', 'latency.cjs')] : []),
+		...(!production ? [node('test/smoke/src/main.ts', 'smoke.cjs'), node('test/latency/main.ts', 'latency.cjs')] : []),
 		browser('src/renderer.ts', 'renderer/renderer.js'),
 		browser('src/notice.ts', 'renderer/notice.js'),
-		...(!production ? [browser('test/browser/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' })] : []),
+		...(!production ? [browser('test/smoke/fixtures/index.ts', 'browser-tests.js', { format: 'iife', globalName: 'browserTests' })] : []),
 	];
 }
 
@@ -59,7 +60,26 @@ export async function assertBundleFresh(root: string, output: string, outputDire
 	}
 }
 
-export function resources(root: string, outputDirectory = join(root, 'out')): Resource[] {
+/** Throws unless every bundle in `out/` is what building its sources now writes. */
+export async function assertBundlesFresh(root: string): Promise<void> {
+	await Promise.all(bundleOptions(root).map(options => assertBundleFresh(root, relative(join(root, 'out'), options.outfile ?? ''))));
+}
+
+/**
+ * What a build copies beside its bundles. A release also carries the Rust
+ * sources and lockfile its addon can be relinked from; a development build
+ * and the watcher leave them out, since nothing in a checkout reads them.
+ */
+export function resources(root: string, outputDirectory = join(root, 'out'), { relink = false } = {}): Resource[] {
+	const relinkSources = relink ? [
+		['Cargo.toml', 'relink/source/Cargo.toml'],
+		['Cargo.lock', 'relink/source/Cargo.lock'],
+		['.cargo/config.toml', 'relink/source/.cargo/config.toml'],
+		['rust-toolchain.toml', 'relink/source/rust-toolchain.toml'],
+		['crates', 'relink/source/crates'],
+		['vendor', 'relink/source/vendor'],
+		['.github/workflows/ci.yml', 'relink/source/.github/workflows/ci.yml'],
+	] : [];
 	return [
 		['src/workbench/index.html', 'renderer/index.html'],
 		['src/workbench/notice.html', 'renderer/notice.html'],
@@ -75,13 +95,7 @@ export function resources(root: string, outputDirectory = join(root, 'out')): Re
 		['LICENSE.vscode.txt', 'licenses/vscode.txt'],
 		['ThirdPartyNotices.vscode.txt', 'licenses/vscode-third-party.txt'],
 		['assets/licenses', 'licenses/native-codecs'],
-		['Cargo.toml', 'relink/source/Cargo.toml'],
-		['Cargo.lock', 'relink/source/Cargo.lock'],
-		['.cargo/config.toml', 'relink/source/.cargo/config.toml'],
-		['rust-toolchain.toml', 'relink/source/rust-toolchain.toml'],
-		['crates', 'relink/source/crates'],
-		['vendor', 'relink/source/vendor'],
-		['.github/workflows/ci.yml', 'relink/source/.github/workflows/ci.yml'],
+		...relinkSources,
 	].map(([source, output]) => ({ source: join(root, source), output: join(outputDirectory, output) }));
 }
 
@@ -105,9 +119,16 @@ export interface ApplicationBuildOptions extends BundleOptions {
 	readonly native?: NativeOptions;
 }
 
-/** Compiles the addon, then bundles, stages resources and publishes the addon into `outputDirectory`. */
+/**
+ * Compiles the addon, then bundles, stages resources and publishes the addon
+ * into `outputDirectory`. The output is built beside it (`out.next` for
+ * `out`) and renamed into place, so a build that fails or is stopped leaves
+ * the previous output whole; a lock keeps two builds from publishing at once.
+ */
 export async function buildApplication(root: string, signal: AbortSignal, options: ApplicationBuildOptions = {}): Promise<void> {
-	const { production = false, outputDirectory = join(root, 'out') } = options;
+	const { production = false } = options;
+	const published = options.outputDirectory ?? join(root, 'out');
+	const outputDirectory = join(dirname(published), `${basename(published)}.next`);
 	const native = options.native ?? defaultNativeOptions();
 	const processes = new ProcessRunner(signal);
 	let compiled: NativeIdentity | undefined;
@@ -124,8 +145,8 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 				await Promise.all(bundleOptions(root, { production, outputDirectory }).map(value => build(value)));
 			}),
 			define('resources:stage', async () => {
-				const filter = production ? releaseSourceFilter : relinkSourceFilter;
-				await Promise.all(resources(root, outputDirectory).map(({ source, output }) => cp(source, output, { recursive: true, filter })));
+				const staged = resources(root, outputDirectory, { relink: production });
+				await Promise.all(staged.map(({ source, output }) => cp(source, output, { recursive: true, filter: releaseSourceFilter })));
 			}),
 			define('native:stage', async () => {
 				if (!compiled) {
@@ -141,9 +162,16 @@ export async function buildApplication(root: string, signal: AbortSignal, option
 			}),
 		),
 	);
+	await mkdir(dirname(published), { recursive: true });
+	const releaseLock = await acquireLock(`${published}.lock`);
 	try {
 		await execute(define('application:build', task), signal);
+		signal.throwIfAborted();
+		await rm(published, { recursive: true, force: true });
+		await rename(outputDirectory, published);
 	} finally {
 		await processes.stop();
+		await rm(outputDirectory, { recursive: true, force: true });
+		await releaseLock();
 	}
 }

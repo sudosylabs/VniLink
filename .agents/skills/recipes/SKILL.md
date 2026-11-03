@@ -12,7 +12,7 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 1. Write the page class in `src/workbench/contrib/<feature>/<name>Page.ts`, implementing `IHomePage` from `contrib/home/homePages.ts`. Imitate `contrib/devices/devicesPage.ts`: inject services, start the element with `createPageHeading`, create children with `createInstance`.
 2. Register it in `<feature>.contribution.ts` with `Registry.as<IHomePagesRegistry>(Extensions.HomePages).registerPage({ id, group, order, title, icon, ctorDescriptor: new SyncDescriptor(Page) })`. Imitate `contrib/devices/devices.contribution.ts`.
 3. Import the contribution from `src/workbench/workbench.desktop.main.ts`.
-4. Add a scenario in `test/browser/` that builds the page through an `InstantiationService` with fake services. Imitate `test/browser/devices.ts`.
+4. Add a suite in `contrib/<feature>/test/browser/<name>Page.test.ts` that builds the page through `TestInstantiationService` with typed doubles, one test per behaviour. Imitate `contrib/devices/test/browser/devicesPage.test.ts`.
 
 ## Add a setting
 
@@ -20,14 +20,14 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 2. If the engine must apply it: a `user` setting joins a group in `engineCommands` in `platform/configuration/electron-main/configurationMainService.ts`; an engine setting maps to its policy field in `engineSettings.ts`.
 3. Show it by adding the key to a section of a page in `contrib/settings/settings.contribution.ts`. Booleans, numbers and enums render themselves (`settingRenderers.ts`). A control the generic renderers cannot express implements `ISettingControl` and is registered with `registerControl(key, Ctor)`; imitate `codecSettingControl.ts`. Content that is not a setting is an `ISettingsWidget` (`powerStatusWidget.ts`).
 4. Read it anywhere with `IConfigurationService.getValue(key)`; never add a page-level Save. Settings apply when valid.
-5. Tests: schema and source behaviour in `test/tooling/settings.test.mjs`; the page through `SettingsFixture` in `test/browser/settings.ts`.
+5. Tests: the schema in `platform/configuration/test/common/configurationSchema.test.ts`, saving in `test/node/userSettings.test.ts`; the page through `SettingsFixture` in `contrib/settings/test/browser/settings.test.ts`.
 
 ## Add a workbench service
 
 1. Contract: `src/workbench/services/<area>/<area>Service.ts` with `export const IAreaService = createDecorator<IAreaService>('areaService')` and the interface.
 2. Implementation: `<area>ServiceImpl.ts`, constructor parameters `@IEngineService ...`, last line `registerSingleton(IAreaService, AreaService, InstantiationType.Delayed)`. Imitate `services/devices/deviceServiceImpl.ts`.
 3. Import the implementation from `workbench.desktop.main.ts`.
-4. Contract tests in `test/tooling/<area>.test.mjs` with `fakeEngine` from `test/tooling/fixtures.mjs`.
+4. Unit tests in `services/<area>/test/browser/<area>Service.test.ts`, built through `TestInstantiationService` with `TestEngineService` (`platform/engine/test/common/testEngineService.ts`). Imitate `services/devices/test/browser/deviceService.test.ts`.
 
 ## Add a main-process capability for windows
 
@@ -35,13 +35,13 @@ Each recipe names the files to touch and the existing file to imitate. `workbenc
 2. Main service in `platform/<area>/electron-main/<area>MainService.ts`, registered in `VniLinkApplication.createServices`.
 3. Channel facade in `platform/<area>/electron-main/<area>Channel.ts`. It validates every argument and reads the window from `windowIdFromContext(context)`. Imitate `platform/permissions/electron-main/permissionsChannel.ts`. Register it in `initChannels`.
 4. Renderer side: `registerMainProcessRemoteService` for plain proxies, or a small service over `IMainProcessService.getChannel` when results need validation (`workbench/services/configuration/configurationServiceImpl.ts`).
-5. Channel-level tests in `test/tooling/applicationIpc.test.mjs`, including refused input.
+5. Channel-level tests in `platform/<area>/test/electron-main/<area>Channel.test.ts`, including refused input; imitate `platform/native/test/electron-main/nativeHostChannel.test.ts`.
 
 ## Add a toolbar action
 
 1. Define or reuse a context key in `src/workbench/contextkeys.ts`, bound in `contextkeysHandler.ts` or the owning contribution.
 2. `registerAction2(class extends Action2 { ... menu: { id: ViewActionsMenu, group: 'navigation', when } ... run(accessor) { return accessor.get(IService).doIt(); } })` in the feature's contribution or `src/workbench/actions/`. Imitate `actions/applicationActions.ts`. Give `icon: ThemeIcon.fromId(Icons.x)` for product icons.
-3. Test the menu through real `MenuService`/`ContextKeyService`, as `test/browser/home.ts` does for restart.
+3. Test the menu through real `MenuService`/`ContextKeyService`, as `contrib/home/test/browser/home.test.ts` does for restart.
 
 ## Add startup work
 

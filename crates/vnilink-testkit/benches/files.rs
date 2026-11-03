@@ -286,6 +286,8 @@ fn main() {
         );
     };
     let mib = 1024 * 1024;
+    // One small file alone: its `files/s` is how promptly a lone file lands.
+    measure("single", many(1, 4 * 1024, "single"), Setup::PLAIN);
     measure("small", many(1_000, 4 * 1024, "small"), Setup::PLAIN);
     measure("large", many(1, 256 * mib, "large"), Setup::PLAIN);
     let mut mixed = many(500, 4 * 1024, "small");

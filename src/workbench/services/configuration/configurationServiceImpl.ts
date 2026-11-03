@@ -11,8 +11,8 @@ import { Disposable } from '../../../base/common/lifecycle.js';
 import type { IChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { IMainProcessService } from '../../../platform/ipc/common/mainProcessService.js';
-import { ConfigurationTarget, IConfigurationService, type IConfigurationChange, type IConfigurationChangeEvent, type IConfigurationData, type IConfigurationOverrides, type IConfigurationValue } from '../../../platform/configuration/common/configuration.js';
-import { settingDefaults, settingKeys, settingSource } from '../../../platform/configuration/common/configurationSchema.js';
+import { ConfigurationTarget, IConfigurationService, type IConfigurationChange, type IConfigurationChangeEvent, type IConfigurationOverrides } from '../../../platform/configuration/common/configuration.js';
+import { settingKeys, settingSource } from '../../../platform/configuration/common/configurationSchema.js';
 import { CONFIGURATION_CHANNEL_NAME, freezeSnapshot, isConfigurationSnapshot, type ConfigurationSnapshot } from '../../../platform/configuration/common/configurationSnapshot.js';
 import type { IWorkbenchConfigurationService } from './configurationService.js';
 
@@ -40,10 +40,6 @@ export class ConfigurationService extends Disposable implements IWorkbenchConfig
 		this.accept(await this.channel.call<unknown>('getSnapshot'));
 	}
 
-	public getConfigurationData(): IConfigurationData | null {
-		return null;
-	}
-
 	// The type parameter mirrors VS Code's IConfigurationService.getValue contract.
 	// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 	public getValue<T>(sectionOrOverrides?: string | IConfigurationOverrides): T {
@@ -57,27 +53,9 @@ export class ConfigurationService extends Disposable implements IWorkbenchConfig
 		this.accept(await this.channel.call<unknown>('updateValue', { key, value }));
 	}
 
-	public inspect<T>(key: string): IConfigurationValue<Readonly<T>> {
-		const value = this.snapshot.values[key] as T | undefined;
-		const defaultValue = settingDefaults()[key] as T | undefined;
-		const userValue = value === undefined || equals(value, defaultValue) ? undefined : value;
-		return {
-			value,
-			defaultValue,
-			userValue,
-			default: defaultValue === undefined ? undefined : { value: defaultValue },
-			user: userValue === undefined ? undefined : { value: userValue },
-		};
-	}
-
 	/** Reads the engine's settings again, for changes made outside this window. */
 	public async reloadConfiguration(): Promise<void> {
 		this.accept(await this.channel.call<unknown>('reload'));
-	}
-
-	public keys(): { default: string[]; policy: string[]; user: string[]; workspace: string[]; workspaceFolder: string[] } {
-		const keys = settingKeys();
-		return { default: keys, policy: [], user: keys.filter(key => this.inspect(key).userValue !== undefined), workspace: [], workspaceFolder: [] };
 	}
 
 	public getUnavailableReason(key: string): string | undefined {

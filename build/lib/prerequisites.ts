@@ -509,6 +509,17 @@ const customChecks: Readonly<Record<string, CustomCheck>> = {
 		}
 		return { status: 'missing', detail: `Rust ${channel} (${manifest.rust.toolchainFile}) is not installed` };
 	},
+	'rust-fuzz': async (_requirement, _manifest, host, probe) => {
+		if (!await findCommand(host, probe, 'rustup')) {
+			return { status: 'missing', detail: 'rustup is not installed' };
+		}
+		const toolchains = await probe.run('rustup', ['toolchain', 'list']);
+		if (!toolchains.stdout.split('\n').some(line => line.startsWith('nightly-'))) {
+			return { status: 'missing', detail: 'the nightly Rust toolchain is not installed' };
+		}
+		const fuzz = await probe.run('cargo', ['+nightly', 'fuzz', '--version']);
+		return fuzz.ok ? { status: 'ready', detail: fuzz.stdout.trim() } : { status: 'missing', detail: 'cargo-fuzz is not installed for nightly Rust' };
+	},
 	'rust-target': async (_requirement, manifest, host, probe) => {
 		const target = manifest.platforms.win32.rustTarget ?? '';
 		const channel = rustChannel(await probe.readFile(pathsOf(host.platform).join(host.root, manifest.rust.toolchainFile)) ?? '') ?? 'stable';

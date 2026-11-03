@@ -1,7 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
+ *  Adapted for VniLink: moved out of common/ beside its implementation; its relative imports follow.
  *--------------------------------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------------------------
+// Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
+// Modifications licensed under the GNU Affero General Public License, version 3 only.
+// See LICENSE in the project root for license information.
+// SPDX-License-Identifier: AGPL-3.0-only AND MIT
+// ---------------------------------------------------------------------------------------------
 
 import { CancellationToken } from '../../../base/common/cancellation.js';
 import { Event } from '../../../base/common/event.js';
@@ -24,27 +31,6 @@ export interface BeforeShutdownEvent {
 	 * The reason why the application will be shutting down.
 	 */
 	readonly reason: ShutdownReason;
-
-	/**
-	 * Allows to veto the shutdown. The veto can be a long running operation but it
-	 * will block the application from closing.
-	 *
-	 * @param id to identify the veto operation in case it takes very long or never
-	 * completes.
-	 */
-	veto(value: boolean | Promise<boolean>, id: string): void;
-}
-
-export interface InternalBeforeShutdownEvent extends BeforeShutdownEvent {
-
-	/**
-	 * Allows to set a veto operation to run after all other
-	 * vetos have been handled from the `BeforeShutdownEvent`
-	 *
-	 * This method is hidden from the API because it is intended
-	 * to be only used once internally.
-	 */
-	finalVeto(vetoFn: () => boolean | Promise<boolean>, id: string): void;
 }
 
 /**
@@ -63,36 +49,6 @@ export interface BeforeShutdownErrorEvent {
 	 * The error that happened during shutdown handling.
 	 */
 	readonly error: Error;
-}
-
-export enum WillShutdownJoinerOrder {
-
-	/**
-	 * Joiners to run before the `Last` joiners. This is the default order and best for
-	 * most cases. You can be sure that services are still functional at this point.
-	 */
-	Default = 1,
-
-	/**
-	 * The joiners to run last. This should ONLY be used in rare cases when you have no
-	 * dependencies to workbench services or state. The workbench may be in a state where
-	 * resources can no longer be accessed or changed.
-	 */
-	Last
-}
-
-export interface IWillShutdownEventJoiner {
-	readonly id: string;
-	readonly label: string;
-	readonly order?: WillShutdownJoinerOrder;
-}
-
-export interface IWillShutdownEventDefaultJoiner extends IWillShutdownEventJoiner {
-	readonly order?: WillShutdownJoinerOrder.Default;
-}
-
-export interface IWillShutdownEventLastJoiner extends IWillShutdownEventJoiner {
-	readonly order: WillShutdownJoinerOrder.Last;
 }
 
 /**
@@ -115,37 +71,6 @@ export interface WillShutdownEvent {
 	 * shutdown was forced by the user.
 	 */
 	readonly token: CancellationToken;
-
-	/**
-	 * Allows to join the shutdown. The promise can be a long running operation but it
-	 * will block the application from closing.
-	 *
-	 * @param promise the promise to join the shutdown event.
-	 * @param joiner to identify the join operation in case it takes very long or never
-	 * completes.
-	 */
-	join(promise: Promise<void>, joiner: IWillShutdownEventDefaultJoiner): void;
-
-	/**
-	 * Allows to join the shutdown at the end. The promise can be a long running operation but it
-	 * will block the application from closing.
-	 *
-	 * @param promiseFn the promise to join the shutdown event.
-	 * @param joiner to identify the join operation in case it takes very long or never
-	 * completes.
-	 */
-	join(promiseFn: (() => Promise<void>), joiner: IWillShutdownEventLastJoiner): void;
-
-	/**
-	 * Allows to access the joiners that have not finished joining this event.
-	 */
-	joiners(): IWillShutdownEventJoiner[];
-
-	/**
-	 * Allows to enforce the shutdown, even when there are
-	 * pending `join` operations to complete.
-	 */
-	force(): void;
 }
 
 export const enum ShutdownReason {
@@ -177,14 +102,6 @@ export const enum StartupKind {
 	ReopenedWindow = 4
 }
 
-export function StartupKindToString(startupKind: StartupKind): string {
-	switch (startupKind) {
-		case StartupKind.NewWindow: return 'NewWindow';
-		case StartupKind.ReloadedWindow: return 'ReloadedWindow';
-		case StartupKind.ReopenedWindow: return 'ReopenedWindow';
-	}
-}
-
 export const enum LifecyclePhase {
 
 	/**
@@ -214,15 +131,6 @@ export const enum LifecyclePhase {
 	 * some time has passed (2-5 seconds).
 	 */
 	Eventually = 4
-}
-
-export function LifecyclePhaseToString(phase: LifecyclePhase): string {
-	switch (phase) {
-		case LifecyclePhase.Starting: return 'Starting';
-		case LifecyclePhase.Ready: return 'Ready';
-		case LifecyclePhase.Restored: return 'Restored';
-		case LifecyclePhase.Eventually: return 'Eventually';
-	}
 }
 
 /**

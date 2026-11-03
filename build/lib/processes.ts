@@ -7,6 +7,7 @@
 
 /** Owns launched process groups, failure propagation and bounded teardown on each host OS. */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { isWindows } from './platform.ts';
 
 export interface LaunchedProcess {
 	readonly child: ChildProcess;
@@ -17,11 +18,17 @@ function asError(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
 }
 
+/**
+ * Signals the process group `pid` leads. A group that is gone is not an error, nor one macOS
+ * refuses with EPERM: it does so when every member has exited and awaits reaping, and the
+ * group's members are this process's own descendants, which it may otherwise signal.
+ */
 function killGroup(pid: number, signal: NodeJS.Signals): void {
 	try {
 		process.kill(-pid, signal);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code !== 'ESRCH' && code !== 'EPERM') {
 			throw error;
 		}
 	}
@@ -43,7 +50,7 @@ export class ProcessRunner {
 		if (this.#closed) {
 			throw new Error('Process runner is closed');
 		}
-		const child = spawn(command, args, { stdio: 'inherit', ...options, detached: process.platform !== 'win32' });
+		const child = spawn(command, args, { stdio: 'inherit', ...options, detached: !isWindows });
 		const result = new Promise<number>((resolve, reject) => {
 			child.once('error', error => {
 				this.#children.delete(child);
@@ -52,7 +59,7 @@ export class ProcessRunner {
 			child.once('exit', (code, signal) => {
 				this.#children.delete(child);
 				try {
-					if (process.platform !== 'win32' && child.pid) {
+					if (!isWindows && child.pid) {
 						killGroup(child.pid, 'SIGKILL');
 					}
 				} catch (error) {
@@ -72,6 +79,32 @@ export class ProcessRunner {
 		return { child, result };
 	}
 
+	/**
+	 * Runs `command` and resolves with what it writes to standard output, once
+	 * its streams have closed. A failure's message carries its standard error.
+	 */
+	public async output(command: string, args: readonly string[], options: SpawnOptions = {}): Promise<string> {
+		const { child, result } = this.start(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+		const stdout: Buffer[] = [];
+		const stderr: Buffer[] = [];
+		child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk));
+		child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
+		const closed = new Promise<void>(resolve => {
+			child.once('close', () => {
+				resolve();
+			});
+		});
+		try {
+			await result;
+		} catch (error) {
+			await closed;
+			const detail = Buffer.concat(stderr).toString('utf8').trim();
+			throw new Error(detail ? `${asError(error).message}: ${detail}` : asError(error).message);
+		}
+		await closed;
+		return Buffer.concat(stdout).toString('utf8');
+	}
+
 	public run(command: string, args: readonly string[], options: SpawnOptions = {}): Promise<number> {
 		return this.start(command, args, options).result;
 	}
@@ -89,7 +122,7 @@ async function terminate(child: ChildProcess, result: Promise<number>): Promise<
 		await result.catch(() => undefined);
 		return;
 	}
-	if (process.platform === 'win32') {
+	if (isWindows) {
 		await new Promise<void>((resolve, reject) => {
 			const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
 			const timer = setTimeout(() => {
@@ -130,4 +163,15 @@ async function terminate(child: ChildProcess, result: Promise<number>): Promise<
 		}
 	}
 	await result.catch(() => undefined);
+}
+
+/** `ProcessRunner.output` for one command, stopped with `signal` if it aborts. */
+export async function processOutput(command: string, args: readonly string[], options: Omit<SpawnOptions, 'signal' | 'stdio'> & { readonly signal?: AbortSignal } = {}): Promise<string> {
+	const { signal, ...spawnOptions } = options;
+	const processes = new ProcessRunner(signal);
+	try {
+		return await processes.output(command, args, spawnOptions);
+	} finally {
+		await processes.stop();
+	}
 }

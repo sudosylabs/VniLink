@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import { MessageChannelMain } from 'electron';
-import type { WebContents } from 'electron';
+import type { MessagePortMain } from 'electron';
 import { randomUUID } from 'node:crypto';
 import type { Event } from '../../../base/common/event.js';
 import { Disposable, toDisposable } from '../../../base/common/lifecycle.js';
@@ -15,7 +15,6 @@ import type { IServerChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { windowIdFromContext } from '../../ipc/electron-main/windowContext.js';
 import type { NativeHostMainService } from '../../native/electron-main/nativeHostMainService.js';
 import type { PermissionsMainService } from '../../permissions/electron-main/permissionsMainService.js';
-import type { WindowsMainService } from '../../windows/electron-main/windowsMainService.js';
 import { isChannelRequest } from '../common/dataChannel.js';
 import { isEngineCommand, type EngineCommand, type EngineReply } from '../common/engine.js';
 import { DATA_CHANNEL_PORT_RESPONSE } from '../common/engineService.js';
@@ -44,6 +43,30 @@ const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	'scheduledSystemActions', 'cancelHostedSystemAction', 'runHostedSystemActionNow',
 ]);
 
+/** A connected pair of ports, as `MessageChannelMain` creates them. */
+export interface PortPair {
+	readonly port1: MessagePortMain;
+	readonly port2: MessagePortMain;
+}
+
+type NavigationListener = (event: Electron.Event, url: string, isInPlace: boolean, isMainFrame: boolean) => void;
+
+/** A window's web contents, as the channel follows its page and sends it ports. */
+export interface IChannelWindowContents {
+	isDestroyed(): boolean;
+	postMessage(channel: string, message: unknown, transfer?: MessagePortMain[]): void;
+	once(event: 'destroyed' | 'render-process-gone', listener: () => void): unknown;
+	on(event: 'did-start-navigation', listener: NavigationListener): unknown;
+	removeListener(event: 'destroyed' | 'render-process-gone', listener: () => void): unknown;
+	removeListener(event: 'did-start-navigation', listener: NavigationListener): unknown;
+}
+
+/** The application windows, as the channel finds them. */
+export interface IChannelWindows {
+	getWindowById(windowId: number): { readonly webContents: IChannelWindowContents } | undefined;
+	getMainWindow(): { readonly id: number } | undefined;
+}
+
 /**
  * Serves engine commands and data channels to windows. Commands are validated
  * here even though the renderer and Rust validate them too, and data channels
@@ -54,9 +77,10 @@ export class EngineChannel extends Disposable implements IServerChannel {
 
 	constructor(
 		private readonly engine: EngineMainService,
-		private readonly windows: WindowsMainService,
+		private readonly windows: IChannelWindows,
 		private readonly nativeHost: NativeHostMainService,
 		private readonly permissions: PermissionsMainService,
+		private readonly createPorts: () => PortPair = () => new MessageChannelMain(),
 	) {
 		super();
 		this._register(toDisposable(() => {
@@ -120,7 +144,7 @@ export class EngineChannel extends Disposable implements IServerChannel {
 			throw new Error('Invalid data channel request');
 		}
 		const owner = this.ownerFor(windowId, window.webContents);
-		const { port1, port2 } = new MessageChannelMain();
+		const { port1, port2 } = this.createPorts();
 		try {
 			this.engine.attachChannel(port1, request, owner);
 			window.webContents.postMessage(DATA_CHANNEL_PORT_RESPONSE, request.requestId, [port2]);
@@ -132,13 +156,13 @@ export class EngineChannel extends Disposable implements IServerChannel {
 	}
 
 	/** Returns the window's channel owner, created on first use and released with the page. */
-	private ownerFor(windowId: number, contents: WebContents): string {
+	private ownerFor(windowId: number, contents: IChannelWindowContents): string {
 		const existing = this.owners.get(windowId);
 		if (existing) {
 			return existing.id;
 		}
 		const id = randomUUID();
-		const navigate = (_event: Electron.Event, _url: string, _inPlace: boolean, mainFrame: boolean): void => {
+		const navigate: NavigationListener = (_event, _url, _inPlace, mainFrame) => {
 			if (mainFrame) {
 				release();
 			}

@@ -76,15 +76,6 @@ export interface ILazyWorkbenchContributionInstantiation {
 
 export type WorkbenchContributionInstantiation = WorkbenchPhase | ILazyWorkbenchContributionInstantiation;
 
-function toWorkbenchPhase(phase: LifecyclePhase.Restored | LifecyclePhase.Eventually): WorkbenchPhase.AfterRestored | WorkbenchPhase.Eventually {
-	switch (phase) {
-		case LifecyclePhase.Restored:
-			return WorkbenchPhase.AfterRestored;
-		case LifecyclePhase.Eventually:
-			return WorkbenchPhase.Eventually;
-	}
-}
-
 function toLifecyclePhase(instantiation: WorkbenchPhase): LifecyclePhase {
 	switch (instantiation) {
 		case WorkbenchPhase.BlockStartup:
@@ -101,11 +92,6 @@ function toLifecyclePhase(instantiation: WorkbenchPhase): LifecyclePhase {
 type IWorkbenchContributionSignature<Service extends BrandedService[]> = new (...services: Service) => IWorkbenchContribution;
 
 export interface IWorkbenchContributionsRegistry {
-
-	/**
-	 * @deprecated use `registerWorkbenchContribution2` instead.
-	 */
-	registerWorkbenchContribution<Services extends BrandedService[]>(contribution: IWorkbenchContributionSignature<Services>, phase: LifecyclePhase.Restored | LifecyclePhase.Eventually): void;
 
 	/**
 	 * Starts the registry by providing the required services.
@@ -185,41 +171,6 @@ export class WorkbenchContributionsRegistry extends Disposable implements IWorkb
 				}
 			}
 		}
-	}
-
-	registerWorkbenchContribution(ctor: IConstructorSignature<IWorkbenchContribution>, phase: LifecyclePhase.Restored | LifecyclePhase.Eventually): void {
-		this.registerWorkbenchContribution2(undefined, ctor, toWorkbenchPhase(phase));
-	}
-
-	getWorkbenchContribution<T extends IWorkbenchContribution>(id: string): T {
-		if (this.instancesById.has(id)) {
-			return this.instancesById.get(id) as T;
-		}
-
-		const instantiationService = this.instantiationService;
-		const lifecycleService = this.lifecycleService;
-		const logService = this.logService;
-		if (!instantiationService || !lifecycleService || !logService) {
-			throw new Error(`IWorkbenchContributionsRegistry#getContribution('${id}'): cannot be called before registry started`);
-		}
-
-		const contribution = this.contributionsById.get(id);
-		if (!contribution) {
-			throw new Error(`IWorkbenchContributionsRegistry#getContribution('${id}'): contribution with that identifier is unknown.`);
-		}
-
-		if (lifecycleService.phase < LifecyclePhase.Restored) {
-			logService.warn(`IWorkbenchContributionsRegistry#getContribution('${id}'): contribution instantiated before LifecyclePhase.Restored!`);
-		}
-
-		this.safeCreateContribution(instantiationService, logService, contribution, lifecycleService.phase);
-
-		const instance = this.instancesById.get(id);
-		if (!instance) {
-			throw new Error(`IWorkbenchContributionsRegistry#getContribution('${id}'): failed to create contribution.`);
-		}
-
-		return instance as T;
 	}
 
 	start(accessor: ServicesAccessor): void {
@@ -377,15 +328,5 @@ export class WorkbenchContributionsRegistry extends Disposable implements IWorkb
 export const registerWorkbenchContribution2 = WorkbenchContributionsRegistry.INSTANCE.registerWorkbenchContribution2.bind(WorkbenchContributionsRegistry.INSTANCE) as {
 	<Services extends BrandedService[]>(id: string, ctor: IWorkbenchContributionSignature<Services>, instantiation: WorkbenchContributionInstantiation): void;
 };
-
-/**
- * Provides access to a workbench contribution with a specific identifier.
- * The contribution is created if not yet done.
- *
- * Note: will throw an error if
- * - called too early before the registry has started
- * - no contribution is known for the given identifier
- */
-export const getWorkbenchContribution = WorkbenchContributionsRegistry.INSTANCE.getWorkbenchContribution.bind(WorkbenchContributionsRegistry.INSTANCE);
 
 Registry.add(Extensions.Workbench, WorkbenchContributionsRegistry.INSTANCE);

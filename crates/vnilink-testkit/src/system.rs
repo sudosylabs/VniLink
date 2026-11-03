@@ -7,18 +7,21 @@
 
 //! What the system actions suites share: host operating systems that
 //! record what they are asked to do instead of doing it, one of them shaped
-//! as a scenario needs, and a system service opened as the application
-//! opens one.
+//! as a scenario needs, a system service opened as the application opens
+//! one, and the checks that run a controller's actions ([`check_actions`])
+//! and give privacy back ([`check_giving_back`]).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
+use expect_test::Expect;
 use vnilink::{
-    Error, HostSessionState, HostSystemActions, RemoteSystemService, ServiceKind, SessionInfo,
-    SystemSupport,
+    Error, HostSessionState, HostSystemActions, OperationState, PrivacyState, RemoteSystemService,
+    ServiceKind, SessionInfo, SystemAction, SystemOperation, SystemPolicy, SystemSupport,
 };
 
-use crate::{Engine, Pair};
+use crate::{assert_story, wait_for, Engine, Pair, Traced, DEFAULT_WAIT};
 
 /// Opening services: the System service, beside [`Engine::open_desktop`].
 impl Engine {
@@ -108,34 +111,41 @@ impl HostSystemActions for RecordingSystem {
     }
 }
 
-/// A host sharing its system actions, with `system` as its operating
-/// system when given, and a controller with the system service open.
+/// A host sharing its system actions, and a controller with the System
+/// service open on its services connection.
 pub struct SystemSession {
     pub pair: Pair,
+    pub connection: SessionInfo,
     pub service: RemoteSystemService,
-    pub system: Option<Arc<RecordingSystem>>,
 }
 
 impl SystemSession {
-    pub fn open(system: Option<Arc<RecordingSystem>>) -> Self {
-        let pair = Pair::for_services(&[ServiceKind::System]);
-        if let Some(system) = &system {
-            pair.host
-                .core
-                .set_system_actions(Some(Arc::clone(system) as Arc<dyn HostSystemActions>))
-                .expect("system actions");
+    /// The host's operating system is `system`, and its policy `policy`
+    /// when given, else the engine's own.
+    pub fn open(
+        system: Arc<dyn HostSystemActions>,
+        policy: Option<SystemPolicy>,
+    ) -> Result<Self, Error> {
+        let pair = sharing(system)?;
+        if let Some(policy) = policy {
+            pair.host.core.set_system_policy(policy)?;
         }
-        let connection = pair.connect_services();
-        let service = pair
-            .controller
-            .open_system(&connection)
-            .expect("the system service");
-        Self {
+        let connection = pair.controller.connect_services(&pair.host)?;
+        let service = pair.controller.open_system(&connection)?;
+        Ok(Self {
             pair,
+            connection,
             service,
-            system,
-        }
+        })
     }
+}
+
+/// A host sharing its system actions, with `system` as its operating
+/// system, and a controller paired with it.
+pub fn sharing(system: Arc<dyn HostSystemActions>) -> Result<Pair, Error> {
+    let pair = Pair::for_services(&[ServiceKind::System]);
+    pair.host.core.set_system_actions(Some(system))?;
+    Ok(pair)
 }
 
 /// One privacy facility of the host, the display or input: whether it is
@@ -352,4 +362,250 @@ impl HostSystemActions for FakeSystem {
     fn session_state(&self) -> HostSessionState {
         self.session.clone()
     }
+}
+
+/// One step of [`check_actions`].
+#[derive(Clone, Copy, Debug)]
+pub enum Step {
+    /// The controller asks for the action, which ends in this state; one
+    /// left `Scheduled` is still counting down its notice.
+    Ask(SystemAction, OperationState),
+    /// The controller cancels the action it asked for last.
+    Cancel,
+    /// The host's policy becomes this.
+    Policy(SystemPolicy),
+    /// The notice the host gives before a restart or shutdown becomes this.
+    Notice(Duration),
+}
+
+/// What a controller asks of a host's System service, in order, and how
+/// the host's operating system answers a lock.
+pub struct Asking<'a> {
+    /// The host's policy when the service opens, else the engine's own.
+    pub policy: Option<SystemPolicy>,
+    /// The host's OS refuses every lock.
+    pub fail_lock: bool,
+    pub steps: &'a [Step],
+}
+
+/// Opens a controller's System service on a host whose OS records each
+/// action, takes `asking`'s steps in order and waits until each action
+/// ends as its step says; asserts that an admitted lock runs at once and
+/// observably while a restart or shutdown waits out its notice, that each
+/// operation is kept as it ended, that the host's OS was asked exactly the
+/// actions that ran, and that the host told the story `expect` of its
+/// system actions. Returns each action's operation as it ended.
+#[track_caller]
+pub fn check_actions(
+    trace: &Traced,
+    asking: Asking<'_>,
+    expect: Expect,
+) -> Result<Vec<SystemOperation>, Box<dyn std::error::Error>> {
+    let system = Arc::new(FakeSystem::full());
+    system.calls().fail_lock = asking.fail_lock;
+    let session = SystemSession::open(system.clone(), asking.policy)?;
+    let (host, service) = (&session.pair.host.core, &session.service);
+    let mut ended: Vec<SystemOperation> = Vec::new();
+    for step in asking.steps {
+        match *step {
+            Step::Ask(action, ends) => {
+                let answer = service.execute(action)?;
+                if matches!(
+                    answer.state,
+                    OperationState::Scheduled | OperationState::Executed
+                ) {
+                    assert_eq!(
+                        answer.state == OperationState::Scheduled,
+                        action != SystemAction::Lock,
+                        "a lock runs at once, a restart or shutdown waits out its notice: {answer:?}"
+                    );
+                    assert_eq!(
+                        answer.completion_observable,
+                        action == SystemAction::Lock,
+                        "only a lock's completion is observable: {answer:?}"
+                    );
+                }
+                let operation = if answer.state == ends {
+                    answer
+                } else {
+                    wait_for(
+                        &format!("the {action:?} to end {ends:?}"),
+                        DEFAULT_WAIT,
+                        || {
+                            let operation = service.operation(answer.id).ok()?;
+                            (operation.state == ends).then_some(operation)
+                        },
+                    )
+                };
+                ended.push(operation);
+            }
+            Step::Cancel => {
+                let last = ended.last_mut().ok_or("an action to cancel")?;
+                let cancelled = service.cancel(last.id)?;
+                assert_eq!(
+                    cancelled.state,
+                    OperationState::Cancelled,
+                    "an action cancelled during its notice is cancelled"
+                );
+                *last = cancelled;
+            }
+            Step::Policy(policy) => host.set_system_policy(policy)?,
+            Step::Notice(notice) => host.set_system_action_notice(notice),
+        }
+    }
+    for operation in &ended {
+        assert_eq!(
+            &service.operation(operation.id)?,
+            operation,
+            "an operation is kept as it ended"
+        );
+    }
+    let ran = |action| {
+        ended
+            .iter()
+            .filter(|operation| {
+                operation.action == action && operation.state == OperationState::Executed
+            })
+            .count()
+    };
+    {
+        let calls = system.calls();
+        assert_eq!(
+            (
+                calls.locks as usize,
+                calls.restarts as usize,
+                calls.shutdowns as usize
+            ),
+            (
+                ran(SystemAction::Lock),
+                ran(SystemAction::Restart),
+                ran(SystemAction::Shutdown)
+            ),
+            "the host's OS is asked exactly the actions that ran"
+        );
+    }
+    let finished = ended
+        .iter()
+        .filter(|operation| {
+            matches!(
+                operation.state,
+                OperationState::Executed | OperationState::Failed
+            )
+        })
+        .count();
+    trace.wait_for_records("system action ended", finished);
+    assert_story(expect, || trace.story(&["system"]));
+    Ok(ended)
+}
+
+/// How the host gives privacy back in [`check_giving_back`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GivingBack {
+    /// The controller closes its System service.
+    Close,
+    /// The host stops sharing its system actions.
+    Withdraw,
+    /// The host's policy stops allowing privacy, which is given back before
+    /// the change returns.
+    Narrow,
+    /// The host's OS backend is removed.
+    RemoveBackend,
+    /// The host's OS backend is replaced by another, which is never asked.
+    ReplaceBackend,
+}
+
+/// Privacy a controller takes on a host, and how the host gives it back.
+pub struct Giving {
+    /// The host's operating system.
+    pub system: FakeSystem,
+    /// Whether the controller hides the host's screen.
+    pub display: bool,
+    /// Whether the controller blocks the host's input.
+    pub input: bool,
+    pub back: GivingBack,
+}
+
+/// Opens a controller's System service on a host whose policy allows
+/// privacy, takes the privacy `giving` asks for and gives it back as
+/// `giving.back` says; asserts that the host reports privacy given back,
+/// that the OS that applied it restricted and restored each facility asked
+/// exactly once and never touched the others, that a replacement backend
+/// is never asked, and that the host told the story `expect` of its
+/// privacy. Returns the session, for what a test asserts after.
+#[track_caller]
+pub fn check_giving_back(
+    trace: &Traced,
+    giving: Giving,
+    expect: Expect,
+) -> Result<SystemSession, Box<dyn std::error::Error>> {
+    let system = Arc::new(giving.system);
+    let session = SystemSession::open(
+        system.clone(),
+        Some(SystemPolicy {
+            allow_privacy: true,
+            ..SystemPolicy::default()
+        }),
+    )?;
+    let host = &session.pair.host.core;
+    let held = session.service.set_privacy(giving.display, giving.input)?;
+    assert_eq!(
+        (held.display_private, held.input_blocked),
+        (giving.display, giving.input),
+        "privacy holds what the controller asked"
+    );
+    let replacement = Arc::new(FakeSystem::full());
+    match giving.back {
+        GivingBack::Close => session.service.close(),
+        GivingBack::Withdraw => host.set_service_sharing(ServiceKind::System, false)?,
+        GivingBack::Narrow => host.set_system_policy(SystemPolicy::default())?,
+        GivingBack::RemoveBackend => host.set_system_actions(None)?,
+        GivingBack::ReplaceBackend => {
+            host.set_system_actions(Some(Arc::clone(&replacement) as Arc<dyn HostSystemActions>))?
+        }
+    }
+    let asked = usize::from(giving.display) + usize::from(giving.input);
+    if giving.back == GivingBack::Narrow {
+        assert_eq!(
+            host.system_privacy()?,
+            PrivacyState::default(),
+            "a narrowed policy gives privacy back before the change returns"
+        );
+    } else {
+        wait_for("privacy to be given back", DEFAULT_WAIT, || {
+            let restores = {
+                let calls = system.calls();
+                calls.display.restores_asked() + calls.input.restores_asked()
+            };
+            (restores >= asked && host.system_privacy().ok()? == PrivacyState::default())
+                .then_some(())
+        });
+    }
+    {
+        let calls = system.calls();
+        for (name, facility, asked) in [
+            ("display", &calls.display, giving.display),
+            ("input", &calls.input, giving.input),
+        ] {
+            let expected = if asked {
+                vec![(true, true), (false, true)]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                facility.calls, expected,
+                "the {name} is restricted and restored once by the backend that applied it, \
+                 and never asked unless privacy wanted it"
+            );
+        }
+    }
+    {
+        let fresh = replacement.calls();
+        assert!(
+            fresh.display.calls.is_empty() && fresh.input.calls.is_empty(),
+            "a replacement backend is never asked to give back privacy it did not apply"
+        );
+    }
+    trace.wait_for_records("privacy restored", 1);
+    assert_story(expect, || trace.story(&["system"]));
+    Ok(session)
 }

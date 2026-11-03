@@ -5,8 +5,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
+import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { hardwareMatrix, type StreamMatrix } from './decoderColour.js';
 import type { CameraChunk, CameraDecoder, CameraDecoderFactory } from './engineCameraStream.js';
+import { IVideoDecoderService } from './videoDecoderService.js';
 
 /** A WebCodecs H.264 decoder for Annex-B pictures, hardware first. */
 class WebCodecsDecoder implements CameraDecoder {
@@ -98,3 +100,18 @@ export const createWebCodecsDecoder: CameraDecoderFactory = async (codec, output
 	}
 	return undefined;
 };
+
+/** Decodes through this window's WebCodecs. */
+class WebCodecsDecoderService implements IVideoDecoderService {
+	declare public readonly _serviceBrand: undefined;
+
+	public createDecoder(codec: string, output: (frame: VideoFrame) => void, error: () => void): Promise<CameraDecoder | undefined> {
+		return createWebCodecsDecoder(codec, output, error);
+	}
+
+	public support(config: VideoDecoderConfig): Promise<StreamMatrix | undefined> {
+		return webCodecsSupport(config);
+	}
+}
+
+registerSingleton(IVideoDecoderService, WebCodecsDecoderService, InstantiationType.Delayed);

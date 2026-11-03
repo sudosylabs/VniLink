@@ -1,15 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from './buffer.js';
 import { URI, UriComponents } from './uri.js';
 import { MarshalledId } from './marshallingIds.js';
-
-export function stringify(obj: unknown): string {
-	return JSON.stringify(obj, replacer);
-}
 
 export function parse(text: string): any {
 	let data = JSON.parse(text);
@@ -19,18 +15,6 @@ export function parse(text: string): any {
 
 export interface MarshalledObject {
 	$mid: MarshalledId;
-}
-
-function replacer(key: string, value: any): any {
-	// URI is done via toJSON-member
-	if (value instanceof RegExp) {
-		return {
-			$mid: MarshalledId.Regexp,
-			source: value.source,
-			flags: value.flags,
-		};
-	}
-	return value;
 }
 
 

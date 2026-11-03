@@ -15,10 +15,6 @@ export abstract class Widget extends Disposable {
 		this._register(dom.addDisposableListener(domNode, dom.EventType.CLICK, (e: MouseEvent) => listener(new StandardMouseEvent(dom.getWindow(domNode), e))));
 	}
 
-	protected onmousedown(domNode: HTMLElement, listener: (e: IMouseEvent) => void): void {
-		this._register(dom.addDisposableListener(domNode, dom.EventType.MOUSE_DOWN, (e: MouseEvent) => listener(new StandardMouseEvent(dom.getWindow(domNode), e))));
-	}
-
 	protected onmouseover(domNode: HTMLElement, listener: (e: IMouseEvent) => void): void {
 		this._register(dom.addDisposableListener(domNode, dom.EventType.MOUSE_OVER, (e: MouseEvent) => listener(new StandardMouseEvent(dom.getWindow(domNode), e))));
 	}
@@ -31,10 +27,6 @@ export abstract class Widget extends Disposable {
 		this._register(dom.addDisposableListener(domNode, dom.EventType.KEY_DOWN, (e: KeyboardEvent) => listener(new StandardKeyboardEvent(e))));
 	}
 
-	protected onkeyup(domNode: HTMLElement, listener: (e: IKeyboardEvent) => void): void {
-		this._register(dom.addDisposableListener(domNode, dom.EventType.KEY_UP, (e: KeyboardEvent) => listener(new StandardKeyboardEvent(e))));
-	}
-
 	protected oninput(domNode: HTMLElement, listener: (e: Event) => void): void {
 		this._register(dom.addDisposableListener(domNode, dom.EventType.INPUT, listener));
 	}
@@ -45,10 +37,6 @@ export abstract class Widget extends Disposable {
 
 	protected onfocus(domNode: HTMLElement, listener: (e: Event) => void): void {
 		this._register(dom.addDisposableListener(domNode, dom.EventType.FOCUS, listener));
-	}
-
-	protected onchange(domNode: HTMLElement, listener: (e: Event) => void): void {
-		this._register(dom.addDisposableListener(domNode, dom.EventType.CHANGE, listener));
 	}
 
 	protected ignoreGesture(domNode: HTMLElement): IDisposable {

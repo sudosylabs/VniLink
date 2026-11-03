@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 class Node<E> {
@@ -91,25 +91,6 @@ export class LinkedList<E> {
 		} else {
 			const res = this._first.element;
 			this._remove(this._first);
-			return res as E;
-		}
-	}
-
-	pop(): E | undefined {
-		if (this._last === Node.Undefined) {
-			return undefined;
-		} else {
-			const res = this._last.element;
-			this._remove(this._last);
-			return res as E;
-		}
-	}
-
-	peek(): E | undefined {
-		if (this._last === Node.Undefined) {
-			return undefined;
-		} else {
-			const res = this._last.element;
 			return res as E;
 		}
 	}

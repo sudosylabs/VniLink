@@ -19,10 +19,3 @@ export function register(id: string, fontCharacter: number | string): ThemeIcon 
 	_codiconFontCharacters[id] = fontCharacter;
 	return { id };
 }
-
-/**
- * Only to be used by the iconRegistry.
- */
-export function getCodiconFontCharacters(): { [id: string]: number } {
-	return _codiconFontCharacters;
-}

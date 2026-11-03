@@ -1,0 +1,152 @@
+[
+  {
+    "path": "src/base/parts/sandbox/electron-browser/electronTypes.ts",
+    "name": "IpcRenderer.on",
+    "reason": "IpcRenderer is passed where a NodeEventEmitter is required"
+  },
+  {
+    "path": "src/base/parts/sandbox/node/electronTypes.ts",
+    "name": "ParentPort.postMessage",
+    "reason": "UtilityNodeJSProcess extends Electron's Process, whose parentPort has it"
+  },
+  {
+    "path": "src/base/parts/sandbox/node/electronTypes.ts",
+    "name": "MessagePortMain.close",
+    "reason": "these ports are passed where Electron's MessagePortMain is required"
+  },
+  {
+    "path": "src/platform/native/common/native.ts",
+    "name": "INativeHostService.maximizeWindow",
+    "reason": "the smoke driver calls the native host channel by method name"
+  },
+  {
+    "path": "src/platform/native/common/native.ts",
+    "name": "INativeHostService.unmaximizeWindow",
+    "reason": "the smoke driver calls the native host channel by method name"
+  },
+  {
+    "path": "src/platform/log/common/log.ts",
+    "name": "NullLogService",
+    "reason": "the logger fake that unit tests give the services they build"
+  },
+  {
+    "path": "src/platform/log/common/log.ts",
+    "name": "NullLogger",
+    "reason": "NullLogService's base"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.warning",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.info",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.close",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleDown",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleLeft",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleRight",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/codiconsLibrary.ts",
+    "name": "codiconsLibrary.triangleUp",
+    "reason": "codiconsDerived registers an icon on it by its id string"
+  },
+  {
+    "path": "src/base/common/lifecycle.ts",
+    "name": "DisposableTracker",
+    "reason": "VS Code's leak tracker: ensureNoDisposablesAreLeakedInTestSuite installs it around every test suite"
+  },
+  {
+    "path": "src/base/common/collections.ts",
+    "name": "groupBy",
+    "reason": "DisposableTracker groups leaked disposables by their creation stack with it"
+  },
+  {
+    "path": "src/base/common/map.ts",
+    "name": "SetMap",
+    "reason": "DisposableTracker indexes each disposable's children with it"
+  },
+  {
+    "path": "src/base/common/path.ts",
+    "name": "join",
+    "reason": "base/test/common/utils.ts toResource builds per-test resource paths with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "compareBy",
+    "reason": "the virtual clock in base/test/common/virtualScheduling orders scheduled tasks with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "tieBreakComparators",
+    "reason": "the virtual clock in base/test/common/virtualScheduling orders tasks due at the same time with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "numberComparator",
+    "reason": "the virtual clock in base/test/common/virtualScheduling compares task times with it"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "Comparator",
+    "reason": "the type of compareBy and tieBreakComparators, which the virtual clock uses"
+  },
+  {
+    "path": "src/base/common/arrays.ts",
+    "name": "CompareResult",
+    "reason": "the result type of Comparator, which the virtual clock uses"
+  },
+  {
+    "path": "src/platform/instantiation/common/instantiationService.ts",
+    "name": "InstantiationService.createChild",
+    "reason": "TestInstantiationService overrides it so a child keeps the test's stubs"
+  },
+  {
+    "path": "src/platform/instantiation/common/strictServiceCollection.ts",
+    "name": "StrictServiceCollection",
+    "reason": "VS Code's instantiation service tests construct it"
+  },
+  {
+    "path": "src/base/common/types.ts",
+    "name": "DeepPartial",
+    "reason": "base/test/common/mock.ts types upcastDeepPartial with it"
+  },
+  {
+    "path": "src/platform/commands/common/commands.ts",
+    "name": "ICommandService.onWillExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
+  },
+  {
+    "path": "src/platform/commands/common/commands.ts",
+    "name": "ICommandService.onDidExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
+  },
+  {
+    "path": "src/workbench/services/commands/commandService.ts",
+    "name": "CommandService.onWillExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
+  },
+  {
+    "path": "src/workbench/services/commands/commandService.ts",
+    "name": "CommandService.onDidExecuteCommand",
+    "reason": "ICommandService is VS Code's contract, copied whole; nothing here listens for commands yet"
+  }
+]

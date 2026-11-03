@@ -432,6 +432,21 @@ impl PairingWindow {
         self.allow_control && !self.expired(now_ms) && self.requests < MAX_CONTROL_REQUESTS
     }
 
+    /// Whether a control request may reach the prompt from the window in
+    /// `slot` at `now_ms`. An expired window closes.
+    fn admit_control(slot: &mut Option<Self>, now_ms: u64) -> bool {
+        if slot
+            .as_ref()
+            .is_some_and(|window| window.admits_control(now_ms))
+        {
+            return true;
+        }
+        if slot.as_ref().is_some_and(|window| window.expired(now_ms)) {
+            *slot = None;
+        }
+        false
+    }
+
     fn count_request(&mut self) {
         self.requests = self.requests.saturating_add(1);
     }

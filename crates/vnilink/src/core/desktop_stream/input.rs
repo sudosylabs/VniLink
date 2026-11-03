@@ -13,6 +13,12 @@ use super::*;
 /// position on the stream.
 pub(super) const POINTER_SETTLE: Duration = Duration::from_millis(50);
 
+/// Whether a pointer position sent `at` has rested long enough by `now`
+/// to be repeated on the stream.
+pub(super) fn pointer_settled(at: std::time::Instant, now: std::time::Instant) -> bool {
+    now.saturating_duration_since(at) >= POINTER_SETTLE
+}
+
 /// Commands the host reads ahead of the one it applies. A burst of pointer
 /// moves is applied as its newest.
 pub(super) const HOST_COMMAND_BATCH: usize = 64;
