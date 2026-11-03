@@ -495,7 +495,19 @@ fn two_desktop_owners_fail_only_the_removed_display() -> TestResult {
           input: input refused kind=pointer reason=another viewer controls this computer service=2
           warn input: input failed reason=the display is not in the current topology session=2
     "#]],
-        || trace.story(&["topology", "input"]),
+        || {
+            // A pointer is repeated on the reliable stream and its datagram
+            // copy can land later, refused again as the first was, or, after
+            // the topology changed, as outdated. Each refusal above was
+            // awaited once; a copy's repeat of a line is left out.
+            let mut seen = std::collections::HashSet::new();
+            let story = trace.story(&["topology", "input"]);
+            story
+                .lines()
+                .filter(|line| seen.insert(line.to_owned()))
+                .map(|line| format!("{line}\n"))
+                .collect::<String>()
+        },
     );
     Ok(())
 }
