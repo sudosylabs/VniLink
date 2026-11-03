@@ -9,14 +9,15 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join, relative } from 'node:path';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { verifyInstallerFiles } from './installers.ts';
 import { packageInventory, verifyReleaseFiles } from './inventory.ts';
+import { checkDesktopIntegration } from './package.linux.ts';
 import { runPackagedApplication } from './packagedApplication.ts';
 import { ProcessRunner } from './processes.ts';
-import { readProduct } from './product.ts';
-import { isMacintosh } from './platform.ts';
+import { readProduct, type Product } from './product.ts';
+import { isLinux, isMacintosh } from './platform.ts';
 
 interface TemporaryEngine {
 	execute(command: string): Promise<string>;
@@ -67,6 +68,11 @@ export async function verifyInstallers(root: string, signal: AbortSignal): Promi
 	const product = await readProduct(root);
 	const directory = join(root, 'dist/installers', `${process.platform}-${process.arch}`);
 	const manifest = await verifyInstallerFiles(directory, product);
+	if (isLinux) {
+		await verifyLinuxPackages(directory, manifest.artifacts.map(file => file.path), product, signal);
+		console.log('Installer checksums and desktop integration passed. Native installation, upgrade and uninstall checks have not been performed by this command.');
+		return;
+	}
 	if (!isMacintosh) {
 		console.log('Installer checksums passed. Native installation, upgrade and uninstall checks have not been performed by this command.');
 		return;
@@ -106,5 +112,32 @@ export async function verifyInstallers(root: string, signal: AbortSignal): Promi
 		} finally {
 			await cleanup.stop();
 		}
+	}
+}
+
+/**
+ * Checks what each Linux package installs for the desktop without installing
+ * it. Both packages carry the one desktop entry electron-builder wrote, so the
+ * Debian package's is read and the RPM's file list is checked against it.
+ */
+async function verifyLinuxPackages(directory: string, artifacts: readonly string[], product: Product, signal: AbortSignal): Promise<void> {
+	const deb = artifacts.find(path => path.endsWith('.deb'));
+	const rpm = artifacts.find(path => path.endsWith('.rpm'));
+	assert(deb && rpm, 'Expected a .deb and an .rpm installer');
+	const processes = new ProcessRunner(signal);
+	const work = await mkdtemp(join(tmpdir(), 'vnilink-package-check-'));
+	try {
+		await processes.run('dpkg-deb', ['-x', join(directory, deb), work]);
+		const entry = await readFile(join(work, 'usr/share/applications', product.platforms.linux.desktopFileName), 'utf8');
+		// Not `packageInventory`: the package links its command to an absolute path under /opt.
+		const debFiles = (await readdir(work, { recursive: true, withFileTypes: true }))
+			.filter(file => !file.isDirectory())
+			.map(file => relative(work, join(file.parentPath, file.name)));
+		checkDesktopIntegration(product, debFiles, entry);
+		const rpmFiles = (await processes.output('rpm', ['-qlp', join(directory, rpm)])).split('\n').map(path => path.replace(/^\//, '')).filter(Boolean);
+		checkDesktopIntegration(product, rpmFiles, entry);
+	} finally {
+		await processes.stop();
+		await rm(work, { recursive: true, force: true });
 	}
 }

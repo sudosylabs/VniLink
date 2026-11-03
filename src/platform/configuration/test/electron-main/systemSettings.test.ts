@@ -10,6 +10,7 @@ import { mkdtemp, readFile, rm, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { product } from '../../../product/common/product.js';
 import { AutostartLoginItem, autostartEntry, SystemSettings } from '../../electron-main/systemSettings.js';
 
 type LoginItem = NonNullable<ConstructorParameters<typeof SystemSettings>[0]>;
@@ -117,6 +118,11 @@ suite('autostartEntry', () => {
 	test('quotes the executable and escapes what the Exec key and its strings treat specially', () => {
 		const entry = autostartEntry('/opt/Vni "Link"/$HOME/50%/a\\b');
 		assert.ok(entry.split('\n').includes(String.raw`Exec="/opt/Vni \\"Link\\"/\\$HOME/50%%/a\\\\b" --hidden`), entry);
+	});
+	test('names the installed icon and window class', () => {
+		const lines = autostartEntry('/opt/VniLink/vnilink').split('\n');
+		assert.ok(lines.includes(`Icon=${product.linux.iconName}`), lines.join('\n'));
+		assert.ok(lines.includes(`StartupWMClass=${product.appId}`), lines.join('\n'));
 	});
 });
 

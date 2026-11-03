@@ -9,7 +9,7 @@ import { app } from 'electron';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isWindows } from '../../base/common/platform.js';
+import { isLinux, isWindows } from '../../base/common/platform.js';
 import { isBuilt } from '../../platform/environment/electron-main/environment.js';
 import { VniLinkApplication } from './app.js';
 import { planLaunch } from './launch.js';
@@ -30,6 +30,10 @@ export class VniLinkMain {
 		app.setName(plan.name);
 		if (plan.appUserModelId !== undefined) {
 			app.setAppUserModelId(plan.appUserModelId);
+		}
+		if (isLinux) {
+			// Electron takes it only before `ready`.
+			app.setDesktopName(plan.desktopName);
 		}
 		const action = plan.action;
 		switch (action.kind) {

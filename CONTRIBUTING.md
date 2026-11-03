@@ -44,6 +44,10 @@ variable with what it does, including the other settings a person may set.
 
 On Ubuntu 23.10 and later, AppArmor stops Chromium's sandbox until a profile
 allows it: run `npm run sandbox:linux` once per checkout (it asks for sudo).
+A Wayland session shows a window's icon, and its portals accept it, only through
+an installed desktop entry: run `npm run desktop:linux` once per checkout to
+install the development Electron's, and `npm run desktop:linux -- --remove` to
+take it away.
 Normal startup on Linux reads its key from the desktop's Secret Service, such
 as GNOME Keyring.
 
