@@ -213,7 +213,9 @@ export class VniLinkApplication extends Disposable {
 				return;
 			}
 			// A macOS application opened from the disk image or Downloads offers to move to Applications, which relaunches it.
-			if (await this.instantiationService.invokeFunction(accessor => accessor.get(IApplicationLocationMainService)).offerAtStartup()) {
+			// A self-check runs a copy wherever it was assembled, with nobody to answer.
+			const location = this.instantiationService.invokeFunction(accessor => accessor.get(IApplicationLocationMainService));
+			if (!this.options.selfCheck && await location.offerAtStartup()) {
 				return;
 			}
 			const window = await this.openWindow();
