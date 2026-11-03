@@ -1,0 +1,153 @@
+/* ---------------------------------------------------------------------------------------------
+ * Copyright (c) 2026 Sudosy Labs. All rights reserved.
+ * Licensed under the GNU Affero General Public License, version 3 only.
+ * See LICENSE in the project root for license information.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * --------------------------------------------------------------------------------------------- */
+
+/*
+ * The welcome is one bounded column centred in the tab, so each step reads
+ * as a page of the window rather than a floating dialog. It scrolls when a
+ * step is taller than a short window.
+ */
+.onboarding {
+	box-sizing: border-box;
+	height: 100%;
+	padding: 48px 24px;
+	overflow-y: auto;
+	background: var(--canvas);
+	color: var(--text);
+}
+
+.onboarding-card {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	max-width: 560px;
+	margin: 0 auto;
+}
+
+.onboarding-progress {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.onboarding-card h1 {
+	margin: 0;
+	font-size: 22px;
+	font-weight: 600;
+}
+
+.onboarding-card h1:focus {
+	outline: none;
+}
+
+.onboarding-card h2 {
+	margin: 8px 0 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.onboarding-body {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	line-height: 1.5;
+}
+
+.onboarding-body p {
+	margin: 0;
+}
+
+.onboarding-choices,
+.onboarding-switches {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface-raised);
+}
+
+.onboarding-choice,
+.onboarding-switch,
+.onboarding-permission {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 14px;
+}
+
+.onboarding-choice {
+	cursor: pointer;
+}
+
+.onboarding-choice + .onboarding-choice,
+.onboarding-switch + .onboarding-switch,
+.onboarding-permission + .onboarding-permission {
+	border-top: 1px solid var(--line);
+}
+
+.onboarding-choice:has(input:checked) {
+	background: var(--selection-surface);
+}
+
+.onboarding-choice input:focus-visible,
+.onboarding-switch input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.onboarding-choice-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.onboarding-choice-help {
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.onboarding-note {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 12px 14px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+}
+
+.onboarding-status {
+	margin: 0;
+	color: var(--status-disconnected);
+}
+
+.onboarding-status:empty {
+	display: none;
+}
+
+.onboarding-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding-top: 8px;
+}
+
+.onboarding-steps {
+	display: flex;
+	gap: 8px;
+}
+
+.onboarding-actions .monaco-button {
+	width: auto;
+	padding: 4px 14px;
+}
+
+.onboarding-actions .monaco-button[hidden] {
+	display: none;
+}

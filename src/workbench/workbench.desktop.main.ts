@@ -21,6 +21,7 @@ import '../platform/engine/electron-browser/dataChannelService.js';
 import '../platform/recording/electron-browser/recordingService.js';
 import '../platform/theme/browser/themeService.js';
 import './services/application/applicationServiceImpl.js';
+import './services/applicationLocation/applicationLocationServiceImpl.js';
 import './services/clipboard/clipboardService.js';
 import './services/commands/commandService.js';
 import './services/configuration/configurationServiceImpl.js';
@@ -66,6 +67,7 @@ import './contrib/camera/camera.contribution.js';
 import './contrib/files/files.contribution.js';
 import './contrib/remoteDesktop/remoteDesktop.contribution.js';
 import './contrib/systemActions/systemActions.contribution.js';
+import './contrib/onboarding/onboarding.contribution.js';
 import './contrib/home/home.contribution.js';
 
 registerWorkbenchContribution2(WorkbenchContextKeysHandler.ID, WorkbenchContextKeysHandler, WorkbenchPhase.BlockStartup);

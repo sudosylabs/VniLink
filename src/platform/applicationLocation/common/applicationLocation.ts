@@ -16,3 +16,7 @@ export const APPLICATION_LOCATION_CHANNEL_NAME = 'applicationLocation';
 export interface ApplicationLocation {
 	readonly movable: boolean;
 }
+
+export function isApplicationLocation(value: unknown): value is ApplicationLocation {
+	return typeof value === 'object' && value !== null && typeof (value as Record<string, unknown>).movable === 'boolean' && Object.keys(value).length === 1;
+}
