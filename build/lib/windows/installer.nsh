@@ -46,23 +46,25 @@
 		${EndIf}
 	!macroend
 
+	# The page's functions are defined where electron-builder inserts the page,
+	# after the Modern UI is included: this file is included before it.
 	!macro customPageAfterChangeDir
 		Page custom VniLinkTasksPage VniLinkTasksLeave
+
+		Function VniLinkTasksPage
+			!insertmacro MUI_HEADER_TEXT "Additional tasks" "Choose what else setup does."
+			nsDialogs::Create 1018
+			Pop $0
+			${NSD_CreateCheckbox} 0 0 100% 12u "Create a desktop shortcut"
+			Pop $VniLinkDesktopCheckbox
+			${NSD_SetState} $VniLinkDesktopCheckbox $VniLinkDesktopShortcut
+			nsDialogs::Show
+		FunctionEnd
+
+		Function VniLinkTasksLeave
+			${NSD_GetState} $VniLinkDesktopCheckbox $VniLinkDesktopShortcut
+		FunctionEnd
 	!macroend
-
-	Function VniLinkTasksPage
-		!insertmacro MUI_HEADER_TEXT "Additional tasks" "Choose what else setup does."
-		nsDialogs::Create 1018
-		Pop $0
-		${NSD_CreateCheckbox} 0 0 100% 12u "Create a desktop shortcut"
-		Pop $VniLinkDesktopCheckbox
-		${NSD_SetState} $VniLinkDesktopCheckbox $VniLinkDesktopShortcut
-		nsDialogs::Show
-	FunctionEnd
-
-	Function VniLinkTasksLeave
-		${NSD_GetState} $VniLinkDesktopCheckbox $VniLinkDesktopShortcut
-	FunctionEnd
 !endif
 
 !macro customUnInstall
