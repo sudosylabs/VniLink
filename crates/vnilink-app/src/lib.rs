@@ -162,12 +162,19 @@ impl VnilinkCore {
         })
     }
 
-    /// Temporary loopback-only fixture; never exposed through the desktop bridge.
+    /// Temporary loopback-only fixture; never exposed through the desktop
+    /// bridge. Paired computers use what it shares without anyone accepting
+    /// them, as a test of services needs.
     #[cfg(feature = "test-support")]
     pub fn create_loopback_for_test() -> Result<Self, FfiError> {
         let core = Core::start(CoreConfig {
             listen: Listen::Loopback,
             ..CoreConfig::default()
+        })
+        .map_err(map_error)?;
+        core.change_sharing_policy(vnilink::SharingPolicyUpdate {
+            unattended: Some(true),
+            ..Default::default()
         })
         .map_err(map_error)?;
         Ok(Self {
@@ -668,6 +675,17 @@ impl VnilinkCore {
 
 #[cfg(test)]
 mod tests;
+
+/// Lets paired computers use what `core` shares without anyone accepting
+/// them, as a test of services needs; admission has its own tests.
+#[cfg(test)]
+pub(crate) fn unattended(core: &VnilinkCore) {
+    core.set_sharing_policy(FfiSharingPolicyUpdate {
+        unattended: Some(true),
+        ..Default::default()
+    })
+    .expect("unattended sharing");
+}
 
 #[cfg(test)]
 mod desktop_tests;

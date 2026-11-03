@@ -27,7 +27,7 @@ import { OnboardingView } from '../../onboardingView.js';
 const nothingShared = Object.fromEntries(sharingSettings.map(key => [key, false])) as OnboardingChoices['sharing'];
 
 const choices = (overrides: Partial<OnboardingChoices>): OnboardingChoices => ({
-	computerName: '', role: 'both', sharing: nothingShared, openAtLogin: false, runInBackground: true, ...overrides,
+	computerName: '', role: 'both', sharing: nothingShared, unattended: false, openAtLogin: false, runInBackground: true, ...overrides,
 });
 
 suite('onboarding model', () => {
@@ -50,9 +50,10 @@ suite('onboarding model', () => {
 			['application.computerName', 'Studio'], ['application.acceptConnections', false],
 		]);
 	});
-	test('a reachable computer saves what it shares and how it stays reachable, except what it cannot change', () => {
+	test('a reachable computer saves what it shares, whether it asks, and how it stays reachable, except what it cannot change', () => {
 		const keys = onboardingSettings(choices({ role: 'reachable' }), key => key !== 'application.openAtLogin').map(([key]) => key);
-		assert.deepStrictEqual(keys, ['application.computerName', 'application.acceptConnections', ...sharingSettings, 'application.runInBackground']);
+		assert.deepStrictEqual(keys, ['application.computerName', 'application.acceptConnections', ...sharingSettings, 'sharing.unattended', 'application.runInBackground']);
+		assert.deepStrictEqual(onboardingSettings(choices({ role: 'reachable', unattended: true }), () => true).find(([key]) => key === 'sharing.unattended'), ['sharing.unattended', true]);
 	});
 });
 

@@ -44,6 +44,9 @@ export function filesOpenFailure(error: unknown): FilesFailure {
 	switch (engineErrorCategory(error) ?? '') {
 		case 'TransferDenied':
 		case 'Unauthorized': return 'turnedOff';
+		case 'Declined':
+		case 'NotAdmitted': return 'declined';
+		case 'Unanswered': return 'unanswered';
 		case 'NoSession':
 		case 'StaleSession': return 'disconnected';
 		default: return 'failed';

@@ -272,7 +272,7 @@ mod tests {
     use std::time::Instant;
 
     fn core() -> VnilinkCore {
-        VnilinkCore {
+        let core = VnilinkCore {
             inner: Arc::new(
                 Core::start(vnilink::CoreConfig {
                     listen: vnilink::Listen::Loopback,
@@ -288,7 +288,9 @@ mod tests {
             previews: Mutex::new(std::collections::HashMap::new()),
             next_preview: std::sync::atomic::AtomicU64::new(1),
             audio_coordinator: Arc::new(crate::audio_native::AudioCoordinator::default()),
-        }
+        };
+        crate::unattended(&core);
+        core
     }
 
     /// Desktop Duplication opens only on an interactive desktop, so this is run

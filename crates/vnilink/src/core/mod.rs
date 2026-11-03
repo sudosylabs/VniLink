@@ -42,6 +42,7 @@ use crate::trust::{Device, Trust};
 use crate::video::HostCapture;
 
 mod activity;
+mod admission;
 #[cfg(feature = "test-probes")]
 mod agent;
 #[cfg(feature = "test-probes")]
@@ -403,6 +404,8 @@ struct State {
     link_refused: std::collections::HashSet<[u8; 32]>,
     /// Paired computers that answered the last link with `Unauthorized`.
     link_unauthorized: std::collections::HashSet<[u8; 32]>,
+    /// Ask-each-time approvals and requests; see `admission.rs`.
+    admission: admission::Admission,
 }
 
 struct PairingWindow {

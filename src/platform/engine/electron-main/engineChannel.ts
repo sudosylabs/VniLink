@@ -39,8 +39,10 @@ const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	'reportNativePermissions',
 	// The engine log's filter follows `diagnostics.engineLog`.
 	'setLogFilter',
-	// A restart or shutdown asked of this computer is answered in the main process's notice.
+	// A restart or shutdown asked of this computer, or a computer asking to
+	// use it, is answered in the main process's notice.
 	'scheduledSystemActions', 'cancelHostedSystemAction', 'runHostedSystemActionNow',
+	'admissionRequests', 'answerAdmissionRequest',
 ]);
 
 /** A connected pair of ports, as `MessageChannelMain` creates them. */

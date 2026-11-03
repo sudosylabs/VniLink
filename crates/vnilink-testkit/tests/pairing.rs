@@ -37,12 +37,11 @@ use expect_test::expect;
 use std::time::Duration;
 
 use vnilink::{
-    CoreEvent, DevicePresence, Error, EventSubscription, OperatingSystem, SessionPhase,
-    SessionRole, SharingPolicy,
+    CoreEvent, DevicePresence, Error, EventSubscription, OperatingSystem, SessionPhase, SessionRole,
 };
 use vnilink_testkit::events::drain;
 use vnilink_testkit::session::wait_closed;
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
+use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT, NOTHING_SHARED};
 
 use support::{ask, Answer, FILE_LIFETIME};
 
@@ -196,12 +195,12 @@ fn a_pairing_file_and_its_digits_pair_both_computers() -> TestResult {
     );
     assert_eq!(
         host.core.sharing_policy()?,
-        SharingPolicy::default(),
+        NOTHING_SHARED,
         "pairing changes no sharing on the host"
     );
     assert_eq!(
         controller.core.sharing_policy()?,
-        SharingPolicy::default(),
+        NOTHING_SHARED,
         "pairing changes no sharing on the controller"
     );
 

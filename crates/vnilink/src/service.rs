@@ -471,6 +471,16 @@ mod startup_tests {
     }
 }
 
+/// A paired computer waiting for the person here to accept it; see
+/// [`crate::Core::admission_requests`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmissionRequest {
+    pub id: u64,
+    pub endpoint_id: String,
+    /// Until the request ends unanswered.
+    pub remaining: std::time::Duration,
+}
+
 /// Installation-wide sharing consent for every paired device. OS consent and
 /// backend availability remain independent checks. Enabling never starts work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -486,6 +496,10 @@ pub struct SharingPolicy {
     pub microphone: bool,
     pub recording: bool,
     pub system_actions: bool,
+    /// Paired computers use what is shared without anyone here accepting.
+    /// Off, the person here is asked when a paired computer starts to use
+    /// this one; see `core/admission.rs`.
+    pub unattended: bool,
 }
 
 impl SharingPolicy {
@@ -523,6 +537,7 @@ impl SharingPolicy {
             self.microphone,
             self.recording,
             self.system_actions,
+            self.unattended,
         ];
         fields
             .into_iter()
@@ -533,7 +548,7 @@ impl SharingPolicy {
     }
 
     pub(crate) fn from_bits(bits: u16) -> Result<Self, crate::Error> {
-        if bits & !1023 != 0 {
+        if bits & !2047 != 0 {
             return Err(crate::Error::CorruptRecord);
         }
         Ok(Self {
@@ -547,6 +562,7 @@ impl SharingPolicy {
             microphone: bits & 128 != 0,
             recording: bits & 256 != 0,
             system_actions: bits & 512 != 0,
+            unattended: bits & 1024 != 0,
         })
     }
 }
@@ -615,6 +631,12 @@ pub struct SharingPolicyUpdate {
         deserialize_with = "sharing_boolean"
     )]
     pub system_actions: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "sharing_boolean"
+    )]
+    pub unattended: Option<bool>,
 }
 
 impl SharingPolicyUpdate {
@@ -648,6 +670,9 @@ impl SharingPolicyUpdate {
         }
         if let Some(value) = self.system_actions {
             policy.system_actions = value;
+        }
+        if let Some(value) = self.unattended {
+            policy.unattended = value;
         }
     }
 }

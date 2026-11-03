@@ -91,7 +91,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 				id: 'sharing',
 				title: nls.localize('sharing.title', 'Sharing with paired computers'),
 				description: nls.localize('sharing.description', 'Applies to every paired computer. Turning something off ends its use right away.'),
-				settings: ['sharing.screen', 'sharing.files', 'sharing.terminal', 'sharing.camera', 'sharing.microphone', 'sharing.systemAudio', 'sharing.clipboard', 'sharing.recording', 'sharing.systemActions'],
+				settings: ['sharing.screen', 'sharing.files', 'sharing.terminal', 'sharing.camera', 'sharing.microphone', 'sharing.systemAudio', 'sharing.clipboard', 'sharing.recording', 'sharing.systemActions', 'sharing.unattended'],
 			},
 			{ id: 'permissions', bare: true, widget: new SyncDescriptor(MachinePermissionsWidget) },
 			{

@@ -7,10 +7,13 @@
 
 //! Services on a connection: how each is attached, admitted, carried across
 //! a redial and closed beside its siblings; the host's consent to share
-//! them; and whether each capability is available.
+//! them and its person's acceptance; and whether each capability is
+//! available.
 
 #[path = "services/admission.rs"]
 mod admission;
+#[path = "services/asking.rs"]
+mod asking;
 #[path = "services/availability.rs"]
 mod availability;
 #[path = "services/closing.rs"]

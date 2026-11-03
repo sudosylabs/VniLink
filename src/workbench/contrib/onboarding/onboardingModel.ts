@@ -20,6 +20,8 @@ export interface OnboardingChoices {
 	readonly computerName: string;
 	readonly role: OnboardingRole;
 	readonly sharing: Readonly<Record<SharingSetting, boolean>>;
+	/** Paired computers use what is shared without the person here accepting them each time. */
+	readonly unattended: boolean;
 	readonly openAtLogin: boolean;
 	readonly runInBackground: boolean;
 }
@@ -68,6 +70,7 @@ export function onboardingSettings(choices: OnboardingChoices, writable: (key: s
 	settings.push(['application.acceptConnections', reachable(choices.role)]);
 	if (reachable(choices.role)) {
 		settings.push(...sharingSettings.map((key): [string, unknown] => [key, choices.sharing[key]]));
+		settings.push(['sharing.unattended', choices.unattended]);
 		settings.push(['application.openAtLogin', choices.openAtLogin], ['application.runInBackground', choices.runInBackground]);
 	}
 	return settings.filter(([key]) => writable(key));

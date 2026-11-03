@@ -84,6 +84,14 @@ pub enum FfiError {
     PairingCheckMismatch,
     #[error("there is no control request waiting")]
     NoControlRequest,
+    #[error("the other computer's owner declined")]
+    Declined,
+    #[error("the other computer's owner has not accepted this computer")]
+    NotAdmitted,
+    #[error("nobody at the other computer answered in time")]
+    Unanswered,
+    #[error("there is no admission request waiting")]
+    NoAdmissionRequest,
 }
 
 pub(crate) fn map_error(error: Error) -> FfiError {
@@ -133,5 +141,9 @@ pub(crate) fn map_error(error: Error) -> FfiError {
         Error::InvalidPairingFile => FfiError::InvalidPairingFile,
         Error::PairingCheckMismatch => FfiError::PairingCheckMismatch,
         Error::NoControlRequest => FfiError::NoControlRequest,
+        Error::Declined => FfiError::Declined,
+        Error::NotAdmitted => FfiError::NotAdmitted,
+        Error::Unanswered => FfiError::Unanswered,
+        Error::NoAdmissionRequest => FfiError::NoAdmissionRequest,
     }
 }

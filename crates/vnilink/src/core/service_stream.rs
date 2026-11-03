@@ -95,8 +95,40 @@ pub(super) fn status(bytes: &[u8]) -> Result<u8, Error> {
         4 => Err(Error::Busy),
         6 => Err(Error::Unauthorized),
         7 => Err(Error::NoSession),
+        super::admission::DECLINED => Err(Error::Declined),
+        super::admission::NOT_ADMITTED => Err(Error::NotAdmitted),
+        super::admission::UNANSWERED => Err(Error::Unanswered),
         _ => Err(Error::IncompatibleVersion),
     }
+}
+
+/// A service kind's byte on the wire.
+pub(super) fn wire_kind(kind: ServiceKind) -> u8 {
+    match kind {
+        ServiceKind::Desktop => 1,
+        ServiceKind::Files => 2,
+        ServiceKind::Terminal => 3,
+        ServiceKind::Camera => 4,
+        ServiceKind::SystemAudio => 5,
+        ServiceKind::Microphone => 6,
+        ServiceKind::System => 7,
+        ServiceKind::ScreenSnapshot => 8,
+    }
+}
+
+/// The service kind a wire byte names, if any.
+pub(super) fn service_kind(kind: u8) -> Option<ServiceKind> {
+    Some(match kind {
+        1 => ServiceKind::Desktop,
+        2 => ServiceKind::Files,
+        3 => ServiceKind::Terminal,
+        4 => ServiceKind::Camera,
+        5 => ServiceKind::SystemAudio,
+        6 => ServiceKind::Microphone,
+        7 => ServiceKind::System,
+        8 => ServiceKind::ScreenSnapshot,
+        _ => return None,
+    })
 }
 
 struct Work {
@@ -707,6 +739,11 @@ impl Drop for HostedGuard {
     fn drop(&mut self) {
         let mut state = lock(&self.shared.state);
         if let Some(mut record) = state.hosted_services.remove(&self.id) {
+            super::admission::service_ended(
+                &mut state,
+                &record.info.peer_id,
+                std::time::Instant::now(),
+            );
             record.stop.send_replace(true);
             if !record.info.phase.finished() {
                 // Backstop for a serve task that ended without an explicit
@@ -977,8 +1014,30 @@ fn refusal(status: u8) -> &'static str {
         3 => "stale session",
         4 => "busy",
         5 => "malformed",
+        super::admission::NOT_ADMITTED => "not admitted",
         _ => "other",
     }
+}
+
+/// Whether a request for one of a service's lists, or to close one of its
+/// sessions, comes from a peer this computer admits now. Its consent switch
+/// is the handler's to check; a stale stamp is an error.
+fn side_request_admitted(
+    shared: &Shared,
+    connection_id: u64,
+    peer: [u8; 32],
+    stamp: SessionStamp,
+) -> Result<bool, Error> {
+    let state = lock(&shared.state);
+    let session = live_session(&state, true, connection_id)?;
+    if session.wire_stamp != stamp || session.peer_key != peer {
+        return Err(Error::StaleSession);
+    }
+    Ok(super::admission::approved(
+        &state,
+        &session.peer_id,
+        std::time::Instant::now(),
+    ))
 }
 
 pub(super) async fn serve(
@@ -1004,24 +1063,26 @@ pub(super) async fn serve(
     );
     let remote_id = u64::from_be_bytes(body[18..26].try_into().unwrap());
     let kind = body[26];
-    let service_kind = match kind {
-        1 => Some(ServiceKind::Desktop),
-        2 => Some(ServiceKind::Files),
-        3 => Some(ServiceKind::Terminal),
-        4 => Some(ServiceKind::Camera),
-        5 => Some(ServiceKind::SystemAudio),
-        6 => Some(ServiceKind::Microphone),
-        7 => Some(ServiceKind::System),
-        8 => Some(ServiceKind::ScreenSnapshot),
-        _ => None,
-    };
+    let service_kind = service_kind(kind);
+    if body[1] == super::admission::ADMIT && remote_id == 0 {
+        return super::admission::serve(
+            shared,
+            connection_id,
+            peer,
+            stamp,
+            kind,
+            send,
+            parent_stop,
+        )
+        .await;
+    }
     if matches!(body[1], 3 | 4) && remote_id == 0 && kind == 3 {
-        {
-            let state = lock(&shared.state);
-            let session = live_session(&state, true, connection_id)?;
-            if session.wire_stamp != stamp || session.peer_key != peer {
-                return Err(Error::StaleSession);
-            }
+        // Listing a computer's terminals is using it; closing one of this
+        // computer's own sessions there is not, and is never refused.
+        let admitted = side_request_admitted(&shared, connection_id, peer, stamp)?;
+        if body[1] == 3 && !admitted {
+            write(&mut send, vec![VERSION, super::admission::NOT_ADMITTED, 0]).await?;
+            return Ok(());
         }
         return super::terminal_stream::registry(
             shared,
@@ -1040,12 +1101,9 @@ pub(super) async fn serve(
         return super::snapshot::probe(shared, connection_id, peer, send, stamp).await;
     }
     if body[1] == 2 && remote_id == 0 && matches!(kind, 4..=6) {
-        {
-            let state = lock(&shared.state);
-            let session = live_session(&state, true, connection_id)?;
-            if session.wire_stamp != stamp || session.peer_key != peer {
-                return Err(Error::StaleSession);
-            }
+        if !side_request_admitted(&shared, connection_id, peer, stamp)? {
+            write(&mut send, vec![VERSION, super::admission::NOT_ADMITTED, 0]).await?;
+            return Ok(());
         }
         return if kind == 4 {
             super::camera_stream::list(shared, peer, send, parent_stop).await
@@ -1077,6 +1135,8 @@ pub(super) async fn serve(
             Err(1)
         } else if !super::service_permissions::admitted(&state, &peer, service_kind.unwrap()) {
             Err(if kind == 2 { 2 } else { 6 })
+        } else if !super::admission::approved(&state, &session.peer_id, std::time::Instant::now()) {
+            Err(super::admission::NOT_ADMITTED)
         } else if kind != 2
             && !(kind == 4 && lock(&shared.camera_factory).is_some())
             && !(matches!(kind, 5 | 6)

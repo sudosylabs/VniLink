@@ -1600,14 +1600,16 @@ mod retry_tests {
     use super::*;
 
     fn core() -> Core {
-        Core::boot(
+        let core = Core::boot(
             crate::core::CoreConfig {
                 listen: crate::core::Listen::Loopback,
                 ..crate::core::CoreConfig::default()
             },
             iroh::RelayMode::Disabled,
         )
-        .unwrap()
+        .unwrap();
+        crate::test_support::unattended(&core);
+        core
     }
 
     /// Failures that may clear are retried with growing pauses while the

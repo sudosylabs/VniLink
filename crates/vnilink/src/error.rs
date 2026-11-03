@@ -89,6 +89,14 @@ pub enum Error {
     PairingCheckMismatch,
     #[error("there is no control request waiting")]
     NoControlRequest,
+    #[error("the other computer's owner declined")]
+    Declined,
+    #[error("the other computer's owner has not accepted this computer")]
+    NotAdmitted,
+    #[error("nobody at the other computer answered in time")]
+    Unanswered,
+    #[error("there is no admission request waiting")]
+    NoAdmissionRequest,
 }
 
 /// Why a disk write failed, as far as a transfer tells the user.
@@ -147,6 +155,10 @@ impl Error {
             Self::InvalidPairingFile => "invalid pairing file",
             Self::PairingCheckMismatch => "pairing check mismatch",
             Self::NoControlRequest => "no control request",
+            Self::Declined => "declined",
+            Self::NotAdmitted => "not admitted",
+            Self::Unanswered => "unanswered",
+            Self::NoAdmissionRequest => "no admission request",
         }
     }
 

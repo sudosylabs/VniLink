@@ -38,7 +38,7 @@ const terminalPolicy = {
 
 const sharingPolicy = {
 	view: false, control: false, clipboard: false, files: false, terminal: false,
-	camera: false, system_audio: false, microphone: false, recording: false, system_actions: false,
+	camera: false, system_audio: false, microphone: false, recording: false, system_actions: false, unattended: false,
 };
 
 const service = { id: '1', connectionId: '2', generation: '3', peer_id: 'peer', kind: 'Desktop', phase: 'Active' };
@@ -188,11 +188,16 @@ suite('isEngineCommand', () => {
 		accepts(isEngineCommand, [
 			['a sharing policy query', { type: 'sharingPolicy' }],
 			['a complete sharing policy', { type: 'setSharingPolicy', policy: sharingPolicy }],
+			['sharing without asking', { type: 'setSharingPolicy', policy: { unattended: true } }],
+			['the computers waiting to be accepted', { type: 'admissionRequests' }],
+			['an answer to one of them', { type: 'answerAdmissionRequest', id: '7', accept: true }],
 		]);
 		refuses(isEngineCommand, [
 			['a sharing policy with a field that is not a boolean', { type: 'setSharingPolicy', policy: { ...sharingPolicy, camera: 'yes' } }],
 			['a sharing policy for one device', { type: 'setSharingPolicy', policy: sharingPolicy, endpointId: 'peer' }],
 			['a sharing policy with an extra field', { type: 'setSharingPolicy', policy: { ...sharingPolicy, extra: true } }],
+			['an answer that is not yes or no', { type: 'answerAdmissionRequest', id: '7', accept: 'later' }],
+			['an answer to a request with a numeric id', { type: 'answerAdmissionRequest', id: 7, accept: false }],
 		]);
 	});
 	suite('availability and diagnostics', () => {
@@ -279,10 +284,13 @@ suite('isEngineReply', () => {
 		accepts(isEngineReply, [
 			['a pairing preview with the largest ids as decimal strings', { type: 'pairingPreview', preview }],
 			['a sharing policy', { type: 'sharingPolicy', policy: sharingPolicy }],
+			['a computer waiting to be accepted', { type: 'admissionRequests', requests: [{ id: '7', endpoint_id: 'peer', remainingMs: 30000 }] }],
 		]);
 		refuses(isEngineReply, [
 			['a pairing preview with a numeric id', { type: 'pairingPreview', preview: { ...preview, id: Number(preview.id) } }],
 			['a device with only an id', { type: 'device', device: { endpoint_id: 'peer' } }],
+			['a sharing policy without its asking switch', { type: 'sharingPolicy', policy: { ...sharingPolicy, unattended: undefined } }],
+			['a waiting computer without its time left', { type: 'admissionRequests', requests: [{ id: '7', endpoint_id: 'peer' }] }],
 		]);
 	});
 	suite('availability', () => {
@@ -356,6 +364,9 @@ suite('isEngineEvent', () => {
 		['a locked host', { type: 'hostLocked', locked: true }],
 		['a presence change', { type: 'presenceChanged', endpoint_id: 'peer', presence: 'notAccepting' }],
 		['an availability change', { type: 'peerAvailabilityChanged', endpoint_id: 'peer' }],
+		['a computer asking to be accepted', { type: 'admissionRequested', id: '7', endpoint_id: 'peer', remainingMs: 30000 }],
+		['its request ending', { type: 'admissionRequestEnded', id: '7' }],
+		['this computer waiting to be accepted', { type: 'admissionWaiting', endpoint_id: 'peer', waiting: true }],
 	]);
 	refuses(isEngineEvent, [
 		['a numeric watch id', { type: 'folderChanged', watch: 4 }],

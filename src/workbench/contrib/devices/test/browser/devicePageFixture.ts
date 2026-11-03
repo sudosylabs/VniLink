@@ -120,6 +120,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public readonly onDidChangeAvailability = this.availabilityChanged.event;
 	private readonly checked = this._register(new Emitter<ControlCheck>());
 	public readonly onDidReceiveControlCheck = this.checked.event;
+	public readonly onDidChangeAwaitingAcceptance = this._register(new Emitter<string>()).event;
 	public devices: readonly DeviceSummary[] = [];
 	/** What each computer reports it allows; a missing entry has not reported. */
 	private readonly reports = new Map<string, RemoteCapabilityStatus[]>();
@@ -238,6 +239,10 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 
 	public incomingPairing(): Promise<ControlRequestInfo | null> {
 		return Promise.resolve(this.incoming);
+	}
+
+	public isAwaitingAcceptance(): boolean {
+		return false;
 	}
 
 	public systemComputerName(): Promise<string | null> {

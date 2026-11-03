@@ -30,6 +30,7 @@ import { HostingMainService, IHostingMainService } from '../../platform/hosting/
 import { electronScreenHostingEnvironment, IScreenHostingMainService, ScreenHostingMainService } from '../../platform/hosting/electron-main/screenHostingMainService.js';
 import { electronTrayEnvironment, ITrayMainService, TrayMainService } from '../../platform/tray/electron-main/trayMainService.js';
 import { ISystemActionNoticeMainService, SystemActionNoticeMainService } from '../../platform/systemActions/electron-main/systemActionNotice.js';
+import { AdmissionNoticeMainService, IAdmissionNoticeMainService } from '../../platform/hosting/electron-main/admissionNotice.js';
 import { traySupported } from '../../platform/tray/electron-main/traySupport.js';
 import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.js';
 import type { ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
@@ -142,6 +143,7 @@ export class VniLinkApplication extends Disposable {
 			[IScreenHostingMainService, new SyncDescriptor(ScreenHostingMainService, [electronScreenHostingEnvironment])],
 			[ITrayMainService, new SyncDescriptor(TrayMainService, [electronTrayEnvironment])],
 			[ISystemActionNoticeMainService, new SyncDescriptor(SystemActionNoticeMainService)],
+			[IAdmissionNoticeMainService, new SyncDescriptor(AdmissionNoticeMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
 			[IInvitationsMainService, new SyncDescriptor(InvitationsMainService, [readInvitation])],
 			[IApplicationLocationMainService, new SyncDescriptor(ApplicationLocationMainService, [electronApplicationLocationEnvironment])],
@@ -198,8 +200,10 @@ export class VniLinkApplication extends Disposable {
 				if (sharesScreen(this.options)) {
 					void accessor.get(IScreenHostingMainService).start();
 				}
-				// A paired computer may ask this one to restart or shut down; its user sees and answers it.
+				// A paired computer may ask this one to restart or shut down, or to
+				// start using it; its user sees and answers it.
 				accessor.get(ISystemActionNoticeMainService).start();
+				accessor.get(IAdmissionNoticeMainService).start();
 			});
 			if (await traySupported()) {
 				this.checkRunning();

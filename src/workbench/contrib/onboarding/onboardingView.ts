@@ -122,6 +122,7 @@ export class OnboardingView extends Disposable implements WorkbenchTab {
 			computerName: typeof value('application.computerName') === 'string' ? String(value('application.computerName')) : '',
 			role: accepts ? 'both' : 'control',
 			sharing: Object.fromEntries(sharingSettings.map(key => [key, value(key) === true])) as Record<SharingSetting, boolean>,
+			unattended: value('sharing.unattended') === true,
 			openAtLogin: value('application.openAtLogin') === true,
 			runInBackground: value('application.runInBackground') !== false,
 		};
@@ -247,13 +248,18 @@ export class OnboardingView extends Disposable implements WorkbenchTab {
 
 	private renderAccess(): void {
 		this.heading.textContent = nls.localize('onboarding.accessTitle', 'What may your paired computers use here?');
-		append(this.body, $('p')).textContent = nls.localize('onboarding.accessText', 'A computer you pair can use what you turn on, without asking each time. Turning something off later ends its use right away.');
+		append(this.body, $('p')).textContent = nls.localize('onboarding.accessText', 'A computer you pair can use what you turn on. Turning something off later ends its use right away.');
 		const list = append(this.body, $('div.onboarding-switches'));
 		for (const key of sharingSettings) {
 			this.renderSwitch(list, key, this.choices.sharing[key], checked => {
 				this.choices = { ...this.choices, sharing: { ...this.choices.sharing, [key]: checked } };
 			});
 		}
+		append(this.body, $('h2')).textContent = nls.localize('onboarding.acceptingTitle', 'Accepting computers');
+		const accepting = append(this.body, $('div.onboarding-switches'));
+		this.renderSwitch(accepting, 'sharing.unattended', this.choices.unattended, checked => {
+			this.choices = { ...this.choices, unattended: checked };
+		});
 		append(this.body, $('h2')).textContent = nls.localize('onboarding.availabilityTitle', 'Staying reachable');
 		const availability = append(this.body, $('div.onboarding-switches'));
 		this.renderSwitch(availability, 'application.openAtLogin', this.choices.openAtLogin, checked => {

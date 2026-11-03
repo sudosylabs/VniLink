@@ -148,6 +148,7 @@ const sharingFields: Readonly<Record<string, readonly (keyof SharingPolicy)[]>> 
 	'sharing.clipboard': ['clipboard'],
 	'sharing.recording': ['recording'],
 	'sharing.systemActions': ['system_actions'],
+	'sharing.unattended': ['unattended'],
 };
 
 const sharing: PolicyBinding = {

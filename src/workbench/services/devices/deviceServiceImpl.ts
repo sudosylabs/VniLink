@@ -24,6 +24,10 @@ export class DeviceService extends Disposable implements IDeviceService {
 	public readonly onDidChangeAvailability = this.availabilityChanged.event;
 	private readonly controlChecked = this._register(new Emitter<ControlCheck>());
 	public readonly onDidReceiveControlCheck = this.controlChecked.event;
+	private readonly awaitingChanged = this._register(new Emitter<string>());
+	public readonly onDidChangeAwaitingAcceptance = this.awaitingChanged.event;
+	/** Devices whose person this computer waits on, as the engine last said. */
+	private readonly awaiting = new Set<string>();
 	private readonly stateChanged = this._register(new Emitter<void>());
 	public readonly onDidChangeState = this.stateChanged.event;
 	private loaded = false;
@@ -211,6 +215,14 @@ export class DeviceService extends Disposable implements IDeviceService {
 				this.availabilityChanged.fire(event.endpoint_id);
 			} else if (event.type === 'controlCheck') {
 				this.controlChecked.fire({ endpointId: event.endpoint_id, check: event.check });
+			} else if (event.type === 'admissionWaiting') {
+				this.setAwaiting(event.endpoint_id, event.waiting);
+			}
+		}
+		// A wait whose end was missed would show forever; the next ask says so again.
+		if (batch.resync) {
+			for (const id of [...this.awaiting]) {
+				this.setAwaiting(id, false);
 			}
 		}
 		if (!(batch.resync || batch.events.some(event => deviceEvents.has(event.type)))) {
@@ -219,6 +231,21 @@ export class DeviceService extends Disposable implements IDeviceService {
 		void this.refresh(this.lifetime.signal).catch(() => {
 			this.markUnknown();
 		});
+	}
+
+	public isAwaitingAcceptance(id: string): boolean {
+		return this.awaiting.has(id);
+	}
+
+	private setAwaiting(id: string, waiting: boolean): void {
+		if (waiting !== this.awaiting.has(id)) {
+			if (waiting) {
+				this.awaiting.add(id);
+			} else {
+				this.awaiting.delete(id);
+			}
+			this.awaitingChanged.fire(id);
+		}
 	}
 
 	private setState(failed: boolean): void {

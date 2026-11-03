@@ -31,13 +31,25 @@ class TestEventWatch {
 	}
 }
 
+/** One ask to be admitted, which a test answers. */
+interface TestAdmission {
+	readonly service: string;
+	readonly sessionId: string;
+	answer(error?: Error): void;
+}
+
 /**
  * The native engine: a test queues events, makes the next read fail and
  * rings the wake the engine rings when an event is waiting. Every command
- * it receives is kept in `commands`.
+ * it receives is kept in `commands`, every ask to be admitted in
+ * `admissions` and every channel opened in `opened`; `steps` has the asks
+ * and the commands in the order they arrived.
  */
 class TestNativeEngine {
 	public readonly commands: EngineCommand[] = [];
+	public readonly admissions: TestAdmission[] = [];
+	public readonly opened: string[] = [];
+	public readonly steps: string[] = [];
 	public readonly queue: EngineEvent[] = [];
 	public readonly watches: TestEventWatch[] = [];
 	public lagged = '0';
@@ -57,9 +69,25 @@ class TestNativeEngine {
 		return watch;
 	}
 
+	public admit(service: string, sessionId: string): Promise<void> {
+		this.steps.push(`admit ${service}`);
+		return new Promise((resolve, reject) => {
+			this.admissions.push({
+				service, sessionId, answer: error => {
+					if (error) {
+						reject(error);
+					} else {
+						resolve();
+					}
+				},
+			});
+		});
+	}
+
 	public execute(json: string): Promise<string> {
 		const command = JSON.parse(json) as EngineCommand;
 		this.commands.push(command);
+		this.steps.push(command.type);
 		switch (command.type) {
 			case 'subscribeEvents':
 				return Promise.resolve(JSON.stringify({ type: 'eventSubscription', subscriptionId: String(++this.subscriptions) }));
@@ -77,7 +105,8 @@ class TestNativeEngine {
 		}
 	}
 
-	public openDataChannel(): Promise<NativeDataChannel> {
+	public openDataChannel(kind: string): Promise<NativeDataChannel> {
+		this.opened.push(kind);
 		return new Promise(() => { /* The channel never opens. */ });
 	}
 
@@ -266,6 +295,41 @@ suite('EngineHost', () => {
 			const host = await openHost();
 			await host.execute({ type: 'shutdown' });
 			await assert.rejects(host.execute({ type: 'snapshot' }), /shutting down/);
+		});
+		test('a command that begins a use of another computer asks to be admitted first', async () => {
+			const host = await openHost();
+			const reply = host.execute({ type: 'remoteTerminalSessions', connectionId: '4', generation: '2' });
+			await settled();
+			assert.deepStrictEqual(native.steps, ['admit Terminal'], 'nothing runs before the answer');
+			native.admissions[0].answer();
+			await reply;
+			assert.deepStrictEqual(native.steps, ['admit Terminal', 'remoteTerminalSessions']);
+			assert.strictEqual(native.admissions[0].sessionId, '4');
+		});
+		test('following up on what was admitted asks nothing', async () => {
+			const host = await openHost();
+			await host.execute({ type: 'cancelSystemAction', sessionId: '4', generation: '2', id: '7' });
+			await host.execute({ type: 'closeRemoteTerminalSession', connectionId: '4', generation: '2', id: 'a' });
+			assert.deepStrictEqual(native.steps, ['cancelSystemAction', 'closeRemoteTerminalSession']);
+		});
+		test('a refused admission fails its command, which never runs', async () => {
+			const host = await openHost();
+			const reply = host.execute({ type: 'systemAction', sessionId: '4', generation: '2', action: 'lock' });
+			await settled();
+			native.admissions[0].answer(new Error('Declined: the other computer\'s owner declined'));
+			await assert.rejects(reply, /^Error: Declined: /);
+			assert.deepStrictEqual(native.steps, ['admit System']);
+		});
+		test('a data channel opens once admitted, and a screenshot asks nothing', async () => {
+			const host = await openHost();
+			const request = (requestId: string, kind: string, media?: object) => ({ type: 'attachDataChannel', owner: 'window', request: { requestId, kind, sessionId: '4', generation: '2', media } });
+			host.handledClientConnection({ data: request('video', 'video'), ports: [new TestPort()] });
+			host.handledClientConnection({ data: request('shot', 'snapshot', { type: 'snapshot', prompt: false, access: false }), ports: [new TestPort()] });
+			await settled();
+			assert.deepStrictEqual([native.steps, native.opened], [['admit Desktop'], ['snapshot']]);
+			native.admissions[0].answer();
+			await settled();
+			assert.deepStrictEqual(native.opened, ['snapshot', 'video']);
 		});
 		test('after shutdown, a data channel is refused and its port closed', async () => {
 			const host = await openHost();

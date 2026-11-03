@@ -45,6 +45,8 @@ function problemMessage(name: string, problem: CameraProblem): string {
 		case 'unavailable': return nls.localize('camera.unavailable', '{0} can\'t open another camera right now.', name);
 		case 'noCamera': return nls.localize('camera.noCamera', '{0} has no camera connected.', name);
 		case 'inUse': return nls.localize('camera.inUse', 'Another computer is watching this camera.');
+		case 'declined': return nls.localize('camera.declined', '{0} didn\'t allow this computer.', name);
+		case 'unanswered': return nls.localize('camera.unanswered', 'Nobody at {0} answered.', name);
 		case 'failed': return nls.localize('camera.failed', 'The camera on {0} didn\'t start.', name);
 		case 'stopped': return nls.localize('camera.stopped', 'The camera on {0} stopped.', name);
 		case 'withdrawn': return nls.localize('camera.withdrawn', '{0} stopped sharing its camera.', name);

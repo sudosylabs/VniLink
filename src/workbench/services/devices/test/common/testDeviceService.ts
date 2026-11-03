@@ -36,10 +36,28 @@ export class TestDeviceService extends Disposable implements IDeviceService {
 	public readonly onDidChangeAvailability = this._register(new Emitter<string>()).event;
 	private readonly controlChecked = this._register(new Emitter<ControlCheck>());
 	public readonly onDidReceiveControlCheck = this.controlChecked.event;
+	private readonly awaitingChanged = this._register(new Emitter<string>());
+	public readonly onDidChangeAwaitingAcceptance = this.awaitingChanged.event;
+	/** Devices whose person this computer waits on; `setAwaiting` changes it as the engine would. */
+	private readonly awaiting = new Set<string>();
 	public readonly calls: TestDeviceCall[] = [];
 	public incoming: ControlRequestInfo | null = null;
 	/** The operating system's name for this computer. */
 	public systemName: string | null = 'workstation';
+
+	public isAwaitingAcceptance(id: string): boolean {
+		return this.awaiting.has(id);
+	}
+
+	/** This computer starts or stops waiting for the person at device `id`. */
+	public setAwaiting(id: string, waiting: boolean): void {
+		if (waiting) {
+			this.awaiting.add(id);
+		} else {
+			this.awaiting.delete(id);
+		}
+		this.awaitingChanged.fire(id);
+	}
 
 	/** Issues an invitation that lasts fifteen minutes from now. */
 	public exportPairingFile = (): Promise<PairingFile> => Promise.resolve({ bytes: [1, 2, 3], check: '042517', expiresAt: Date.now() + 900_000 });

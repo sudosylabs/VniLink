@@ -32,7 +32,7 @@ class EnginePolicies {
 	};
 	public sharing: SharingPolicy = {
 		view: false, control: false, clipboard: true, files: false, terminal: false,
-		camera: false, system_audio: false, microphone: false, recording: false, system_actions: false,
+		camera: false, system_audio: false, microphone: false, recording: false, system_actions: false, unattended: false,
 	};
 	public system: SystemPolicy = { allow_lock: true, allow_restart: false, allow_shutdown: false, allow_privacy: false };
 	public readonly support: SystemSupport = { lock: true, restart: false, shutdown: true, privacy: true };

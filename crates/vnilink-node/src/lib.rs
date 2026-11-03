@@ -421,6 +421,27 @@ impl EventTransfer {
             vnilink_app::FfiEvent::ControlRequested { endpoint_id } => {
                 serde_json::json!({ "type": "controlRequested", "endpoint_id": endpoint_id })
             }
+            vnilink_app::FfiEvent::AdmissionRequested {
+                request_id,
+                endpoint_id,
+                remaining_ms,
+            } => serde_json::json!({
+                "type": "admissionRequested",
+                "id": request_id.to_string(),
+                "endpoint_id": endpoint_id,
+                "remainingMs": remaining_ms,
+            }),
+            vnilink_app::FfiEvent::AdmissionRequestEnded { request_id } => {
+                serde_json::json!({ "type": "admissionRequestEnded", "id": request_id.to_string() })
+            }
+            vnilink_app::FfiEvent::AdmissionWaiting {
+                endpoint_id,
+                waiting,
+            } => serde_json::json!({
+                "type": "admissionWaiting",
+                "endpoint_id": endpoint_id,
+                "waiting": waiting,
+            }),
             vnilink_app::FfiEvent::ControlCheck { endpoint_id, check } => {
                 serde_json::json!({ "type": "controlCheck", "endpoint_id": endpoint_id, "check": check })
             }
@@ -517,6 +538,16 @@ fn keyboard_mode_name(mode: vnilink_app::FfiKeyboardMode) -> &'static str {
     }
 }
 
+/// A paired computer waiting for the person here, as the window reads it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TransferAdmissionRequest {
+    id: String,
+    #[serde(rename = "endpoint_id")]
+    endpoint_id: String,
+    remaining_ms: u64,
+}
+
 fn parse_id(value: &str, what: &str) -> Result<u64> {
     value
         .parse::<u64>()
@@ -591,6 +622,12 @@ enum Call {
     ReleaseEvents {
         #[serde(rename = "subscriptionId")]
         subscription_id: String,
+    },
+    /// Paired computers waiting for the person here to accept them.
+    AdmissionRequests,
+    AnswerAdmissionRequest {
+        id: String,
+        accept: bool,
     },
     SharingPolicy,
     SetSharingPolicy {
@@ -1090,6 +1127,9 @@ enum Reply {
     Events {
         events: Vec<serde_json::Value>,
         lagged: String,
+    },
+    AdmissionRequests {
+        requests: Vec<TransferAdmissionRequest>,
     },
     SharingPolicy {
         policy: TransferSharingPolicy,
@@ -1878,6 +1918,24 @@ impl EngineBridge {
             Call::SharingPolicy => Reply::SharingPolicy {
                 policy: core.sharing_policy().map_err(core_error)?,
             },
+            Call::AdmissionRequests => Reply::AdmissionRequests {
+                requests: core
+                    .admission_requests()
+                    .map_err(core_error)?
+                    .into_iter()
+                    .map(|request| TransferAdmissionRequest {
+                        id: request.id.to_string(),
+                        endpoint_id: request.endpoint_id,
+                        remaining_ms: request.remaining_ms,
+                    })
+                    .collect(),
+            },
+            Call::AnswerAdmissionRequest { id, accept } => {
+                let id = parse_id(id, "Invalid admission request ID")?;
+                core.answer_admission_request(id, *accept)
+                    .map_err(core_error)?;
+                Reply::Done
+            }
             Call::SetSharingPolicy { policy } => {
                 core.set_sharing_policy(*policy).map_err(core_error)?;
                 Reply::Done
@@ -2185,6 +2243,8 @@ impl EngineBridge {
             }
             Call::SharingPolicy
             | Call::SetSharingPolicy { .. }
+            | Call::AdmissionRequests
+            | Call::AnswerAdmissionRequest { .. }
             | Call::SystemPolicy
             | Call::SetSystemPolicy { .. }
             | Call::TerminalPolicy
@@ -2516,7 +2576,8 @@ impl CommandShape {
             | "controllerSessionPaths" => &["type", "sessionId"],
             "pollEvents" => &["type", "subscriptionId", "maxEvents"],
             "releaseEvents" => &["type", "subscriptionId"],
-            "sharingPolicy" => &["type"],
+            "sharingPolicy" | "admissionRequests" => &["type"],
+            "answerAdmissionRequest" => &["type", "id", "accept"],
             "setSharingPolicy" => &["type", "policy"],
             "systemPolicy" => &["type"],
             "setSystemPolicy" => &["type", "policy"],
@@ -2578,6 +2639,10 @@ fn ffi_error_name(error: &FfiError) -> &'static str {
         FfiError::InvalidPairingFile => "InvalidPairingFile",
         FfiError::PairingCheckMismatch => "PairingCheckMismatch",
         FfiError::NoControlRequest => "NoControlRequest",
+        FfiError::Declined => "Declined",
+        FfiError::NotAdmitted => "NotAdmitted",
+        FfiError::Unanswered => "Unanswered",
+        FfiError::NoAdmissionRequest => "NoAdmissionRequest",
     }
 }
 

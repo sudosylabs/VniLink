@@ -26,6 +26,8 @@ export function problemMessage(name: string, problem: DesktopProblem): string {
 		case 'needsPermission': return nls.localize('desktop.needsPermission', '{0} hasn’t allowed VniLink to share its screen.', name);
 		case 'unsupported': return nls.localize('desktop.unsupported', '{0} can’t share its screen.', name);
 		case 'unavailable': return nls.localize('desktop.unavailable', '{0} can’t open its screen right now.', name);
+		case 'declined': return nls.localize('desktop.declined', '{0} didn’t allow this computer.', name);
+		case 'unanswered': return nls.localize('desktop.unanswered', 'Nobody at {0} answered.', name);
 		case 'failed': return nls.localize('desktop.failed', 'The screen of {0} didn’t start.', name);
 		case 'linkLost': return nls.localize('desktop.lost', 'The connection to {0} dropped.', name);
 		case 'relayUnreachable': return nls.localize('desktop.relayUnreachable', 'The relayed connection to {0} dropped.', name);
@@ -48,6 +50,8 @@ export function problemAdvice(name: string, problem: DesktopProblem): string {
 		case 'hostPermission': return nls.localize('desktop.hostPermissionAdvice', 'Someone at {0} needs to allow VniLink to record the screen in its system settings. Then try again.', name);
 		case 'displayGone': return nls.localize('desktop.displayGoneAdvice', 'Try again to show another display.');
 		case 'hostShutdown': return nls.localize('desktop.hostShutdownAdvice', 'Try again once VniLink is open on {0}.', name);
+		case 'unanswered': return nls.localize('desktop.unansweredAdvice', 'Someone at {0} needs to allow this computer. Try again when they’re there.', name);
+		case 'declined':
 		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
 		case 'linkLost': case 'relayUnreachable': case 'peerClosed': case 'hostEncoderFailed': case 'hostCaptureFailed':
 		case 'hostStopped': case 'hostDisconnected': case 'revoked': case 'cantShow':
@@ -76,7 +80,7 @@ export function reconnectReason(name: string, problem: DesktopProblem | undefine
 	switch (problem) {
 		case 'hostEncoderFailed': case 'hostCaptureFailed': case 'peerClosed': return `${problemMessage(name, problem)} ${nls.localize('desktop.reconnectingHost', 'Keys and the pointer stay here until its screen is back.')}`;
 		case 'relayUnreachable': return nls.localize('desktop.reconnectingRelay', 'The relayed connection dropped. Keys and the pointer stay here until it’s back.');
-		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'failed':
+		case 'disconnected': case 'turnedOff': case 'needsPermission': case 'unsupported': case 'unavailable': case 'declined': case 'unanswered': case 'failed':
 		case 'linkLost': case 'hostPermission': case 'displayGone': case 'hostStopped': case 'hostDisconnected': case 'hostShutdown': case 'revoked': case 'cantShow':
 		case undefined:
 			return nls.localize('desktop.reconnectingBody', 'The connection dropped. Keys and the pointer stay here until it’s back.');

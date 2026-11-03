@@ -43,7 +43,7 @@ impl ClipboardWriter for Pasteboard {
     }
 }
 fn core() -> VnilinkCore {
-    VnilinkCore {
+    let core = VnilinkCore {
         inner: Arc::new(
             Core::start(CoreConfig {
                 listen: Listen::Loopback,
@@ -56,7 +56,9 @@ fn core() -> VnilinkCore {
         previews: Mutex::new(HashMap::new()),
         next_preview: AtomicU64::new(1),
         audio_coordinator: Arc::new(audio_native::AudioCoordinator::default()),
-    }
+    };
+    crate::unattended(&core);
+    core
 }
 
 fn full_codecs() -> FfiVideoCodecCaps {

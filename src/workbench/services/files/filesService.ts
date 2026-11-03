@@ -14,7 +14,7 @@ import type { FilesPane, FolderLocation } from '../../../platform/state/common/u
 export const IFilesService = createDecorator<IFilesService>('filesService');
 
 /** Why the other computer's files can't be opened. */
-export type FilesFailure = 'turnedOff' | 'needsPermission' | 'unsupported' | 'unavailable' | 'disconnected' | 'failed';
+export type FilesFailure = 'turnedOff' | 'needsPermission' | 'unsupported' | 'unavailable' | 'declined' | 'unanswered' | 'disconnected' | 'failed';
 
 /** One folder's entries, in the engine's order. */
 export interface FilesListing {

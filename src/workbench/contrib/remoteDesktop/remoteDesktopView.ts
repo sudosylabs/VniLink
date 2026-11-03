@@ -19,7 +19,7 @@ import type { DisplayInfo, OperatingSystem } from '../../../platform/engine/comm
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { INativeHostService } from '../../../platform/native/common/native.js';
 import { desktopSwapModifiersKey } from '../../../platform/state/common/uiState.js';
-import type { DeviceSummary } from '../../services/devices/deviceService.js';
+import { IDeviceService, type DeviceSummary } from '../../services/devices/deviceService.js';
 import { INativeRuntimeService } from '../../services/nativeRuntime/nativeRuntimeService.js';
 import { formatElapsed, SessionRecording } from '../../services/recording/sessionRecording.js';
 import { IRemoteDesktopService, type DesktopInput, type DesktopPicture, type DesktopPointer, type DesktopPointerShape, type IDesktopSession } from '../../services/remoteDesktop/remoteDesktopService.js';
@@ -182,6 +182,7 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@IUIStateService private readonly uiState: IUIStateService,
 		@INativeRuntimeService nativeRuntime: INativeRuntimeService,
+		@IDeviceService private readonly devices: IDeviceService,
 	) {
 		super();
 		this.pictureSize = pictureSizeFrom(configurationService.getValue<unknown>('desktop.pictureSize'));
@@ -210,6 +211,12 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.layout();
 		}, getWindow(this.element)));
 		this._register(resize.observe(this.stage));
+		// The other computer's person may be asked first: the overlay says whom it waits for.
+		this._register(this.devices.onDidChangeAwaitingAcceptance(id => {
+			if (id === this.device.id && (this.phase === 'connecting' || this.phase === 'reconnecting')) {
+				this.showState(this.phase);
+			}
+		}));
 		this._register(addDisposableListener(this.stage, EventType.SCROLL, () => {
 			this.showPointer();
 		}));
@@ -939,6 +946,15 @@ export class RemoteDesktopView extends Disposable implements WorkbenchTab {
 			this.reconnectingFor = why;
 		} else if (state === 'connecting') {
 			this.reconnectingFor = undefined;
+		}
+		if (this.devices.isAwaitingAcceptance(this.device.id)) {
+			this.setOverlay(
+				state,
+				nls.localize('desktop.awaiting', 'Waiting for {0} to accept…', name),
+				nls.localize('desktop.awaitingBody', 'Someone at {0} is asked to allow this computer.', name),
+				[{ label: nls.localize('desktop.cancel', 'Cancel'), run: () => void this.tabService.close(this.id) }],
+			);
+			return;
 		}
 		this.setOverlay(
 			state,

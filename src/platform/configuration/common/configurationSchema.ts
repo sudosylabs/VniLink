@@ -532,6 +532,7 @@ registerSettings('sharing', {
 		...sharing('clipboard', nls.localize('sharing.clipboard', 'Clipboard'), nls.localize('sharing.clipboardHelp', 'During remote desktop sessions.')),
 		...sharing('recording', nls.localize('sharing.recording', 'Record desktop sessions')),
 		...sharing('systemActions', nls.localize('sharing.actions', 'System actions'), nls.localize('sharing.actionsHelp', 'Only the actions turned on under Remote actions.')),
+		...sharing('unattended', nls.localize('sharing.unattended', 'Allow access without asking'), nls.localize('sharing.unattendedHelp', 'Paired computers use what’s shared without anyone here accepting them. When off, this computer asks each time one starts.')),
 	},
 });
 

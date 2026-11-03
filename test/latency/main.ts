@@ -265,6 +265,8 @@ async function host(driver: WindowDriver): Promise<void> {
 		await engine(driver, { type: 'setSharingPolicy', policy: ACROSS_SHARING });
 		assertSeenOnly((await engine(driver, { type: 'sharingPolicy' })).policy);
 	}
+	// A run measures the picture, with nobody at the host to accept the viewer.
+	await engine(driver, { type: 'setSharingPolicy', policy: { unattended: true } });
 	await engine(driver, { type: 'acceptInvitation', token: viewer.token });
 	if (across) {
 		assertSeenOnly((await engine(driver, { type: 'sharingPolicy' })).policy);

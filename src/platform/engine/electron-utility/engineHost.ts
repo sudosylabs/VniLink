@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { Emitter } from '../../../base/common/event.js';
 import type { IClientConnectionFilter } from '../../../base/parts/ipc/node/ipc.mp.js';
 import type { MessageEvent } from '../../../base/parts/sandbox/node/electronTypes.js';
+import { channelAdmission, commandAdmission, type Admission } from '../common/admission.js';
 import { isChannelRequest } from '../common/dataChannel.js';
 import { engineErrorCategory, record } from '../common/engine.js';
 import type { EngineEvent } from '../common/engine.js';
@@ -27,6 +28,8 @@ interface NativeEngine {
 	/** Calls `wake` when events are waiting; calls that wait to run merge. */
 	watchEvents(wake: () => void): NativeEventWatch;
 	openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>;
+	/** Resolves once the other computer admits this one to `kind`, which may wait for its person to answer. */
+	admit(kind: string, sessionId: string, generation: string): Promise<void>;
 }
 
 interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(capture?: boolean, screenGrant?: string): Promise<NativeEngine>; }
@@ -118,6 +121,7 @@ export class EngineHost implements IClientConnectionFilter {
 			this.beginShutdown();
 		}
 		try {
+			await this.admit(commandAdmission(command));
 			// Replies are validated by the main-process owner; forward them untouched.
 			return JSON.parse(await this.engine.execute(JSON.stringify(command)));
 		} catch (error) {
@@ -173,11 +177,27 @@ export class EngineHost implements IClientConnectionFilter {
 		});
 		channels.add(channel);
 		const media = request.media ? JSON.stringify(request.media) : undefined;
-		void this.engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, media).then(native => {
+		const engine = this.engine;
+		const open = async (): Promise<NativeDataChannel> => {
+			await this.admit(channelAdmission(request));
+			return engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, media);
+		};
+		void open().then(native => {
 			channel.start(native);
 		}, (error: unknown) => {
 			channel.fail(engineErrorCategory(error));
 		});
+	}
+
+	/**
+	 * Asks the other computer to admit this one before a use of it begins.
+	 * Its person may be asked, so this can wait for as long as they take;
+	 * nothing else waits on it meanwhile.
+	 */
+	private async admit(admission: Admission | undefined): Promise<void> {
+		if (admission && this.engine) {
+			await this.engine.admit(admission.service, admission.sessionId, admission.generation);
+		}
 	}
 
 	private closeChannels(owner: string): void {

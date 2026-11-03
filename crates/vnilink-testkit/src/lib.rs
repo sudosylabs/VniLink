@@ -58,7 +58,8 @@ mod trace;
 mod wait;
 
 pub use engine::{
-    pair_cores, pair_cores_for_control, Engine, Files, Pair, Reach, FILES, SEEN_AND_CONTROLLED,
+    pair_cores, pair_cores_for_control, Engine, Files, Pair, Reach, FILES, NOTHING_SHARED,
+    SEEN_AND_CONTROLLED,
 };
 pub use scratch::{PositionalFs, Scratch, ScratchVolume};
 pub use trace::{assert_story, traced, Story, Traced};

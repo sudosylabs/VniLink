@@ -320,6 +320,7 @@ impl Core {
                 presence: HashMap::new(),
                 link_refused: std::collections::HashSet::new(),
                 link_unauthorized: std::collections::HashSet::new(),
+                admission: Default::default(),
             }),
             desktop: Arc::new(Mutex::new(None)),
             desktop_info: Mutex::new(None),
