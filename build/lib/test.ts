@@ -80,7 +80,11 @@ export async function testLoom(root: string, signal: AbortSignal): Promise<void>
 	}
 }
 
-/** Reproducible Linux validation with a read-only checkout and isolated writable volumes. */
+/**
+ * Reproducible Linux validation with a read-only checkout and isolated writable
+ * volumes. Without a GPU every canvas is shared memory until collected; the unit
+ * suite's peak, about 740 MB, outgrows a smaller `/dev/shm` and the renderer stops.
+ */
 export async function validateLinux(root: string, signal: AbortSignal): Promise<void> {
-	await runContainer(root, signal, { purpose: 'linux', evidence: 'linux-validation', options: ['--shm-size=512m'] });
+	await runContainer(root, signal, { purpose: 'linux', evidence: 'linux-validation', options: ['--shm-size=2g'] });
 }

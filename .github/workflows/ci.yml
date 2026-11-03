@@ -101,8 +101,10 @@ jobs:
     container:
       image: fedora:43@sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42
       # An init reaps orphans, as in the Debian image: the job's own PID 1 keeps
-      # them as zombies, which still answer kill(pid, 0).
-      options: --shm-size=512m --init
+      # them as zombies, which still answer kill(pid, 0). Without a GPU every
+      # canvas is shared memory until collected, and the unit suite's peak
+      # (about 740 MB) outgrows Docker's default, as a desktop's never does.
+      options: --shm-size=2g --init
     env:
       # Root in a container: Electron runs without its sandbox, as in the Debian image.
       VNILINK_TEST_CONTAINER: '1'
