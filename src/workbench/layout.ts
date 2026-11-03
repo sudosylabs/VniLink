@@ -9,8 +9,10 @@ import * as nls from '../nls.js';
 import { $, addDisposableListener, append, EventType, getClientArea, type IDimension } from '../base/browser/dom.js';
 import { mainWindow } from '../base/browser/window.js';
 import { setARIAContainer } from '../base/browser/ui/aria/aria.js';
+import { Button } from '../base/browser/ui/button/button.js';
 import { Emitter, Event } from '../base/common/event.js';
-import { Disposable } from '../base/common/lifecycle.js';
+import { Disposable, DisposableStore } from '../base/common/lifecycle.js';
+import { defaultButtonStyles } from '../platform/theme/browser/defaultStyles.js';
 import type { ILayoutService } from '../platform/layout/browser/layoutService.js';
 import type { Part } from './part.js';
 
@@ -27,7 +29,11 @@ export abstract class Layout extends Disposable implements ILayoutService {
 	private _mainContainerDimension: IDimension;
 	private readonly titlebarContainer: HTMLElement;
 	private readonly workspace: HTMLElement;
-	private readonly notice: HTMLElement;
+	/** The line above the views that `setNotice` fills. */
+	protected readonly notice: HTMLElement;
+	private readonly noticeText: HTMLElement;
+	/** The notice's action button, replaced with each notice. */
+	private readonly noticeAction = this._register(new DisposableStore());
 	private readonly viewsContainer: HTMLElement;
 
 	constructor(protected readonly parent: HTMLElement) {
@@ -36,6 +42,7 @@ export abstract class Layout extends Disposable implements ILayoutService {
 		this.workspace = $('.workspace');
 		this.notice = append(this.workspace, $('.workbench-notice', { role: 'alert' }));
 		this.notice.hidden = true;
+		this.noticeText = append(this.notice, $('span.workbench-notice-text'));
 		this.viewsContainer = append(this.workspace, $('div'));
 		this._mainContainerDimension = getClientArea(parent);
 		this._register(addDisposableListener(mainWindow, EventType.RESIZE, () => {
@@ -77,13 +84,23 @@ export abstract class Layout extends Disposable implements ILayoutService {
 		this.parent.replaceChildren(this.titlebarContainer, this.workspace);
 	}
 
-	/** Shows a message above the views; `undefined` hides it. */
-	protected setNotice(message: string | undefined): void {
+	/** Shows a message above the views, with a button that runs `action`; `undefined` hides it. */
+	protected setNotice(message: string | undefined, action?: { readonly label: string; run(): void }): void {
 		this.notice.hidden = message === undefined;
-		this.notice.textContent = message ?? '';
+		this.noticeText.textContent = message ?? '';
+		this.noticeAction.clear();
+		this.notice.querySelector('.workbench-notice-action')?.remove();
+		if (message !== undefined && action) {
+			const button = this.noticeAction.add(new Button(append(this.notice, $('.workbench-notice-action')), { ...defaultButtonStyles, secondary: true, title: false }));
+			button.label = action.label;
+			this.noticeAction.add(button.onDidClick(() => {
+				action.run();
+			}));
+		}
 	}
 
 	protected static readonly engineRestartingNotice = nls.localize('workbench.engineRestarting', 'VniLink’s connection service stopped and is starting again.');
 	protected static readonly engineUnavailableNotice = nls.localize('workbench.engineUnavailable', 'VniLink could not start its connection service. Restart the app to try again.');
+	protected static readonly installationUnreadableNotice = nls.localize('workbench.installationUnreadable', 'VniLink can’t read what it saved on this computer, so it can’t connect. Starting fresh sets it up as a new computer.');
 	protected static readonly unexpectedErrorNotice = nls.localize('workbench.actionFailed', 'The action could not be completed. Try again.');
 }

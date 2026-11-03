@@ -23,10 +23,13 @@ export class EngineService extends Disposable implements IEngineService {
 	public readonly onDidChangeRestarting = this.restartingChanged.event;
 	private readonly restartRequiredChanged = this._register(new Emitter<boolean>());
 	public readonly onDidChangeRestartRequired = this.restartRequiredChanged.event;
+	private readonly installationUnreadableChanged = this._register(new Emitter<boolean>());
+	public readonly onDidChangeInstallationUnreadable = this.installationUnreadableChanged.event;
 	public readonly onDidReceiveEvents: Event<EngineEventBatch>;
 	private _available: boolean;
 	private _restartRequired = false;
 	private _restarting = false;
+	private _installationUnreadable = false;
 
 	constructor(
 		available: boolean,
@@ -45,12 +48,18 @@ export class EngineService extends Disposable implements IEngineService {
 		this._register(this.channel.listen<boolean>('onDidChangeRestartRequired')(value => {
 			this.setRestartRequired(value);
 		}));
+		this._register(this.channel.listen<boolean>('onDidChangeInstallationUnreadable')(value => {
+			this.setInstallationUnreadable(value);
+		}));
 		if (available) {
 			this.readRestartRequired();
 		} else {
-			// A window opened while the engine restarts.
+			// A window opened while the engine restarts, or stopped on an unreadable installation.
 			void this.channel.call<boolean>('getRestarting').then(value => {
 				this.setRestarting(value);
+			}, () => { /* Without an answer the window shows the engine as given up. */ });
+			void this.channel.call<boolean>('getInstallationUnreadable').then(value => {
+				this.setInstallationUnreadable(value);
 			}, () => { /* Without an answer the window shows the engine as given up. */ });
 		}
 	}
@@ -72,6 +81,14 @@ export class EngineService extends Disposable implements IEngineService {
 
 	public get restartRequired(): boolean {
 		return this._restartRequired;
+	}
+
+	public get installationUnreadable(): boolean {
+		return this._installationUnreadable;
+	}
+
+	public startFresh(): Promise<void> {
+		return this.channel.call('startFresh');
 	}
 
 	public async execute(command: EngineCommand): Promise<EngineReply> {
@@ -100,6 +117,13 @@ export class EngineService extends Disposable implements IEngineService {
 		if (!this._store.isDisposed && value !== this._restarting) {
 			this._restarting = value;
 			this.restartingChanged.fire(value);
+		}
+	}
+
+	private setInstallationUnreadable(value: boolean): void {
+		if (!this._store.isDisposed && value !== this._installationUnreadable) {
+			this._installationUnreadable = value;
+			this.installationUnreadableChanged.fire(value);
 		}
 	}
 

@@ -96,6 +96,7 @@ export class EngineChannel extends Disposable implements IServerChannel {
 		switch (event) {
 			case 'onDidChangeAvailability': return this.engine.onDidChangeAvailability as Event<T>;
 			case 'onDidChangeRestarting': return this.engine.onDidChangeRestarting as Event<T>;
+			case 'onDidChangeInstallationUnreadable': return this.engine.onDidChangeInstallationUnreadable as Event<T>;
 			case 'onDidChangeRestartRequired': return this.engine.onDidChangeRestartRequired as Event<T>;
 			case 'onDidReceiveEvents': return this.engine.onDidReceiveEvents as Event<T>;
 		}
@@ -107,6 +108,11 @@ export class EngineChannel extends Disposable implements IServerChannel {
 		switch (command) {
 			case 'getAvailability': return this.engine.available as T;
 			case 'getRestarting': return this.engine.isRestarting as T;
+			case 'getInstallationUnreadable': return this.engine.isInstallationUnreadable as T;
+			// Main refuses it unless the engine is stopped on an unreadable installation.
+			case 'startFresh':
+				await this.engine.startFresh();
+				return undefined as T;
 			case 'getRestartRequired': return await this.engine.getRestartRequired() as T;
 			case 'execute': return await this.execute(arg) as T;
 			case 'openDataChannel':

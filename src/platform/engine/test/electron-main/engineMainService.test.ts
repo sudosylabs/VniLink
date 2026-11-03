@@ -94,8 +94,9 @@ class TestLogService extends NullLogService {
 
 suite('EngineMainService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
-	/** Every engine process started, oldest first. */
+	/** Every engine process started, oldest first, and the arguments each was given. */
 	let forks: TestEngineProcess[];
+	let launches: string[][];
 	let answers: Answer[];
 	let log: TestLogService;
 	/** What windows would be told, and when main re-applied its defaults. */
@@ -103,7 +104,8 @@ suite('EngineMainService', () => {
 	function createService(): EngineMainService {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ILogService, log);
-		const service = disposables.add(new EngineMainService(instantiationService.get(ILogService), () => {
+		const service = disposables.add(new EngineMainService(instantiationService.get(ILogService), args => {
+			launches.push([...args]);
 			const process = disposables.add(new TestEngineProcess(answers));
 			forks.push(process);
 			return process;
@@ -148,6 +150,7 @@ suite('EngineMainService', () => {
 	}
 	setup(() => {
 		forks = [];
+		launches = [];
 		answers = [];
 		log = new TestLogService();
 		story = [];
@@ -260,6 +263,49 @@ suite('EngineMainService', () => {
 		await timeout(0);
 		assert.deepStrictEqual(story, ['restarting', 'defaults applied', 'steady', 'available']);
 		assert.strictEqual(service.available, true);
+		await service.stop();
+	}));
+	test('an engine that cannot read its installation is not started again, and windows hear why', () => runWithFakedTimers({}, async () => {
+		const service = createService();
+		const unreadable: boolean[] = [];
+		disposables.add(service.onDidChangeInstallationUnreadable(value => unreadable.push(value)));
+		const started = assert.rejects(service.start(), /CorruptRecord/);
+		newest().refuse('CorruptRecord: the installation record is not valid');
+		await started;
+		await timeout(60_000);
+		assert.deepStrictEqual([forks.length, service.isRestarting, service.isInstallationUnreadable, unreadable], [1, false, true, [true]]);
+		await service.stop();
+	}));
+	test('a restarted engine that cannot read its installation stops there', () => runWithFakedTimers({}, async () => {
+		const service = await startService();
+		newest().crash(1);
+		await timeout(1000);
+		newest().refuse('CorruptRecord: the installation record is not valid');
+		await timeout(60_000);
+		assert.deepStrictEqual([forks.length, service.isRestarting, service.isInstallationUnreadable], [2, false, true]);
+		await service.stop();
+	}));
+	test('starting fresh opens the engine once on a new installation and applies its defaults', () => runWithFakedTimers({}, async () => {
+		const service = createService();
+		const started = assert.rejects(service.start());
+		newest().refuse('CorruptRecord: the installation record is not valid');
+		await started;
+		story.length = 0;
+		const fresh = service.startFresh();
+		assert.deepStrictEqual(launches.at(-1), ['--start-fresh']);
+		newest().ready();
+		await fresh;
+		assert.deepStrictEqual(story, ['restarting', 'defaults applied', 'steady', 'available']);
+		assert.strictEqual(service.isInstallationUnreadable, false);
+		newest().crash(1);
+		await timeout(1000);
+		assert.deepStrictEqual(launches.at(-1), [], 'a later restart opens the installation as it is');
+		await service.stop();
+	}));
+	test('starting fresh is refused while the engine can read its installation', () => runWithFakedTimers({}, async () => {
+		const service = await startService();
+		await assert.rejects(service.startFresh(), /no unreadable installation/);
+		assert.strictEqual(forks.length, 1);
 		await service.stop();
 	}));
 	test('stopping while the engine starts fails the start at once, not at its timeout', () => runWithFakedTimers({}, async () => {

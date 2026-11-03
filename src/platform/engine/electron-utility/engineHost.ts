@@ -32,7 +32,11 @@ interface NativeEngine {
 	admit(kind: string, sessionId: string, generation: string): Promise<void>;
 }
 
-interface Addon { openEngine(): Promise<NativeEngine>; openTemporaryEngine(capture?: boolean, screenGrant?: string): Promise<NativeEngine>; }
+/** `openEngine(true)` sets aside an installation the engine cannot read and opens a new one; a readable one is opened as it is. */
+interface Addon {
+	openEngine(startFresh?: boolean): Promise<NativeEngine>;
+	openTemporaryEngine(capture?: boolean, screenGrant?: string): Promise<NativeEngine>;
+}
 
 function isAddon(value: unknown): value is Addon {
 	return record(value) && typeof value.openEngine === 'function' && typeof value.openTemporaryEngine === 'function';
@@ -92,7 +96,7 @@ export class EngineHost implements IClientConnectionFilter {
 			if (!isAddon(addon)) {
 				throw new Error('Invalid addon');
 			}
-			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine(process.argv.includes('--capture'), screenGrantArgument(process.argv)) : addon.openEngine());
+			this.engine = await (process.argv.includes('--temporary') ? addon.openTemporaryEngine(process.argv.includes('--capture'), screenGrantArgument(process.argv)) : addon.openEngine(process.argv.includes('--start-fresh')));
 			this.port.postMessage({ ready: true });
 		} catch (error) {
 			// Native error strings name the reason only, never secrets, so the main process can log it.

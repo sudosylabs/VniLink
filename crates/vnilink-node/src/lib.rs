@@ -1238,6 +1238,26 @@ pub struct OpenTask {
     /// grant, so a measurement asks once; a persistent engine keeps it in
     /// its installation's private directory.
     screen_grant: Option<std::path::PathBuf>,
+    /// A persistent engine whose installation the store refuses as
+    /// unreadable sets it aside and opens a new one. A readable installation
+    /// is opened as it is: starting fresh never discards one.
+    start_fresh: bool,
+}
+
+/// This computer's installation and where it keeps its grants. With
+/// `start_fresh`, one the store refuses as unreadable is set aside first.
+fn open_installation(
+    start_fresh: bool,
+) -> std::result::Result<(VnilinkCore, std::path::PathBuf, std::path::PathBuf), vnilink_app::FfiError>
+{
+    let open = || {
+        let store = storage::EncryptedInstallationStore::open_production()?;
+        start_log_file(Some(&store.log_folder()));
+        let (screen_grant, screenshot_grant) = (store.screen_grant(), store.screenshot_grant());
+        VnilinkCore::open_persistent(Box::new(store))
+            .map(|core| (core, screen_grant, screenshot_grant))
+    };
+    storage::open_or_start_fresh(start_fresh, open, storage::start_fresh)
 }
 impl Task for OpenTask {
     type Output = OpenedEngine;
@@ -1251,15 +1271,9 @@ impl Task for OpenTask {
                 None,
             )
         } else {
-            let store =
-                storage::EncryptedInstallationStore::open_production().map_err(core_error)?;
-            start_log_file(Some(&store.log_folder()));
-            let (screen_grant, screenshot_grant) = (store.screen_grant(), store.screenshot_grant());
-            (
-                VnilinkCore::open_persistent(Box::new(store)),
-                Some(screen_grant),
-                Some(screenshot_grant),
-            )
+            let (core, screen_grant, screenshot_grant) =
+                open_installation(self.start_fresh).map_err(core_error)?;
+            (Ok(core), Some(screen_grant), Some(screenshot_grant))
         };
         let core = result.map_err(core_error)?;
         let backends = if self.temporary && self.capture {
@@ -1350,13 +1364,16 @@ fn start_log_file(folder: Option<&std::path::Path>) {
     }
 }
 
+/// Opens this computer's installation. `start_fresh` sets aside one the
+/// store refuses as unreadable and opens a new one, as its person chose.
 #[napi]
-pub fn open_engine() -> AsyncTask<OpenTask> {
+pub fn open_engine(start_fresh: Option<bool>) -> AsyncTask<OpenTask> {
     vnilink_log::install();
     AsyncTask::new(OpenTask {
         temporary: false,
         capture: false,
         screen_grant: None,
+        start_fresh: start_fresh.unwrap_or(false),
     })
 }
 // Explicit isolated test/preview mode; never a fallback for unavailable storage.
@@ -1372,6 +1389,7 @@ pub fn open_temporary_engine(
         temporary: true,
         capture: capture.unwrap_or(false),
         screen_grant: screen_grant.map(std::path::PathBuf::from),
+        start_fresh: false,
     })
 }
 

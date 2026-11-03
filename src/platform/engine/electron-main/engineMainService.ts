@@ -18,7 +18,7 @@ import { createDecorator } from '../../instantiation/common/instantiation.js';
 import { ILogService } from '../../log/common/log.js';
 import type { DataChannelRequest } from '../common/dataChannel.js';
 import type { EngineCommand, EngineReply } from '../common/engine.js';
-import { isEngineEvent, isEngineReply, record } from '../common/engine.js';
+import { engineErrorCategory, isEngineEvent, isEngineReply, record } from '../common/engine.js';
 import { ENGINE_HOST_CHANNEL_NAME, ENGINE_HOST_CONNECTION, type EngineEventBatch } from '../common/engineService.js';
 
 export const IEngineMainService = createDecorator<EngineMainService>('engineMainService');
@@ -114,6 +114,13 @@ const maxRestartDelay = 16000;
 const stableAfter = 60_000;
 
 /**
+ * The engine refused this computer's saved installation as unreadable, as
+ * one written by an older build is. Starting it again cannot change that, so
+ * it is not restarted; its person may start fresh instead.
+ */
+class UnreadableInstallationError extends Error { }
+
+/**
  * Owns the engine utility process, its request lanes and its lifetime. An
  * engine that exits on its own is started again with a bounded backoff; the
  * restart handler re-applies what main configured on the first start, and
@@ -131,8 +138,12 @@ export class EngineMainService extends Disposable implements IEngineSettingsServ
 	private readonly restartingChanged = this._register(new Emitter<boolean>());
 	/** Whether the engine stopped on its own and is waiting to be started again. */
 	public readonly onDidChangeRestarting = this.restartingChanged.event;
+	private readonly installationUnreadableChanged = this._register(new Emitter<boolean>());
+	/** Whether the engine is stopped because it could not read this computer's installation. */
+	public readonly onDidChangeInstallationUnreadable = this.installationUnreadableChanged.event;
 	private restartRequired = false;
 	private restarting = false;
+	private installationUnreadable = false;
 	private restartAttempts = 0;
 	private restartTimer: ReturnType<typeof setTimeout> | undefined;
 	private stableTimer: ReturnType<typeof setTimeout> | undefined;
@@ -173,6 +184,11 @@ export class EngineMainService extends Disposable implements IEngineSettingsServ
 		return this.restarting;
 	}
 
+	/** The engine is stopped, not restarting, because this computer's installation could not be read. */
+	public get isInstallationUnreadable(): boolean {
+		return this.installationUnreadable;
+	}
+
 	/**
 	 * Registers what runs on every engine started after the first, before
 	 * windows are told it is available again: the engine begins empty, so the
@@ -197,16 +213,42 @@ export class EngineMainService extends Disposable implements IEngineSettingsServ
 		try {
 			await this.launch();
 		} catch (error) {
-			// A first start that fails is retried like a crash; the restart handler configures the engine that comes up.
-			this.scheduleRestart();
+			// A first start that fails is retried like a crash, unless retrying cannot help; the restart handler
+			// configures the engine that comes up.
+			this.afterFailedStart(error);
 			throw error;
 		}
 		this.markAvailable();
 	}
 
-	/** Forks the engine and resolves once it accepts commands; it stays supervised from then on. */
-	private async launch(): Promise<void> {
-		const child = this.launcher([...this.launchArguments]);
+	/**
+	 * Sets aside the installation the engine could not read and starts it on
+	 * a new one, as its person chose: this computer becomes new to its paired
+	 * computers. Refused unless that is why the engine is stopped; the engine
+	 * itself also keeps an installation it can read.
+	 */
+	public async startFresh(): Promise<void> {
+		if (!this.installationUnreadable || this.closing || this.child) {
+			throw new Error('The engine has no unreadable installation to start fresh from');
+		}
+		this.setInstallationUnreadable(false);
+		this.setRestarting(true);
+		try {
+			await this.launch(['--start-fresh']);
+			this.ready = true;
+			await this.restartHandler?.();
+			this.markAvailable();
+		} catch (error) {
+			this.logService.error('[engine] could not start fresh.', error);
+			this.fail(error instanceof Error ? error : new Error('Engine start failed'));
+			this.afterFailedStart(error);
+			throw error;
+		}
+	}
+
+	/** Forks the engine, with `extra` arguments this once, and resolves once it accepts commands; it stays supervised from then on. */
+	private async launch(extra: readonly string[] = []): Promise<void> {
+		const child = this.launcher([...this.launchArguments, ...extra]);
 		const listeners = this.processListeners.add(new DisposableStore());
 		// A line may arrive in several chunks; each is logged once it is whole, the last when the engine exits.
 		let partial = '';
@@ -256,7 +298,8 @@ export class EngineMainService extends Disposable implements IEngineSettingsServ
 						resolve();
 					} else {
 						const reason = typeof message.error === 'string' ? `: ${message.error}` : '';
-						const error = new Error(`Engine could not open its secure installation${reason}`);
+						const unreadable = typeof message.error === 'string' && engineErrorCategory(new Error(message.error)) === 'CorruptRecord';
+						const error = new (unreadable ? UnreadableInstallationError : Error)(`Engine could not open its secure installation${reason}`);
 						this.fail(error);
 						reject(error);
 					}
@@ -310,6 +353,24 @@ export class EngineMainService extends Disposable implements IEngineSettingsServ
 		}
 	}
 
+	private setInstallationUnreadable(value: boolean): void {
+		if (value !== this.installationUnreadable) {
+			this.installationUnreadable = value;
+			this.installationUnreadableChanged.fire(value);
+		}
+	}
+
+	/** Restarts after a start that failed, unless the installation could not be read, which restarting cannot fix. */
+	private afterFailedStart(error: unknown): void {
+		if (error instanceof UnreadableInstallationError) {
+			this.logService.error('[engine] this computer\'s installation could not be read; it is not started again until its person starts fresh.');
+			this.setRestarting(false);
+			this.setInstallationUnreadable(true);
+			return;
+		}
+		this.scheduleRestart();
+	}
+
 	/** Starts the engine again after a wait that doubles with each failure, until the attempts are spent. */
 	private scheduleRestart(): void {
 		if (this.closing || this.restartTimer) {
@@ -342,7 +403,7 @@ export class EngineMainService extends Disposable implements IEngineSettingsServ
 		} catch (error) {
 			this.logService.error('[engine] could not be started again.', error);
 			this.fail(error instanceof Error ? error : new Error('Engine restart failed'));
-			this.scheduleRestart();
+			this.afterFailedStart(error);
 		}
 	}
 
