@@ -703,6 +703,10 @@ enum Call {
         endpoint_id: String,
         name: String,
     },
+    ComputerName,
+    SetComputerName {
+        name: Option<String>,
+    },
     Disconnect,
     DisconnectSession {
         #[serde(rename = "sessionId")]
@@ -1074,6 +1078,10 @@ enum Reply {
     },
     Hostname {
         hostname: Option<String>,
+    },
+    ComputerName {
+        chosen: Option<String>,
+        system: Option<String>,
     },
     EventSubscription {
         #[serde(rename = "subscriptionId")]
@@ -1780,6 +1788,14 @@ impl EngineBridge {
                     .map_err(core_error)?;
                 Reply::Done
             }
+            Call::ComputerName => {
+                let (chosen, system) = core.computer_name().map_err(core_error)?;
+                Reply::ComputerName { chosen, system }
+            }
+            Call::SetComputerName { name } => {
+                core.set_computer_name(name.clone()).map_err(core_error)?;
+                Reply::Done
+            }
             Call::PeerHostname { endpoint_id } => Reply::Hostname {
                 hostname: core
                     .peer_hostname(endpoint_id.clone())
@@ -2078,6 +2094,8 @@ impl EngineBridge {
             | Call::Revoke { .. }
             | Call::Unpair { .. }
             | Call::SetPeerName { .. }
+            | Call::ComputerName
+            | Call::SetComputerName { .. }
             | Call::PeerHostname { .. } => Self::pairing(&self.core, command),
             Call::ControlRequest
             | Call::ConfirmControlRequest { .. }
@@ -2375,6 +2393,8 @@ impl CommandShape {
             "confirmPairing" => &["type", "previewId", "digits"],
             "revoke" | "unpair" => &["type", "endpointId"],
             "setPeerName" => &["type", "endpointId", "name"],
+            "computerName" => &["type"],
+            "setComputerName" => &["type", "name"],
             "disconnectSession" | "stopHostedPeer" => &["type", "sessionId"],
             "peerAvailability" => &["type", "endpointId"],
             "submitKey" => &["type", "sessionId", "generation", "usage", "down"],

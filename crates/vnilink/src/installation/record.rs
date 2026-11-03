@@ -33,6 +33,14 @@ pub(crate) struct Record {
     pub terminal_policy: crate::terminal::TerminalPolicy,
     pub file_retention_policy: crate::job::FileRetentionPolicy,
     pub system_policy: crate::system::SystemPolicy,
+    pub local: LocalSettings,
+}
+
+/// What this computer chose about itself: the name other computers are told,
+/// or the operating system's when none was chosen.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LocalSettings {
+    pub computer_name: Option<String>,
 }
 
 impl std::fmt::Debug for Record {
@@ -54,6 +62,7 @@ pub(crate) struct Policies<'a> {
     pub power: &'a crate::power::PowerPolicy,
     pub file_resource: &'a crate::job::FileResourcePolicy,
     pub system: &'a crate::system::SystemPolicy,
+    pub local: &'a LocalSettings,
 }
 
 pub(crate) fn encode(
@@ -69,6 +78,7 @@ pub(crate) fn encode(
         power: power_policy,
         file_resource: file_resource_policy,
         system: system_policy,
+        local,
     } = policies;
     let mut body = Vec::new();
     body.extend_from_slice(MAGIC);
@@ -101,6 +111,7 @@ pub(crate) fn encode(
     system_policy.validate()?;
     body.push(system_policy.bits());
     body.extend_from_slice(&trust.sharing.bits().to_be_bytes());
+    write_computer_name(&mut body, local.computer_name.as_deref())?;
     if body.len() + 4 > MAX_RECORD_BYTES {
         return Err(Error::InvalidSetting(
             "installation record field is too long",
@@ -182,6 +193,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
         crate::system::SystemPolicy::from_bits(reader.byte()?).map_err(|_| Error::CorruptRecord)?
     };
     trust.sharing = crate::SharingPolicy::from_bits(reader.u16()?)?;
+    let local = LocalSettings {
+        computer_name: read_computer_name(&mut reader)?,
+    };
     reader.finish()?;
     Ok(Record {
         secret,
@@ -193,7 +207,37 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Record, Error> {
         power_policy,
         file_resource_policy,
         system_policy,
+        local,
     })
+}
+
+/// A chosen name as a length byte and its UTF-8, or a zero length for none;
+/// only a name `clean_hostname` keeps unchanged is written or read.
+fn write_computer_name(out: &mut Vec<u8>, name: Option<&str>) -> Result<(), Error> {
+    match name {
+        None => out.push(0),
+        Some(name) => {
+            if crate::hostname::clean_hostname(name).as_deref() != Some(name) {
+                return Err(Error::InvalidSetting("invalid computer name"));
+            }
+            // A clean name is at most MAX_HOSTNAME_BYTES, which fits the length byte.
+            out.push(name.len() as u8);
+            out.extend_from_slice(name.as_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn read_computer_name(reader: &mut Reader<'_>) -> Result<Option<String>, Error> {
+    let len = usize::from(reader.byte()?);
+    if len == 0 {
+        return Ok(None);
+    }
+    let text = std::str::from_utf8(reader.take(len)?).map_err(|_| Error::CorruptRecord)?;
+    match crate::hostname::clean_hostname(text) {
+        Some(name) if name == text => Ok(Some(name)),
+        _ => Err(Error::CorruptRecord),
+    }
 }
 
 fn write_relay(out: &mut Vec<u8>, relay: &RelaySettings) -> Result<(), Error> {
@@ -608,6 +652,10 @@ mod tests {
     use crate::{OperatingSystem, SharingPolicy};
 
     fn encode(secret: &[u8; 32], trust: &Trust) -> Vec<u8> {
+        encode_with(secret, trust, &LocalSettings::default())
+    }
+
+    fn encode_with(secret: &[u8; 32], trust: &Trust, local: &LocalSettings) -> Vec<u8> {
         super::encode(
             secret,
             &RelaySettings::custom(vec![CustomRelay::new("https://relay.example.com")
@@ -623,6 +671,7 @@ mod tests {
                 power: &crate::power::PowerPolicy::default(),
                 file_resource: &crate::job::FileResourcePolicy::default(),
                 system: &crate::system::SystemPolicy::default(),
+                local,
             },
         )
         .unwrap()
@@ -701,9 +750,58 @@ mod tests {
         }
         let mut invalid = bytes.clone();
         let end = invalid.len();
-        invalid[end - 6] = 0xff;
+        // The high byte of the sharing bits, before the empty name's length and the checksum.
+        invalid[end - 7] = 0xff;
         resign(&mut invalid);
         assert!(matches!(decode(&invalid), Err(Error::CorruptRecord)));
+    }
+
+    #[test]
+    fn the_chosen_computer_name_survives_a_record_round_trip() {
+        let secret = SecretKey::generate().to_bytes();
+        let local = LocalSettings {
+            computer_name: Some("Studio Mac".to_string()),
+        };
+        let bytes = encode_with(&secret, &Trust::default(), &local);
+        assert_eq!(decode(&bytes).unwrap().local, local);
+        assert_eq!(
+            decode(&encode(&secret, &Trust::default())).unwrap().local,
+            LocalSettings::default()
+        );
+    }
+
+    #[test]
+    fn a_computer_name_the_cleaner_would_change_is_neither_written_nor_read() {
+        let secret = SecretKey::generate().to_bytes();
+        let padded = LocalSettings {
+            computer_name: Some(" Studio ".to_string()),
+        };
+        let result = super::encode(
+            &secret,
+            &RelaySettings::Public,
+            &Trust::default(),
+            &ReplayCache::new(),
+            Policies {
+                terminal: &crate::terminal::TerminalPolicy::default(),
+                file_retention: &crate::job::FileRetentionPolicy::default(),
+                power: &crate::power::PowerPolicy::default(),
+                file_resource: &crate::job::FileResourcePolicy::default(),
+                system: &crate::system::SystemPolicy::default(),
+                local: &padded,
+            },
+        );
+        assert!(matches!(result, Err(Error::InvalidSetting(_))));
+        let mut bytes = encode_with(
+            &secret,
+            &Trust::default(),
+            &LocalSettings {
+                computer_name: Some("Studio".to_string()),
+            },
+        );
+        let end = bytes.len();
+        bytes[end - 5] = b'\t';
+        resign(&mut bytes);
+        assert!(matches!(decode(&bytes), Err(Error::CorruptRecord)));
     }
 
     #[test]
@@ -751,6 +849,7 @@ mod tests {
                 power: &crate::power::PowerPolicy::default(),
                 file_resource: &crate::job::FileResourcePolicy::default(),
                 system: &policy,
+                local: &LocalSettings::default(),
             },
         )
         .unwrap();

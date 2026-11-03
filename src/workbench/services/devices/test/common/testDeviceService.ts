@@ -38,6 +38,8 @@ export class TestDeviceService extends Disposable implements IDeviceService {
 	public readonly onDidReceiveControlCheck = this.controlChecked.event;
 	public readonly calls: TestDeviceCall[] = [];
 	public incoming: ControlRequestInfo | null = null;
+	/** The operating system's name for this computer. */
+	public systemName: string | null = 'workstation';
 
 	/** Issues an invitation that lasts fifteen minutes from now. */
 	public exportPairingFile = (): Promise<PairingFile> => Promise.resolve({ bytes: [1, 2, 3], check: '042517', expiresAt: Date.now() + 900_000 });
@@ -50,6 +52,10 @@ export class TestDeviceService extends Disposable implements IDeviceService {
 
 	public incomingPairing(): Promise<ControlRequestInfo | null> {
 		return Promise.resolve(this.incoming);
+	}
+
+	public systemComputerName(): Promise<string | null> {
+		return Promise.resolve(this.systemName);
 	}
 
 	public approvePairing(digits: string): Promise<void> {

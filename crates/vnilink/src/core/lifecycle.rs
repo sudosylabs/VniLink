@@ -96,6 +96,7 @@ impl Core {
             power_policy,
             file_resource_policy,
             system_policy,
+            local,
         ) = match loaded {
             None => (
                 None,
@@ -107,6 +108,7 @@ impl Core {
                 crate::power::PowerPolicy::default(),
                 crate::job::FileResourcePolicy::default(),
                 crate::system::SystemPolicy::default(),
+                installation::LocalSettings::default(),
             ),
             Some(record) => (
                 Some(record.secret),
@@ -118,6 +120,7 @@ impl Core {
                 record.power_policy,
                 record.file_resource_policy,
                 record.system_policy,
+                record.local,
             ),
         };
         let relay_mode = if direct_only {
@@ -140,6 +143,7 @@ impl Core {
                 file_retention_policy,
                 terminal_policy,
                 system_policy,
+                local,
                 trust,
                 replay,
                 record_relay: relay,
@@ -185,6 +189,7 @@ impl Core {
             power_policy,
             file_resource_policy,
             system_policy,
+            local,
         ) = match installed {
             Some(installed) => (
                 installed.trust,
@@ -196,6 +201,7 @@ impl Core {
                 installed.power_policy,
                 installed.file_resource_policy,
                 installed.system_policy,
+                installed.local,
             ),
             None => (
                 Trust::default(),
@@ -207,8 +213,11 @@ impl Core {
                 crate::power::PowerPolicy::default(),
                 crate::job::FileResourcePolicy::default(),
                 crate::system::SystemPolicy::default(),
+                installation::LocalSettings::default(),
             ),
         };
+        // The chosen name is what other computers are told, until it changes.
+        let hostname = local.computer_name.clone();
         let span = crate::trace::engine_span();
         let runtime = {
             thread_local! {
@@ -280,6 +289,7 @@ impl Core {
                 file_retention_policy,
                 terminal_policy,
                 system_policy,
+                local,
                 desktop_quality_default: crate::session::controller_offer(),
                 desktop_codec_default: None,
                 window_decoders: None,
@@ -329,7 +339,7 @@ impl Core {
             system_actions: Mutex::new(None),
             privacy_serial: Mutex::new(()),
             system_notice: Mutex::new(crate::system::SYSTEM_ACTION_NOTICE),
-            hostname: Mutex::new(None),
+            hostname: Mutex::new(hostname),
             terminal_sessions: Mutex::new(HashMap::new()),
             clipboard_available: AtomicBool::new(false),
             session_gate: tokio::sync::Mutex::new(()),
@@ -522,6 +532,7 @@ impl Core {
                     power: &state.power_policy,
                     file_resource: &state.file_resource_policy,
                     system: &state.system_policy,
+                    local: &state.local,
                 },
             )?;
             save_installation(&self.shared, &mut state, store.as_ref(), &bytes)?;

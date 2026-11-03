@@ -103,6 +103,9 @@ suite('isEngineCommand', () => {
 			['a relay without credentials', { type: 'saveCustomRelays', relays: [{ url: 'https://relay.example', authenticated: false, replacementToken: '' }] }],
 			['an authenticated relay with a token', { type: 'saveCustomRelays', relays: [{ url: 'https://relay.example', authenticated: true, replacementToken: 'token' }] }],
 			['a device host name query', { type: 'peerHostname', endpointId: 'peer' }],
+			['a computer name query', { type: 'computerName' }],
+			['a chosen computer name', { type: 'setComputerName', name: 'Studio Mac' }],
+			['going back to the system\'s computer name', { type: 'setComputerName', name: null }],
 			['a controller session\'s paths', { type: 'controllerSessionPaths', sessionId: '1' }],
 			['an event read of 32', { type: 'pollEvents', subscriptionId: '1', maxEvents: 32 }],
 			['releasing an event subscription', { type: 'releaseEvents', subscriptionId: '1' }],
@@ -218,6 +221,9 @@ suite('isEngineCommand', () => {
 			['a native runtime query', { type: 'nativeRuntime' }],
 		]);
 		refuses(isEngineCommand, [
+			['a computer name with a line break', { type: 'setComputerName', name: 'two\nlines' }],
+			['a computer name longer than 128 bytes', { type: 'setComputerName', name: 'é'.repeat(65) }],
+			['an empty computer name, which is no name', { type: 'setComputerName', name: '' }],
 			['a native runtime query for a device', { type: 'nativeRuntime', endpointId: 'unexpected' }],
 			['a camera source named twice', { type: 'setNativeCameraSources', ids: ['one', 'one'] }],
 			['an audio source used as microphone and system sound', { type: 'setNativeAudioSources', microphones: ['one'], system: ['one'] }],
@@ -235,11 +241,14 @@ suite('isEngineReply', () => {
 			['codecs', { type: 'videoCodecs', codecs }],
 			['an unknown host name', { type: 'hostname', hostname: null }],
 			['a host name', { type: 'hostname', hostname: 'peer' }],
+			['a chosen computer name beside the system\'s', { type: 'computerName', chosen: 'Studio Mac', system: 'studio.local' }],
+			['no chosen computer name and no system name', { type: 'computerName', chosen: null, system: null }],
 			['an event subscription', { type: 'eventSubscription', subscriptionId: '3' }],
 			['no events', { type: 'events', events: [], lagged: '0' }],
 			['a known event', { type: 'events', events: [{ type: 'hostingChanged', hosting: true }], lagged: '0' }],
 		]);
 		refuses(isEngineReply, [
+			['a computer name with spaces around it', { type: 'computerName', chosen: ' Studio ', system: null }],
 			['a clipboard owner, since no reply names one,', { type: 'ownerSession', session: null }],
 			['an unknown event', { type: 'events', events: [{ type: 'bogus' }], lagged: '0' }],
 		]);

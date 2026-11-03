@@ -207,6 +207,8 @@ export type EngineCommand =
 	| { type: 'setVideoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'saveCustomRelays'; relays: RelayInput[] }
 	| { type: 'peerHostname'; endpointId: string }
+	| { type: 'computerName' }
+	| { type: 'setComputerName'; name: string | null }
 	| { type: 'controllerSessionPaths'; sessionId: string }
 	| { type: 'pollEvents'; subscriptionId: string; maxEvents: number }
 	| { type: 'releaseEvents'; subscriptionId: string }
@@ -323,6 +325,7 @@ export type EngineReply =
 	| { type: 'capabilities'; capabilities: Capabilities }
 	| { type: 'videoCodecs'; codecs: VideoCodecCaps }
 	| { type: 'hostname'; hostname: string | null }
+	| { type: 'computerName'; chosen: string | null; system: string | null }
 	| { type: 'eventSubscription'; subscriptionId: string }
 	| { type: 'events'; events: EngineEvent[]; lagged: string }
 	| { type: 'sharingPolicy'; policy: SharingPolicy }
@@ -341,6 +344,14 @@ export type EngineReply =
 
 export function record(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The most bytes of UTF-8 a computer's name may take, as the engine keeps it. */
+export const MAX_COMPUTER_NAME_BYTES = 128;
+
+/** A name the engine keeps as given: not padded, no control characters, at most 128 bytes. */
+export function isComputerName(value: unknown): value is string {
+	return typeof value === 'string' && value.length > 0 && value === value.trim() && !/\p{Cc}/u.test(value) && new TextEncoder().encode(value).length <= MAX_COMPUTER_NAME_BYTES;
 }
 
 function text(value: unknown): value is string {
@@ -767,6 +778,8 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 		case 'confirmPairing': keys = ['previewId', 'digits']; valid = decimal(value.previewId) && typeof value.digits === 'string' && /^[0-9]{6}$/.test(value.digits); break;
 		case 'revoke': case 'unpair': keys = ['endpointId']; valid = text(value.endpointId); break;
 		case 'setPeerName': keys = ['endpointId', 'name']; valid = text(value.endpointId) && text(value.name) && value.name.length <= 256; break;
+		case 'computerName': keys = []; valid = true; break;
+		case 'setComputerName': keys = ['name']; valid = value.name === null || isComputerName(value.name); break;
 		case 'disconnect': keys = []; valid = true; break;
 		case 'disconnectSession': case 'stopHostedPeer': keys = ['sessionId']; valid = decimal(value.sessionId); break;
 		case 'setInputDefaults': keys = ['mode', 'swap', 'pointer']; valid = keyboardMode(value.mode) && typeof value.swap === 'boolean' && pointerSettings(value.pointer); break;
@@ -876,6 +889,7 @@ export function isEngineReply(value: unknown): value is EngineReply {
 		case 'capabilities': return capabilities(value.capabilities) && Object.keys(value).length === 2;
 		case 'videoCodecs': return videoCodecs(value.codecs) && Object.keys(value).length === 2;
 		case 'hostname': return (value.hostname === null || text(value.hostname)) && Object.keys(value).length === 2;
+		case 'computerName': return (value.chosen === null || isComputerName(value.chosen)) && (value.system === null || isComputerName(value.system)) && Object.keys(value).length === 3;
 		case 'eventSubscription': return decimal(value.subscriptionId) && Object.keys(value).length === 2;
 		case 'events': return Array.isArray(value.events) && value.events.length <= 256 && value.events.every((item: unknown) => isEngineEvent(item)) && decimal(value.lagged) && Object.keys(value).length === 3;
 		case 'sharingPolicy': return sharingPolicy(value.policy) && Object.keys(value).length === 2;

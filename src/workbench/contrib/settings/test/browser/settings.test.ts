@@ -163,6 +163,27 @@ suite('Settings pages', () => {
 			assert.strictEqual(fixture.configuration.getValue<unknown>('input.pointerSensitivity'), 150);
 		}));
 	});
+	suite('computer name', () => {
+		const name = (page: HTMLElement): HTMLInputElement => element<HTMLInputElement>(page, 'input[data-setting="application.computerName"]');
+		test('an empty name shows the system\'s as its placeholder', async () => {
+			const page = fixture.open('general').element;
+			await settle();
+			assert.deepStrictEqual([name(page).value, name(page).placeholder], ['', 'workstation']);
+		});
+		test('a typed name is saved without the spaces around it, after a pause', () => runWithFakedTimers({}, async () => {
+			const page = fixture.open('general').element;
+			edit(name(page), '  Studio Mac ');
+			await fixture.settleEdit();
+			assert.strictEqual(fixture.configuration.getValue<unknown>('application.computerName'), 'Studio Mac');
+		}));
+		test('clearing the field goes back to the system\'s name', () => runWithFakedTimers({}, async () => {
+			fixture.configuration.set('application.computerName', 'Studio Mac');
+			const page = fixture.open('general').element;
+			edit(name(page), '');
+			await fixture.settleEdit();
+			assert.strictEqual(fixture.configuration.getValue<unknown>('application.computerName'), '');
+		}));
+	});
 	suite('recording', () => {
 		let page: HTMLElement;
 		setup(async () => {

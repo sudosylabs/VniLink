@@ -23,6 +23,7 @@ import { Extensions as SettingExtensions, type ISettingControlsRegistry } from '
 import { SettingsRefresh, type ISettingsPageDescriptor } from './settingsLayout.js';
 import { SettingsPage } from './settingsPage.js';
 import { TerminalShellControl } from './terminalShellControl.js';
+import { ComputerNameControl } from './computerNameControl.js';
 import { ThemeSettingControl } from './themeSettingControl.js';
 
 const controls = Registry.as<ISettingControlsRegistry>(SettingExtensions.SettingControls);
@@ -40,6 +41,8 @@ controls.registerControl('input.pointerSensitivity', PointerSensitivityControl);
 controls.registerControl('recording.directory', RecordingFolderControl);
 
 controls.registerControl('terminal.shell', TerminalShellControl);
+
+controls.registerControl('application.computerName', ComputerNameControl);
 
 for (const key of ['media.camera', 'media.microphone', 'media.systemAudio']) {
 	controls.registerControl(key, MediaSourceControl);
@@ -60,6 +63,7 @@ const pages: readonly ISettingsPageDescriptor[] = [
 		// Start at login is read from the operating system, which can change it too.
 		refresh: SettingsRefresh.Interval,
 		sections: [
+			{ id: 'computer', settings: ['application.computerName'] },
 			{ id: 'availability', settings: ['application.acceptConnections', 'application.openAtLogin', 'application.runInBackground'] },
 			{ id: 'appearance', title: nls.localize('home.appearance', 'Appearance'), settings: ['appearance.theme'] },
 			{ id: 'diagnostics', title: nls.localize('diagnostics.title', 'Diagnostics'), settings: ['diagnostics.engineLog', 'diagnostics.applicationLog'] },

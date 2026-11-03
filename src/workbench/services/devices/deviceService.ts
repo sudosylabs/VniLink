@@ -57,6 +57,8 @@ export interface IDeviceService {
 	/** Fires on the controller with the digits to read out on the host once it is waiting for its owner. */
 	readonly onDidReceiveControlCheck: Event<ControlCheck>;
 	incomingPairing(): Promise<ControlRequestInfo | null>;
+	/** The name the operating system gives this computer, which paired computers see unless another is chosen. */
+	systemComputerName(): Promise<string | null>;
 	approvePairing(digits: string): Promise<void>;
 	rejectPairing(): Promise<void>;
 }

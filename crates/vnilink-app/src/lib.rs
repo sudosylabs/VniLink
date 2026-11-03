@@ -489,6 +489,19 @@ impl VnilinkCore {
         self.inner.peer_hostname(&endpoint_id).map_err(map_error)
     }
 
+    /// The name this computer chose, if any, and the operating system's.
+    pub fn computer_name(&self) -> Result<(Option<String>, Option<String>), FfiError> {
+        let name = self.inner.computer_name().map_err(map_error)?;
+        Ok((name.chosen, name.system))
+    }
+
+    /// Saves the name other computers are told, or with `None` goes back to the operating system's.
+    pub fn set_computer_name(&self, name: Option<String>) -> Result<(), FfiError> {
+        self.inner
+            .set_computer_name(name.as_deref())
+            .map_err(map_error)
+    }
+
     pub fn confirm_control_request(&self, digits: String) -> Result<FfiDeviceInfo, FfiError> {
         self.inner
             .confirm_control_request(&digits)

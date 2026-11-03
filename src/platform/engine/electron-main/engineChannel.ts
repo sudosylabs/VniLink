@@ -32,7 +32,7 @@ const privateCommands: ReadonlySet<EngineCommand['type']> = new Set([
 	// Replacing the identity unpairs every computer; no window asks for it.
 	'resetIdentity',
 	'saveCustomRelays', 'setRelayPublic', 'setRelayCustom',
-	'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setTerminalShell', 'setPowerPolicy',
+	'setComputerName', 'setSharingPolicy', 'setSystemPolicy', 'setTerminalPolicy', 'setTerminalShell', 'setPowerPolicy',
 	'setDesktopCodecDefault', 'setDesktopQualityDefaults', 'setInputDefaults',
 	'setNativeCameraSources', 'setNativeAudioSources', 'setTransferDirectory', 'enableFilesystemAccess',
 	// Only the operating system knows what was granted; main reads it and tells the engine.

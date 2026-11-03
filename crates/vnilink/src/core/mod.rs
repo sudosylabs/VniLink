@@ -355,6 +355,7 @@ struct State {
     file_retention_policy: crate::job::FileRetentionPolicy,
     terminal_policy: crate::terminal::TerminalPolicy,
     system_policy: crate::system::SystemPolicy,
+    local: installation::LocalSettings,
     desktop_quality_default: crate::protocol::Quality,
     desktop_codec_default: Option<crate::VideoCodec>,
     /// Codecs the app's window decodes, when it said; offers keep to them.
@@ -480,6 +481,14 @@ struct PendingControl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlRequest {
     pub endpoint_id: String,
+}
+
+/// What this computer is called: the name it chose, if any, and the
+/// operating system's, if it can be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerName {
+    pub chosen: Option<String>,
+    pub system: Option<String>,
 }
 
 /// The engine's shared state.
@@ -726,6 +735,41 @@ impl Core {
         Ok(())
     }
 
+    /// The name this computer chose and the operating system's, which other
+    /// computers are told when none was chosen.
+    pub fn computer_name(&self) -> Result<ComputerName, Error> {
+        let _engine = self.engine();
+        let chosen = self.alive_state()?.local.computer_name.clone();
+        // Read after the state is released: it starts the `hostname` program.
+        Ok(ComputerName {
+            chosen,
+            system: crate::hostname::local_hostname(),
+        })
+    }
+
+    /// Saves the name other computers are told from now on, or with `None`
+    /// goes back to the operating system's. Paired computers learn it at
+    /// their next connection; a live link keeps the name it was opened with.
+    pub fn set_computer_name(&self, name: Option<&str>) -> Result<(), Error> {
+        let _engine = self.engine();
+        let name = match name {
+            Some(name) => Some(
+                crate::clean_hostname(name)
+                    .ok_or(Error::InvalidSetting("invalid computer name"))?,
+            ),
+            None => None,
+        };
+        let mut state = self.alive_state()?;
+        let previous = state.local.computer_name.clone();
+        state.local.computer_name = name.clone();
+        if let Err(error) = persist(&self.shared, &mut state) {
+            state.local.computer_name = previous;
+            return Err(error);
+        }
+        *lock(&self.shared.hostname) = name;
+        Ok(())
+    }
+
     fn alive_state(&self) -> Result<std::sync::MutexGuard<'_, State>, Error> {
         let mut state = lock(&self.shared.state);
         if LOCK_POISONED.load(Ordering::SeqCst) {
@@ -885,6 +929,7 @@ struct Installed {
     file_retention_policy: crate::job::FileRetentionPolicy,
     terminal_policy: crate::terminal::TerminalPolicy,
     system_policy: crate::system::SystemPolicy,
+    local: installation::LocalSettings,
     trust: Trust,
     replay: ReplayCache,
     record_relay: RelaySettings,
@@ -912,6 +957,7 @@ fn persist(shared: &Shared, state: &mut State) -> Result<(), Error> {
             power: &state.power_policy,
             file_resource: &state.file_resource_policy,
             system: &state.system_policy,
+            local: &state.local,
         },
     )?;
     save_installation(shared, state, store.as_ref(), &bytes)

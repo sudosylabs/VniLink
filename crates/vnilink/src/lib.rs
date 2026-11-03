@@ -158,8 +158,8 @@ pub use core::service_stream::RemoteFilesService;
 pub use core::RemoteDesktopService;
 pub use core::TopologySnapshot;
 pub use core::{
-    ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath, Snapshot,
-    VideoRouting, VideoTarget,
+    ComputerName, ControlRequest, Core, CoreConfig, DeviceInfo, Listen, OpenConfig, SessionPath,
+    Snapshot, VideoRouting, VideoTarget,
 };
 pub use core::{DesktopControlState, DesktopInfo};
 pub use diagnostics::{

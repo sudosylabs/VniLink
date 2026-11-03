@@ -160,6 +160,14 @@ export class DeviceService extends Disposable implements IDeviceService {
 		return reply.request;
 	}
 
+	public async systemComputerName(): Promise<string | null> {
+		const reply = await this.execute({ type: 'computerName' });
+		if (reply.type !== 'computerName') {
+			throw new Error('Invalid computer name reply');
+		}
+		return reply.system;
+	}
+
 	public async approvePairing(digits: string): Promise<void> {
 		await this.execute({ type: 'confirmControlRequest', digits });
 		await this.refresh(this.lifetime.signal);

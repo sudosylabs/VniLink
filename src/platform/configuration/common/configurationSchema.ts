@@ -9,7 +9,7 @@ import * as nls from '../../../nls.js';
 import type { IStringDictionary } from '../../../base/common/collections.js';
 import { Registry } from '../../registry/common/platform.js';
 import { isMacintosh } from '../../../base/common/platform.js';
-import { isCodecPreference, isQualityLimits, MAX_LOG_FILTER_BYTES, shellId } from '../../engine/common/engine.js';
+import { isCodecPreference, isComputerName, isQualityLimits, MAX_COMPUTER_NAME_BYTES, MAX_LOG_FILTER_BYTES, shellId } from '../../engine/common/engine.js';
 import { Extensions, type IConfigurationNode, type IConfigurationPropertySchema, type IConfigurationRegistry } from './configurationRegistry.js';
 
 /**
@@ -18,9 +18,9 @@ import { Extensions, type IConfigurationNode, type IConfigurationPropertySchema,
  * system; every other source is a policy object the engine persists, read and
  * written as a whole.
  */
-export type ConfigurationSource = 'user' | 'system' | 'power' | 'terminal' | 'sharing' | 'security' | 'relays';
+export type ConfigurationSource = 'user' | 'system' | 'computer' | 'power' | 'terminal' | 'sharing' | 'security' | 'relays';
 
-export const configurationSources: readonly ConfigurationSource[] = ['user', 'system', 'power', 'terminal', 'sharing', 'security', 'relays'];
+export const configurationSources: readonly ConfigurationSource[] = ['user', 'system', 'computer', 'power', 'terminal', 'sharing', 'security', 'relays'];
 
 /** A registered setting, with VniLink's presentation and validation additions. */
 export interface ISettingSchema extends IConfigurationPropertySchema {
@@ -158,6 +158,20 @@ registerSettings('system', {
 			default: false,
 			title: nls.localize('application.login', 'Start when you sign in'),
 			restrictedReason: nls.localize('application.loginUnavailable', 'Available in the installed app.'),
+		},
+	},
+});
+
+registerSettings('computer', {
+	id: 'computer',
+	title: nls.localize('home.general', 'General'),
+	properties: {
+		'application.computerName': {
+			type: 'string',
+			default: '',
+			title: nls.localize('application.computerName', 'Computer name'),
+			description: nls.localize('application.computerNameHelp', 'What your paired computers call this one. They see a new name the next time they connect. Leave it empty to use the name from your system settings.'),
+			validate: value => value === '' || isComputerName(value) ? undefined : nls.localize('application.computerNameInvalid', 'Enter a name of up to {0} bytes, without line breaks or spaces around it.', String(MAX_COMPUTER_NAME_BYTES)),
 		},
 	},
 });
