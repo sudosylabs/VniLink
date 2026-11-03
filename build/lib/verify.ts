@@ -94,6 +94,12 @@ export async function verifyInstallers(root: string, signal: AbortSignal): Promi
 			.map(file => ({ ...file, path: file.path.slice(prefix.length) }));
 		assert(expected.length > 0, 'Installer manifest has no application payload');
 		assert.deepEqual(await packageInventory(join(mount, name)), expected, 'DMG application differs from the assembled input');
+		if (manifest.application.signing === 'developer-id') {
+			// What Gatekeeper checks on a download: the bundle's seal, the image's signature and its stapled ticket.
+			await processes.run('codesign', ['--verify', '--deep', '--strict', join(mount, name)], { signal: AbortSignal.timeout(120000) });
+			await processes.run('spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', dmg], { signal: AbortSignal.timeout(60000) });
+			await processes.run('xcrun', ['stapler', 'validate', dmg], { signal: AbortSignal.timeout(60000) });
+		}
 		const copy = join(work, 'application');
 		await mkdir(copy);
 		await cp(join(mount, name), join(copy, name), { recursive: true, verbatimSymlinks: true });

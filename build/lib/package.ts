@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-/** Assembles one host-native, unsigned Electron directory from a verified release payload. */
+/** Assembles one host-native Electron directory from a verified release payload, signed only when release signing is configured. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -18,6 +18,7 @@ import { ProcessRunner } from './processes.ts';
 import { validateProduct, type Product, type ProductPlatform } from './product.ts';
 import { fileSha256, packageInventory, verifyReleaseFiles, type PackageManifest, type ReleaseManifest } from './inventory.ts';
 import { isMacintosh } from './platform.ts';
+import { macSigning, signingKind, signingKinds, signMacApplication } from './signing.ts';
 
 /** electron-builder v26 options; only what VniLink sets is described. */
 export type BuilderConfiguration = Record<string, unknown> & {
@@ -168,12 +169,20 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		}
 		const directory = candidates[0];
 		const layout = packagedLayout(directory, process.platform, product);
+		const signing = signingKind(process.platform);
 		if (isMacintosh) {
 			// Its own executable UUID, so local network privacy decides for VniLink
 			// alone. The fuses changed the Electron framework and the UUID the executable,
-			// so the whole bundle is sealed again, nested code first.
+			// so the whole bundle is sealed again, nested code first: with the release
+			// identity when one is configured, ad hoc otherwise.
 			await assignExecutableUuids(layout.executable, product.appId);
-			await processes.run('codesign', ['--force', '--deep', '--sign', '-', join(directory, `${product.nameLong}.app`)]);
+			const bundle = join(directory, `${product.nameLong}.app`);
+			const identity = macSigning();
+			if (identity) {
+				await signMacApplication(bundle, identity);
+			} else {
+				await processes.run('codesign', ['--force', '--deep', '--sign', '-', bundle]);
+			}
 		}
 		const nativeSha256 = manifest.files.find(file => file.path === 'app/native/vnilink.node')?.sha256;
 		if (!nativeSha256 || createHash('sha256').update(await readFile(layout.native)).digest('hex') !== nativeSha256) {
@@ -182,13 +191,13 @@ export async function packageApplication(root: string, signal: AbortSignal): Pro
 		await access(join(layout.resources, 'licenses/native-codecs/native-codecs.txt'));
 		await access(join(layout.resources, 'relink/source/Cargo.lock'));
 		const packager = await readJson(join(root, 'node_modules/electron-builder/package.json'));
-		const packaging = { appId: product.appId, version: manifest.version, electronVersion: electron.version, packagerVersion: packager.version, platform: process.platform, architecture: process.arch, signing: 'unsigned', executable: relative(directory, layout.executable).split('\\').join('/'), asarSha256: createHash('sha256').update(await readFile(layout.asar)).digest('hex'), nativeSha256, files: await packageInventory(directory) };
+		const packaging = { appId: product.appId, version: manifest.version, electronVersion: electron.version, packagerVersion: packager.version, platform: process.platform, architecture: process.arch, signing, executable: relative(directory, layout.executable).split('\\').join('/'), asarSha256: createHash('sha256').update(await readFile(layout.asar)).digest('hex'), nativeSha256, files: await packageInventory(directory) };
 		await writeFile(join(directory, 'packaging-manifest.json'), JSON.stringify(packaging, null, 2) + '\n');
 		await verifyReleaseFiles(stage);
 		signal.throwIfAborted();
 		await rm(output, { recursive: true, force: true });
 		await rename(directory, output);
-		console.log(`Unsigned Electron application assembled: ${output}`);
+		console.log(`${signing === 'unsigned' ? 'Unsigned' : 'Signed'} Electron application assembled: ${output}`);
 		return output;
 	} finally {
 		await processes.stop();
@@ -205,7 +214,7 @@ export async function verifyPackageFiles(directory: string, product: Product): P
 	assert.equal(manifest.appId, product.appId);
 	assert.equal(manifest.platform, process.platform);
 	assert.equal(manifest.architecture, process.arch);
-	assert.equal(manifest.signing, 'unsigned');
+	assert(signingKinds(process.platform).includes(manifest.signing), 'Unexpected signature in the packaging manifest');
 	assert.deepEqual(await packageInventory(directory), manifest.files, 'Assembled application inventory differs');
 	const layout = packagedLayout(directory, process.platform, product);
 	assert.equal(await fileSha256(layout.asar), manifest.asarSha256);

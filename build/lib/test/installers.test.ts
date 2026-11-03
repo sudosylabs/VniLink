@@ -10,13 +10,15 @@ import { validateConfiguration } from 'app-builder-lib/out/util/config/config.js
 import { DebugLogger } from 'builder-util';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, suite, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildInstallers, installerConfiguration, installerExtensions, verifyInstallerFiles, type InstallerOptions } from '../installers.ts';
 import { packagedLayout, verifyPackageFiles, type BuilderConfiguration, type PackagedLayout } from '../package.ts';
 import { readProduct, type ProductPlatform } from '../product.ts';
 import { fileSha256, packageInventory, releaseInventory } from '../inventory.ts';
+import { isMacintosh } from '../platform.ts';
+import type { SigningKind } from '../signing.ts';
 
 const product = await readProduct(fileURLToPath(new URL('../../../', import.meta.url)));
 
@@ -51,7 +53,7 @@ interface Checkout {
 	readonly output: string;
 }
 
-async function checkout(): Promise<Checkout> {
+async function checkout(signing: SigningKind = 'unsigned'): Promise<Checkout> {
 	const root = await mkdtemp(join(tmpdir(), 'vnilink-installer-contract-'));
 	const target = `${process.platform}-${process.arch}`;
 	const application = join(root, 'dist', target);
@@ -59,7 +61,7 @@ async function checkout(): Promise<Checkout> {
 	await mkdir(join(layout.resources, 'app.asar.unpacked/native'), { recursive: true });
 	await writeFile(layout.asar, 'test application archive');
 	await writeFile(layout.native, 'test native library');
-	const manifest = { appId: product.appId, version: '0.1.0', electronVersion: '44.7.0', platform: process.platform, architecture: process.arch, signing: 'unsigned', asarSha256: await fileSha256(layout.asar), nativeSha256: await fileSha256(layout.native), files: await packageInventory(application) };
+	const manifest = { appId: product.appId, version: '0.1.0', electronVersion: '44.7.0', platform: process.platform, architecture: process.arch, signing, asarSha256: await fileSha256(layout.asar), nativeSha256: await fileSha256(layout.native), files: await packageInventory(application) };
 	await writeFile(join(application, 'packaging-manifest.json'), JSON.stringify(manifest));
 	const stage = join(root, '.build/release', target);
 	await mkdir(join(stage, 'app'), { recursive: true });
@@ -182,6 +184,46 @@ suite('installers', () => {
 			await assert.rejects(buildInstallers(f.root, never(), failingBuilder), /installer tool failed/);
 			assert.strictEqual(await readFile(join(f.output, 'previous'), 'utf8'), 'completed output');
 		});
+		test('an unsigned application\'s installers are not notarized', async () => {
+			let notarized = 0;
+			await buildInstallers(f.root, never(), {
+				...builder, notarize: () => {
+					notarized++;
+					return Promise.resolve();
+				}
+			});
+			assert.strictEqual(notarized, 0);
+		});
+		if (isMacintosh) {
+			const signing = { VNILINK_MACOS_SIGNING_IDENTITY: 'Developer ID Application: Test', VNILINK_MACOS_NOTARY_PROFILE: 'test-profile' };
+			test('a signed application\'s disk image is notarized before its checksum is taken', async () => {
+				const signed = await checkout('developer-id');
+				try {
+					const images: string[] = [];
+					await buildInstallers(signed.root, never(), {
+						...builder,
+						environment: signing,
+						notarize: async (_processes, image, identity) => {
+							images.push(`${basename(image)} ${identity.notaryProfile}`);
+							await writeFile(image, 'stapled installer artifact');
+						},
+					});
+					assert.deepStrictEqual(images, ['VniLink-test.dmg test-profile']);
+					const manifest = await verifyInstallerFiles(signed.output, product);
+					assert.strictEqual(manifest.artifacts[0].sha256, await fileSha256(join(signed.output, 'VniLink-test.dmg')));
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+			test('a signed application without the notary profile is refused', async () => {
+				const signed = await checkout('developer-id');
+				try {
+					await assert.rejects(buildInstallers(signed.root, never(), { ...builder, environment: {} }), /not set to notarize/);
+				} finally {
+					await rm(signed.root, { recursive: true, force: true });
+				}
+			});
+		}
 		test('a failing builder leaves no work directory behind', async () => {
 			await assert.rejects(buildInstallers(f.root, never(), failingBuilder), /installer tool failed/);
 			assert.ok(!(await readdir(join(f.root, 'dist/installers'))).some(name => name.startsWith('.installer-')));
