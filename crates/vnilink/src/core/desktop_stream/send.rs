@@ -464,6 +464,13 @@ async fn send_cursor(
     Ok(())
 }
 
+/// Writes whether the viewer may record, with the epoch it changed at.
+async fn write_recording_state(send: &mut SendStream, state: (bool, u64)) -> Result<(), Error> {
+    let mut bytes = vec![RECORDING_STATE, u8::from(state.0)];
+    bytes.extend_from_slice(&state.1.to_be_bytes());
+    write(send, &bytes).await
+}
+
 pub(super) async fn host_send(
     shared: &Shared,
     desktop: &DesktopRuntime,
@@ -495,6 +502,10 @@ pub(super) async fn host_send(
     let mut recording_rx = desktop.recording_allowed.subscribe();
     let status = *control_rx.borrow_and_update();
     write_control_state(send, status).await?;
+    // The open response carried the recording state of its moment; one that
+    // changed before this subscription would otherwise never be told.
+    let recording = *recording_rx.borrow_and_update();
+    write_recording_state(send, recording).await?;
     if let Some(bytes) = topology_bytes(shared, desktop) {
         write(send, &bytes).await?;
     }
@@ -522,10 +533,8 @@ pub(super) async fn host_send(
             _ = cursor.changed() => {},
             changed = recording_rx.changed() => {
                 changed.map_err(|_| Error::NoSession)?;
-                let allowed = *recording_rx.borrow_and_update();
-                let mut bytes = vec![RECORDING_STATE, u8::from(allowed.0)];
-                bytes.extend_from_slice(&allowed.1.to_be_bytes());
-                write(send, &bytes).await?;
+                let recording = *recording_rx.borrow_and_update();
+                write_recording_state(send, recording).await?;
             }
             changed = control_rx.changed() => {
                 if changed.is_err() { return Err(Error::NoSession); }
