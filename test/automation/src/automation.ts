@@ -14,6 +14,7 @@ import { Dialogs } from './dialogs.js';
 import type { WindowDriver } from './driver.js';
 import { Files } from './files.js';
 import { Home } from './home.js';
+import { Onboarding } from './onboarding.js';
 import { RemoteDesktop } from './remoteDesktop.js';
 import { Settings } from './settings.js';
 import { Titlebar } from './titlebar.js';
@@ -24,6 +25,7 @@ export class Automation {
 	public readonly code: Code;
 	public readonly workbench: Workbench;
 	public readonly home: Home;
+	public readonly onboarding: Onboarding;
 	public readonly settings: Settings;
 	public readonly titlebar: Titlebar;
 	public readonly devices: Devices;
@@ -36,6 +38,7 @@ export class Automation {
 		this.code = new Code(driver);
 		this.workbench = new Workbench(this.code);
 		this.home = new Home(this.code);
+		this.onboarding = new Onboarding(this.code);
 		this.settings = new Settings(this.code);
 		this.titlebar = new Titlebar(this.code);
 		this.devices = new Devices(this.code);

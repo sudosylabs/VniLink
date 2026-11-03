@@ -8,11 +8,14 @@
 /*
  * The welcome is one bounded column centred in the tab, so each step reads
  * as a page of the window rather than a floating dialog. It scrolls when a
- * step is taller than a short window.
+ * step is taller than a short window. The tab host is a flex row, so the
+ * welcome grows across all of it, as other views do.
  */
 .onboarding {
 	box-sizing: border-box;
-	height: 100%;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
 	padding: 48px 24px;
 	overflow-y: auto;
 	background: var(--canvas);
