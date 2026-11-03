@@ -7,18 +7,21 @@
 
 /** The Linux installers: Debian and RPM packages with a desktop entry matching the application id. */
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { linuxIconDirectory } from './installerAssets.ts';
 import type { BuilderConfiguration } from './package.ts';
 import type { Product } from './product.ts';
 
 export const extensions = ['.deb', '.rpm'];
 
-/** Files the release stages into `packaging-resources` for these installers: none beyond the icon. */
-export const resources: readonly string[] = [];
+/** Files the release stages into `packaging-resources` for these installers, at the same paths: the icon at each size. */
+export const resources: readonly string[] = [linuxIconDirectory];
 
 export function installerOptions(product: Product, base: BuilderConfiguration): Record<string, unknown> {
 	return {
 		linux: {
 			...base.linux,
+			icon: join(base.directories.buildResources, linuxIconDirectory),
 			target: ['deb', 'rpm'],
 			maintainer: `${product.publisherName} <${product.supportEmail}>`,
 			vendor: product.publisherName,

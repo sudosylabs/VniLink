@@ -13,9 +13,9 @@
  * `rsvg-convert` (librsvg); NSIS takes only 24-bit BMP files, which are
  * written here from the rendered PNG.
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { processOutput } from './processes.ts';
 
@@ -25,6 +25,12 @@ const purple = { light: '#A855F7', dark: '#7C2AEF' };
 /** The disk image window and the centres of its two icons, as `package.darwin.ts` lays them out. */
 export const dmgLayout = { width: 540, height: 380, application: { x: 140, y: 170 }, applications: { x: 400, y: 170 } };
 
+/** What the images are drawn from: the mark's path and the application icon's SVG. */
+export interface InstallerArt {
+	readonly markPath: string;
+	readonly appIcon: string;
+}
+
 /** One rendered image: its path under `assets/`, its size and the scales it is rendered at. */
 export interface InstallerImage {
 	readonly path: string;
@@ -32,7 +38,7 @@ export interface InstallerImage {
 	readonly height: number;
 	readonly format: 'png' | 'bmp';
 	readonly scales: readonly number[];
-	readonly svg: (markPath: string) => string;
+	readonly svg: (art: InstallerArt) => string;
 }
 
 const fonts = 'font-family="-apple-system, \'Segoe UI\', \'Helvetica Neue\', Helvetica, Arial, sans-serif"';
@@ -83,10 +89,21 @@ function headerSvg(markPath: string): string {
 	].join('');
 }
 
+/** Where the Linux packages' icons are, one `<size>x<size>.png` each, as electron-builder installs a folder of them. */
+export const linuxIconDirectory = 'assets/linux/icons';
+
+/**
+ * The sizes docks, launchers and the Alt-Tab switcher ask the icon theme
+ * for. Without them only the largest is installed, in a folder that many
+ * themes do not list, and the desktop shows a generic icon.
+ */
+const linuxIconSizes = [16, 24, 32, 48, 64, 128, 256, 512];
+
 export const installerImages: readonly InstallerImage[] = [
 	{ path: 'apple/dmg/background.png', width: dmgLayout.width, height: dmgLayout.height, format: 'png', scales: [1, 2], svg: dmgSvg },
-	{ path: 'windows/installer-sidebar.bmp', width: 164, height: 314, format: 'bmp', scales: [1], svg: sidebarSvg },
-	{ path: 'windows/installer-header.bmp', width: 150, height: 57, format: 'bmp', scales: [1], svg: headerSvg },
+	{ path: 'windows/installer-sidebar.bmp', width: 164, height: 314, format: 'bmp', scales: [1], svg: art => sidebarSvg(art.markPath) },
+	{ path: 'windows/installer-header.bmp', width: 150, height: 57, format: 'bmp', scales: [1], svg: art => headerSvg(art.markPath) },
+	...linuxIconSizes.map((size): InstallerImage => ({ path: `linux/icons/${String(size)}x${String(size)}.png`, width: size, height: size, format: 'png', scales: [1], svg: art => art.appIcon })),
 ];
 
 /** The file an image renders to at `scale`, as macOS looks up a background's `@2x` representation. */
@@ -191,11 +208,13 @@ export async function renderInstallerAssets(root: string, signal: AbortSignal): 
 	if (!markPath) {
 		throw new Error('assets/tray/mark-black.svg has no path');
 	}
+	const art: InstallerArt = { markPath, appIcon: await readFile(join(root, 'assets/linux/app-icon.svg'), 'utf8') };
 	const work = await mkdtemp(join(tmpdir(), 'vnilink-installer-art-'));
 	try {
 		for (const image of installerImages) {
 			const svg = join(work, 'image.svg');
-			await writeFile(svg, image.svg(markPath));
+			await writeFile(svg, image.svg(art));
+			await mkdir(dirname(join(root, 'assets', image.path)), { recursive: true });
 			for (const scale of image.scales) {
 				const png = image.format === 'png' ? join(root, 'assets', installerImageFile(image, scale)) : join(work, 'image.png');
 				try {

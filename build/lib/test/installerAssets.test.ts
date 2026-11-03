@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
 import { decodePng, encodeBmp, installerImageFile, installerImages } from '../installerAssets.ts';
 import * as darwin from '../package.darwin.ts';
+import * as linux from '../package.linux.ts';
 import * as win32 from '../package.win32.ts';
 
 const assets = fileURLToPath(new URL('../../../assets/', import.meta.url));
@@ -60,6 +61,11 @@ suite('installerAssets', () => {
 	test('the Windows installer stages every Windows image', () => {
 		const rendered = installerImages.filter(image => image.path.startsWith('windows/')).map(image => `assets/${image.path}`);
 		assert.deepStrictEqual(win32.resources.filter(path => path.startsWith('assets/')).sort(), rendered.sort());
+	});
+	test('the Linux installers stage the icon at every size', () => {
+		const rendered = installerImages.filter(image => image.path.startsWith('linux/')).map(image => `assets/${image.path}`);
+		assert.deepStrictEqual(rendered.every(path => path.startsWith(`${linux.resources[0]}/`)), true);
+		assert.ok(rendered.includes('assets/linux/icons/48x48.png') && rendered.includes('assets/linux/icons/256x256.png'));
 	});
 	test('undoes each PNG row filter', () => {
 		// One row per filter: none, sub, up, average and Paeth, each two pixels wide.
