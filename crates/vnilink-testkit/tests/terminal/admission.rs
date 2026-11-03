@@ -140,6 +140,8 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
     trace.wait_for_records("terminal stream ended", 2);
     tb.close();
     wait_shells_ended(host);
+    // Its stream too records why before the next terminal is asked for.
+    trace.wait_for_records("terminal stream ended", 3);
     let denied = TerminalPolicy {
         allow_persistence: false,
         ..policy
