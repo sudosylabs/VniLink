@@ -151,7 +151,7 @@ pub(super) fn follow_arrival(
 
 /// Removes the partial files of job `id`, stopping its fetches ahead.
 pub(super) fn remove_staging(shared: &Shared, id: u64) {
-    stop_prefetch(shared, id);
+    forget_prefetch(shared, id);
     if let Some(dir) = lock(&shared.transfer_dir).clone() {
         crate::ignored!(
             crate::trace::FILES,

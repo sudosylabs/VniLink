@@ -472,9 +472,8 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
     let job = download(&pair, &files, "set", "got")?;
     let controller = &pair.controller.core;
     controller.job_poll(job)?;
-    // The 12 MiB fetch takes far longer than starting a thread and
-    // delivering the cancel, so the cancel lands on a live fetch or a
-    // pending poll.
+    // The 12 MiB file is fetched ahead, from the first poll on, so the
+    // cancel lands on a live fetch, a pending poll or a file already whole.
     std::thread::scope(|scope| -> TestResult {
         let poll = scope.spawn(|| controller.job_poll(job));
         controller.job_cancel(job)?;
@@ -525,9 +524,11 @@ fn a_cancelled_download_keeps_what_landed_and_shows_nothing_partial() -> TestRes
     let fetches = trace.named("file received");
     let field = |index: usize, key: &str| fetches[index][key].as_u64().unwrap_or(u64::MAX);
     let size = 12 * 1024 * 1024;
+    // The cancel may land after the whole file arrived, where a fast link
+    // takes all of it in one segment; the fetch keeps what it took either way.
     assert!(
-        field(1, "took") < size && field(1, "resumed_at") == 0,
-        "the cancelled fetch kept part of the file: {fetches:?}"
+        field(1, "took") <= size && field(1, "resumed_at") == 0,
+        "the cancelled fetch kept what arrived of the file: {fetches:?}"
     );
     assert!(
         field(2, "resumed_at") <= field(1, "took")

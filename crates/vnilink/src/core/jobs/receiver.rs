@@ -146,6 +146,15 @@ impl Core {
         if let Some(parent) = staged.parent() {
             std::fs::create_dir_all(parent).map_err(|_| Error::InvalidSetting(STAGE_FAILED))?;
         }
+        // A fetch stopped with the job's last run may still be writing a
+        // partial: it ends before this run writes any.
+        for stopped in take_stopped_prefetch(&self.shared, id) {
+            crate::ignored!(
+                crate::trace::FILES,
+                "a stopped fetch that panicked left a partial, checked again when used",
+                self.runtime.block_on(stopped)
+            );
+        }
         // This file may already be arriving: take it before the next small
         // files start, so no second fetch ever writes its partial.
         let ahead = lock(&self.shared.job_prefetch)

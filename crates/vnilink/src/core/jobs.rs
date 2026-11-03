@@ -533,6 +533,9 @@ pub(super) struct Prefetch {
     /// Stops every fetch ahead when the job stops.
     stop: Option<tokio::sync::watch::Sender<bool>>,
     files: HashMap<usize, (u64, tokio::task::JoinHandle<Fetched>)>,
+    /// Fetches stopped and perhaps still writing their partials, which the
+    /// job's next fetch waits for.
+    stopped: Vec<tokio::task::JoinHandle<Fetched>>,
 }
 
 /// How a file fetched ahead ended, and the connection it arrived on.
@@ -545,18 +548,41 @@ const PREFETCH_FILES: usize = 7;
 
 const PREFETCH_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Stops a job's fetches ahead and forgets them. Their partials stay, and
-/// what they hold is checked again whenever it is used.
+/// Stops a job's fetches ahead. A stopped fetch may still be writing its
+/// partial, so it is kept until the job's next fetch has waited for it
+/// ([`take_stopped_prefetch`]); no two fetches write one partial. Their
+/// partials stay, and what they hold is checked again whenever it is used.
 pub(super) fn stop_prefetch(shared: &Shared, id: u64) {
-    if let Some(prefetch) = lock(&shared.job_prefetch).remove(&id) {
-        if let Some(stop) = prefetch.stop {
-            crate::ignored!(
-                crate::trace::FILES,
-                "a fetch that already ended needs no stop",
-                stop.send(true)
-            );
-        }
+    let mut prefetches = lock(&shared.job_prefetch);
+    let Some(prefetch) = prefetches.get_mut(&id) else {
+        return;
+    };
+    if let Some(stop) = prefetch.stop.take() {
+        crate::ignored!(
+            crate::trace::FILES,
+            "a fetch that already ended needs no stop",
+            stop.send(true)
+        );
     }
+    let stopped = prefetch.files.drain().map(|(_, (_, fetching))| fetching);
+    prefetch.stopped.extend(stopped);
+}
+
+/// The fetches of job `id` that were stopped, for its next fetch to wait for.
+pub(super) fn take_stopped_prefetch(
+    shared: &Shared,
+    id: u64,
+) -> Vec<tokio::task::JoinHandle<Fetched>> {
+    lock(&shared.job_prefetch)
+        .get_mut(&id)
+        .map(|prefetch| std::mem::take(&mut prefetch.stopped))
+        .unwrap_or_default()
+}
+
+/// Stops a job's fetches ahead and forgets them, when its partials go.
+pub(super) fn forget_prefetch(shared: &Shared, id: u64) {
+    stop_prefetch(shared, id);
+    lock(&shared.job_prefetch).remove(&id);
 }
 
 /// Retries of a job whose last step failed in a way that may clear on its
