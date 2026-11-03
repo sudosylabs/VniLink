@@ -53,6 +53,7 @@ export function checkDesktopIntegration(product: Product, files: readonly string
 	assert(files.includes(desktopFile), `The package installs no ${desktopFile}`);
 	const keys = desktopEntryKeys(entry);
 	assert.equal(keys.get('StartupWMClass'), product.appId, 'The desktop entry names another window class than the app id');
+	assert((keys.get('MimeType') ?? '').split(';').includes(product.invitation.mimeType), 'The desktop entry does not open invitations');
 	const icon = keys.get('Icon');
 	assert(icon, 'The desktop entry names no icon');
 	for (const size of ['48x48', '256x256']) {

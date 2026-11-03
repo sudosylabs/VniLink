@@ -15,11 +15,13 @@ import { ICommandService } from '../../../platform/commands/common/commands.js';
 import { IContextKeyService } from '../../../platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
 import { EngineAvailableContext } from '../../contextkeys.js';
+import { IDevicePairingService } from '../../services/devices/devicePairingService.js';
 import { IDeviceService } from '../../services/devices/deviceService.js';
 import { createPageHeading, type IHomePage } from '../home/homePages.js';
 import { CreateInvitationAction, ImportInvitationAction } from './deviceActions.js';
 import { DeviceDetails } from './deviceDetails.js';
 import { DeviceList } from './deviceList.js';
+import { IDevicePairingPopover } from './devicePairingPopover.js';
 
 interface IPairingChoice {
 	readonly command: string;
@@ -45,6 +47,8 @@ export class DevicesPage extends Disposable implements IHomePage {
 	private readonly headingActions: HTMLElement;
 	private readonly emptyChoices: HTMLElement;
 	private readonly pairingButtons: HTMLButtonElement[] = [];
+	/** The two Open an invitation buttons; an invitation opened from outside shows under the visible one. */
+	private readonly importButtons: HTMLButtonElement[] = [];
 	private readonly list: DeviceList;
 	private readonly details: DeviceDetails;
 	private selectedId: string | undefined;
@@ -53,6 +57,8 @@ export class DevicesPage extends Disposable implements IHomePage {
 		@IDeviceService private readonly devices: IDeviceService,
 		@ICommandService private readonly commandService: ICommandService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
+		@IDevicePairingService private readonly pairing: IDevicePairingService,
+		@IDevicePairingPopover private readonly pairingPopover: IDevicePairingPopover,
 		@IInstantiationService instantiationService: IInstantiationService,
 	) {
 		super();
@@ -111,6 +117,18 @@ export class DevicesPage extends Disposable implements IHomePage {
 		this._register(this.devices.onDidChangeDevices(() => {
 			this.render();
 		}));
+		// An invitation the operating system opened arrives with no popover showing it.
+		let step = this.pairing.state.step;
+		this._register(this.pairing.onDidChange(state => {
+			const opened = state.step !== step && state.step.kind === 'opened';
+			step = state.step;
+			if (opened && !this.pairingPopover.isOpen) {
+				const anchor = this.importButtons.find(button => button.checkVisibility());
+				if (anchor) {
+					this.pairingPopover.toggle(anchor, 'import');
+				}
+			}
+		}));
 		this._register(this.contextKeyService.onDidChangeContext(event => {
 			if (event.affectsSome(new Set([EngineAvailableContext.key]))) {
 				this.updatePairingEnablement();
@@ -147,6 +165,9 @@ export class DevicesPage extends Disposable implements IHomePage {
 					void this.commandService.executeCommand(choice.command, { anchor: button });
 				}));
 				this.pairingButtons.push(button);
+				if (choice.command === ImportInvitationAction.ID) {
+					this.importButtons.push(button);
+				}
 			}
 			this.headingActions.append(compact.root);
 			this.emptyChoices.append(choiceButton);

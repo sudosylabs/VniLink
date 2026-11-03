@@ -55,6 +55,8 @@ export function packageConfiguration(root: string, stage: string, output: string
 		asar: true,
 		asarUnpack: ['native/**', 'engine.cjs'],
 		extraResources: resources,
+		// The bundle declares it on macOS; the Windows and Linux installers register it.
+		fileAssociations: [{ ext: product.invitation.extension, name: product.invitation.name, mimeType: product.invitation.mimeType, role: 'Viewer' }],
 		npmRebuild: false,
 		nodeGypRebuild: false,
 		publish: null,

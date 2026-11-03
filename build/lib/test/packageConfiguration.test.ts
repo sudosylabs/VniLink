@@ -43,6 +43,11 @@ suite('packageConfiguration', () => {
 		test(`does not rebuild dependencies on ${platform}`, () => {
 			assert.strictEqual(configuration(platform).npmRebuild, false);
 		});
+		test(`associates invitation files with the application on ${platform}`, () => {
+			assert.deepStrictEqual(configuration(platform).fileAssociations, [
+				{ ext: product.invitation.extension, name: product.invitation.name, mimeType: product.invitation.mimeType, role: 'Viewer' },
+			]);
+		});
 		test(`publishes nothing on ${platform}`, () => {
 			assert.strictEqual(configuration(platform).publish, null);
 		});

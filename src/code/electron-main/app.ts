@@ -55,6 +55,9 @@ import { INativeHostMainService, NativeHostMainService } from '../../platform/na
 import { PERMISSIONS_CHANNEL_NAME } from '../../platform/permissions/common/permissions.js';
 import { PermissionsChannel } from '../../platform/permissions/electron-main/permissionsChannel.js';
 import { IPermissionsMainService, PermissionsMainService } from '../../platform/permissions/electron-main/permissionsMainService.js';
+import { INVITATIONS_CHANNEL_NAME } from '../../platform/invitations/common/invitations.js';
+import { InvitationsChannel } from '../../platform/invitations/electron-main/invitationsChannel.js';
+import { IInvitationsMainService, InvitationsMainService, readInvitation } from '../../platform/invitations/electron-main/invitationsMainService.js';
 import { RECORDING_CHANNEL_NAME } from '../../platform/recording/common/recording.js';
 import { UI_STATE_CHANNEL_NAME } from '../../platform/state/common/uiState.js';
 import { UIStateChannel } from '../../platform/state/electron-main/uiStateChannel.js';
@@ -137,6 +140,7 @@ export class VniLinkApplication extends Disposable {
 			[ITrayMainService, new SyncDescriptor(TrayMainService, [electronTrayEnvironment])],
 			[ISystemActionNoticeMainService, new SyncDescriptor(SystemActionNoticeMainService)],
 			[IPermissionsMainService, new SyncDescriptor(PermissionsMainService)],
+			[IInvitationsMainService, new SyncDescriptor(InvitationsMainService, [readInvitation])],
 			[IConfigurationMainService, new SyncDescriptor(ConfigurationMainService, [join(app.getPath('userData'), 'settings.json')])],
 			[IRecordingMainService, new SyncDescriptor(RecordingMainService)],
 			[IStateService, this.stateService],
@@ -179,6 +183,8 @@ export class VniLinkApplication extends Disposable {
 				this.applyLogLevel(accessor);
 				this.configureSession();
 				this.initChannels(accessor);
+				// Windows and Linux start the application with the invitation the user opened.
+				void accessor.get(IInvitationsMainService).openFromCommandLine(process.argv.slice(1), process.cwd());
 			});
 			mark('vnilink/appReady');
 			await this.startEngine();
@@ -253,7 +259,18 @@ export class VniLinkApplication extends Disposable {
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'will-quit')(() => {
 			this.dispose();
 		}));
-		this._register(Event.fromNodeEventEmitter<unknown>(app, 'second-instance')(() => {
+		const invitations = accessor.get(IInvitationsMainService);
+		// Another launch passes on its command line, which names the invitation opened on Windows and Linux.
+		this._register(Event.fromNodeEventEmitter<{ argv: string[]; workingDirectory: string }>(app, 'second-instance', (_event: unknown, argv: string[], workingDirectory: string) => ({ argv, workingDirectory }))(launch => {
+			void invitations.openFromCommandLine(launch.argv.slice(1), launch.workingDirectory);
+			windowRequests.request();
+		}));
+		// macOS opens an invitation in the running application, before `ready` when it starts it.
+		this._register(Event.fromNodeEventEmitter<string>(app, 'open-file', (event: { preventDefault(): void }, path: string) => {
+			event.preventDefault();
+			return path;
+		})(path => {
+			void invitations.openPaths([path]);
 			windowRequests.request();
 		}));
 		this._register(Event.fromNodeEventEmitter<unknown>(app, 'activate')(() => {
@@ -347,6 +364,7 @@ export class VniLinkApplication extends Disposable {
 		}));
 		server.registerChannel(ENGINE_CHANNEL_NAME, disposables.add(new EngineChannel(engine, windows, nativeHost, permissions)));
 		server.registerChannel(PERMISSIONS_CHANNEL_NAME, new PermissionsChannel(permissions));
+		server.registerChannel(INVITATIONS_CHANNEL_NAME, new InvitationsChannel(accessor.get(IInvitationsMainService)));
 		server.registerChannel(LOGGER_CHANNEL_NAME, new WindowLoggerChannel(disposables.add(new LoggerChannel(this.loggerService)), this.logsHome));
 		// A closed window's loggers, and their open files, go with it.
 		disposables.add(windows.onDidOpenWindow(window => {

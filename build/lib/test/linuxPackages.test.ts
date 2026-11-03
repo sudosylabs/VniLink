@@ -13,7 +13,7 @@ import { readProduct } from '../product.ts';
 
 const product = await readProduct(fileURLToPath(new URL('../../../', import.meta.url)));
 
-const entry = ['[Desktop Entry]', 'Name=VniLink', 'Icon=vnilink', `StartupWMClass=${product.appId}`, '', '[Desktop Action New]', 'Icon=other', ''].join('\n');
+const entry = ['[Desktop Entry]', 'Name=VniLink', 'Icon=vnilink', `StartupWMClass=${product.appId}`, `MimeType=${product.invitation.mimeType};`, '', '[Desktop Action New]', 'Icon=other', ''].join('\n');
 
 const desktopFile = `usr/share/applications/${product.platforms.linux.desktopFileName}`;
 
@@ -41,6 +41,9 @@ suite('Linux package desktop integration', () => {
 	});
 	test('refuses an entry whose window class is not the app id', () => {
 		assert.match(refusal(files, entry.replace(`StartupWMClass=${product.appId}`, 'StartupWMClass=VniLink')), /window class/);
+	});
+	test('refuses an entry that does not open invitations', () => {
+		assert.match(refusal(files, entry.replace(`MimeType=${product.invitation.mimeType};`, '')), /open invitations/);
 	});
 	test('refuses a package with only a large icon', () => {
 		assert.match(refusal([files[0], 'usr/share/icons/hicolor/1024x1024/apps/vnilink.png'], entry), /48x48 icon/);

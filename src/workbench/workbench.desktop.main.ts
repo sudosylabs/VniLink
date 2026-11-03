@@ -27,6 +27,7 @@ import './services/configuration/configurationServiceImpl.js';
 import './services/connection/connectionServiceImpl.js';
 import './services/devices/deviceServiceImpl.js';
 import './services/devices/devicePairingServiceImpl.js';
+import './services/home/homeServiceImpl.js';
 import './services/host/nativeHostService.js';
 import './services/lifecycle/lifecycleService.js';
 import './services/nativeRuntime/nativeRuntimeServiceImpl.js';

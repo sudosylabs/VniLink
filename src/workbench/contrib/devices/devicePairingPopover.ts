@@ -32,6 +32,8 @@ export interface IDevicePairingPopover {
 	/** Shows pairing under `anchor`, or closes it when that action's popover is already open. */
 	toggle(anchor: HTMLElement, kind: PairingPopoverKind): void;
 	hide(): void;
+	/** Whether a pairing popover is showing. */
+	readonly isOpen: boolean;
 }
 
 /** Whether a hide returns focus to the button that opened it, as Escape and Done do. */
@@ -58,6 +60,10 @@ export class DevicePairingPopover extends Disposable implements IDevicePairingPo
 		@IDeviceService private readonly devices: IDeviceService,
 	) {
 		super();
+	}
+
+	public get isOpen(): boolean {
+		return this.open !== undefined;
 	}
 
 	public toggle(anchor: HTMLElement, kind: PairingPopoverKind): void {
