@@ -939,12 +939,13 @@ mod tests {
                 "the inbox is the scenario's own, not the engine's folder"
             );
             host.stop()?;
+            let after = files.pipe.list(root, inbox, 0, 10);
             assert!(
                 matches!(
-                    files.pipe.list(root, inbox, 0, 10),
+                    after,
                     Err(vnilink::Error::NoSession | vnilink::Error::TransferDenied)
                 ),
-                "once the scenario stopped the disk is out of reach"
+                "once the scenario stopped the disk is out of reach: {after:?}"
             );
             assert_eq!(
                 agent.core.sharing_policy()?,
