@@ -10,18 +10,28 @@ import type { BrowserWindow, NativeTheme } from 'electron';
 import { release } from 'node:os';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
-import { resolveWindowMaterial, windowPlatform, type WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
+import { getWindowColors } from '../../theme/common/windowColors.js';
+import { resolveWindowMaterial, windowPlatform, type IMaterialPanel, type WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import { createLiquidGlass, type GlassOptions, type LiquidGlassOwner } from './liquidGlass.js';
 
 /**
- * Glass sits on the system's window-coloured backing rather than the desktop,
- * so the chrome looks the same over every wallpaper, and carries the theme's
- * sidebar colour (`--sidebar` in colors.css) so it matches the pages beside it.
- * Over the desktop itself, glass took on the wallpaper's colour, and no tint
- * could lighten it over a dark one.
+ * Glass refracts the window's content material, as AppKit's own sidebar glass
+ * does, rather than the desktop: it stays light or dark with the window over
+ * any wallpaper. Light glass on that backing is as white as the page, so it
+ * carries the palette's light grey, as the system's sidebars are; dark glass
+ * reads apart from the page untinted.
  */
-function glassOptions(dark: boolean): GlassOptions {
-	return { opaque: true, tintColor: dark ? '#26272BB8' : '#F1F1F3CC' };
+function windowGlass(dark: boolean): GlassOptions {
+	return { opaque: true, tintColor: getWindowColors(dark).glassTint };
+}
+
+/** A panel's glass, on the same backing. It follows the window's height; the page sends a new frame when its width or place changes. */
+function panelGlass(panel: IMaterialPanel, dark: boolean): GlassOptions {
+	return {
+		...windowGlass(dark),
+		cornerRadius: panel.cornerRadius,
+		frame: { x: panel.x, y: panel.y, width: panel.width, height: panel.height, anchors: { top: true, left: true, bottom: true } },
+	};
 }
 
 type MaterialWindow = Pick<BrowserWindow, 'isDestroyed' | 'setVibrancy' | 'setBackgroundMaterial' | 'setBackgroundColor' | 'getNativeWindowHandle'>;
@@ -32,7 +42,8 @@ type MaterialTheme = Event.NodeEventEmitter & Pick<NativeTheme, 'shouldUseDarkCo
 /**
  * Owns the native backdrop and its theme/accessibility subscription for one
  * window. On macOS 26 and later that is Liquid Glass behind the web content,
- * falling back to sidebar vibrancy when glass cannot attach.
+ * falling back to sidebar vibrancy when glass cannot attach, plus glass of its
+ * own under the page's material panel.
  */
 export class WindowMaterial extends Disposable {
 	private readonly changed = this._register(new Emitter<void>());
@@ -42,6 +53,9 @@ export class WindowMaterial extends Disposable {
 	private glass: LiquidGlassOwner | undefined;
 	private glassView = -1;
 	private glassCreated = false;
+	/** The page's material panel, in the window's points. */
+	private panel: IMaterialPanel | undefined;
+	private panelView = -1;
 
 	constructor(
 		private readonly window: MaterialWindow,
@@ -64,12 +78,20 @@ export class WindowMaterial extends Disposable {
 		}));
 	}
 
+	/** The page's material panel, in the window's points; `undefined` when none is shown. */
+	public setPanel(panel: IMaterialPanel | undefined): void {
+		this.panel = panel;
+		if (!this.window.isDestroyed()) {
+			this.updatePanel();
+		}
+	}
+
 	private update(): void {
 		if (this.window.isDestroyed()) {
 			return;
 		}
 		let material = resolveWindowMaterial(this.platform, this.osRelease, this.theme.prefersReducedTransparency, this.theme.shouldUseHighContrastColors);
-		const fallback = this.theme.shouldUseDarkColors ? '#202124' : '#fafafa';
+		const fallback = getWindowColors(this.theme.shouldUseDarkColors, this.platform).background;
 		try {
 			if (material === 'glass' && !this.attachGlass()) {
 				material = 'vibrancy';
@@ -89,6 +111,7 @@ export class WindowMaterial extends Disposable {
 			this.material = 'none';
 			this.window.setBackgroundColor(fallback);
 		}
+		this.updatePanel();
 	}
 
 	/**
@@ -104,14 +127,40 @@ export class WindowMaterial extends Disposable {
 		if (!this.glass?.isGlassSupported()) {
 			return false;
 		}
-		this.glassView = this.glass.addView(this.window.getNativeWindowHandle(), glassOptions(this.theme.shouldUseDarkColors));
-		return this.glassView >= 0;
+		const view = this.glass.addView(this.window.getNativeWindowHandle(), windowGlass(this.theme.shouldUseDarkColors));
+		if (view !== this.glassView) {
+			// A new window view is above the panel's, which must be added again to show.
+			this.detachPanel();
+		}
+		this.glassView = view;
+		return view >= 0;
 	}
 
 	private detachGlass(): void {
+		this.detachPanel();
 		if (this.glassView >= 0) {
 			this.glass?.removeView(this.glassView);
 			this.glassView = -1;
+		}
+	}
+
+	/** Glass under the panel exists only with glass under the window, and moves with the panel. */
+	private updatePanel(): void {
+		if (this.material !== 'glass' || !this.glass || !this.panel) {
+			this.detachPanel();
+			return;
+		}
+		const options = panelGlass(this.panel, this.theme.shouldUseDarkColors);
+		if (this.panelView >= 0 && this.glass.updateView(this.panelView, options)) {
+			return;
+		}
+		this.panelView = this.glass.addView(this.window.getNativeWindowHandle(), options);
+	}
+
+	private detachPanel(): void {
+		if (this.panelView >= 0) {
+			this.glass?.removeView(this.panelView);
+			this.panelView = -1;
 		}
 	}
 }

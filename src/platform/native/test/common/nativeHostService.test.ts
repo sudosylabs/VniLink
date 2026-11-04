@@ -18,7 +18,7 @@ import { TestMainProcessService } from '../../../ipc/test/common/testMainProcess
 import { INativeHostService, NATIVE_HOST_CHANNEL_NAME, type IWindowState } from '../../common/native.js';
 import { NativeHostService } from '../../common/nativeHostService.js';
 
-const state: IWindowState = { windowId: 7, revision: 1, focused: false, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none' };
+const state: IWindowState = { windowId: 7, revision: 1, focused: false, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none', accentColor: undefined };
 
 /**
  * Main's native-host channel: records every call, answers `getWindowState`

@@ -282,6 +282,6 @@ export class TestDesktopHostService extends Disposable implements Pick<INativeHo
 
 	/** The window left full screen by itself, as from its own button. */
 	public leaveFullScreen(): void {
-		this.windowState.fire({ windowId: 1, revision: 1, focused: true, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none' });
+		this.windowState.fire({ windowId: 1, revision: 1, focused: true, maximized: false, fullscreen: false, alwaysOnTop: false, zoomFactor: 1, backgroundMaterial: 'none', accentColor: undefined });
 	}
 }

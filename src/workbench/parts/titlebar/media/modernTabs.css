@@ -2,7 +2,7 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
  *  Adapted for VniLink: modern tab presentation with selectors for VniLink's titlebar and theme tokens
- *  from its chrome palette; the active tab's cap restates upstream's connectedEditorTabs.css.
+ *  from its chrome palette; the active tab's cap restates upstream's connectedEditorTabs.css, each shoulder one gradient.
  *-------------------------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------------------------
@@ -17,7 +17,9 @@
 
 	--tab-height: 35px;
 	--tab-radius: 12px;
-	--tab-active-background: transparent;
+
+	/* The selected tab is cut from the page below it, so it takes the page's colour. */
+	--tab-active-background: var(--canvas);
 	--tab-hover-background: var(--chrome-hover);
 }
 
@@ -142,6 +144,9 @@
 .tab[aria-selected='true'] > .tab-fill {
 	bottom: 7px;
 	background-color: var(--tab-active-background);
+
+	/* The fill ends where the shoulders begin; its shadow carries the colour down to the page. */
+	box-shadow: 0 7px var(--tab-active-background);
 	border-color: var(--chrome-line);
 	border-bottom: 0;
 	z-index: 1;
@@ -181,7 +186,7 @@
 }
 
 .tab:focus-visible > .tab-fill {
-	outline: 1px solid #547eea;
+	outline: 1px solid var(--focus-border);
 	outline-offset: -1px;
 }
 
@@ -199,8 +204,16 @@
 	}
 }
 
-/* Adapted from VS Code connectedEditorTabs.css: retain the active cap and
- * reverse rounded outline while revealing the titlebar through both. */
+/* A view drawn on Mica has a tab of Mica (workbench.css). */
+:root[data-window-material='mica'] .tab[data-surface='material'] {
+	--tab-active-background: transparent;
+}
+
+/* Adapted from VS Code connectedEditorTabs.css: the active cap and its
+ * reverse rounded shoulders. Each shoulder is one shape, its line and the
+ * page's colour drawn by one gradient around the same centre, so the curve
+ * has no seam between the two. Each overlaps the cap by the line's width, so
+ * the cap's side continues into the curve. */
 
 .tabs-scrollable {
 	align-self: flex-end;
@@ -209,24 +222,22 @@
 
 .tab[aria-selected='true'] > .tab-fill::before,
 .tab[aria-selected='true'] > .tab-fill::after {
+	--shoulder:
+		transparent 5.6px, var(--chrome-line) 6.2px, var(--chrome-line) 6.8px, var(--tab-active-background) 7.4px;
+
 	content: '';
 	position: absolute;
 	bottom: -7px;
 	width: 7px;
 	height: 7px;
-	box-sizing: border-box;
-	border-bottom: 1px solid var(--chrome-line);
-	background: transparent;
 }
 
 .tab[aria-selected='true'] > .tab-fill::before {
-	right: 100%;
-	border-right: 1px solid var(--chrome-line);
-	border-bottom-right-radius: 7px;
+	right: calc(100% - 1px);
+	background: radial-gradient(circle at 0 0, var(--shoulder));
 }
 
 .tab[aria-selected='true'] > .tab-fill::after {
-	left: 100%;
-	border-left: 1px solid var(--chrome-line);
-	border-bottom-left-radius: 7px;
+	left: calc(100% - 1px);
+	background: radial-gradient(circle at 100% 0, var(--shoulder));
 }

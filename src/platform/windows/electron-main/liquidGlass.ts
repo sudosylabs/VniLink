@@ -9,11 +9,31 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { isMacintosh } from '../../../base/common/platform.js';
 
+/** The window edges a framed view keeps its distance to as the window resizes. */
+export interface GlassAnchors {
+	readonly top?: boolean;
+	readonly right?: boolean;
+	readonly bottom?: boolean;
+	readonly left?: boolean;
+}
+
+/** Where a view goes, in points from the top-left of the window's content. */
+export interface GlassFrame {
+	readonly x: number;
+	readonly y: number;
+	readonly width: number;
+	readonly height: number;
+	readonly anchors?: GlassAnchors;
+}
+
 /** Presentation options for one glass attachment; see @vnilink/elg. */
 export interface GlassOptions {
 	readonly cornerRadius?: number;
 	readonly tintColor?: string;
+	/** The window's content material behind the glass, as AppKit puts under a sidebar. */
 	readonly opaque?: boolean;
+	/** Omitted, the glass covers the whole window. */
+	readonly frame?: GlassFrame;
 }
 
 /**
@@ -23,7 +43,10 @@ export interface GlassOptions {
  */
 export interface LiquidGlassOwner {
 	isGlassSupported(): boolean;
+	/** A whole-window view is one per window, so adding it again updates it; each framed view is new, above the earlier ones. */
 	addView(handle: Buffer, options?: GlassOptions): number;
+	/** False when the view is gone or would change between framed and whole-window. */
+	updateView(id: number, options?: GlassOptions): boolean;
 	removeView(id: number): boolean;
 	dispose(): void;
 }

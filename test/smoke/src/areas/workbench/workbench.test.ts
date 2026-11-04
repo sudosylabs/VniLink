@@ -35,9 +35,16 @@ function windowEvent(window: BrowserWindow, event: 'minimize' | 'restore' | 'ent
 	});
 }
 
-const DARK_CONTENT = 'rgb(32, 33, 36)';
+const DARK_CONTENT = 'rgb(33, 33, 35)';
 
-const LIGHT_CONTENT = 'rgb(250, 250, 250)';
+const LIGHT_CONTENT = 'rgb(255, 255, 255)';
+
+/** The solid titlebar, where the window has no material: each platform's own chrome colour (colors.css). */
+const SOLID_CHROME: Record<string, { readonly light: string; readonly dark: string }> = {
+	darwin: { light: 'rgb(236, 236, 239)', dark: 'rgb(45, 45, 48)' },
+	win32: { light: 'rgb(243, 243, 243)', dark: 'rgb(43, 43, 43)' },
+	linux: { light: 'rgb(235, 235, 237)', dark: 'rgb(46, 46, 50)' },
+};
 
 /** What the titlebar and sidebar paint over `material` in `theme`, where `opaque` is the titlebar's colour without one. */
 function chrome(material: string | undefined, theme: 'light' | 'dark', opaque: string): string {
@@ -97,11 +104,12 @@ export function setup(automation: Automation): void {
 		Mocha.it('draws a titlebar of the platform\'s height that drags the window, without its own controls or menu', async () => {
 			assert.deepEqual(await automation.titlebar.presentation(), { height, drag: 'drag', unwanted: 0 });
 		});
-		Mocha.it('sits the selected tab on the titlebar\'s floor, draggable around it but not itself', async () => {
+		Mocha.it('sits the selected tab on the titlebar\'s floor in its page\'s colour, draggable around it but not itself', async () => {
 			// Home has no titlebar actions; the titlebar tabs unit suite checks an action's drag region.
-			assert.deepEqual(await automation.titlebar.selectedTab(), { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: 'rgba(0, 0, 0, 0)', strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: null });
+			const page = (await automation.titlebar.surfaces()).content;
+			assert.deepEqual(await automation.titlebar.selectedTab(), { height: 35, topGap: height - 35, bottomGap: 0, radius: '12px', fill: page, strip: 'drag', container: 'drag', tab: 'no-drag', close: false, action: null });
 		});
-		Mocha.it('gets the native material this system should draw, under a titlebar and sidebar that let it through', async () => {
+		Mocha.it('gets the native material this system should draw, under a titlebar and Home panel that let it through', async () => {
 			// Liquid Glass on macOS 26 and later, so a silent fallback to vibrancy fails here.
 			const { prefersReducedTransparency, shouldUseHighContrastColors } = nativeTheme;
 			const material = resolveWindowMaterial(process.platform, release(), prefersReducedTransparency, shouldUseHighContrastColors);
@@ -149,10 +157,10 @@ export function setup(automation: Automation): void {
 			automation.window.setAlwaysOnTop(false);
 			assert(record(state) && state.windowId === automation.window.id && state.alwaysOnTop === true);
 		});
-		for (const [theme, opaque] of [['dark', 'rgb(44, 45, 49)'], ['light', 'rgb(236, 236, 239)']] as const) {
+		for (const theme of ['dark', 'light'] as const) {
 			Mocha.it(`follows the system into the ${theme} theme`, async () => {
 				await setNativeTheme(automation, theme);
-				await automation.titlebar.waitForBackground(chrome(await automation.workbench.material(), theme, opaque));
+				await automation.titlebar.waitForBackground(chrome(await automation.workbench.material(), theme, SOLID_CHROME[process.platform][theme]));
 				await automation.workbench.waitForContentBackground(theme === 'dark' ? DARK_CONTENT : LIGHT_CONTENT);
 			});
 		}

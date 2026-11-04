@@ -9,6 +9,7 @@ import { app, BrowserWindow, nativeTheme, screen } from 'electron';
 import { release } from 'node:os';
 import { join } from 'node:path';
 import { isMacintosh } from '../../../base/common/platform.js';
+import { getWindowColors } from '../../theme/common/windowColors.js';
 import { resolveWindowMaterial, windowPlatform } from '../../window/common/windowMaterial.js';
 import { WindowMaterial } from '../../windows/electron-main/windowMaterial.js';
 import { isNoticeAnswer, NOTICE_MATERIAL_CHANNEL, NOTICE_RESPOND_CHANNEL, NOTICE_SHOW_CHANNEL, NOTICE_URL, type NoticeContent } from '../common/notice.js';
@@ -53,7 +54,7 @@ export const windowPrompt: NoticePrompt = (content: NoticeContent, signal: Abort
 		closable: false,
 		alwaysOnTop: true,
 		title: 'VniLink',
-		backgroundColor: material !== 'none' ? '#00000000' : nativeTheme.shouldUseDarkColors ? '#26272b' : '#ffffff',
+		backgroundColor: material !== 'none' ? '#00000000' : getWindowColors(nativeTheme.shouldUseDarkColors).raisedBackground,
 		webPreferences: {
 			preload: join(__dirname, 'noticePreload.cjs'),
 			sandbox: true,

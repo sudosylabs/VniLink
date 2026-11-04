@@ -25,6 +25,7 @@ import { Layout } from './layout.js';
 import { NativeTitlebarPart } from './parts/titlebar/nativeTitlebarPart.js';
 import { ViewsPart } from './parts/views/viewsPart.js';
 import { registerWindowDriver } from './services/driver/driver.js';
+import { IHostService } from './services/host/host.js';
 import { ILifecycleService, LifecyclePhase } from './services/lifecycle/lifecycle.js';
 
 /**
@@ -96,6 +97,11 @@ export class Workbench extends Layout {
 		const engineService = accessor.get(IEngineService);
 		const lifecycleService = accessor.get(ILifecycleService);
 		const dialogService = accessor.get(IDialogService);
+		const hostService = accessor.get(IHostService);
+		this._register(hostService.onDidChangeFocus(hasFocus => {
+			this.onWindowFocusChanged(hasFocus);
+		}));
+		this.onWindowFocusChanged(hostService.hasFocus);
 		const startFresh = async (): Promise<void> => {
 			const { button } = await dialogService.show({
 				type: 'warning',

@@ -6,7 +6,7 @@
  * --------------------------------------------------------------------------------------------- */
 
 :root {
-	--canvas: #fafafa;
+	--canvas: #fff;
 	--sidebar: #f1f1f3;
 	--opaque-chrome: #ececef;
 	--chrome: var(--opaque-chrome);
@@ -15,14 +15,27 @@
 	--line: #dedee2;
 	--selected: #fff;
 	--native-chrome: rgb(248 248 250 / 58%);
-	--accent: #547eea;
-	--on-accent: #fff;
+
+	/* The system's accent where it reads on these pages; themeService.ts decides. */
+	--accent: var(--system-accent, #547eea);
+	--on-accent: var(--system-on-accent, #fff);
 	--surface-raised: #fff;
 	--surface-hover: #f5f5f7;
-	--selection-surface: #f0f4ff;
+
+	/* A raised surface, such as a card, on a view drawn on the window's material. */
+	--material-raised: rgb(255 255 255 / 55%);
+	--selection-surface: color-mix(in srgb, var(--accent) 8%, var(--canvas));
 	--status-connected: #22863a;
 	--status-pending: #a66b00;
 	--status-disconnected: #cf3434;
+	--error-foreground: var(--status-disconnected);
+	--focus-border: var(--accent);
+	--switch-thumb: #fff;
+
+	/* The tint Liquid Glass carries on the window's backing, which is as white
+	 * as the page: the system sidebars' light grey. Dark glass needs none. The
+	 * main process applies it, from its copy in windowColors.ts. */
+	--glass-tint: rgb(232 232 236 / 70%);
 
 	/* Window chrome (titlebar, tabs, sidebar). Opaque here; a window material
 	 * makes them translucent so they take on the backdrop like the system's own. */
@@ -87,22 +100,24 @@
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--canvas: #202124;
-		--sidebar: #26272b;
-		--opaque-chrome: #2c2d31;
+		--canvas: #212123;
+		--sidebar: #27272a;
+		--opaque-chrome: #2d2d30;
 		--text: #e6e6e8;
 		--muted: #999ba2;
-		--line: #383a40;
-		--selected: #36383e;
+		--line: #3a3a3e;
+		--selected: #38383c;
 		--native-chrome: rgb(32 33 36 / 22%);
+		--glass-tint: transparent;
 	}
 }
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--surface-raised: #26272b;
-		--surface-hover: #303136;
-		--selection-surface: #29334b;
+		--surface-raised: #29292c;
+		--surface-hover: #303033;
+		--material-raised: rgb(255 255 255 / 6%);
+		--selection-surface: color-mix(in srgb, var(--accent) 22%, var(--canvas));
 		--status-connected: #4ac776;
 		--status-pending: #e5b643;
 		--status-disconnected: #f06b6b;
@@ -118,6 +133,34 @@
 	}
 }
 
+/* Solid chrome where the window has no material takes each platform's own
+ * colours: Windows' base layer, libadwaita's header bar and sidebar. macOS's
+ * are the defaults above. Pages stay the same everywhere; windowColors.ts
+ * copies the chrome for the main process. */
+@media (forced-colors: none) {
+	:root[data-platform='win32'] {
+		--opaque-chrome: #f3f3f3;
+		--sidebar: #f3f3f3;
+	}
+
+	:root[data-platform='linux'] {
+		--opaque-chrome: #ebebed;
+		--sidebar: #ebebed;
+	}
+}
+
+@media (forced-colors: none) and (prefers-color-scheme: dark) {
+	:root[data-platform='win32'] {
+		--opaque-chrome: #2b2b2b;
+		--sidebar: #2b2b2b;
+	}
+
+	:root[data-platform='linux'] {
+		--opaque-chrome: #2e2e32;
+		--sidebar: #2e2e32;
+	}
+}
+
 @media (forced-colors: active) {
 	:root {
 		--canvas: Canvas;
@@ -129,9 +172,13 @@
 		--line: CanvasText;
 		--selected: Highlight;
 		--accent: Highlight;
+		--focus-border: Highlight;
+		--error-foreground: CanvasText;
+		--switch-thumb: Canvas;
 		--on-accent: HighlightText;
 		--surface-raised: Canvas;
 		--surface-hover: Canvas;
+		--material-raised: Canvas;
 		--selection-surface: Canvas;
 		--native-chrome: Canvas;
 		--chrome-muted: GrayText;

@@ -50,6 +50,7 @@ export class ViewsPart extends Part {
 			element.id = `view-${encodeURIComponent(tab.id)}`;
 			element.setAttribute('role', 'tabpanel');
 			element.setAttribute('aria-labelledby', `tab-${encodeURIComponent(tab.id)}`);
+			element.dataset.surface = tab.surface ?? 'opaque';
 			if (element.parentElement !== host) {
 				host.append(element);
 			}

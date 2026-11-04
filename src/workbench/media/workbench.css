@@ -71,7 +71,7 @@ button {
 }
 
 button:focus-visible {
-	outline: 2px solid #547eea;
+	outline: 2px solid var(--focus-border);
 	outline-offset: -2px;
 }
 
@@ -81,13 +81,35 @@ button:focus-visible {
 	flex-direction: column;
 }
 
+/* Home's sidebar is a rounded panel inset in Home's page, never under a tab.
+ * The cell around it is the page: the panel's spread shadow paints the page's
+ * colour up to its rounded edge, so the panel itself can be a hole that shows
+ * the window's material. Solid without one. */
 .sidebar {
+	--sidebar-inset: 8px;
+	--sidebar-radius: 10px;
+
 	display: flex;
-	flex-direction: column;
-	background: var(--sidebar);
-	border-right: 1px solid var(--chrome-line);
-	padding: 16px 12px;
+	min-height: 0;
+	padding: var(--sidebar-inset) 0 var(--sidebar-inset) var(--sidebar-inset);
+	overflow: hidden;
+}
+
+.sidebar > nav {
+	flex: 1;
+	min-width: 0;
+	padding: 12px 8px;
 	overflow-y: auto;
+	border-radius: var(--sidebar-radius);
+	background: var(--sidebar);
+	box-shadow: 0 0 0 100vmax var(--canvas);
+}
+
+@media (forced-colors: active) {
+	.sidebar > nav {
+		outline: 1px solid CanvasText;
+		outline-offset: -1px;
+	}
 }
 
 .sidebar-section + .sidebar-section {
@@ -283,6 +305,20 @@ h2 {
 	--chrome-selected: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
+/* An inactive window's material greys itself, and its selections turn
+ * neutral and fainter, as the system's own do. Page selections lose their
+ * accent too, so the focused window is the one with colour in it. */
+:root:is([data-window-material='vibrancy'], [data-window-material='mica'], [data-window-material='glass'])
+	.window-inactive {
+	--chrome-selected: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+@media (forced-colors: none) {
+	.window-inactive {
+		--selection-surface: color-mix(in srgb, var(--text) 8%, transparent);
+	}
+}
+
 :root[data-window-material='vibrancy'] {
 	--sidebar: var(--native-chrome);
 	--chrome: var(--native-chrome);
@@ -301,6 +337,20 @@ h2 {
 .home-content,
 .view-host > :not(.home-view) {
 	background: var(--canvas);
+}
+
+/* A view drawn on the material shows Mica, as Windows 11's own first-run
+ * pages do. Liquid Glass and vibrancy stay on navigation, so there the view
+ * is an ordinary page. Its text and surfaces are tints, so they read on Mica
+ * in either focus state; muted text is darker than on a page, since Mica is
+ * darker than the canvas. */
+:root[data-window-material='mica'] .view-host > [data-surface='material'] {
+	--muted: color-mix(in srgb, var(--text) 72%, transparent);
+	--line: color-mix(in srgb, var(--text) 14%, transparent);
+	--surface-raised: var(--material-raised);
+	--selection-surface: color-mix(in srgb, var(--accent) 16%, transparent);
+
+	background: transparent;
 }
 
 .settings-form {
@@ -386,12 +436,12 @@ h2 {
 }
 
 .settings-form input[type='checkbox'] {
-	accent-color: #547eea;
+	accent-color: var(--accent);
 }
 
 .settings-form input:focus-visible,
 .settings-form select:focus-visible {
-	outline: 2px solid #547eea;
+	outline: 2px solid var(--focus-border);
 	outline-offset: 1px;
 }
 
@@ -421,14 +471,14 @@ h2 {
 }
 
 .settings-button.primary {
-	background: #547eea;
-	color: #fff;
+	background: var(--accent);
+	color: var(--on-accent);
 	border-color: transparent;
 	margin-top: 24px;
 }
 
 .setting-error {
-	color: #d44949;
+	color: var(--error-foreground);
 	line-height: 1.5;
 }
 

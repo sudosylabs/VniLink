@@ -57,6 +57,8 @@ const menuDebounce = 100;
 class TabsFixture extends Disposable {
 	public readonly titlebar = $('div');
 	public readonly root = $('div');
+	/** The page under the tabs. */
+	public readonly content = $('div');
 	public readonly tabService = this._register(new TabService());
 	/** The actions that ran, by tab. */
 	public readonly ran: string[] = [];
@@ -74,7 +76,7 @@ class TabsFixture extends Disposable {
 		this.root.style.padding = '0';
 		this.titlebar.append(this.root);
 		document.body.append(this.titlebar);
-		const content = $('div');
+		const content = this.content;
 		content.style.backgroundColor = 'var(--canvas)';
 		this.titlebar.append(content);
 		const instantiationService = this._register(new TestInstantiationService());
@@ -195,9 +197,9 @@ suite('TitlebarTabsControl', () => {
 		assert.deepStrictEqual([first.element.hidden, second.element.hidden], [false, true]);
 		assert.strictEqual(fixture.disposed, 0, 'switching disposed a view');
 	});
-	test('the active tab is drawn as a rounded, outlined, transparent fill joined to the page', () => {
+	test('the active tab is drawn as a rounded, outlined fill in the page\'s colour, joined to the page', () => {
 		fixture.openThree();
-		assert.strictEqual(getComputedStyle(fixture.titlebar).boxShadow, 'none', 'the titlebar divider crosses the transparent active tab');
+		assert.strictEqual(getComputedStyle(fixture.titlebar).boxShadow, 'none', 'the titlebar divider crosses the active tab');
 		const fill = fixture.root.querySelector<HTMLElement>('[aria-selected="true"] .tab-fill');
 		assert.ok(fill);
 		const style = getComputedStyle(fill);
@@ -205,10 +207,40 @@ suite('TitlebarTabsControl', () => {
 		assert.strictEqual(style.borderBottomWidth, '0px', 'the joined active tab has a bottom divider');
 		assert.strictEqual(style.bottom, '7px');
 		assert.strictEqual(getComputedStyle(fill, '::before').bottom, '-7px', 'the side strokes overlap the reverse shoulders');
-		assert.strictEqual(style.backgroundColor, 'rgba(0, 0, 0, 0)', 'the active tab masks the titlebar background');
+		const page = getComputedStyle(fixture.content).backgroundColor;
+		assert.notStrictEqual(page, 'rgba(0, 0, 0, 0)', 'the page has no colour to compare with');
+		assert.strictEqual(style.backgroundColor, page, 'the active tab is not the page\'s colour');
+		assert.strictEqual(style.boxShadow, `${page} 0px 7px 0px 0px`, 'the active tab stops short of the page');
 		// A 1px border is snapped to whole device pixels: one device pixel, 0.8px, at Windows' 125% scale.
 		assert.strictEqual(Math.round(Number.parseFloat(style.borderTopWidth) * window.devicePixelRatio), Math.max(1, Math.floor(window.devicePixelRatio)));
 		assert.notStrictEqual(style.borderTopColor, 'rgba(0, 0, 0, 0)', 'the active tab lost its selection outline');
+	});
+	test('a view drawn on Mica has a tab of Mica; on glass and vibrancy its tab is the page\'s', () => {
+		const root = document.documentElement;
+		try {
+			fixture.tabService.open({ ...fixture.view('welcome'), surface: 'material' });
+			const fill = fixture.root.querySelector<HTMLElement>('[aria-selected="true"] .tab-fill');
+			assert.ok(fill);
+			const page = getComputedStyle(fixture.content).backgroundColor;
+			const backgrounds = Object.fromEntries((['mica', 'glass', 'vibrancy', 'none'] as const).map(material => {
+				root.dataset.windowMaterial = material;
+				return [material, getComputedStyle(fill).backgroundColor];
+			}));
+			assert.deepStrictEqual(backgrounds, { mica: 'rgba(0, 0, 0, 0)', glass: page, vibrancy: page, none: page });
+		} finally {
+			delete root.dataset.windowMaterial;
+		}
+	});
+	test('each shoulder of the active tab is one shape, its line and fill drawn around the same centre', () => {
+		fixture.openThree();
+		const fill = fixture.root.querySelector<HTMLElement>('[aria-selected="true"] .tab-fill');
+		assert.ok(fill);
+		for (const [side, centre] of [['::before', 'at 0px 0px'], ['::after', 'at 100% 0px']] as const) {
+			const shoulder = getComputedStyle(fill, side);
+			assert.match(shoulder.backgroundImage, new RegExp(`^radial-gradient\\(circle ${centre}, rgba\\(0, 0, 0, 0\\)`), `the ${side} shoulder is not one gradient`);
+			assert.strictEqual(shoulder.borderBottomWidth, '0px', `the ${side} shoulder still draws its line as a border`);
+			assert.strictEqual(shoulder.boxShadow, 'none', `the ${side} shoulder still fills with a shadow`);
+		}
 	});
 	test('the close button\'s hover target is square', () => {
 		fixture.openThree();

@@ -169,6 +169,7 @@ export class TitlebarTabsControl extends Disposable {
 			'aria-selected': String(active),
 		});
 		element.dataset.tabId = tab.id;
+		element.dataset.surface = tab.surface ?? 'opaque';
 		append(element, $('span.tab-fill'));
 		if (tab.icon) {
 			element.append(renderIcon(tab.icon));

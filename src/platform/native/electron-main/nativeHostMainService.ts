@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: window controls and state, folder picking, message boxes, displays, allowlisted links, clipboard, logs and remote keyboard;
- *  the shell and clipboards it uses are given to it.
+ *  Adapted for VniLink: window controls and state, the material panel, folder picking, message boxes, displays,
+ *  allowlisted links, clipboard, logs and remote keyboard; the shell and clipboards it uses are given to it.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -30,6 +30,8 @@ import { IWindowsMainService } from '../../windows/electron-main/windowsMainServ
 import type { WindowsMainService } from '../../windows/electron-main/windowsMainService.js';
 import { CodeWindow } from '../../windows/electron-main/windowImpl.js';
 import { WindowMaterial } from '../../windows/electron-main/windowMaterial.js';
+import type { IMaterialPanel } from '../../window/common/windowMaterial.js';
+import { SystemAccent } from '../../theme/electron-main/systemAccent.js';
 
 export const INativeHostMainService = createDecorator<NativeHostMainService>('nativeHostMainService');
 
@@ -71,14 +73,17 @@ export class NativeHostMainService extends Disposable {
 	/** Windows whose remote desktop has the keyboard. */
 	private readonly remoteKeyboards = new Set<number>();
 	private readonly materials = new Map<number, WindowMaterial>();
+	private readonly accent: SystemAccent;
 
 	/** `logsHome` is this run's logs folder; `nativeShell` is Electron's unless a test gives its own. */
 	constructor(
 		private readonly logsHome: URI,
 		@IWindowsMainService private readonly windowsMainService: WindowsMainService,
 		private readonly nativeShell: INativeShell = electronShell,
+		accent = new SystemAccent(),
 	) {
 		super();
+		this.accent = this._register(accent);
 		this._register(windowsMainService.onDidOpenWindow(window => {
 			this.registerWindow(window);
 		}));
@@ -94,6 +99,7 @@ export class NativeHostMainService extends Disposable {
 		const material = store.add(new WindowMaterial(window));
 		this.materials.set(window.id, material);
 		store.add(material.onDidChange(publish));
+		store.add(this.accent.onDidChange(publish));
 		const events = [
 			'focus',
 			'blur',
@@ -135,6 +141,7 @@ export class NativeHostMainService extends Disposable {
 			alwaysOnTop: window.isAlwaysOnTop(),
 			zoomFactor: window.webContents.getZoomFactor(),
 			backgroundMaterial: this.materials.get(window.id)?.material ?? 'none',
+			accentColor: this.accent.color,
 		};
 	}
 
@@ -197,6 +204,20 @@ export class NativeHostMainService extends Disposable {
 
 	public updateWindowControls(windowId: number, options: IWindowControlsOptions): Promise<void> {
 		new CodeWindow(this.window(windowId), this.materials.get(windowId)?.material ?? 'none').updateWindowControls(options);
+		return Promise.resolve();
+	}
+
+	/** Gives the window's material the panel the page shows it through, in the window's points. */
+	public setMaterialPanel(windowId: number, panel: IMaterialPanel | undefined): Promise<void> {
+		const window = this.window(windowId);
+		const zoom = window.webContents.getZoomFactor();
+		this.materials.get(windowId)?.setPanel(panel && {
+			x: panel.x * zoom,
+			y: panel.y * zoom,
+			width: panel.width * zoom,
+			height: panel.height * zoom,
+			cornerRadius: panel.cornerRadius * zoom,
+		});
 		return Promise.resolve();
 	}
 

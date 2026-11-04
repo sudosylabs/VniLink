@@ -19,6 +19,7 @@ import { ContextKeyService } from '../../../../../platform/contextkey/browser/co
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
+import { INativeHostService } from '../../../../../platform/native/common/native.js';
 import '../../../../actions/applicationActions.js';
 import { ActiveTabContext, EngineAvailableContext, RestartRequiredContext } from '../../../../contextkeys.js';
 import { ViewActionsMenu } from '../../../../parts/titlebar/viewActionsToolbar.js';
@@ -143,6 +144,7 @@ suite('Home', () => {
 			instantiationService.stub(IHomeService, { requestedPage: undefined, onDidRequestPage: pageRequests.event, showPage: () => undefined });
 			instantiationService.stub(ISystemActionService, disposables.add(new TestSystemActionService()));
 			instantiationService.stub(IClipboardService, new TestClipboardService());
+			instantiationService.stub(INativeHostService, { onDidChangeWindowState: Event.None, setMaterialPanel: () => Promise.resolve() });
 			home = disposables.add(instantiationService.createInstance(HomeView));
 			contextKeys = instantiationService.get(IContextKeyService);
 			menu = disposables.add(instantiationService.get(IMenuService).createMenu(ViewActionsMenu, contextKeys));

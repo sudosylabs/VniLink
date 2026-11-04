@@ -94,7 +94,7 @@ export class Titlebar {
 
 	public async surfaces(): Promise<Surfaces> {
 		const background = async (selector: string) => (await this.code.driver.renderer.getLayout(selector, [BACKGROUND])).style[BACKGROUND];
-		return { titlebar: await background(TITLEBAR), sidebar: await background('.sidebar'), content: await background('.home-content') };
+		return { titlebar: await background(TITLEBAR), sidebar: await background('.sidebar > nav'), content: await background('.home-content') };
 	}
 
 	/** How far the toolbar ends from the edge the native controls reserve. */

@@ -80,7 +80,7 @@
 }
 
 .preview-workbench {
-	--preview-canvas: #fafafa;
+	--preview-canvas: #fff;
 	--preview-chrome: #e9e9ed;
 	--preview-sidebar: #f0f0f3;
 	--preview-line: #dbdce2;
@@ -96,7 +96,7 @@
 }
 
 .preview-workbench-dark {
-	--preview-canvas: #202124;
+	--preview-canvas: #212123;
 	--preview-chrome: #303136;
 	--preview-sidebar: #292a2e;
 	--preview-line: #42444c;

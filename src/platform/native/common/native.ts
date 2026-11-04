@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See LICENSE.vscode.txt in the project root for license information.
- *  Adapted for VniLink: window controls and state, folder picking, message boxes, displays, allowlisted links, clipboard, relaunch, logs, remote keyboard.
+ *  Adapted for VniLink: window controls and state, the material panel, folder picking, message boxes, displays,
+ *  allowlisted links, clipboard, relaunch, logs, remote keyboard.
  *--------------------------------------------------------------------------------------------*/
 // ---------------------------------------------------------------------------------------------
 // Modifications Copyright (c) 2026 Sudosy Labs. All rights reserved.
@@ -10,7 +11,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only AND MIT
 // ---------------------------------------------------------------------------------------------
 
-import type { WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
+import { isMaterialPanel, type IMaterialPanel, type WindowBackgroundMaterial } from '../../window/common/windowMaterial.js';
 import type { Event } from '../../../base/common/event.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import type { MessageBoxOptions, MessageBoxReturnValue } from '../../../base/parts/sandbox/common/electronTypes.js';
@@ -25,6 +26,8 @@ export interface IWindowState {
 	readonly alwaysOnTop: boolean;
 	readonly zoomFactor: number;
 	readonly backgroundMaterial: WindowBackgroundMaterial;
+	/** The accent colour the user chose for the system, as `#rrggbb`; `undefined` where the system has none. */
+	readonly accentColor: string | undefined;
 }
 
 export interface IWindowControlsOptions {
@@ -56,6 +59,8 @@ export interface INativeHostService {
 	 */
 	setRemoteKeyboard(owned: boolean): Promise<void>;
 	updateWindowControls(options: IWindowControlsOptions): Promise<void>;
+	/** The part of the page the window's material shows through as a panel; `undefined` when none is shown. */
+	setMaterialPanel(panel: IMaterialPanel | undefined): Promise<void>;
 	pickFolder(defaultPath: string): Promise<string | null>;
 	/** A native message box over the window. */
 	showMessageBox(options: MessageBoxOptions & ITargetWindowOptions): Promise<MessageBoxReturnValue>;
@@ -105,6 +110,7 @@ export type NativeHostMethod =
 	| 'setFullScreen'
 	| 'setRemoteKeyboard'
 	| 'updateWindowControls'
+	| 'setMaterialPanel'
 	| 'pickFolder'
 	| 'showMessageBox'
 	| 'openExternal'
@@ -168,6 +174,9 @@ export function isNativeHostRequest(method: unknown, args: unknown): method is N
 	}
 	if (method === 'setRemoteKeyboard') {
 		return args.length === 2 && typeof args[1] === 'boolean';
+	}
+	if (method === 'setMaterialPanel') {
+		return args.length <= 2 && (args[1] === undefined || isMaterialPanel(args[1]));
 	}
 	if (method === 'writeClipboardText') {
 		return args.length >= 2 && args.length <= 3 && typeof args[1] === 'string' && args[1].length <= MAX_CLIPBOARD_TEXT && isClipboardType(args[2]);
