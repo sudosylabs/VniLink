@@ -22,10 +22,15 @@
 	color: var(--text);
 }
 
+/*
+ * The welcome is a `main`, a flex column, where centring margins would shrink
+ * the card to its content; every step keeps the column's width instead.
+ */
 .onboarding-card {
 	display: flex;
 	flex-direction: column;
 	gap: 16px;
+	width: 100%;
 	max-width: 560px;
 	margin: 0 auto;
 }

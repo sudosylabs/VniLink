@@ -32,6 +32,11 @@ export class Onboarding {
 		return { welcome: welcome.width, tab: tab.width };
 	}
 
+	/** How wide the step shown is. */
+	public async stepWidth(): Promise<number> {
+		return (await this.code.waitForLayout(`${WELCOME} .onboarding-card`, [], layout => layout.width > 0)).width;
+	}
+
 	/**
 	 * Walks from the welcome's first step to its permissions step as someone
 	 * sharing this computer's screen, camera and microphone, and says whether
