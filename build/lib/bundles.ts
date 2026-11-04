@@ -42,7 +42,8 @@ export function bundleOptions(root: string, { production = false, outputDirector
 }
 
 /**
- * Throws unless `out/<output>` is exactly what building its sources now
+ * Throws unless `out/<output>` and each file written beside it, such as the
+ * stylesheet its imports gather, are exactly what building its sources now
  * writes: the test agent's revision covers a side's sources, so the script
  * it launches must be built from them, not left from another commit.
  */
@@ -53,10 +54,14 @@ export async function assertBundleFresh(root: string, output: string, outputDire
 		throw new Error(`No bundle writes out/${output}`);
 	}
 	const result = await build({ ...options, write: false, logLevel: 'silent' });
-	const built = result.outputFiles.find(file => file.path === outfile);
-	const current = await readFile(outfile).catch(() => undefined);
-	if (!built || !current || !Buffer.from(built.contents).equals(current)) {
-		throw new Error(`out/${output} is missing or was not built from these sources: run npm run build`);
+	if (!result.outputFiles.some(file => file.path === outfile)) {
+		throw new Error(`Building out/${output} wrote no such file`);
+	}
+	for (const built of result.outputFiles) {
+		const current = await readFile(built.path).catch(() => undefined);
+		if (!current || !Buffer.from(built.contents).equals(current)) {
+			throw new Error(`out/${relative(outputDirectory, built.path)} is missing or was not built from these sources: run npm run build`);
+		}
 	}
 }
 

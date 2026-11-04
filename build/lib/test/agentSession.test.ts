@@ -197,5 +197,14 @@ for await (const line of createInterface({ input: process.stdin })) { console.lo
 			await writeFile(latencyScript(), `${await readFile(latencyScript(), 'utf8')}\n// another commit\n`);
 			await assert.rejects(assertBundleFresh(root, 'latency.cjs', directory), /not built from these sources/);
 		});
+		test('refuses a page whose stylesheet differs from these sources', async () => {
+			const options = bundleOptions(root, { outputDirectory: directory }).find(candidate => candidate.outfile === join(directory, 'renderer/notice.js'));
+			assert.ok(options);
+			await build({ ...options, logLevel: 'silent' });
+			await assertBundleFresh(root, 'renderer/notice.js', directory);
+			const stylesheet = join(directory, 'renderer/notice.css');
+			await writeFile(stylesheet, `${await readFile(stylesheet, 'utf8')}\n/* another commit */\n`);
+			await assert.rejects(assertBundleFresh(root, 'renderer/notice.js', directory), /out[\\/]renderer[\\/]notice\.css is missing or was not built from these sources/);
+		});
 	});
 });

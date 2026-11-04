@@ -250,10 +250,28 @@ export function setup(automation: Automation): void {
 			await automation.onboarding.open();
 			for (const width of [1200, 760]) {
 				automation.window.setSize(width, 820);
-				const { welcome, tab } = await automation.onboarding.widths(width);
+				const { welcome, tab } = await automation.onboarding.widths(automation.window.getContentSize()[0]);
 				assert.ok(Math.abs(welcome - tab) <= 1, `the welcome is ${String(welcome)} px in a ${String(tab)} px tab at ${String(width)} px`);
 			}
 			await automation.screenshot('welcome');
+			await automation.onboarding.skip();
+		});
+		Mocha.it('keeps each welcome step the column\'s width, each permission\'s name beside a button of its own width', async () => {
+			automation.window.setSize(760, 820);
+			await automation.settings.open('general');
+			await automation.onboarding.open();
+			const column = await automation.onboarding.stepWidth();
+			const shown = await automation.onboarding.openPermissions();
+			// The first step's text fills the column; a step with less in it keeps that width.
+			const width = await automation.onboarding.stepWidth();
+			assert.ok(Math.abs(width - column) < 1, `the step is ${String(width)} px in a ${String(column)} px column`);
+			if (shown) {
+				// Only a permission still to grant has a button; one already granted shows its status alone.
+				for (const { row, text, button } of await automation.onboarding.permissionRows()) {
+					assert.ok(text > button, `a permission's name is ${String(text)} px beside a ${String(button)} px button in a ${String(row)} px row`);
+				}
+				await automation.screenshot('welcome-permissions');
+			}
 			await automation.onboarding.skip();
 		});
 	});

@@ -28,7 +28,16 @@ pub(crate) const MAX_HOSTNAME_BYTES: usize = 128;
 /// missing, fails, or reports something unusable. Call it at pairing or
 /// app start, not per frame: it spawns one short-lived process.
 pub fn local_hostname() -> Option<String> {
-    let output = std::process::Command::new("hostname").output().ok()?;
+    let mut command = std::process::Command::new("hostname");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// No console window flashes while the name is read: the
+        /// application has no console of its own to lend the program.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
