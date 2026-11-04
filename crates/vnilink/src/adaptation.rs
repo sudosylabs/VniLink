@@ -567,7 +567,10 @@ impl Adaptive {
         // The round trip answering a rate just tried: the link's queue
         // filling, before it loses anything.
         let probe_queueing = self.probe.is_some_and(|probe| {
-            next.rtt_ms >= probe.rtt_ms + (probe.rtt_ms / 2).max(PROBE_RTT_RISE_MS)
+            next.rtt_ms
+                >= probe
+                    .rtt_ms
+                    .saturating_add((probe.rtt_ms / 2).max(PROBE_RTT_RISE_MS))
         });
         let losing_frames = missing(gate_dropped) || self.lossy_ms >= LOSS_LASTS_MS;
         self.signals = Some(Signals {
@@ -756,7 +759,8 @@ impl Adaptive {
         // one whose round trip has left its floor, that lost data in the
         // interval, or whose coders have no time to spare.
         let used = u64::from(self.status.received_kbps) * 2 >= u64::from(current.max_bitrate_kbps);
-        let near_floor = next.rtt_ms <= recent_floor + (recent_floor / 2).max(NEAR_FLOOR_MS);
+        let near_floor =
+            next.rtt_ms <= recent_floor.saturating_add((recent_floor / 2).max(NEAR_FLOOR_MS));
         let probing = used
             && near_floor
             && loss == 0
@@ -1543,6 +1547,34 @@ mod automatic_tests {
             probed = probed.or(state.step(quality, limits(50_000, 60), 1000, feedback));
         }
         assert_eq!(probed.unwrap().max_bitrate_kbps, 6000);
+    }
+
+    #[test]
+    fn a_round_trip_too_long_to_add_to_never_keeps_a_raised_rate() {
+        let mut state = Adaptive::default();
+        let mut link = Link::new(1_000_000);
+        let mut quality = Quality::new(4000, 60, 1920, 1080).unwrap();
+        let mut changes = Vec::new();
+        for _ in 0..20 {
+            let mut feedback = link.feedback(quality);
+            feedback.rtt_ms = u64::MAX;
+            if let Some(next) = state.step(quality, limits(50_000, 60), 1000, feedback) {
+                quality = next;
+                changes.push((link.second, next.max_bitrate_kbps, state.status.reason));
+            }
+        }
+        // A round trip at the largest value cannot be seen to stay level
+        // after a probe, so each probe is given back as one the link's queue
+        // answered, and tried again later.
+        assert_eq!(
+            changes,
+            [
+                (4, 6000, AdaptationReason::Recovering),
+                (5, 4000, AdaptationReason::NetworkPressure),
+                (11, 5000, AdaptationReason::Recovering),
+                (12, 4000, AdaptationReason::NetworkPressure),
+            ]
+        );
     }
 
     #[test]
