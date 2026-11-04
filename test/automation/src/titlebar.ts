@@ -108,6 +108,18 @@ export class Titlebar {
 		await this.code.waitForLayout(TITLEBAR, [], layout => Math.abs(layout.height - height) < 0.1);
 	}
 
+	/** Where the selected tab's fill is, to sample inside it. */
+	public async selectedTabFill(): Promise<{ readonly left: number; readonly top: number; readonly bottom: number }> {
+		const fill = await this.code.driver.renderer.getLayout(`${SELECTED_TAB} .tab-fill`);
+		return { left: fill.left, top: fill.top, bottom: fill.bottom };
+	}
+
+	/** The titlebar's height and width, to sample its empty strip. */
+	public async bounds(): Promise<{ readonly width: number; readonly height: number }> {
+		const bar = await this.code.driver.renderer.getLayout(TITLEBAR);
+		return { width: bar.width, height: bar.height };
+	}
+
 	public async tabHeight(): Promise<number> {
 		return (await this.code.driver.renderer.getLayout('.tab')).height;
 	}

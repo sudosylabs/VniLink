@@ -46,6 +46,30 @@ const SOLID_CHROME: Record<string, { readonly light: string; readonly dark: stri
 	linux: { light: 'rgb(235, 235, 237)', dark: 'rgb(46, 46, 50)' },
 };
 
+/** Home's solid panel, where the window has no material: each platform's own sidebar colour (colors.css). */
+const SOLID_PANEL: Record<string, { readonly light: string; readonly dark: string }> = {
+	darwin: { light: 'rgb(241, 241, 243)', dark: 'rgb(39, 39, 42)' },
+	win32: { light: 'rgb(243, 243, 243)', dark: 'rgb(43, 43, 43)' },
+	linux: { light: 'rgb(235, 235, 237)', dark: 'rgb(46, 46, 50)' },
+};
+
+/** How far apart two `#rrggbb` colours are, by their most different channel. */
+function distance(first: string, second: string): number {
+	const channels = (color: string) => [1, 3, 5].map(index => Number.parseInt(color.slice(index, index + 2), 16));
+	const [a, b] = [channels(first), channels(second)];
+	return Math.max(...a.map((value, index) => Math.abs(value - b[index])));
+}
+
+/** `rgb(r, g, b)` as `#rrggbb`. */
+function hex(color: string): string {
+	const channels = /^rgb\((\d+), (\d+), (\d+)\)$/.exec(color);
+	assert.ok(channels, `${color} is not an opaque colour`);
+	return `#${channels.slice(1).map(value => Number(value).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** The system composes a capture in the display's colour space, a few steps from the page's sRGB. */
+const COMPOSED = 6;
+
 /** What the titlebar and sidebar paint over `material` in `theme`, where `opaque` is the titlebar's colour without one. */
 function chrome(material: string | undefined, theme: 'light' | 'dark', opaque: string): string {
 	if (material === 'none') {
@@ -197,6 +221,79 @@ export function setup(automation: Automation): void {
 			assert(record(state) && state.windowId === automation.window.id && state.fullscreen === false && state.alwaysOnTop === false);
 			await automation.screenshot('window');
 		});
+	});
+	Mocha.describe('window-theme', () => {
+		restoresWindow(automation);
+		Mocha.after(() => automation.settings.setTheme('system'));
+		// The system composes, and so captures, only a window on screen.
+		let shown = false;
+		Mocha.before(async () => {
+			shown = automation.window.isVisible();
+			automation.window.show();
+			automation.window.setSize(1120, 760);
+			await automation.home.open('devices');
+		});
+		Mocha.after(() => {
+			if (!shown) {
+				automation.window.hide();
+			}
+		});
+		Mocha.it('insets Home\'s sidebar as a rounded panel in Home\'s page, below the tabs', async () => {
+			const panel = await automation.home.panel();
+			const { height } = await automation.titlebar.bounds();
+			const viewport = await automation.workbench.viewportHeight();
+			// Within a pixel: the page's height is whole pixels, its layout fractional at Windows' 125%.
+			const inset = (value: number) => Math.abs(value - 8) < 1;
+			assert.deepEqual({ left: inset(panel.left), top: inset(panel.top - height), bottom: inset(viewport - panel.bottom), radius: panel.radius }, { left: true, top: true, bottom: true, radius: '10px' }, `the panel is at ${JSON.stringify(panel)} in a ${String(viewport)} px page below a ${String(height)} px titlebar`);
+		});
+		for (const theme of ['light', 'dark'] as const) {
+			Mocha.it(`draws the ${theme} chrome and panel in this system\'s material, or its own solid colours, beside an opaque page`, async () => {
+				await automation.settings.setTheme(theme);
+				await automation.settings.open('general');
+				await automation.home.open('devices');
+				await automation.driver.renderer.whenRendered();
+				const material = await automation.workbench.material();
+				const surfaces = await automation.titlebar.surfaces();
+				const panel = await automation.home.panel();
+				if (material === 'none' && !nativeTheme.shouldUseHighContrastColors) {
+					assert.equal(panel.background, SOLID_PANEL[process.platform][theme], 'the panel is not this platform\'s sidebar colour');
+				} else if (material !== 'none') {
+					assert.equal(panel.background, chrome(material, theme, ''), 'the panel hides the material');
+				}
+				automation.window.focus();
+				await automation.driver.renderer.whenRendered();
+				const fill = await automation.titlebar.selectedTabFill();
+				const bar = await automation.titlebar.bounds();
+				const page = await automation.home.page();
+				const points = {
+					strip: { x: bar.width * 0.6, y: bar.height / 2 },
+					tab: { x: fill.left + 4, y: (fill.top + fill.bottom) / 2 },
+					panel: { x: (panel.left + panel.right) / 2, y: panel.bottom - 16 },
+					gutter: { x: panel.left / 2, y: panel.bottom - 16 },
+					// Clear of the corners, where a system can draw over every window (Windows' activation notice).
+					page: { x: (page.left + page.right) / 2, y: page.bottom - 40 },
+				};
+				const colors = await automation.captureNative(`window-theme-${theme}`, points);
+				await automation.screenshot(`window-theme-${theme}`);
+				if (!colors) {
+					// The system gave no picture of the window; the page capture above and the DOM checks still ran.
+					return;
+				}
+				const canvas = hex(surfaces.content);
+				for (const point of ['tab', 'gutter', 'page'] as const) {
+					assert.ok(distance(colors[point], canvas) <= COMPOSED, `the ${point} is ${colors[point]}, not the page's ${canvas}`);
+				}
+				if (material === 'none') {
+					assert.ok(distance(colors.panel, hex(panel.background)) <= COMPOSED, `the solid panel is ${colors.panel}, not ${panel.background}`);
+				} else {
+					assert.ok(distance(colors.panel, colors.page) >= COMPOSED, `the ${String(material)} panel, ${colors.panel}, is lost against the page, ${colors.page}`);
+				}
+				automation.window.blur();
+				await automation.driver.renderer.whenRendered();
+				// Unfocused, the material greys itself; recorded for comparison, not judged.
+				await automation.captureNative(`window-theme-${theme}-unfocused`, points);
+			});
+		}
 	});
 	Mocha.describe('appearance', () => {
 		restoresWindow(automation);

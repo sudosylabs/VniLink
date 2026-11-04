@@ -9,6 +9,9 @@ import type { Code } from './code.js';
 
 const SIDEBAR = '.sidebar';
 
+/** The rounded panel inset in Home's page, which shows the window's material. */
+const PANEL = `${SIDEBAR} > nav`;
+
 const NAV_ITEM = `${SIDEBAR} .nav-item`;
 
 const PAGE = '.home-content > main';
@@ -19,6 +22,16 @@ const DEVICE_ACTIONS = '.view-action[data-action-id^="vnilink.devices."]';
 export interface SidebarItem {
 	readonly id: string;
 	readonly label: string;
+}
+
+/** Home's panel: where it is, how round, and what the page paints in it. */
+export interface HomePanel {
+	readonly top: number;
+	readonly left: number;
+	readonly right: number;
+	readonly bottom: number;
+	readonly radius: string;
+	readonly background: string;
 }
 
 /** Home: the sidebar and the page it shows. */
@@ -98,5 +111,17 @@ export class Home {
 
 	public async sidebarBottom(): Promise<number> {
 		return (await this.code.driver.renderer.getLayout(SIDEBAR)).bottom;
+	}
+
+	/** Where Home's panel is, how round, and what the page paints in it. */
+	public async panel(): Promise<HomePanel> {
+		const panel = await this.code.driver.renderer.getLayout(PANEL, ['border-top-left-radius', 'background-color']);
+		return { top: panel.top, left: panel.left, right: panel.right, bottom: panel.bottom, radius: panel.style['border-top-left-radius'], background: panel.style['background-color'] };
+	}
+
+	/** Where the page shown beside the panel is. */
+	public async page(): Promise<{ readonly left: number; readonly right: number; readonly bottom: number }> {
+		const content = await this.code.driver.renderer.getLayout('.home-content');
+		return { left: content.left, right: content.right, bottom: content.bottom };
 	}
 }
