@@ -68,8 +68,17 @@ export class Home {
 		return (await this.code.getElements(DEVICE_ACTIONS, false) ?? []).length;
 	}
 
-	/** The labels of the titlebar's actions. */
+	/**
+	 * The labels of the titlebar's actions once the menus have dropped those
+	 * of the page shown before, after their debounce; what they are still,
+	 * if any outlast it.
+	 */
 	public async titlebarActions(): Promise<string[]> {
+		try {
+			await this.code.waitForElements('.view-action', false, actions => actions.length === 0, 20);
+		} catch {
+			// Reported by the labels below.
+		}
 		return (await this.code.getElements('.view-action', false) ?? []).map(action => action.attributes['aria-label']);
 	}
 

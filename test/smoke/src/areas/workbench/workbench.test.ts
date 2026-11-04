@@ -250,7 +250,7 @@ export function setup(automation: Automation): void {
 			await automation.onboarding.open();
 			for (const width of [1200, 760]) {
 				automation.window.setSize(width, 820);
-				const { welcome, tab } = await automation.onboarding.widths(width);
+				const { welcome, tab } = await automation.onboarding.widths(automation.window.getContentSize()[0]);
 				assert.ok(Math.abs(welcome - tab) <= 1, `the welcome is ${String(welcome)} px in a ${String(tab)} px tab at ${String(width)} px`);
 			}
 			await automation.screenshot('welcome');

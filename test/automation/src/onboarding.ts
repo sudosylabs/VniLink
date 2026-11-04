@@ -22,11 +22,12 @@ export class Onboarding {
 
 	/**
 	 * How wide the welcome is, and the tab area it is shown in, once the tab
-	 * fits a window resized to `windowWidth`. The welcome is read after the
-	 * tab, so both come from the same layout.
+	 * fills a window whose content is `contentWidth` wide. The welcome is read
+	 * after the tab, so both come from the same layout.
 	 */
-	public async widths(windowWidth: number): Promise<{ readonly welcome: number; readonly tab: number }> {
-		const tab = await this.code.waitForLayout('.view-host', [], layout => layout.width > 0 && layout.width <= windowWidth);
+	public async widths(contentWidth: number): Promise<{ readonly welcome: number; readonly tab: number }> {
+		// Under display scaling the window's size is rounded to whole device pixels.
+		const tab = await this.code.waitForLayout('.view-host', [], layout => Math.abs(layout.width - contentWidth) < 1);
 		const welcome = await this.code.waitForLayout(WELCOME, [], layout => layout.width > 0);
 		return { welcome: welcome.width, tab: tab.width };
 	}
