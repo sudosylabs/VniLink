@@ -285,9 +285,11 @@ export function setup(automation: Automation): void {
 				}
 				if (material === 'none') {
 					assert.ok(distance(colors.panel, hex(panel.background)) <= COMPOSED, `the solid panel is ${colors.panel}, not ${panel.background}`);
-				} else {
+				} else if (material !== 'mica') {
 					assert.ok(distance(colors.panel, colors.page) >= COMPOSED, `the ${String(material)} panel, ${colors.panel}, is lost against the page, ${colors.page}`);
 				}
+				// Mica takes the desktop's colours, so how far it stands from the page depends on the
+				// wallpaper; dark Mica over a plain one is the page's colour. Recorded, not judged.
 				automation.window.blur();
 				await automation.driver.renderer.whenRendered();
 				// Unfocused, the material greys itself; recorded for comparison, not judged.
