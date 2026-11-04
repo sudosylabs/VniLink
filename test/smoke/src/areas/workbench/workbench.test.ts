@@ -256,6 +256,19 @@ export function setup(automation: Automation): void {
 			await automation.screenshot('welcome');
 			await automation.onboarding.skip();
 		});
+		Mocha.it('gives each permission on the welcome its name beside a button of its own width', async () => {
+			automation.window.setSize(760, 820);
+			await automation.settings.open('general');
+			await automation.onboarding.open();
+			if (await automation.onboarding.openPermissions()) {
+				// Only a permission still to grant has a button; one already granted shows its status alone.
+				for (const { row, text, button } of await automation.onboarding.permissionRows()) {
+					assert.ok(text > button, `a permission's name is ${String(text)} px beside a ${String(button)} px button in a ${String(row)} px row`);
+				}
+				await automation.screenshot('welcome-permissions');
+			}
+			await automation.onboarding.skip();
+		});
 	});
 	Mocha.describe('reload', () => {
 		let endpointId = '';

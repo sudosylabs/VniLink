@@ -114,6 +114,20 @@
 	font-size: 12px;
 }
 
+/*
+ * A permission's name and help take the row's free width; its status and
+ * button keep their own, as the step's other buttons do.
+ */
+.onboarding-permission .setting-status,
+.onboarding-permission .monaco-button {
+	flex: none;
+}
+
+.onboarding-permission .monaco-button {
+	width: auto;
+	padding: 4px 14px;
+}
+
 .onboarding-note {
 	display: flex;
 	flex-direction: column;
