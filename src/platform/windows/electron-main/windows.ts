@@ -15,6 +15,7 @@ import type { BrowserWindowConstructorOptions } from 'electron';
 import { release } from 'node:os';
 import { isMacintosh } from '../../../base/common/platform.js';
 import { getMacOSWindowControlsPosition } from '../../window/common/window.js';
+import { getWindowColors } from '../../theme/common/windowColors.js';
 import { getWorkbenchTitlebarHeight } from '../../window/common/titlebar.js';
 import { resolveWindowMaterial, windowPlatform } from '../../window/common/windowMaterial.js';
 
@@ -29,7 +30,7 @@ export function defaultBrowserWindowOptions(): BrowserWindowConstructorOptions {
 		minWidth: 760,
 		minHeight: 520,
 		show: false,
-		backgroundColor: material === 'none' ? (dark ? '#202124' : '#fafafa') : '#00000000',
+		backgroundColor: material === 'none' ? getWindowColors(dark).background : '#00000000',
 		titleBarStyle: 'hidden',
 		webPreferences: {
 			sandbox: true,
@@ -61,8 +62,8 @@ export function defaultBrowserWindowOptions(): BrowserWindowConstructorOptions {
 		}
 		options.titleBarOverlay = {
 			height: height - 1,
-			color: material === 'mica' ? '#00000000' : (dark ? '#2c2d31' : '#ececef'),
-			symbolColor: dark ? '#e6e6e8' : '#242426',
+			color: material === 'mica' ? '#00000000' : getWindowColors(dark).titlebar,
+			symbolColor: getWindowColors(dark).titlebarForeground,
 		};
 	}
 	return options;

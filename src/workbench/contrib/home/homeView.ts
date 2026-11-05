@@ -16,11 +16,14 @@ import { HomePageContext } from '../../contextkeys.js';
 import { HOME_TAB_ID, IHomeService } from '../../services/home/homeService.js';
 import type { WorkbenchTab } from '../../services/tabs/tabService.js';
 import { Extensions, HomePageGroup, type IHomePage, type IHomePagesRegistry } from './homePages.js';
+import { MaterialPanel } from './materialPanel.js';
 import { Sidebar, type SidebarGroup } from './sidebar.js';
 
 /**
  * The permanent Home tab: a sidebar of contributed pages beside the page
- * being shown. Pages are created on first visit and kept until Home closes.
+ * being shown. The sidebar is a panel inset in Home's page that shows the
+ * window's material. Pages are created on first visit and kept until Home
+ * closes.
  */
 export class HomeView extends Disposable implements WorkbenchTab {
 	public static readonly ID = HOME_TAB_ID;
@@ -48,6 +51,7 @@ export class HomeView extends Disposable implements WorkbenchTab {
 		this.sidebar = this._register(new Sidebar(nls.localize('home.navigation', 'Home navigation')));
 		this.content = $('.home-content');
 		append(this.element, this.sidebar.element, this.content);
+		this._register(instantiationService.createInstance(MaterialPanel, this.sidebar.panel));
 		this._register(this.sidebar.onDidSelect(id => {
 			this.showPage(id);
 		}));

@@ -11,7 +11,7 @@ import { Code } from './code.js';
 import { ContextMenu } from './contextMenu.js';
 import { Devices } from './devices.js';
 import { Dialogs } from './dialogs.js';
-import type { WindowDriver } from './driver.js';
+import type { NativeColors, WindowDriver, WindowPoint } from './driver.js';
 import { Files } from './files.js';
 import { Home } from './home.js';
 import { Onboarding } from './onboarding.js';
@@ -50,5 +50,10 @@ export class Automation {
 
 	public screenshot(name: string): Promise<void> {
 		return this.driver.screenshot(name);
+	}
+
+	/** Captures the window as the system composes it; see {@link WindowDriver.captureNative}. */
+	public captureNative(name: string, points: Readonly<Record<string, WindowPoint>>): Promise<NativeColors | undefined> {
+		return this.driver.captureNative(name, points);
 	}
 }

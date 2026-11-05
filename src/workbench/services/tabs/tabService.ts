@@ -22,8 +22,18 @@ export interface WorkbenchTab extends IDisposable {
 	readonly element: HTMLElement;
 	/** Permanent navigation tabs stay first and cannot be closed or reordered. */
 	readonly permanent?: boolean;
+	/** What the view is drawn on; `opaque` when unset. */
+	readonly surface?: ViewSurface;
 	canClose?(): boolean | Promise<boolean>;
 }
+
+/**
+ * A view's own opaque page, or the window's native material, as Windows 11
+ * draws its first-run setup on Mica. Only Mica honours `material`: Liquid
+ * Glass and vibrancy belong to navigation, so there the view is a page, as it
+ * is wherever the window has no material.
+ */
+export type ViewSurface = 'opaque' | 'material';
 
 export const ITabService = createDecorator<ITabService>('tabService');
 

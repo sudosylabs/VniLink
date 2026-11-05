@@ -13,7 +13,7 @@
  */
 export const browserScenarioNames = ['context-menu', 'data-channels', 'devices', 'dialogs', 'files', 'remote-desktop-session'];
 
-export const integrationScenarioNames = ['engine', 'navigation', 'window', 'appearance', 'settings-layout', 'reload', 'notice', 'engine-restart'];
+export const integrationScenarioNames = ['engine', 'navigation', 'window', 'window-theme', 'appearance', 'settings-layout', 'reload', 'notice', 'engine-restart'];
 
 export const scenarioNames = [...browserScenarioNames, ...integrationScenarioNames];
 

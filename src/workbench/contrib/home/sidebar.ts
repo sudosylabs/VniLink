@@ -25,7 +25,8 @@ export interface SidebarGroup {
 /** Home's navigation. It only reports selection; Home owns the pages. */
 export class Sidebar extends Disposable {
 	public readonly element: HTMLElement;
-	private readonly nav: HTMLElement;
+	/** The rounded panel inside the sidebar, which shows the window's material. */
+	public readonly panel: HTMLElement;
 	private readonly selected = this._register(new Emitter<string>());
 	public readonly onDidSelect = this.selected.event;
 	private readonly items = new Map<string, { readonly element: HTMLButtonElement; readonly icon: IconId }>();
@@ -35,7 +36,7 @@ export class Sidebar extends Disposable {
 	constructor(label: string) {
 		super();
 		this.element = $('aside.sidebar');
-		this.nav = append(this.element, $('nav', { 'aria-label': label }));
+		this.panel = append(this.element, $('nav', { 'aria-label': label }));
 		this._register({
 			dispose: () => {
 				this.element.remove();
@@ -47,7 +48,7 @@ export class Sidebar extends Disposable {
 	public setGroups(groups: readonly SidebarGroup[]): void {
 		this.itemListeners.clear();
 		this.items.clear();
-		this.nav.replaceChildren(...groups.map(group => this.renderGroup(group)));
+		this.panel.replaceChildren(...groups.map(group => this.renderGroup(group)));
 		const active = this.active;
 		this.active = undefined;
 		if (active) {

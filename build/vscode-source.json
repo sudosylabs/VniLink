@@ -1987,6 +1987,56 @@
       ]
     },
     {
+      "path": "src/base/common/color.ts",
+      "upstreamPath": "src/vs/base/common/color.ts",
+      "sha256": "6d5bf0368d74f43137c62e39a129a46b165f2caccb65899bc8d43cfdae43bc8e",
+      "pruned": [
+        "Color.Format.CSS.formatHSL",
+        "Color.Format.CSS.formatHSLA",
+        "Color.Format.CSS.formatHexA",
+        "Color.Format.CSS.formatRGB",
+        "Color.Format.CSS.parse",
+        "Color.Format.CSS.parseNamedKeyword",
+        "Color._flatten",
+        "Color._toNumber32Bit",
+        "Color.black",
+        "Color.blend",
+        "Color.blue",
+        "Color.cyan",
+        "Color.darken",
+        "Color.ensureConstrast",
+        "Color.equals",
+        "Color.flatten",
+        "Color.getDarkerColor",
+        "Color.getLighterColor",
+        "Color.green",
+        "Color.hsla",
+        "Color.hsva",
+        "Color.increaseRelativeLuminace",
+        "Color.isDarker",
+        "Color.isDarkerThan",
+        "Color.isLighter",
+        "Color.isLighterThan",
+        "Color.isTransparent",
+        "Color.lighten",
+        "Color.lightgrey",
+        "Color.makeOpaque",
+        "Color.mix",
+        "Color.opposite",
+        "Color.reduceRelativeLuminace",
+        "Color.toNumber32Bit",
+        "Color.transparent",
+        "HSLA._hslaBrand",
+        "HSLA.equals",
+        "HSLA.fromRGBA",
+        "HSVA._hsvaBrand",
+        "HSVA.equals",
+        "HSVA.fromRGBA",
+        "RGBA._rgbaBrand",
+        "RGBA.equals"
+      ]
+    },
+    {
       "path": "src/base/common/decorators.ts",
       "upstreamPath": "src/vs/base/common/decorators.ts",
       "sha256": "e945d243ffd179a36d81de3126c00bf9c3285cc08f7e26f1867a3e14fdfa6903",
@@ -4269,7 +4319,7 @@
     {
       "path": "src/platform/native/common/native.ts",
       "upstreamPath": "src/vs/platform/native/common/native.ts",
-      "sha256": "0ea6795699690108180ca2cec936f4a13ce703338f36a2d4ecf4536a9b5e5ac0",
+      "sha256": "ebb1c9a8f7b9b832557d9d6c676942aad8d68efe48185544e48a89f4905bb711",
       "adapted": true
     },
     {
@@ -4282,7 +4332,7 @@
       "path": "src/platform/native/electron-main/nativeHostMainService.ts",
       "upstreamPath": "src/vs/platform/native/electron-main/nativeHostMainService.ts",
       "adapted": true,
-      "sha256": "bd0173969c20a9ec18fb7e58f9198e24b0f2b86d2d3fb6f028fc63cd83a88b91"
+      "sha256": "097fc092e553dfb6b4527cf2e9e8d06fe71d129518e09aae94ff0dbab1bdd6a1"
     },
     {
       "path": "src/platform/registry/common/platform.ts",
@@ -4317,7 +4367,7 @@
       "path": "src/platform/theme/browser/themeService.ts",
       "upstreamPath": "src/vs/workbench/services/themes/browser/workbenchThemeService.ts",
       "adapted": true,
-      "sha256": "155383f1227e175601ac1665dcbd4b47079c8d4d009816fcdf9e48b3f9e44920",
+      "sha256": "da0e1cbbed23b00e647784d322e4010e644328ecf96abdaff35e5955d217d08f",
       "adaptation": "New system-theme adapter using the upstream theme-service registration pattern."
     },
     {
@@ -4342,7 +4392,7 @@
       "path": "src/platform/windows/electron-main/windows.ts",
       "upstreamPath": "src/vs/platform/windows/electron-main/windows.ts",
       "adapted": true,
-      "sha256": "d56a1fba3997b90095d288ec175638be45d5093abef41664d6d9bdbcb9c5bfd0"
+      "sha256": "7b07b31ebb3d38f8df044b5a06c04b96b01a4c3c3e126b89cc5604b26a4217e4"
     },
     {
       "path": "src/platform/workspace/common/workspace.ts",
@@ -4443,7 +4493,7 @@
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
-      "sha256": "6fb30ea73787a16c853ac4764d35cabed3ff468b25625987e3e8860c935f49a9",
+      "sha256": "966bcc2ca6475ce404a8b007d68f2811c21bc13ba2d677984b83a591f8700332",
       "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders. The active cap and reverse outline also restate src/vs/workbench/contrib/modernUI/browser/media/connectedEditorTabs.css."
     },
     {
@@ -4649,6 +4699,7 @@
     "src/workbench/parts/titlebar/media/titlebarpart.css",
     "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
     "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
+    "src/workbench/services/host/host.ts",
     "src/workbench/services/host/nativeHostService.ts",
     "src/workbench/services/lifecycle/lifecycle.ts"
   ],
@@ -4747,6 +4798,7 @@
     "src/workbench/parts/titlebar/media/titlebarpart.css",
     "src/workbench/parts/titlebar/nativeTitlebarPart.ts",
     "src/workbench/services/contextmenu/electron-browser/contextmenuService.ts",
+    "src/workbench/services/host/host.ts",
     "src/workbench/services/host/nativeHostService.ts",
     "src/workbench/services/lifecycle/lifecycle.ts"
   ],
@@ -4778,7 +4830,9 @@
     "src/platform/actions/browser/menuEntryActionViewItem.ts",
     "src/platform/theme/browser/defaultStyles.ts",
     "src/platform/log/node/spdlogAddon.ts",
-    "src/platform/log/common/loggerChannel.ts"
+    "src/platform/log/common/loggerChannel.ts",
+    "src/platform/theme/common/windowColors.ts",
+    "src/platform/theme/electron-main/systemAccent.ts"
   ],
   "dependencyEdges": [
     {
@@ -6823,6 +6877,11 @@
     },
     {
       "from": "src/platform/windows/electron-main/windows.ts",
+      "to": "src/platform/theme/common/windowColors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/windows/electron-main/windows.ts",
       "to": "src/platform/window/common/titlebar.ts",
       "kind": "import"
     },
@@ -6838,6 +6897,16 @@
     },
     {
       "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/base/common/color.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/base/common/errors.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
       "to": "src/base/common/lifecycle.ts",
       "kind": "import"
     },
@@ -6848,12 +6917,22 @@
     },
     {
       "from": "src/platform/theme/browser/themeService.ts",
+      "to": "src/platform/native/common/native.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/theme/browser/themeService.ts",
       "to": "src/platform/theme/common/themeService.ts",
       "kind": "import"
     },
     {
       "from": "src/platform/theme/browser/themeService.ts",
       "to": "src/platform/instantiation/common/extensions.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/base/common/color.ts",
+      "to": "src/base/common/charCode.ts",
       "kind": "import"
     },
     {
@@ -6954,6 +7033,16 @@
     {
       "from": "src/platform/native/electron-main/nativeHostMainService.ts",
       "to": "src/platform/windows/electron-main/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/window/common/windowMaterial.ts",
+      "kind": "import"
+    },
+    {
+      "from": "src/platform/native/electron-main/nativeHostMainService.ts",
+      "to": "src/platform/theme/electron-main/systemAccent.ts",
       "kind": "import"
     },
     {

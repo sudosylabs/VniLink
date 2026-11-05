@@ -46,6 +46,8 @@ export class OnboardingView extends Disposable implements WorkbenchTab {
 	public readonly id = OnboardingView.ID;
 	public readonly label = nls.localize('onboarding.tab', 'Welcome');
 	public readonly icon = Icons.home;
+	/** Setup is drawn on Mica, as Windows 11's own first-run setup is; elsewhere it is a page. */
+	public readonly surface = 'material';
 	public readonly element: HTMLElement;
 	private readonly progress: HTMLElement;
 	private readonly heading: HTMLElement;

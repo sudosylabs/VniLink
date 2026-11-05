@@ -20,6 +20,8 @@ import type { LogTail } from '../../common/native.js';
 import { NativeHostChannel } from '../../electron-main/nativeHostChannel.js';
 import { NativeHostMainService, type INativeShell, type TextClipboard } from '../../electron-main/nativeHostMainService.js';
 import { upcastPartial } from '../../../../base/test/common/mock.js';
+import { SystemAccent } from '../../../theme/electron-main/systemAccent.js';
+import { TestAccentPreferences } from '../../../theme/test/electron-main/testAccentPreferences.js';
 
 /** A clipboard that holds text in memory. */
 class TestClipboard implements TextClipboard {
@@ -79,7 +81,7 @@ suite('NativeHostChannel', () => {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		const window = upcastPartial<BrowserWindow>({ id: 7 });
 		instantiationService.stub(IWindowsMainService, { onDidOpenWindow: Event.None, getWindowById: id => id === 7 ? window : undefined });
-		const nativeHost = disposables.add(new NativeHostMainService(URI.file(logsHome), instantiationService.get(IWindowsMainService), nativeShell));
+		const nativeHost = disposables.add(new NativeHostMainService(URI.file(logsHome), instantiationService.get(IWindowsMainService), nativeShell, new SystemAccent(new TestAccentPreferences(), 'linux')));
 		return new NativeHostChannel(nativeHost, () => {
 			relaunches++;
 			return Promise.resolve();

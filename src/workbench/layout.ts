@@ -84,6 +84,15 @@ export abstract class Layout extends Disposable implements ILayoutService {
 		this.parent.replaceChildren(this.titlebarContainer, this.workspace);
 	}
 
+	/**
+	 * Marks the workbench while its window is not focused. The native window
+	 * material greys itself then, and the chrome drawn over it follows (after
+	 * VS Code's `Layout.onWindowFocusChanged`).
+	 */
+	protected onWindowFocusChanged(hasFocus: boolean): void {
+		this.parent.classList.toggle('window-inactive', !hasFocus);
+	}
+
 	/** Shows a message above the views, with a button that runs `action`; `undefined` hides it. */
 	protected setNotice(message: string | undefined, action?: { readonly label: string; run(): void }): void {
 		this.notice.hidden = message === undefined;

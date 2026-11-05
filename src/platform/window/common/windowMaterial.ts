@@ -16,6 +16,43 @@ export function isWindowBackgroundMaterial(value: unknown): value is WindowBackg
 	return value === 'none' || value === 'vibrancy' || value === 'glass' || value === 'mica';
 }
 
+/**
+ * A rounded rectangle of the page that the window's material shows through,
+ * such as Home's sidebar panel, in CSS pixels from the page's top-left. The
+ * page leaves it transparent; on Liquid Glass it gets glass of its own, with
+ * edges, while vibrancy and Mica show through by themselves.
+ */
+export interface IMaterialPanel {
+	readonly x: number;
+	readonly y: number;
+	readonly width: number;
+	readonly height: number;
+	readonly cornerRadius: number;
+}
+
+/** Larger than any window, so a panel within one always passes. */
+const MAX_PANEL_EXTENT = 32768;
+
+const MAX_PANEL_RADIUS = 64;
+
+const panelKeys = ['x', 'y', 'width', 'height', 'cornerRadius'];
+
+export function isMaterialPanel(value: unknown): value is IMaterialPanel {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const keys = Object.keys(value);
+	if (keys.length !== panelKeys.length || keys.some(key => !panelKeys.includes(key))) {
+		return false;
+	}
+	const extent = (key: string, max: number): boolean => {
+		const field: unknown = Reflect.get(value, key);
+		return typeof field === 'number' && Number.isFinite(field) && field >= 0 && field <= max;
+	};
+	return extent('x', MAX_PANEL_EXTENT) && extent('y', MAX_PANEL_EXTENT) && extent('width', MAX_PANEL_EXTENT)
+		&& extent('height', MAX_PANEL_EXTENT) && extent('cornerRadius', MAX_PANEL_RADIUS);
+}
+
 /** Native backdrops are optional; accessibility preferences take precedence. */
 export function resolveWindowMaterial(platform: string, osRelease: string, reducedTransparency: boolean, highContrast: boolean): WindowBackgroundMaterial {
 	if (reducedTransparency || highContrast) {
