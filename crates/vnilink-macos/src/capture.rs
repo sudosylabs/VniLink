@@ -199,7 +199,7 @@ impl SCStreamOutputTrait for Handler {
             return;
         }
         // Where it says the frame changed costs no pixel to read; only a
-        // frame without that, or on a scaled display, is compared in full.
+        // frame without that is compared in full.
         let info = sample.frame_info();
         let rects: Vec<[f64; 4]> = info
             .as_ref()
@@ -213,7 +213,9 @@ impl SCStreamOutputTrait for Handler {
             .unwrap_or_default();
         let reported = crate::pixels::reported_changes(
             &rects,
-            info.as_ref().and_then(|info| info.scale_factor),
+            info.as_ref()
+                .and_then(|info| info.content_rect)
+                .map(|rect| (rect.size.width, rect.size.height)),
             delivered,
         );
         if reported.is_some() {

@@ -22,22 +22,32 @@ fn strided_rows_are_packed_without_padding() {
 }
 
 /// Rects ScreenCaptureKit reports become the frame's changes without a pixel
-/// read, rounded outwards; on a scaled display, or with none, the pixels say.
+/// read, rounded outwards. They are in the units of the frame's content rect,
+/// which on a scaled display is half the picture's pixels or less: they are
+/// scaled by the picture's size over the content rect's. With no content rect,
+/// or no rects, the pixels say.
 #[test]
-fn reported_rects_are_changes_only_where_their_unit_is_certain() {
+fn reported_rects_are_scaled_from_the_content_rect_to_the_picture() {
     use crate::pixels::reported_changes;
     let rects = [[10.5, 20.0, 30.0, 40.25]];
-    let changes = reported_changes(&rects, Some(1.0), (1920, 1080)).unwrap();
-    assert_eq!(
-        changes.regions,
+    let region = |x, y, width, height| {
         Some(vec![vnilink::Region {
-            x: 10,
-            y: 20,
-            width: 31,
-            height: 41,
+            x,
+            y,
+            width,
+            height,
         }])
-    );
-    assert!(reported_changes(&rects, Some(2.0), (1920, 1080)).is_none());
+    };
+    // A display with no scale, captured at its size.
+    let unscaled = reported_changes(&rects, Some((1920.0, 1080.0)), (1920, 1080)).unwrap();
+    assert_eq!(unscaled.regions, region(10, 20, 31, 41));
+    // Scale 2, captured at the display's pixels: 3840 by 2160 from 1920 by 1080.
+    let full = reported_changes(&rects, Some((1920.0, 1080.0)), (3840, 2160)).unwrap();
+    assert_eq!(full.regions, region(21, 40, 60, 81));
+    // Scale 2, delivered at 1920 by 1080: the content rect is 960 by 540.
+    let delivered = reported_changes(&rects, Some((960.0, 540.0)), (1920, 1080)).unwrap();
+    assert_eq!(delivered.regions, region(21, 40, 60, 81));
     assert!(reported_changes(&rects, None, (1920, 1080)).is_none());
-    assert!(reported_changes(&[], Some(1.0), (1920, 1080)).is_none());
+    assert!(reported_changes(&rects, Some((0.0, 540.0)), (1920, 1080)).is_none());
+    assert!(reported_changes(&[], Some((1920.0, 1080.0)), (1920, 1080)).is_none());
 }
