@@ -38,9 +38,20 @@ pub const STILL_AFTER: std::time::Duration =
 const BETTER_BY: f64 = 1.0;
 
 /// AV1 quantizer levels tried, finest first, until a picture fits. On a
-/// 1080p page of coloured text they give about 40, 36 and 32 dB, against
-/// 25 for the 4:2:0 stream; a coarser still is not worth its bytes.
-const LEVELS: [u32; 3] = [20, 28, 36];
+/// 1080p page of coloured text they give about 40, 36, 32, 30 and 29 dB in
+/// 386, 286, 185, 139 and 104 kB, against 26 dB for the best 4:2:0 picture.
+/// The coarsest two fit what a stream at 6 and at 4 Mb/s carries in
+/// [`vnilink::STILL_DRAIN`]: a stream starts at 4 Mb/s, and a still screen
+/// does not raise it. Coarser still beats 4:2:0 by too little to be worth
+/// its bytes.
+const LEVELS: [u32; 5] = [20, 28, 36, 40, 44];
+
+/// Bytes a megapixel of dense coloured text takes at each of [`LEVELS`],
+/// from the 1080p page above, rounded up. The finest level these say fits
+/// is tried first: each try takes 100 to 200 ms at 1080p, and a still that
+/// comes after the screen moved again is thrown away. Lighter content fits
+/// that level with room to spare.
+const DENSE_BYTES_PER_MEGAPIXEL: [u64; 5] = [187_000, 138_000, 90_000, 67_000, 50_000];
 
 /// Encodes still pictures with libaom: AV1 High profile, 4:4:4.
 pub struct StillEncoder {
@@ -61,19 +72,41 @@ impl StillEncoder {
         }
     }
 
-    /// One AV1 4:4:4 keyframe of `frame` of at most `budget` bytes, at the
-    /// finest quality that fits, when it is worth sending: closer to `frame`
-    /// by [`BETTER_BY`] than a 4:2:0 round trip of it, the best any stream
-    /// can show. On mostly grey text 4:2:0 loses little, and only a fine
-    /// still beats the stream. `None` when no level fits, or the one that
-    /// fits is not better; a coarser one would not be either.
+    /// One AV1 4:4:4 keyframe of `frame` of at most `budget` bytes, when it
+    /// is worth sending: closer to `frame` by [`BETTER_BY`] than a 4:2:0
+    /// round trip of it, the best any stream can show. It starts at the
+    /// finest level dense text is expected to fit, goes coarser while the
+    /// picture does not fit, and finer while one that fits is not better.
+    /// On mostly grey text 4:2:0 loses little, and only a fine still beats
+    /// the stream. `None` when no level fits and beats the stream.
     pub fn encode(&self, frame: &RawFrame, budget: usize) -> Result<Option<Vec<u8>>, Error> {
         let (y, u, v) = bgra_to_i444(frame);
-        for level in LEVELS {
-            let picture = self.encode_at(frame.width(), frame.height(), &y, &u, &v, level)?;
-            if picture.len() <= budget {
-                return Ok(self.beats_subsampling(frame, &picture)?.then_some(picture));
+        let pixels = u64::from(frame.width()) * u64::from(frame.height());
+        let first = DENSE_BYTES_PER_MEGAPIXEL
+            .iter()
+            .position(|per| per * pixels / 1_000_000 <= budget as u64)
+            .unwrap_or(LEVELS.len() - 1);
+        let encode = |level| self.encode_at(frame.width(), frame.height(), &y, &u, &v, level);
+        for (index, &level) in LEVELS.iter().enumerate().skip(first) {
+            let picture = encode(level)?;
+            if picture.len() > budget {
+                continue;
             }
+            if self.beats_subsampling(frame, &picture)? {
+                return Ok(Some(picture));
+            }
+            // Light content, such as grey text, fits finer levels than dense
+            // text and may beat the stream only at one of them.
+            for &finer in LEVELS[..index].iter().rev() {
+                let picture = encode(finer)?;
+                if picture.len() > budget {
+                    break;
+                }
+                if self.beats_subsampling(frame, &picture)? {
+                    return Ok(Some(picture));
+                }
+            }
+            return Ok(None);
         }
         Ok(None)
     }
