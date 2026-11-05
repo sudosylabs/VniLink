@@ -388,6 +388,8 @@ export class FilesService implements IFilesService {
 	}
 
 	private async connect(deviceId: string): Promise<{ readonly failure: FilesFailure } | { readonly session: IFilesSession }> {
+		// A link waiting out its backoff dials now, including Reconnect.
+		await this.devices.connect(deviceId).catch(() => undefined);
 		let report;
 		try {
 			report = await this.devices.availability(deviceId);

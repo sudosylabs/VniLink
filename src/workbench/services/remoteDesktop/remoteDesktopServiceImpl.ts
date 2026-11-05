@@ -62,6 +62,8 @@ export class RemoteDesktopService implements IRemoteDesktopService {
 	) { }
 
 	public async open(deviceId: string, control: boolean): Promise<{ readonly failure: DesktopFailure } | { readonly session: IDesktopSession }> {
+		// Try Again dials now instead of waiting out the offline backoff.
+		await this.devices.connect(deviceId).catch(() => undefined);
 		let report;
 		try {
 			report = await this.devices.availability(deviceId);

@@ -61,6 +61,15 @@ export class LifecycleMainService extends Disposable {
 	}
 
 	/**
+	 * Dials paired computers again when the machine wakes. Electron reports
+	 * that as `resume`. A platform that can see a network change sends the
+	 * same command.
+	 */
+	public listenForResume(onResume: () => void): void {
+		this._register(Event.fromNodeEventEmitter(this.powerMonitor, 'resume')(onResume));
+	}
+
+	/**
 	 * Quits when Linux is about to shut down, holding the system back until
 	 * the participants are done. macOS asks the application to quit itself;
 	 * Windows ends the session (see the constructor). Call once the app is ready.

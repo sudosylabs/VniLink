@@ -208,6 +208,9 @@ impl VnilinkCore {
             .transfer_desktop_control(from_id, from_generation, to_id, to_generation)
             .map_err(map_error)
     }
+    pub fn note_network_change(&self) -> Result<(), FfiError> {
+        self.inner.note_network_change().map_err(map_error)
+    }
     pub fn begin_connect_services(&self, endpoint_id: String) -> Result<FfiSessionInfo, FfiError> {
         self.inner
             .begin_connect_services(&endpoint_id)

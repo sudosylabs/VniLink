@@ -581,6 +581,8 @@ enum Call {
         #[serde(rename = "endpointId")]
         endpoint_id: String,
     },
+    /// The computer woke, or its network changed. Dial paired computers again.
+    NoteNetworkChange,
     Snapshot,
     /// The bounded diagnostic snapshot as JSON; see `vnilink::diagnostics`.
     DiagnosticSnapshot,
@@ -1706,6 +1708,10 @@ impl EngineBridge {
     /// Commands that dial, list, and tear down sessions.
     fn sessions(core: &VnilinkCore, command: &Call) -> Result<Reply> {
         let reply: Reply = match command {
+            Call::NoteNetworkChange => {
+                core.note_network_change().map_err(core_error)?;
+                Reply::Done
+            }
             Call::BeginConnectServices { endpoint_id } => Reply::Session {
                 session: core
                     .begin_connect_services(endpoint_id.clone())
@@ -2176,7 +2182,8 @@ impl EngineBridge {
             Call::ControlRequest
             | Call::ConfirmControlRequest { .. }
             | Call::RejectControlRequest => Self::access(&self.core, command),
-            Call::BeginConnectServices { .. }
+            Call::NoteNetworkChange
+            | Call::BeginConnectServices { .. }
             | Call::Disconnect
             | Call::DisconnectSession { .. }
             | Call::ControllerSessions
@@ -2459,6 +2466,7 @@ impl CommandShape {
             "diagnosticRecorder" | "logFilter" | "engineLogTail" => &["type"],
             "setLogFilter" => &["type", "directives"],
             "endpoint" | "capabilities" | "videoCodecs" | "subscribeEvents" => &["type"],
+            "noteNetworkChange" => &["type"],
             "beginConnectServices" => &["type", "endpointId"],
             "setVideoCodecs" => &["type", "codecs"],
             "saveCustomRelays" => &["type", "relays"],

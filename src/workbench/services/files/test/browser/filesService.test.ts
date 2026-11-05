@@ -45,10 +45,12 @@ suite('FilesService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let dataChannels: TestDataChannelService;
 	let status: RemoteStatus;
+	const dialed: string[] = [];
 	setup(() => {
 		dataChannels = new TestDataChannelService();
 		dataChannels.fileAnswer = quiet;
 		status = 'available';
+		dialed.length = 0;
 		// A session a running transfer keeps ends as one whose channel was lost, which releases it.
 		disposables.add(toDisposable(() => {
 			for (const channel of dataChannels.opened) {
@@ -68,6 +70,10 @@ suite('FilesService', () => {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(IEngineService, engine);
 		instantiationService.stub(IDeviceService, {
+			connect: (id: string) => {
+				dialed.push(id);
+				return Promise.resolve();
+			},
 			availability: (id: string) => {
 				assert.strictEqual(id, 'peer');
 				return Promise.resolve([{ capability: 'files', status }]);
@@ -91,6 +97,10 @@ suite('FilesService', () => {
 			.flatMap(channel => channel.fileOperations)
 			.filter((operation): operation is Extract<FileOperation, { type: T }> => operation.type === type);
 	}
+	test('opening Files dials the computer before it looks for a session', async () => {
+		await createService().open('peer');
+		assert.deepStrictEqual(dialed, ['peer']);
+	});
 	test('Files turned off on the other computer says so, and no channel opens', async () => {
 		status = 'turnedOff';
 		assert.deepStrictEqual(await createService().open('peer'), { failure: 'turnedOff' });

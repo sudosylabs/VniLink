@@ -22,6 +22,8 @@
 
 use super::*;
 
+use rand::RngExt;
+
 use super::link::{remember_peer_addresses, write_addresses};
 use super::transfer::close_peer_files;
 use super::wire::{read_frame_within, read_session_frame, write_frame};
@@ -141,10 +143,35 @@ impl Core {
     /// and reconnect. This does not open or replace any service owner.
     pub fn begin_connect_services(&self, endpoint_id: &str) -> Result<SessionInfo, Error> {
         let _engine = self.engine();
-        let info = start_outgoing(&self.shared, self.runtime.handle(), endpoint_id)?;
-        // A link waiting out its backoff dials now.
+        // A link waiting out its backoff dials now, even when this dial
+        // cannot start a session of its own.
         super::presence::wake_link(&self.shared, &parse_endpoint_id(endpoint_id)?);
+        let info = start_outgoing(&self.shared, self.runtime.handle(), endpoint_id)?;
         Ok(info)
+    }
+
+    /// The network changed, or the computer woke. Tell the endpoint, and
+    /// dial each paired computer again, spread out so they do not all
+    /// start in the same instant.
+    pub fn note_network_change(&self) -> Result<(), Error> {
+        let _engine = self.engine();
+        self.ensure_alive()?;
+        let endpoint = self.shared.endpoint.clone();
+        self.runtime.spawn(async move {
+            endpoint.network_change().await;
+        });
+        let peers: Vec<[u8; 32]> = lock(&self.shared.presence_wake).keys().copied().collect();
+        let handle = self.runtime.handle().clone();
+        for (index, peer) in peers.into_iter().enumerate() {
+            let shared = Arc::clone(&self.shared);
+            let spread = rand::rng().random::<u64>() % 500;
+            let delay = std::time::Duration::from_millis(index as u64 * 200 + spread);
+            handle.spawn(async move {
+                tokio::time::sleep(delay).await;
+                super::presence::wake_link(&shared, &peer);
+            });
+        }
+        Ok(())
     }
 
     pub fn controller_sessions(&self) -> Result<Vec<SessionInfo>, Error> {

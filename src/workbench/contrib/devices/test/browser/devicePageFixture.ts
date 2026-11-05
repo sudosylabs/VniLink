@@ -133,6 +133,8 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	public readonly engineAvailable: IContextKey<boolean>;
 	/** The digits the last pairing or approval sent. */
 	public confirmation = '';
+	/** Computers the page asked to dial. */
+	public readonly connections: string[] = [];
 	public renameResult: Promise<void> | undefined;
 	public incoming: ControlRequestInfo | null = null;
 	/** The operating system's name for this computer. */
@@ -214,6 +216,7 @@ export class DevicePageFixture extends Disposable implements IDeviceService {
 	}
 
 	public connect(id: string): Promise<void> {
+		this.connections.push(id);
 		this.checked.fire({ endpointId: id, check: '918273' });
 		return Promise.resolve();
 	}

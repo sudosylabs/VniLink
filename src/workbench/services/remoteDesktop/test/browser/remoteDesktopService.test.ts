@@ -38,11 +38,13 @@ suite('RemoteDesktopService', () => {
 	let dataChannels: TestDataChannelService;
 	let decoders: TestVideoDecoderService;
 	let statuses: { desktopControl: RemoteStatus; desktopView: RemoteStatus };
+	const dialed: string[] = [];
 	setup(() => {
 		engine = disposables.add(new TestEngineService(connected));
 		dataChannels = new TestDataChannelService();
 		decoders = new TestVideoDecoderService();
 		statuses = { desktopControl: 'available', desktopView: 'available' };
+		dialed.length = 0;
 	});
 
 	/** The service, as the workbench builds it. */
@@ -50,6 +52,10 @@ suite('RemoteDesktopService', () => {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(IEngineService, engine);
 		instantiationService.stub(IDeviceService, {
+			connect: (id: string) => {
+				dialed.push(id);
+				return Promise.resolve();
+			},
 			availability: (id: string) => {
 				assert.strictEqual(id, 'peer');
 				return Promise.resolve([{ capability: 'desktopControl', status: statuses.desktopControl }, { capability: 'desktopView', status: statuses.desktopView }]);
@@ -60,6 +66,12 @@ suite('RemoteDesktopService', () => {
 		instantiationService.stub(IVideoDecoderService, decoders);
 		return instantiationService.createInstance(RemoteDesktopService);
 	}
+	test('Try Again dials the computer before it looks for a session', async () => {
+		const result = await createService().open('peer', true);
+		assert.ok('session' in result, 'the screen did not open');
+		result.session.dispose();
+		assert.deepStrictEqual(dialed, ['peer']);
+	});
 
 	/** The screen of `peer`, opened, for the test to dispose. */
 	async function openScreen(service: RemoteDesktopService, control: boolean): Promise<IDesktopSession> {

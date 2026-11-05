@@ -61,14 +61,16 @@ class RecordingLogService extends NullLogService {
 suite('LifecycleMainService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let application: TestApplication;
+	let power: EventEmitter;
 	let log: RecordingLogService;
 	let lifecycle: LifecycleMainService;
 	setup(() => {
 		application = new TestApplication();
+		power = new EventEmitter();
 		log = disposables.add(new RecordingLogService());
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ILogService, log);
-		lifecycle = disposables.add(instantiationService.createInstance(LifecycleMainService, application, new EventEmitter()));
+		lifecycle = disposables.add(instantiationService.createInstance(LifecycleMainService, application, power));
 	});
 
 	/** Joins a participant that finishes when the returned promise is completed, counting how often it is asked. */
@@ -162,5 +164,13 @@ suite('LifecycleMainService', () => {
 	test('Windows ending the session marks the application as quitting', () => {
 		application.emit('session-end');
 		assert.strictEqual(lifecycle.quitting, true);
+	});
+	test('waking the computer tells the listener', () => {
+		let resumes = 0;
+		lifecycle.listenForResume(() => {
+			resumes++;
+		});
+		power.emit('resume');
+		assert.strictEqual(resumes, 1);
 	});
 });

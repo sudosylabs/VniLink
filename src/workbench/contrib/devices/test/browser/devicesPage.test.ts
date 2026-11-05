@@ -61,6 +61,10 @@ suite('DevicesPage', () => {
 			click(fixture.row(1));
 			assert.strictEqual(panel()?.hidden, false);
 		});
+		test('selecting a device dials it', () => {
+			click(fixture.row(1));
+			assert.deepStrictEqual(fixture.connections, [LAB]);
+		});
 		test('selecting a device opens no tab', () => {
 			const tabs = document.querySelectorAll('[role="tab"]').length;
 			click(fixture.row(1));
