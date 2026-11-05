@@ -97,6 +97,9 @@ pub enum Error {
     Unanswered,
     #[error("there is no admission request waiting")]
     NoAdmissionRequest,
+    /// The file and the volume's free reserve need more space than is free.
+    #[error("this file needs {needed} bytes free and {free} bytes are free")]
+    InsufficientStorage { needed: u64, free: u64 },
 }
 
 /// Why a disk write failed, as far as a transfer tells the user.
@@ -159,6 +162,7 @@ impl Error {
             Self::NotAdmitted => "not admitted",
             Self::Unanswered => "unanswered",
             Self::NoAdmissionRequest => "no admission request",
+            Self::InsufficientStorage { .. } => "insufficient storage",
         }
     }
 

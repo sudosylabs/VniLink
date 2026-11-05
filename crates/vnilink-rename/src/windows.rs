@@ -245,7 +245,13 @@ fn wide(path: &Path) -> io::Result<Vec<u16>> {
     result.push(0);
     Ok(result)
 }
-pub fn available_storage(path: &Path) -> io::Result<u64> {
+/// Free bytes and the volume's size, as `GetDiskFreeSpaceExW` reports them.
+pub struct DiskSpace {
+    pub available: u64,
+    pub volume: u64,
+}
+
+pub fn disk_space(path: &Path) -> io::Result<DiskSpace> {
     let mut path = wide(path)?;
     // Directory paths, including UNC share roots, require a trailing separator.
     if path[path.len() - 2] != b'\\' as u16 && path[path.len() - 2] != b'/' as u16 {
@@ -253,21 +259,26 @@ pub fn available_storage(path: &Path) -> io::Result<u64> {
         path.extend([b'\\' as u16, 0]);
     }
     let mut available = 0u64;
-    // SAFETY: path is NUL-terminated and lives through the call. The one
-    // requested output points to an initialized, aligned 64-bit integer;
-    // documented optional outputs are null. No buffer escapes this call.
+    let mut volume = 0u64;
+    // SAFETY: path is NUL-terminated and lives through the call. Both
+    // outputs point to initialized, aligned 64-bit integers. The caller
+    // free total is unused. No buffer escapes this call.
     if unsafe {
         GetDiskFreeSpaceExW(
             path.as_ptr(),
             &mut available,
-            std::ptr::null_mut(),
+            &mut volume,
             std::ptr::null_mut(),
         )
     } == 0
     {
         return Err(io::Error::last_os_error());
     }
-    Ok(available)
+    Ok(DiskSpace { available, volume })
+}
+
+pub fn available_storage(path: &Path) -> io::Result<u64> {
+    disk_space(path).map(|space| space.available)
 }
 pub fn rename_noreplace(old: &Path, new: &Path) -> io::Result<()> {
     let old = wide(old)?;

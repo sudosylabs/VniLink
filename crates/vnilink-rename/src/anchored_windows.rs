@@ -421,9 +421,9 @@ fn open_child_shared(parent: DirRef<'_>, name: &str, share: u32) -> io::Result<D
     Ok(child)
 }
 
-/// Bytes this account may still write on `dir`'s volume, asked of the
-/// handle rather than a path.
-pub fn available_space(dir: DirRef<'_>) -> io::Result<u64> {
+/// Bytes this account may still write on `dir`'s volume, and the volume's
+/// size, asked of the handle rather than a path.
+pub fn volume_space(dir: DirRef<'_>) -> io::Result<(u64, u64)> {
     #[repr(C)]
     #[derive(Default)]
     struct FullSize {
@@ -447,10 +447,20 @@ pub fn available_space(dir: DirRef<'_>) -> io::Result<u64> {
         )
     };
     nt_result(status)?;
-    Ok(u64::try_from(size.caller_available_units)
+    let unit = u64::from(size.sectors_per_unit).saturating_mul(u64::from(size.bytes_per_sector));
+    let free = u64::try_from(size.caller_available_units)
         .unwrap_or(0)
-        .saturating_mul(u64::from(size.sectors_per_unit))
-        .saturating_mul(u64::from(size.bytes_per_sector)))
+        .saturating_mul(unit);
+    let volume = u64::try_from(size.total_units)
+        .unwrap_or(0)
+        .saturating_mul(unit);
+    Ok((free, volume))
+}
+
+/// Bytes this account may still write on `dir`'s volume, asked of the
+/// handle rather than a path.
+pub fn available_space(dir: DirRef<'_>) -> io::Result<u64> {
+    volume_space(dir).map(|(free, _)| free)
 }
 
 /// Creates one directory level under `parent`. An existing entry, including

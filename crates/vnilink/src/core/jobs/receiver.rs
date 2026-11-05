@@ -108,8 +108,8 @@ impl Core {
         // Admission precedes network fetching and export. Saturated workers
         // leave the job queued for a subsequent poll; impossible budgets fail
         // with a durable, payload-free explanation.
-        let available = match self.receiver_available_storage(id, &entry.path) {
-            Ok(available) => available,
+        let space = match self.receiver_available_storage(id, &entry.path) {
+            Ok(space) => space,
             Err(Error::InvalidSetting(msg)) if msg == fs::DRIVE_CHANGED => {
                 return self.mark_interrupted(id, fs::DRIVE_CHANGED);
             }
@@ -118,13 +118,19 @@ impl Core {
             Err(Error::InvalidSetting(msg)) => return self.mark_failed(id, msg),
             Err(error) => return Err(error),
         };
-        let _reservation =
-            match super::file_resources::reserve(&self.shared, id, entry.size, available) {
-                Ok(Some(reservation)) => reservation,
-                Ok(None) => return self.job_snapshot(id),
-                Err(Error::InvalidSetting(message)) => return self.mark_failed(id, message),
-                Err(error) => return Err(error),
-            };
+        let _reservation = match super::file_resources::reserve(&self.shared, id, entry.size, space)
+        {
+            Ok(Some(reservation)) => reservation,
+            Ok(None) => return self.job_snapshot(id),
+            Err(Error::InvalidSetting(message)) => return self.mark_failed(id, message),
+            Err(Error::InsufficientStorage { needed, free }) => {
+                return self.mark_failed(
+                    id,
+                    format!("this file needs {needed} bytes free and {free} bytes are free"),
+                );
+            }
+            Err(error) => return Err(error),
+        };
         // Fetch into the file's partial with a per-poll cancel watch.
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         // The run this fetch belongs to: what it finds is applied only while
@@ -509,7 +515,11 @@ impl Core {
         }
     }
 
-    pub(super) fn receiver_available_storage(&self, id: u64, path: &str) -> Result<u64, Error> {
+    pub(super) fn receiver_available_storage(
+        &self,
+        id: u64,
+        path: &str,
+    ) -> Result<super::file_resources::Space, Error> {
         let (root, rel) = {
             let jobs = lock(&self.shared.jobs);
             let record = jobs.get(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
@@ -532,8 +542,9 @@ impl Core {
         let destination = {
             use vnilink_rename::anchored::AsDir;
             let dir = lock(&self.shared.file_roots).open_dir_fd(root, &full)?;
-            vnilink_rename::anchored::available_space(dir.as_dir())
-                .map_err(|_| Error::InvalidSetting("available storage could not be checked"))?
+            let (free, volume) = vnilink_rename::anchored::volume_space(dir.as_dir())
+                .map_err(|_| Error::InvalidSetting("available storage could not be checked"))?;
+            super::file_resources::Space { free, volume }
         };
         #[cfg(not(any(unix, windows)))]
         let destination = {
@@ -541,7 +552,12 @@ impl Core {
             super::file_resources::available(&path)?
         };
         let transfer_dir = super::transfer::transfer_directory(&self.shared)?;
-        Ok(destination.min(super::file_resources::available(&transfer_dir)?))
+        let transfer = super::file_resources::available(&transfer_dir)?;
+        Ok(if destination.free <= transfer.free {
+            destination
+        } else {
+            transfer
+        })
     }
 
     /// Starts fetching the small files after `current` that are not
@@ -882,12 +898,16 @@ impl Core {
         }
     }
 
-    pub(super) fn mark_failed(&self, id: u64, reason: &'static str) -> Result<JobSnapshot, Error> {
+    pub(super) fn mark_failed(
+        &self,
+        id: u64,
+        reason: impl Into<String>,
+    ) -> Result<JobSnapshot, Error> {
         {
             let mut jobs = lock(&self.shared.jobs);
             let record = jobs.get_mut(&id).ok_or(Error::InvalidSetting(NO_JOB))?;
             record.enter(JobState::Failed);
-            record.error = Some(reason.to_owned());
+            record.error = Some(reason.into());
         }
         // Failed jobs do not resume: their partial only takes disk.
         remove_staging(&self.shared, id);
