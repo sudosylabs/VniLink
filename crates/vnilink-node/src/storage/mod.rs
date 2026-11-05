@@ -298,8 +298,13 @@ fn open_at(
         None => return Err(StoreFailure::Unavailable),
         Some(bytes) => {
             let key = key::require_key(bytes)?;
+            // The key outlived its database: provisioning stopped after the
+            // key, or a reset moved the files and then could not delete the
+            // key. Reporting it unreadable lets the next start fresh delete
+            // the key and create a new installation. Inventing a database
+            // for this key would pair a new record with the old identity.
             if !presence.database {
-                return Err(StoreFailure::Unavailable);
+                return Err(StoreFailure::Corrupt);
             }
             paths::validate_file(&paths.database)?;
             if presence.journal {

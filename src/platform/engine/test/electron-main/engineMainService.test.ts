@@ -302,6 +302,27 @@ suite('EngineMainService', () => {
 		assert.deepStrictEqual(launches.at(-1), [], 'a later restart opens the installation as it is');
 		await service.stop();
 	}));
+	test('a start fresh that fails after the installation was unreadable keeps the notice', () => runWithFakedTimers({}, async () => {
+		const service = createService();
+		const unreadable: boolean[] = [];
+		disposables.add(service.onDidChangeInstallationUnreadable(value => unreadable.push(value)));
+		const started = assert.rejects(service.start(), /CorruptRecord/);
+		newest().refuse('CorruptRecord: the installation record is not valid');
+		await started;
+		const fresh = assert.rejects(service.startFresh(), /could not open its secure installation/);
+		newest().refuse('StoreUnavailable: the key could not be deleted');
+		await fresh;
+		await timeout(60_000);
+		assert.deepStrictEqual(unreadable, [true]);
+		assert.deepStrictEqual([forks.length, service.isRestarting, service.isInstallationUnreadable], [2, false, true]);
+		const again = service.startFresh();
+		assert.deepStrictEqual(launches.at(-1), ['--start-fresh']);
+		newest().ready();
+		await again;
+		assert.deepStrictEqual(unreadable, [true, false]);
+		assert.strictEqual(service.isInstallationUnreadable, false);
+		await service.stop();
+	}));
 	test('starting fresh is refused while the engine can read its installation', () => runWithFakedTimers({}, async () => {
 		const service = await startService();
 		await assert.rejects(service.startFresh(), /no unreadable installation/);
