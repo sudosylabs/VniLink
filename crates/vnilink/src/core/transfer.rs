@@ -19,7 +19,8 @@
 //! file renamed over it is refused as changed.
 //!
 //! A sender serves at most [`SERVE_PER_PEER`] files at once to one peer and
-//! [`SERVE_IN_ALL`] in all; a request that finds no slot within
+//! [`SERVE_IN_ALL`] in all, enough for the small files a long round trip
+//! fetches ahead. A request that finds no slot within
 //! [`SLOT_WITHIN`] is told busy and tried again later. Serving re-checks the
 //! job and the grant every few megabytes, so a cancel or revoke stops a file
 //! mid-way. The receiver's window starts at [`crate::transfer::INITIAL_WINDOW`]
@@ -40,8 +41,8 @@ const DIAL_WITHIN: Duration = Duration::from_secs(30);
 const PEER_SHUT_DOWN: &str = "the other computer shut down";
 /// Files served at once, to one peer and in all. Each holds a few chunks
 /// read ahead, so these bound what peers can make this computer hold.
-const SERVE_PER_PEER: usize = 8;
-const SERVE_IN_ALL: usize = 32;
+const SERVE_PER_PEER: usize = 256;
+const SERVE_IN_ALL: usize = 256;
 /// How long a request waits for a serving slot before it is told busy.
 const SLOT_WITHIN: Duration = Duration::from_secs(5);
 
@@ -454,6 +455,23 @@ async fn ask_kept(
         forget_files_connection(shared, peer, &connection);
     }
     answered.map(|answer| (answer, connection.stable_id()))
+}
+
+/// The round trip of the files connection kept for `peer`, or zero when
+/// none is open or no path is selected yet.
+pub(super) fn files_rtt(shared: &Shared, peer: &[u8; 32]) -> Duration {
+    let connection = lock(&shared.files_fetching)
+        .get(peer)
+        .map(|fetching| fetching.connection());
+    let Some(connection) = connection else {
+        return Duration::ZERO;
+    };
+    connection
+        .paths()
+        .iter()
+        .find(|path| path.is_selected())
+        .map(|path| path.rtt())
+        .unwrap_or(Duration::ZERO)
 }
 
 /// Whether `connection` is still the peer's open files connection. Revoking

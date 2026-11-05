@@ -545,8 +545,9 @@ impl Core {
     }
 
     /// Starts fetching the small files after `current` that are not
-    /// already arriving, up to [`PREFETCH_FILES`] and [`PREFETCH_BYTES`]
-    /// ahead. A file of more than one segment is left for its turn.
+    /// already arriving, up to [`super::prefetch_file_limit`] of them and
+    /// [`super::PREFETCH_BYTES`] ahead. A file of more than one segment
+    /// is left for its turn.
     pub(super) fn prefetch_after(&self, id: u64, peer: &[u8; 32], wire_job: u64, current: usize) {
         #[cfg(any(test, feature = "test-probes"))]
         if self.shared.prefetch_off.load(Ordering::Relaxed) {
@@ -555,6 +556,7 @@ impl Core {
         let Ok(addr) = super::transfer::peer_addr(&self.shared, peer) else {
             return;
         };
+        let file_limit = super::prefetch_file_limit(super::transfer::files_rtt(&self.shared, peer));
         let started = {
             let jobs = lock(&self.shared.jobs);
             let Some(record) = jobs.get(&id) else {
@@ -572,7 +574,7 @@ impl Core {
                 .iter()
                 .flat_map(|m| m.files_from(current + 1));
             for (index, entry) in files {
-                if count >= PREFETCH_FILES || bytes >= PREFETCH_BYTES {
+                if count >= file_limit || bytes >= super::PREFETCH_BYTES {
                     break;
                 }
                 if entry.size > crate::transfer::SEGMENT_LEN || prefetch.files.contains_key(&index)

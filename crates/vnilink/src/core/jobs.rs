@@ -50,10 +50,11 @@
 //! for a caller driving a job itself, and at most one file per call. Calls
 //! come from outside the runtime, preferably off the UI thread.
 //!
-//! While a receiver takes one file it fetches up to [`PREFETCH_FILES`] of
-//! the next small files (one segment or less) ahead into their partials,
-//! stopping once [`PREFETCH_BYTES`] are fetching, so many small files do
-//! not cost a round trip each. They still publish one at a time in manifest
+//! While a receiver takes one file it fetches the next small files (one
+//! segment or less) ahead into their partials. A short round trip keeps
+//! seven of them. A longer one fetches more, so the wait is not one file
+//! per round trip, stopping once [`PREFETCH_BYTES`] are fetching or the
+//! sender's per-peer bound is reached. They still publish one at a time in manifest
 //! order through the same conflict and permission checks, and a file is
 //! used only if it arrived whole on the files connection still open:
 //! revoking closes that connection, so nothing fetched after a revoke
@@ -541,12 +542,49 @@ pub(super) struct Prefetch {
 /// How a file fetched ahead ended, and the connection it arrived on.
 type Fetched = (Result<crate::transfer::Received, Error>, Option<usize>);
 
-/// Files a job fetches ahead of the one it takes now, and their bytes at
-/// most. With the file taken now, a job stays within a sender's serving
-/// bound for one peer.
-const PREFETCH_FILES: usize = 7;
-
+/// Small files fetched ahead on a short round trip. A longer one fetches
+/// more; see [`prefetch_file_limit`].
+const PREFETCH_FILES_FLOOR: usize = 7;
+/// Bytes of small files fetched ahead of the one being taken.
 const PREFETCH_BYTES: u64 = 64 * 1024 * 1024;
+/// Files a second the extra fetches are there to cover. The loopback
+/// small-file run lands about this many; the count grows with the round
+/// trip so that rate is not cut by the wait.
+const PREFETCH_COVER_PER_SEC: u64 = 1_500;
+/// Never more files ahead than the sender will serve one peer at once,
+/// leaving one slot for the file being taken now.
+const PREFETCH_FILES_CEILING: usize = 192;
+
+/// How many small files may be fetched ahead at round trip `rtt`.
+/// Zero keeps [`PREFETCH_FILES_FLOOR`]. Forty milliseconds covers about
+/// sixty, still under [`PREFETCH_FILES_CEILING`].
+pub(super) fn prefetch_file_limit(rtt: std::time::Duration) -> usize {
+    let extra = u64::try_from(rtt.as_millis()).unwrap_or(u64::MAX) * PREFETCH_COVER_PER_SEC / 1_000;
+    PREFETCH_FILES_FLOOR
+        .max(usize::try_from(extra).unwrap_or(usize::MAX))
+        .min(PREFETCH_FILES_CEILING)
+}
+
+#[cfg(test)]
+mod prefetch_limit {
+    use super::prefetch_file_limit;
+    use std::time::Duration;
+
+    #[test]
+    fn a_short_round_trip_keeps_seven_files_ahead() {
+        assert_eq!(prefetch_file_limit(Duration::ZERO), 7);
+        assert_eq!(prefetch_file_limit(Duration::from_millis(4)), 7);
+    }
+
+    #[test]
+    fn a_longer_round_trip_fetches_more_files_ahead() {
+        let at_40 = prefetch_file_limit(Duration::from_millis(40));
+        assert!(at_40 > 7, "{at_40}");
+        assert!(at_40 >= 60, "{at_40}");
+        assert!(prefetch_file_limit(Duration::from_millis(80)) > at_40);
+        assert!(prefetch_file_limit(Duration::from_secs(5)) <= 192);
+    }
+}
 
 /// Stops a job's fetches ahead. A stopped fetch may still be writing its
 /// partial, so it is kept until the job's next fetch has waited for it
