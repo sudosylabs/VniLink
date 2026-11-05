@@ -206,13 +206,15 @@ fn holds_within_segment(offset: u64, held: u64, size: u64) -> bool {
 /// Reads the held source from `offset` to its end once, segment by
 /// segment, handing on all but the first `held` bytes. Each segment's value
 /// follows its bytes only while the source still has the expected size and
-/// time, checked as each segment ends.
+/// time, and has not changed since the read began, checked as each segment
+/// ends.
 fn read_source(
     mut source: Source,
     offset: u64,
     held: u64,
     pieces: tokio::sync::mpsc::Sender<Piece>,
 ) {
+    let began = change_stamp(&source.file);
     if source.file.seek(SeekFrom::Start(offset)).is_err() {
         crate::ignored!(
             crate::trace::FILES,
@@ -224,7 +226,7 @@ fn read_source(
     let unchanged = |file: &std::fs::File| {
         held_identity(file).is_some_and(|(size, mtime_ms)| {
             size == source.size && (source.mtime_ms == 0 || mtime_ms == source.mtime_ms)
-        })
+        }) && change_stamp(file) == began
     };
     let sent_from = offset + held;
     let mut start = offset;
@@ -336,6 +338,23 @@ fn send_block(
         }
     }
     true
+}
+
+/// When an open file last changed, to the nanosecond: a write moves it, and
+/// so does setting the modification time back, which a save within the same
+/// millisecond as the scan, or a tool that keeps times, leaves unchanged.
+/// Windows has none to offer and needs none: a file served there is opened
+/// for reading only, and other writers are refused while it is read.
+#[cfg(unix)]
+fn change_stamp(file: &std::fs::File) -> Option<(i64, i64)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = file.metadata().ok()?;
+    Some((meta.ctime(), meta.ctime_nsec()))
+}
+
+#[cfg(not(unix))]
+fn change_stamp(_: &std::fs::File) -> Option<(i64, i64)> {
+    None
 }
 
 /// Size and modification time of an open file, in manifest units.
@@ -485,6 +504,46 @@ mod tests {
             pieces_of(source, 0).as_slice(),
             [Piece::Mode(_), Piece::Bytes { .. }, Piece::Changed]
         ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Bytes rewritten while the file is read, its size kept and its time
+    /// set back as it was, as a save within the same millisecond leaves it:
+    /// what was sent is no longer the file, so it is changed, not ended.
+    #[test]
+    fn a_source_rewritten_while_read_with_its_time_kept_is_changed() {
+        let bytes = vec![3u8; 3 * BLOCK];
+        let (path, file) = scratch("rewritten", &bytes);
+        let (_, mtime_ms) = held_identity(&file).unwrap();
+        let modified = file.metadata().unwrap().modified().unwrap();
+        let source = Source {
+            file,
+            size: bytes.len() as u64,
+            mtime_ms,
+        };
+        let (pieces, mut arriving) = tokio::sync::mpsc::channel(1);
+        let reader = std::thread::spawn(move || read_source(source, 0, 0, pieces));
+        // The reader waits to hand on its next block: what it sent so far
+        // was read before the rewrite.
+        assert!(matches!(arriving.blocking_recv(), Some(Piece::Mode(_))));
+        assert!(matches!(
+            arriving.blocking_recv(),
+            Some(Piece::Bytes { .. })
+        ));
+        {
+            use std::io::Write;
+            let mut writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            writer.write_all(&[9u8; 16]).unwrap();
+            writer
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+        }
+        let rest: Vec<Piece> = std::iter::from_fn(|| arriving.blocking_recv()).collect();
+        reader.join().unwrap();
+        assert!(
+            matches!(rest.last(), Some(Piece::Changed)),
+            "a file rewritten while it was read is not sent as whole"
+        );
         let _ = std::fs::remove_file(path);
     }
 
