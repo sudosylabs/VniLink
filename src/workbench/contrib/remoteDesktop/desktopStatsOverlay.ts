@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import * as nls from '../../../nls.js';
-import { $, addDisposableListener, append, EventType } from '../../../base/browser/dom.js';
+import { $, addDisposableListener, append, EventType, getWindow } from '../../../base/browser/dom.js';
 import { status as announce } from '../../../base/browser/ui/aria/aria.js';
 import { renderIcon } from '../../../base/browser/ui/icon/icon.js';
 import { Icons } from '../../../base/common/icons.js';
@@ -117,6 +117,8 @@ export class DesktopStatsOverlay extends Disposable {
 	/** The condition last shown and announced. */
 	private shownCondition: DesktopCondition | undefined;
 	private drag: { readonly pointerId: number; readonly dx: number; readonly dy: number; moved: boolean } | undefined;
+	/** Pointer listeners on the window, used when the panel cannot capture the pointer. */
+	private readonly dragOutside = this._register(new MutableDisposable());
 
 	constructor(
 		private readonly deviceId: string,
@@ -168,44 +170,74 @@ export class DesktopStatsOverlay extends Disposable {
 			}
 			const bounds = this.element.getBoundingClientRect();
 			this.drag = { pointerId: event.pointerId, dx: event.clientX - bounds.left, dy: event.clientY - bounds.top, moved: false };
-			this.element.setPointerCapture(event.pointerId);
+			try {
+				this.element.setPointerCapture(event.pointerId);
+			} catch {
+				// Linux refuses capture. Follow the pointer on the window instead.
+				const view = getWindow(this.element);
+				const listeners = [
+					addDisposableListener(view, EventType.POINTER_MOVE, move => {
+						this.dragMove(move);
+					}),
+					addDisposableListener(view, EventType.POINTER_UP, up => {
+						this.dragEnd(up);
+					}),
+					addDisposableListener(view, 'pointercancel', up => {
+						this.dragEnd(up);
+					}),
+				];
+				this.dragOutside.value = toDisposable(() => {
+					for (const listener of listeners) {
+						listener.dispose();
+					}
+				});
+			}
 		}));
 		this._register(addDisposableListener(this.element, EventType.POINTER_MOVE, event => {
-			const drag = this.drag;
-			const parent = this.element.offsetParent;
-			if (drag?.pointerId !== event.pointerId || !(parent instanceof HTMLElement)) {
-				return;
-			}
-			const room = parent.getBoundingClientRect();
-			const left = clamp(event.clientX - drag.dx - room.left, 0, room.width - this.element.offsetWidth);
-			const top = clamp(event.clientY - drag.dy - room.top, 0, room.height - this.element.offsetHeight);
-			drag.moved = true;
-			this.element.classList.add('dragging');
-			this.element.style.left = `${String(left)}px`;
-			this.element.style.top = `${String(top)}px`;
-			this.element.style.right = this.element.style.bottom = 'auto';
+			this.dragMove(event);
 		}));
-		const drop = (event: PointerEvent): void => {
-			const drag = this.drag;
-			if (drag?.pointerId !== event.pointerId) {
-				return;
-			}
-			this.drag = undefined;
-			this.element.classList.remove('dragging');
-			const parent = this.element.offsetParent;
-			if (!drag.moved || !(parent instanceof HTMLElement)) {
-				this.place(this.corner);
-				return;
-			}
-			// It settles in the corner nearest its centre.
-			const room = parent.getBoundingClientRect();
-			const bounds = this.element.getBoundingClientRect();
-			const right = bounds.left + bounds.width / 2 > room.left + room.width / 2;
-			const bottom = bounds.top + bounds.height / 2 > room.top + room.height / 2;
-			this.moveTo(bottom ? (right ? 'bottomRight' : 'bottomLeft') : (right ? 'topRight' : 'topLeft'));
-		};
-		this._register(addDisposableListener(this.element, EventType.POINTER_UP, drop));
-		this._register(addDisposableListener(this.element, 'pointercancel', drop));
+		this._register(addDisposableListener(this.element, EventType.POINTER_UP, event => {
+			this.dragEnd(event);
+		}));
+		this._register(addDisposableListener(this.element, 'pointercancel', event => {
+			this.dragEnd(event);
+		}));
+	}
+
+	private dragMove(event: PointerEvent): void {
+		const drag = this.drag;
+		const parent = this.element.offsetParent;
+		if (drag?.pointerId !== event.pointerId || !(parent instanceof HTMLElement)) {
+			return;
+		}
+		const room = parent.getBoundingClientRect();
+		const left = clamp(event.clientX - drag.dx - room.left, 0, room.width - this.element.offsetWidth);
+		const top = clamp(event.clientY - drag.dy - room.top, 0, room.height - this.element.offsetHeight);
+		drag.moved = true;
+		this.element.classList.add('dragging');
+		this.element.style.left = `${String(left)}px`;
+		this.element.style.top = `${String(top)}px`;
+		this.element.style.right = this.element.style.bottom = 'auto';
+	}
+
+	private dragEnd(event: PointerEvent): void {
+		const drag = this.drag;
+		if (drag?.pointerId !== event.pointerId) {
+			return;
+		}
+		this.dragOutside.clear();
+		this.drag = undefined;
+		this.element.classList.remove('dragging');
+		const parent = this.element.offsetParent;
+		if (!drag.moved || !(parent instanceof HTMLElement)) {
+			this.place(this.corner);
+			return;
+		}
+		const room = parent.getBoundingClientRect();
+		const bounds = this.element.getBoundingClientRect();
+		const right = bounds.left + bounds.width / 2 > room.left + room.width / 2;
+		const bottom = bounds.top + bounds.height / 2 > room.top + room.height / 2;
+		this.moveTo(bottom ? (right ? 'bottomRight' : 'bottomLeft') : (right ? 'topRight' : 'topLeft'));
 	}
 
 	private moveTo(corner: DesktopStatsCorner): void {
