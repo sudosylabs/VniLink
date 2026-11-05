@@ -68,12 +68,12 @@
 }
 
 .tabs-container:has(> .tab:first-child[aria-selected='true'])::before {
-	background: none;
+	background-size: calc(100% - 6px) 1px;
 }
 
 .tabs-container:has(> .tab:last-child[aria-selected='true'])::after {
 	background-position: right bottom;
-	background-size: calc(100% - 7px) 1px;
+	background-size: calc(100% - 6px) 1px;
 }
 
 .view-actions {
@@ -111,12 +111,13 @@
 	pointer-events: none;
 }
 
+/* The divider resumes where the selected tab's shoulders end, 6px beyond its edges. */
 .tab:has(+ .tab[aria-selected='true'])::after {
-	right: 7px;
+	right: 6px;
 }
 
 .tab[aria-selected='true'] + .tab::after {
-	left: 7px;
+	left: 6px;
 }
 
 .tab-fill {
@@ -145,8 +146,11 @@
 	bottom: 7px;
 	background-color: var(--tab-active-background);
 
-	/* The fill ends where the shoulders begin; its shadow carries the colour down to the page. */
-	box-shadow: 0 7px var(--tab-active-background);
+	/* The outline lies over the titlebar, as the divider does, so a translucent
+	 * line is one shade all round. The fill ends where the shoulders begin; its
+	 * shadow carries the colour down to the page between the side lines. */
+	background-clip: padding-box;
+	box-shadow: 0 8px 0 -1px var(--tab-active-background);
 	border-color: var(--chrome-line);
 	border-bottom: 0;
 	z-index: 1;
@@ -212,8 +216,10 @@
 /* Adapted from VS Code connectedEditorTabs.css: the active cap and its
  * reverse rounded shoulders. Each shoulder is one shape, its line and the
  * page's colour drawn by one gradient around the same centre, so the curve
- * has no seam between the two. Each overlaps the cap by the line's width, so
- * the cap's side continues into the curve. */
+ * has no seam between the two. The curve's line is centred on the cap's side
+ * line where they meet and on the divider where it ends, 6px beyond the side.
+ * Each shape reaches 1px into the cap, so the page's colour fills to the line
+ * at any scale. */
 
 .tabs-scrollable {
 	align-self: flex-end;
@@ -228,7 +234,7 @@
 	content: '';
 	position: absolute;
 	bottom: -7px;
-	width: 7px;
+	width: 8px;
 	height: 7px;
 }
 

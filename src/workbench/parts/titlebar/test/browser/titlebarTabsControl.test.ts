@@ -210,7 +210,8 @@ suite('TitlebarTabsControl', () => {
 		const page = getComputedStyle(fixture.content).backgroundColor;
 		assert.notStrictEqual(page, 'rgba(0, 0, 0, 0)', 'the page has no colour to compare with');
 		assert.strictEqual(style.backgroundColor, page, 'the active tab is not the page\'s colour');
-		assert.strictEqual(style.boxShadow, `${page} 0px 7px 0px 0px`, 'the active tab stops short of the page');
+		assert.strictEqual(style.boxShadow, `${page} 0px 8px 0px -1px`, 'the active tab stops short of the page, or fills under its side lines');
+		assert.strictEqual(style.backgroundClip, 'padding-box', 'the outline lies over the tab\'s fill, not the titlebar the divider lies over');
 		// A 1px border is snapped to whole device pixels: one device pixel, 0.8px, at Windows' 125% scale.
 		assert.strictEqual(Math.round(Number.parseFloat(style.borderTopWidth) * window.devicePixelRatio), Math.max(1, Math.floor(window.devicePixelRatio)));
 		assert.notStrictEqual(style.borderTopColor, 'rgba(0, 0, 0, 0)', 'the active tab lost its selection outline');
@@ -240,6 +241,43 @@ suite('TitlebarTabsControl', () => {
 			assert.match(shoulder.backgroundImage, new RegExp(`^radial-gradient\\(circle ${centre}, rgba\\(0, 0, 0, 0\\)`), `the ${side} shoulder is not one gradient`);
 			assert.strictEqual(shoulder.borderBottomWidth, '0px', `the ${side} shoulder still draws its line as a border`);
 			assert.strictEqual(shoulder.boxShadow, 'none', `the ${side} shoulder still fills with a shadow`);
+		}
+	});
+	test('each shoulder\'s line continues the side line and ends where the divider resumes', () => {
+		const { first } = fixture.openThree();
+		fixture.tabService.select(first.id);
+		const tab = fixture.root.querySelector<HTMLElement>('[aria-selected="true"]');
+		const fill = tab?.querySelector<HTMLElement>('.tab-fill');
+		assert.ok(tab && fill && tab.previousElementSibling && tab.nextElementSibling);
+		const px = (value: string) => Number.parseFloat(value);
+		const bounds = fill.getBoundingClientRect();
+		// Not `clientLeft`, which rounds: the 1px side line is 0.8px at Windows' 125% scale.
+		const side = px(getComputedStyle(fill).borderLeftWidth);
+		const { previousElementSibling: previous, nextElementSibling: next } = tab;
+		const shoulders = [
+			// Positioned from the fill's padding box; each circle is centred on the shape's outer top corner.
+			{
+				pseudo: '::before',
+				sideLine: bounds.left + side / 2,
+				centre: (style: CSSStyleDeclaration) => bounds.right - side - px(style.right) - px(style.width),
+				divider: previous.getBoundingClientRect().right - px(getComputedStyle(previous, '::after').right),
+			},
+			{
+				pseudo: '::after',
+				sideLine: bounds.right - side / 2,
+				centre: (style: CSSStyleDeclaration) => bounds.left + side + px(style.left) + px(style.width),
+				divider: next.getBoundingClientRect().left + px(getComputedStyle(next, '::after').left),
+			},
+		];
+		for (const { pseudo, sideLine, centre, divider } of shoulders) {
+			const style = getComputedStyle(fill, pseudo);
+			const stops = [...style.backgroundImage.matchAll(/\) ([\d.]+)px/g)].map(match => Number(match[1]));
+			assert.ok(stops.length >= 3, `the ${pseudo} shoulder has no line`);
+			// The line is the stops from transparent to the line's colour and back out.
+			const radius = (stops[1] + stops[2]) / 2;
+			const x = centre(style);
+			assert.ok(Math.abs(Math.abs(x - sideLine) - radius) < 0.25, `the ${pseudo} shoulder's line starts ${(Math.abs(x - sideLine) - radius).toFixed(2)}px off the side line`);
+			assert.ok(Math.abs(divider - x) <= side, `the divider resumes ${(divider - x).toFixed(2)}px from where the ${pseudo} shoulder ends`);
 		}
 	});
 	test('the close button\'s hover target is square', () => {

@@ -4493,7 +4493,7 @@
       "path": "src/workbench/parts/titlebar/media/modernTabs.css",
       "upstreamPath": "src/vs/workbench/contrib/modernUI/browser/media/tabs.css",
       "adapted": true,
-      "sha256": "966bcc2ca6475ce404a8b007d68f2811c21bc13ba2d677984b83a591f8700332",
+      "sha256": "e24b50105b5a6d2f4aeb55e02e3ccf7aba0cc72088862f22c8d73df1981722bc",
       "adaptation": "VniLink transparent titlebar tabs retain a shared label color and rounded selection outline; segmented dividers leave the active tab open, with side strokes ending at the reverse shoulders. The active cap and reverse outline also restate src/vs/workbench/contrib/modernUI/browser/media/connectedEditorTabs.css."
     },
     {
