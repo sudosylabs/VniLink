@@ -1253,6 +1253,8 @@ fn interrupt_jobs(shared: &Shared, peer: &[u8; 32], controller_only: bool, reaso
 /// something changed.
 pub(super) fn jobs_changed(shared: &Shared) {
     shared.job_revision.fetch_add(1, Ordering::AcqRel);
+    // A job that starts or ends may take or give back a power hold.
+    shared.events.changes().notify_one();
     let (gate, wake) = &shared.job_wake;
     // Under the gate, so a worker that just found nothing changed is
     // already waiting.

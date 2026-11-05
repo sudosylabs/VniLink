@@ -180,8 +180,8 @@ impl EventSubscription {
 pub(crate) struct EventHub {
     capacity: usize,
     subscribers: Arc<Mutex<Vec<Subscriber>>>,
-    /// Woken when a session or a service changes, for work that waits for
-    /// one instead of polling for it.
+    /// Woken when a session, a service or a job changes, for work that
+    /// waits for one instead of polling for it.
     changes: Arc<tokio::sync::Notify>,
 }
 
@@ -200,7 +200,7 @@ impl EventHub {
         }
     }
 
-    /// Wakes, once, after any session or service change.
+    /// Wakes, once, after any session, service or job change.
     pub(crate) fn changes(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.changes)
     }

@@ -5,7 +5,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! Aggregate OS leases with independently counted Desktop consumers.
+//! Aggregate OS leases with independently counted consumers: desktops,
+//! attached terminals, and Files services while a job moves files.
 use super::*;
 use crate::power::*;
 use crate::{BackendStartup, CloseCause, ServiceKind, ServicePhase};
@@ -122,6 +123,7 @@ pub(super) fn start(shared: Weak<Shared>) {
             let Some(core) = shared.upgrade() else {
                 break;
             };
+            let copying = super::service_jobs::copying_owners(&core);
             let (consumers, revision, factory, lock_fire, desktops, lock_pending) = {
                 let mut state = lock(&core.state);
                 if state.shut_down {
@@ -144,14 +146,24 @@ pub(super) fn start(shared: Weak<Shared>) {
                 for (hosted, records) in [(false, &state.services), (true, &state.hosted_services)]
                 {
                     for record in records.values() {
-                        if record.info.kind != ServiceKind::Desktop
+                        // A desktop, an attached terminal, or Files while one
+                        // of its jobs moves files. A detached shell has no
+                        // service, and an open Files tab alone holds nothing.
+                        let holds = match record.info.kind {
+                            ServiceKind::Desktop => record.desktop.is_some(),
+                            ServiceKind::Terminal => true,
+                            ServiceKind::Files => {
+                                copying.contains(&(hosted, record.info.id, record.info.generation))
+                            }
+                            _ => false,
+                        };
+                        if !holds
                             || record.info.phase != ServicePhase::Active
-                            || record.desktop.is_none()
                             || *record.stop.borrow()
                         {
                             continue;
                         }
-                        desktops = true;
+                        desktops |= record.info.kind == ServiceKind::Desktop;
                         for kind in PowerKind::ALL {
                             if state.power_policy.wants(hosted, kind) {
                                 consumers[kind.index()].push(record.stop.subscribe());
