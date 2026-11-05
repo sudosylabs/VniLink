@@ -32,7 +32,7 @@ struct Control {
 }
 
 struct Running<'scope> {
-    key: (u64, u64, u64),
+    key: (u64, u64),
     control: Arc<Control>,
     /// Joined when this value drops, including shutdown and a departed consumer.
     #[allow(dead_code)]
@@ -41,6 +41,12 @@ struct Running<'scope> {
 
 fn target_key(target: &VideoTarget) -> (u64, u64, u64) {
     (target.id, target.generation, target.display_id)
+}
+
+/// The consumer serving `target` within one capture. A selection that this
+/// capture still serves keeps it, and its encoder, going.
+fn worker_key(target: &VideoTarget) -> (u64, u64) {
+    (target.id, target.generation)
 }
 
 fn serves(target: &VideoTarget, capture_display: u64, default: Option<u64>) -> bool {
@@ -487,7 +493,7 @@ where
             let live: Vec<_> = targets
                 .iter()
                 .copied()
-                .map(|target| target_key(&target))
+                .map(|target| worker_key(&target))
                 .collect();
             let mut index = 0;
             while index < running.len() {
@@ -502,7 +508,7 @@ where
             }
             draining.retain(|worker| !worker.control.finished.load(Ordering::Acquire));
             for target in &targets {
-                let key = target_key(target);
+                let key = worker_key(target);
                 if running.iter().any(|worker| worker.key == key) {
                     continue;
                 }
