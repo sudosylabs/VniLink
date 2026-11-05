@@ -1105,15 +1105,13 @@ mod tests {
                 persistent,
                 resume_id: None,
             };
-            assert!(
-                matches!(
-                    suite.open_terminal(&connection, options(true)),
-                    Err(vnilink::Error::Unauthorized)
-                ),
-                "no shell is kept past its connection"
-            );
-            let terminal = suite.open_terminal(&connection, options(false))?;
+            // Asked to keep the shell, the agent opens an ordinary one.
+            let terminal = suite.open_terminal(&connection, options(true))?;
             let shell = terminal.session();
+            assert!(
+                !shell.persistent,
+                "no shell is kept past its connection: {shell:?}"
+            );
             let mut processes = start_lingering(&terminal);
             processes.push(shell.process_id);
             assert!(

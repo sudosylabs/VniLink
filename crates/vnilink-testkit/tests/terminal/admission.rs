@@ -147,14 +147,13 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
         ..policy
     };
     host.core.set_terminal_policy(denied)?;
+    let ordinary = a.open_terminal(&to_a, options(true, None))?;
     assert!(
-        matches!(
-            a.open_terminal(&to_a, options(true, None)),
-            Err(Error::Unauthorized)
-        ),
-        "a policy without persistence refuses a persistent terminal"
+        !ordinary.session().persistent,
+        "a policy without persistence opens an ordinary shell"
     );
-    assert_eq!(factory.startups(), 2, "the refusal precedes native startup");
+    assert_eq!(factory.startups(), 3, "the ordinary shell still starts");
+    ordinary.close();
     trace.wait_for_records("terminal stream ended", 4);
     trace.wait_for_records("terminal pipe ended", 2);
     vnilink_testkit::assert_story(
@@ -163,6 +162,7 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
           terminal: terminal pipe ended closed_here=true error=no session service=1
         controller:
           terminal: terminal pipe ended closed_here=true error=no session service=1
+          terminal: terminal pipe ended closed_here=true error=no session service=3
         host:
           terminal: terminal not opened error=busy resume=false service=2
           terminal: terminal stream ended ended=busy explicit_close=false service=2
@@ -170,8 +170,8 @@ fn terminal_limits_count_shells_starting_and_keep_peers_independent() -> TestRes
           terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=1
           terminal: terminal stream ended ended=viewer closed explicit_close=false service=3
-          terminal: terminal not opened error=unauthorized resume=false service=4
-          terminal: terminal stream ended ended=unauthorized explicit_close=false service=4
+          terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=4
+          terminal: terminal stream ended ended=viewer closed explicit_close=false service=4
     "#]],
         || trace.tell(&["terminal"]).to_string(),
     );

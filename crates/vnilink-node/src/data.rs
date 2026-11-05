@@ -1143,6 +1143,8 @@ pub struct OpenChannelTask {
     rows: u16,
     columns: u16,
     media: Option<MediaConfig>,
+    /// A kept shell to resume. Only a terminal channel sets it.
+    resume_id: Option<String>,
 }
 impl Task for OpenChannelTask {
     type Output = DataChannel;
@@ -1191,13 +1193,14 @@ impl Task for OpenChannelTask {
             .as_ref()
             .filter(|_| self.kind == ChannelKind::Terminal)
         {
-            match self.core.open_terminal_service(
+            match self.core.open_persistent_terminal_service(
                 owner.id,
                 owner.generation,
                 FfiTerminalSize {
                     rows: self.rows,
                     columns: self.columns,
                 },
+                self.resume_id.clone(),
             ) {
                 Ok(service) => Some(service),
                 Err(error) => {
@@ -1348,6 +1351,10 @@ impl Task for OpenChannelTask {
 #[napi]
 impl Engine {
     #[napi]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the bridge takes the channel request's fields as TypeScript passes them"
+    )]
     pub fn open_data_channel(
         &self,
         kind: String,
@@ -1356,6 +1363,7 @@ impl Engine {
         rows: u16,
         columns: u16,
         media: Option<String>,
+        resume_id: Option<String>,
     ) -> Result<AsyncTask<OpenChannelTask>> {
         let kind =
             ChannelKind::parse(&kind).ok_or_else(|| Error::from_reason("Invalid channel kind"))?;
@@ -1378,6 +1386,13 @@ impl Engine {
             (_, Some(_)) => return Err(Error::from_reason("Unexpected media configuration")),
             _ => {}
         }
+        if let Some(resume_id) = &resume_id {
+            let hex =
+                resume_id.len() == 32 && resume_id.bytes().all(|byte| byte.is_ascii_hexdigit());
+            if kind != ChannelKind::Terminal || !hex {
+                return Err(Error::from_reason("Invalid terminal resume"));
+            }
+        }
         Ok(AsyncTask::new(OpenChannelTask {
             core: self.core.clone(),
             desktops: self.desktops.clone(),
@@ -1388,6 +1403,7 @@ impl Engine {
             rows,
             columns,
             media: config,
+            resume_id,
         }))
     }
 }
@@ -1797,6 +1813,7 @@ mod tests {
             rows: 24,
             columns: 80,
             media: None,
+            resume_id: None,
         };
         host.set_service_sharing(vnilink_app::FfiServiceKind::Desktop, false)
             .unwrap();
@@ -1994,6 +2011,7 @@ mod tests {
             rows: 24,
             columns: 80,
             media: None,
+            resume_id: None,
         };
         let channel = task.compute().unwrap();
         channel
@@ -2030,6 +2048,7 @@ mod tests {
             rows: 24,
             columns: 80,
             media: None,
+            resume_id: None,
         };
         let files = file_open.compute().unwrap();
         let mut file_task = FileTask {

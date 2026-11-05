@@ -19,6 +19,8 @@ export interface DataChannelRequest {
 	generation: string;
 	rows?: number;
 	columns?: number;
+	/** A kept shell on the other computer to resume. A terminal channel only. */
+	resumeId?: string;
 }
 
 export interface DataPacket {
@@ -47,9 +49,10 @@ export function isChannelRequest(value: unknown): value is DataChannelRequest {
 		id(value.sessionId) &&
 		id(value.generation) &&
 		(value.kind !== 'terminal' || (dimension(value.rows) && dimension(value.columns))) &&
+		(value.resumeId === undefined || (value.kind === 'terminal' && typeof value.resumeId === 'string' && /^[0-9a-f]{32}$/i.test(value.resumeId))) &&
 		(value.kind === 'snapshot' ? isSnapshotMedia(value.media) : (value.kind === 'camera' || value.kind === 'audio') ? isMediaChannelConfig(value.media) && value.media.type === value.kind : value.media === undefined) &&
 		Object.keys(value).every((key) =>
-			['requestId', 'kind', 'sessionId', 'generation', 'rows', 'columns', 'media'].includes(key),
+			['requestId', 'kind', 'sessionId', 'generation', 'rows', 'columns', 'media', 'resumeId'].includes(key),
 		)
 	);
 }

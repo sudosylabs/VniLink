@@ -109,11 +109,15 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 			return { code: 'disconnected' };
 		}
 		const size = { cols: this.cols, rows: this.rows };
+		const resumeId = await this.detachedShell(session);
+		if (!this.isStarting()) {
+			return undefined;
+		}
 		const opening = { lost: false };
 		let channel: IDataChannel;
 		try {
 			channel = await this.dataChannels.open(
-				{ kind: 'terminal', sessionId: session.id, generation: session.generation, rows: size.rows, columns: size.cols },
+				{ kind: 'terminal', sessionId: session.id, generation: session.generation, rows: size.rows, columns: size.cols, ...(resumeId ? { resumeId } : {}) },
 				packet => this.consume(packet),
 				() => {
 					opening.lost = this.isStarting();
@@ -179,7 +183,11 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 	}
 
 	public override dispose(): void {
-		this.end();
+		// Closing the tab drops the channel while the link is up, which is
+		// the explicit close. A lost link ends the channel on its own.
+		if (this.state !== 'ended') {
+			this.end();
+		}
 		super.dispose();
 	}
 
@@ -278,5 +286,18 @@ export class EnginePty extends Disposable implements ITerminalChildProcess {
 		this.pending.length = 0;
 		this.pendingBytes = 0;
 		this.releaseOutput?.();
+	}
+
+	/** A kept shell this computer left behind on the paired one, if it has one. */
+	private async detachedShell(session: ControllerSession): Promise<string | undefined> {
+		try {
+			const reply = await this.engine.execute({ type: 'remoteTerminalSessions', connectionId: session.id, generation: session.generation });
+			if (reply.type !== 'terminalSessions') {
+				return undefined;
+			}
+			return reply.sessions.find(shell => shell.persistent && !shell.attached)?.id;
+		} catch {
+			return undefined;
+		}
 	}
 }
