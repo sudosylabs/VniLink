@@ -8,7 +8,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import type { FileJob, FilePlaces } from '../../../../../platform/engine/common/files.js';
-import { folderName, formatSize, itemCount, jobStatus } from '../../filesText.js';
+import { folderName, formatSize, hiddenNames, itemCount, jobStatus } from '../../filesText.js';
 
 /** A transfer of `a.txt` under way, 40 of its 100 bytes sent. */
 const running: FileJob = {
@@ -31,6 +31,12 @@ suite('Files text', () => {
 		});
 	}
 	const places: FilePlaces = { roots: [{ id: '0', name: '/' }, { id: '2', name: 'C:' }], folders: [] };
+	test('one name that is not text is said in the singular', () => {
+		assert.strictEqual(hiddenNames(1), '1 name could not be shown');
+	});
+	test('several names that are not text are counted', () => {
+		assert.strictEqual(hiddenNames(3), '3 names could not be shown');
+	});
 	test('a folder is named by its last part', () => {
 		assert.strictEqual(folderName({ root: '0', path: 'Users/someone/Downloads' }, places, 'This Mac'), 'Downloads');
 	});

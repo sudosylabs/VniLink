@@ -404,6 +404,8 @@ export class FilesPaneView extends Disposable {
 	private filter = '';
 	private showHidden = false;
 	private truncated = false;
+	/** Names in the folder that are not text, so they are not listed. */
+	private skipped = 0;
 	public editing: string | undefined;
 	/** Where a Shift selection starts. */
 	private anchor: number | undefined;
@@ -624,9 +626,9 @@ export class FilesPaneView extends Disposable {
 	}
 
 	/** Entries shown, and the selection's count and file bytes. */
-	public summary(): { readonly shown: number; readonly selected: number; readonly bytes: number; readonly truncated: boolean } {
+	public summary(): { readonly shown: number; readonly selected: number; readonly bytes: number; readonly truncated: boolean; readonly skipped: number } {
 		const selected = this.selectedEntries();
-		return { shown: this.shown.length, selected: selected.length, bytes: selected.reduce((sum, entry) => sum + (entry.kind === 'file' ? Number(entry.size) : 0), 0), truncated: this.truncated };
+		return { shown: this.shown.length, selected: selected.length, bytes: selected.reduce((sum, entry) => sum + (entry.kind === 'file' ? Number(entry.size) : 0), 0), truncated: this.truncated, skipped: this.skipped };
 	}
 
 	public setActive(active: boolean): void {
@@ -724,6 +726,7 @@ export class FilesPaneView extends Disposable {
 			this.current = folder;
 			this.entries = listing.entries;
 			this.truncated = listing.truncated;
+			this.skipped = listing.skipped;
 			this.state.hidden = true;
 			this.show(entering);
 			this.renderCrumbs();

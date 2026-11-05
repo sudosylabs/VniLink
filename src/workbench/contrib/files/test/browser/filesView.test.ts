@@ -43,6 +43,11 @@ suite('FilesView', () => {
 		const { view } = await fixture.open();
 		assert.match(view.element.querySelector('.files-status-selection')?.textContent ?? '', /^This (Mac|PC|Computer): 4 items$/);
 	});
+	test('names that are not text are counted in the status bar', async () => {
+		fixture.localDisk.skipped = 3;
+		const { view } = await fixture.open();
+		assert.match(view.element.querySelector('.files-status-selection')?.textContent ?? '', /3 names could not be shown/);
+	});
 	test('copy is not offered with nothing selected', async () => {
 		const { view } = await fixture.open();
 		assert.strictEqual(view.element.querySelector<HTMLButtonElement>('.files-copy-button')?.disabled, true);

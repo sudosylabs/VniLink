@@ -27,6 +27,13 @@ export function formatSize(bytes: number): string {
 	return `${shown} ${units[unit]}`;
 }
 
+/** Names in a folder that are not text, so they are not in the list. */
+export function hiddenNames(count: number): string {
+	return count === 1
+		? nls.localize('files.hiddenName', '1 name could not be shown')
+		: nls.localize('files.hiddenNames', '{0} names could not be shown', count);
+}
+
 /** The size column: a file's size, nothing for a folder, since folders have no size of their own. */
 export function entrySize(entry: FileEntry): string {
 	return entry.kind === 'file' ? formatSize(Number(entry.size)) : '—';
