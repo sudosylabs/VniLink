@@ -470,6 +470,11 @@ suite('DevicesPage screen', () => {
 		assert.strictEqual(snapshots.prompts.at(-1), true);
 		assert.strictEqual(page.querySelector('.device-screen .monaco-button')?.classList.contains('disabled'), true);
 	});
+	test('a computer that has not been allowed yet says so', async () => {
+		await selectStudio({ status: 'notAdmitted' });
+		assert.strictEqual(caption(), 'This computer has not been allowed yet.');
+		assert.strictEqual(button('Allow screen capture'), undefined);
+	});
 	test('a cancelled screenshot enables Refresh again and says the screen could not be captured', async () => {
 		await selectStudio({ status: 'needsPermission' });
 		click(button('Allow screen capture'));

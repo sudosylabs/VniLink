@@ -327,6 +327,8 @@ export class DeviceScreenSnapshot extends Disposable {
 				return nls.localize('devices.screenUnpaired', 'This computer is no longer paired.');
 			case 'unsupported':
 				return nls.localize('devices.screenUnsupported', 'That computer cannot take a screenshot.');
+			case 'notAdmitted':
+				return nls.localize('devices.screenNotAdmitted', 'This computer has not been allowed yet.');
 			case 'failed':
 			case 'cancelled':
 				return nls.localize('devices.screenFailed', 'The screen could not be captured.');

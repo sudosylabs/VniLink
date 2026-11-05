@@ -18,7 +18,7 @@ use vnilink::snapshot::{
     encode_bgra, jpeg_size, HostSnapshotFactory, ScreenAccess, ScreenImage, ScreenSnapshot,
     SnapshotFailure, MAX_SNAPSHOT_BYTES, SNAPSHOT_MIN_INTERVAL,
 };
-use vnilink::{Core, Error, Grants, ServiceKind, ServicePhase, SessionInfo};
+use vnilink::{Core, Error, Grants, ServiceKind, ServicePhase, SessionInfo, SharingPolicyUpdate};
 use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Pair, TestResult, DEFAULT_WAIT};
 
@@ -227,6 +227,36 @@ fn view_allows_a_screenshot_without_control_audio_or_a_desktop_session() -> Test
         "a second request too soon is refused: {again:?}"
     );
     vnilink_testkit::assert_story(expect![[r#""#]], || trace.story(&["snapshot"]));
+    Ok(())
+}
+
+/// A screenshot does not ask to be admitted. Before this computer is
+/// allowed, the refusal is that, and the host takes no picture.
+#[test]
+fn a_screenshot_before_this_computer_is_allowed_is_not_admitted() -> TestResult {
+    let _trace = traced();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let pair = Pair::for_desktop();
+    pair.host.core.change_sharing_policy(SharingPolicyUpdate {
+        unattended: Some(false),
+        ..Default::default()
+    })?;
+    pair.host.core.set_desktop_sharing(Grants {
+        view: true,
+        control: false,
+        clipboard: false,
+        transfer: false,
+    })?;
+    pair.host.core.set_snapshot_factory(Some(Arc::new(Count {
+        hits: Arc::clone(&hits),
+    })))?;
+    let connection = pair.connect_services();
+    let outcome = request(&pair.controller.core, &connection, false);
+    assert!(
+        matches!(outcome, Err(Error::NotAdmitted)),
+        "a screenshot before admission is not admitted: {outcome:?}"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "the host did not capture");
     Ok(())
 }
 

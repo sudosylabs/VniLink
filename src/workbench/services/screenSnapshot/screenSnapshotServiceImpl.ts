@@ -8,8 +8,8 @@
 import { InstantiationType, registerSingleton } from '../../../platform/instantiation/common/extensions.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IDataChannelService, type IDataChannel } from '../../../platform/engine/common/dataChannelService.js';
+import { engineErrorCategory, type EngineReply, type SessionInfo } from '../../../platform/engine/common/engine.js';
 import { IEngineService } from '../../../platform/engine/common/engineService.js';
-import type { EngineReply, SessionInfo } from '../../../platform/engine/common/engine.js';
 import { parseScreenAccess, parseScreenSnapshot } from './screenSnapshot.js';
 import type { ScreenAccess, ScreenAccessOutcome, ScreenSnapshotResult } from './screenSnapshot.js';
 import { IScreenSnapshotService } from './screenSnapshotService.js';
@@ -20,7 +20,7 @@ function requestStopped(signal: AbortSignal, disposed: boolean): boolean {
 
 interface SnapshotMedia { readonly type: 'snapshot'; readonly prompt: boolean; readonly access: boolean }
 
-class ScreenSnapshotService extends Disposable implements IScreenSnapshotService {
+export class ScreenSnapshotService extends Disposable implements IScreenSnapshotService {
 	declare public readonly _serviceBrand: undefined;
 
 	constructor(
@@ -36,7 +36,7 @@ class ScreenSnapshotService extends Disposable implements IScreenSnapshotService
 			return { status: found.status };
 		}
 		const packet = await this.packet(found.session, signal, { type: 'snapshot', prompt, access: false });
-		if (packet === 'cancelled' || packet === 'failed') {
+		if (packet === 'cancelled' || packet === 'failed' || packet === 'notAdmitted') {
 			return { status: packet };
 		}
 		const parsed = parseScreenSnapshot(packet.metadata, packet.data) ?? { status: 'failed' as const };
@@ -52,10 +52,18 @@ class ScreenSnapshotService extends Disposable implements IScreenSnapshotService
 			return { status: found.status };
 		}
 		const packet = await this.packet(found.session, signal, { type: 'snapshot', prompt: false, access: true });
-		if (packet === 'cancelled' || packet === 'failed') {
-			return { status: packet };
+		if (packet === 'cancelled' || packet === 'failed' || packet === 'notAdmitted') {
+			return { status: packet === 'notAdmitted' ? 'failed' : packet };
 		}
 		return this.accessResult(parseScreenAccess(packet.metadata, packet.data), found.session);
+	}
+
+	/** A channel that ends while this request is live. Not admitted stays its own result. */
+	private channelEnd(signal: AbortSignal, error: unknown): 'cancelled' | 'failed' | 'notAdmitted' {
+		if (signal.aborted || this.isDisposed()) {
+			return 'cancelled';
+		}
+		return engineErrorCategory(error) === 'NotAdmitted' ? 'notAdmitted' : 'failed';
 	}
 
 	private isDisposed(): boolean {
@@ -101,11 +109,11 @@ class ScreenSnapshotService extends Disposable implements IScreenSnapshotService
 		return { ok: true, session };
 	}
 
-	private packet(session: SessionInfo, signal: AbortSignal, media: SnapshotMedia): Promise<{ metadata: string; data?: Uint8Array } | 'cancelled' | 'failed'> {
+	private packet(session: SessionInfo, signal: AbortSignal, media: SnapshotMedia): Promise<{ metadata: string; data?: Uint8Array } | 'cancelled' | 'failed' | 'notAdmitted'> {
 		return new Promise(resolve => {
 			let settled = false;
 			let client: IDataChannel | undefined;
-			const finish = (result: { metadata: string; data?: Uint8Array } | 'cancelled' | 'failed'): void => {
+			const finish = (result: { metadata: string; data?: Uint8Array } | 'cancelled' | 'failed' | 'notAdmitted'): void => {
 				if (settled) {
 					return;
 				}
@@ -137,15 +145,15 @@ class ScreenSnapshotService extends Disposable implements IScreenSnapshotService
 					return;
 				}
 				finish({ metadata: packet.metadata, data: packet.data });
-			}, () => {
-				finish(signal.aborted || this.isDisposed() ? 'cancelled' : 'failed');
+			}, error => {
+				finish(this.channelEnd(signal, error));
 			}).then(opened => {
 				client = opened;
 				if (settled) {
 					opened.close();
 				}
-			}, () => {
-				finish(signal.aborted || this.isDisposed() ? 'cancelled' : 'failed');
+			}, (error: unknown) => {
+				finish(this.channelEnd(signal, error));
 			});
 		});
 	}
