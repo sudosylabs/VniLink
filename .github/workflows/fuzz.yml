@@ -14,18 +14,15 @@ permissions:
 
 jobs:
   fuzz:
+    name: Fuzz targets
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: ./.github/actions/setup-node
+      - uses: ./.github/actions/install-ubuntu-packages
         with:
-          node-version-file: .nvmrc
-          cache: npm
-      - name: Install Ubuntu packages
-        run: |
-          sudo apt-get update
-          node build/lib/prerequisites.ts packages debian build | xargs sudo apt-get install -y --no-install-recommends
+          tasks: build
       - run: npm ci
       - name: Install nightly Rust and cargo-fuzz
         run: |

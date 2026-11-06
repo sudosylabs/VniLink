@@ -1,0 +1,108 @@
+name: release
+
+# Installers, on request and once ci.yml passes on a push to main: the release
+# path every OS ships, signed where the secrets are set. The signing secrets
+# are read here only, under the release environment, never by a workflow a
+# pull request runs.
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Installers (${{ matrix.os }})
+    # A pull request's run of ci.yml can name a head branch called main too:
+    # only a push to this repository's main counts.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      # The commit ci.yml tested, not whatever main is when this starts.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: ./.github/actions/setup-node
+      - if: runner.os == 'Linux'
+        uses: ./.github/actions/install-ubuntu-packages
+        with:
+          tasks: package:installers verify:installers
+      # Without these secrets the macOS installer stays unsigned, as a contributor's does.
+      - name: Prepare macOS release signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_DEVELOPER_ID_IDENTITY }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_API_ISSUER }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            echo "No Developer ID secrets: the macOS installer is unsigned."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -s "$keychain"
+          printf '%s' "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials vnilink-release --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
+          rm "$RUNNER_TEMP/notary.p8"
+          echo "VNILINK_MACOS_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "VNILINK_MACOS_NOTARY_PROFILE=vnilink-release" >> "$GITHUB_ENV"
+      # Without these secrets the Windows application and installer stay unsigned.
+      - name: Prepare Windows release signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:CERTIFICATE) {
+            Write-Output 'No code-signing secrets: the Windows installer is unsigned.'
+            exit 0
+          }
+          $Certificate = Join-Path $env:RUNNER_TEMP 'release.pfx'
+          [IO.File]::WriteAllBytes($Certificate, [Convert]::FromBase64String($env:CERTIFICATE))
+          "VNILINK_WINDOWS_CERTIFICATE_FILE=$Certificate" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VNILINK_WINDOWS_CERTIFICATE_PASSWORD=$env:CERTIFICATE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msys2
+        with:
+          tasks: package:installers
+      - run: npm ci
+      - run: npm run doctor -- --require package:installers
+      - run: npm run package:installers
+      - run: npm run verify:installers
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installers-${{ matrix.os }}
+          path: dist/installers
+          if-no-files-found: error

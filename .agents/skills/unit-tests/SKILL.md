@@ -5,7 +5,7 @@ description: "Select meaningful covering checks and completion evidence for Rust
 
 # Validation Selection and Completion
 
-This skill owns check selection for the repository. Read current `package.json`, Cargo manifests and `.github/workflows/ci.yml` to confirm executable entry points; a documented command is not evidence that it ran.
+This skill owns check selection for the repository. Read current `package.json`, Cargo manifests and `.github/workflows/` (`ci.yml` calls one `test-*.yml` per OS) to confirm executable entry points; a documented command is not evidence that it ran.
 
 ## Select by impact
 

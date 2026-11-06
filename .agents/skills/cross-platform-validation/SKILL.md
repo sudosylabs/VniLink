@@ -7,7 +7,7 @@ description: "Validate cross-platform changes from any development OS using Linu
 
 ## Choose environments by affected behavior
 
-VniLink targets macOS, Windows and Linux. Inspect the changed dependency/OS branches and `.github/workflows/ci.yml` before selecting checks. Shared bridge, protocol, native build and session changes require evidence beyond the development OS. Platform-only work exercises that backend and relevant shared contracts, without unrelated matrix runs as a ritual.
+VniLink targets macOS, Windows and Linux. Inspect the changed dependency/OS branches and the OS workflows `.github/workflows/ci.yml` calls (`test-*.yml`) before selecting checks. Shared bridge, protocol, native build and session changes require evidence beyond the development OS. Platform-only work exercises that backend and relevant shared contracts, without unrelated matrix runs as a ritual.
 
 | Environment | Establishes | Does not establish |
 |---|---|---|

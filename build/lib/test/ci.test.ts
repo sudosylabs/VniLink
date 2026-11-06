@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 import assert from 'assert';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { suite, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,32 +17,73 @@ type StagedCommands = Readonly<Record<string, (files: string[]) => string | stri
 suite('ci', () => {
 	const root = fileURLToPath(new URL('../../../', import.meta.url));
 	const read = (path: string) => readFile(join(root, path), 'utf8');
-	const workflow = () => read('.github/workflows/ci.yml');
+	const workflow = (name: string) => read(`.github/workflows/${name}.yml`);
+	const action = (name: string) => read(`.github/actions/${name}/action.yml`);
 	const count = (text: string, pattern: RegExp) => (text.match(pattern) ?? []).length;
+	/** Every workflow and composite action, as one text, for what may appear in any of them. */
+	async function everything(): Promise<string> {
+		const workflows = (await readdir(join(root, '.github/workflows'))).filter(name => name.endsWith('.yml')).map(name => `.github/workflows/${name}`);
+		const actions = (await readdir(join(root, '.github/actions'))).map(name => `.github/actions/${name}/action.yml`);
+		return (await Promise.all([...workflows, ...actions].map(read))).join('\n');
+	}
 	async function stagedCommands(): Promise<StagedCommands> {
 		return ((await import(pathToFileURL(join(root, '.lintstagedrc.mjs')).href)) as { readonly default: StagedCommands }).default;
 	}
-	for (const manager of ['debian', 'fedora', 'msys2']) {
+	for (const [manager, file] of [['debian', '.github/actions/install-ubuntu-packages/action.yml'], ['fedora', '.github/workflows/test-linux.yml'], ['msys2', '.github/actions/setup-msys2/action.yml']] as const) {
 		test(`installs the ${manager} packages from the prerequisites manifest`, async () => {
-			assert.match(await workflow(), new RegExp(`prerequisites\\.ts packages ${manager} `));
+			assert.match(await read(file), new RegExp(`prerequisites\\.ts packages ${manager} `));
 		});
 	}
-	test('reports the doctor first in every job but Windows', async () => {
-		assert.strictEqual(count(await workflow(), /npm run doctor -- --require/g), 5);
+	for (const name of ['test-macos', 'test-linux-container', 'release']) {
+		test(`${name} reports the doctor before it builds`, async () => {
+			assert.match(await workflow(name), /npm run doctor -- --require/);
+		});
+	}
+	test('the Linux suite reports the doctor first', async () => {
+		assert.match(await action('linux-suite'), /steps:\s+- shell: bash\s+run: npm run doctor -- --require/);
 	});
 	test('reports the doctor first in the Windows script', async () => {
 		assert.match(await read('scripts/test-windows.ps1'), /'doctor', '--', '--require'/);
 	});
 	test('reads the Node version from .nvmrc', async () => {
-		const ci = await workflow();
-		assert.doesNotMatch(ci, /node-version:/);
-		assert.match(ci, /node-version-file: \.nvmrc/);
+		assert.doesNotMatch(await everything(), /node-version:/);
+		assert.match(await action('setup-node'), /node-version-file: \.nvmrc/);
 	});
-	for (const job of ['macos', 'ubuntu', 'fedora', 'windows', 'linux-container']) {
-		test(`has a ${job} job`, async () => {
-			assert.match(await workflow(), new RegExp(`^  ${job}:$`, 'm'));
+	for (const name of ['test-macos', 'test-linux', 'test-windows', 'test-linux-container']) {
+		test(`ci runs ${name}`, async () => {
+			assert.match(await workflow('ci'), new RegExp(`uses: \\./\\.github/workflows/${name}\\.yml$`, 'm'));
+		});
+		test(`${name} is only called`, async () => {
+			assert.match(await workflow(name), /^on:\n {2}workflow_call:$/m);
 		});
 	}
+	for (const job of ['ubuntu', 'fedora']) {
+		test(`test-linux has a ${job} job`, async () => {
+			assert.match(await workflow('test-linux'), new RegExp(`^  ${job}:$`, 'm'));
+		});
+	}
+	test('every job has a time limit', async () => {
+		for (const name of ['test-macos', 'test-linux', 'test-windows', 'test-linux-container', 'supply-chain', 'release', 'fuzz']) {
+			const text = await workflow(name);
+			assert.strictEqual(count(text, /^    timeout-minutes: \d+$/gm), count(text, /^    runs-on:/gm), name);
+		}
+	});
+	test('ci runs on no schedule', async () => {
+		assert.doesNotMatch(await workflow('ci'), /schedule:/);
+	});
+	test('the signing secrets are read by the release workflow alone', async () => {
+		for (const name of (await readdir(join(root, '.github/workflows'))).filter(file => file !== 'release.yml')) {
+			assert.doesNotMatch(await read(`.github/workflows/${name}`), /secrets\.(MACOS|APPLE|WINDOWS)_/, name);
+		}
+		assert.match(await workflow('release'), /^    environment: release$/m);
+	});
+	test('a release follows a passing ci on a push to main', async () => {
+		const release = await workflow('release');
+		assert.match(release, /workflow_run:\s+workflows: \[ci\]\s+types: \[completed\]\s+branches: \[main\]/);
+		assert.match(release, /workflow_run\.conclusion == 'success'/);
+		assert.match(release, /workflow_run\.event == 'push'/);
+		assert.match(release, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}/);
+	});
 	test('runs the Windows suite through the test:windows task', async () => {
 		assert.match(await read('build/run.ts'), /'test:windows':.*scripts\/test-windows\.ps1/);
 	});
@@ -51,10 +92,11 @@ suite('ci', () => {
 		assert.strictEqual(manifest.scripts.precommit, undefined);
 	});
 	test('runs the same sequence as validate on macOS', async () => {
-		assert.match(await workflow(), /npm run validate/);
+		assert.match(await workflow('test-macos'), /npm run validate/);
 	});
 	test('checks the Rust workspace through the task in both Linux jobs', async () => {
-		assert.strictEqual(count(await workflow(), /npm run check:rust/g), 2);
+		assert.match(await action('linux-suite'), /npm run check:rust/);
+		assert.strictEqual(count(await workflow('test-linux'), /uses: \.\/\.github\/actions\/linux-suite$/gm), 2);
 	});
 	test('the pre-commit hook runs no full suite', async () => {
 		assert.doesNotMatch(await read('.husky/pre-commit'), /npm (test|run (check|validate|precommit)\b(?!:))/);

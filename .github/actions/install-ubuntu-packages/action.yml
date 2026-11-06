@@ -1,0 +1,19 @@
+name: Install Ubuntu packages
+description: The Debian packages build/prerequisites.json lists for the given tasks. Needs Node.js.
+
+inputs:
+  tasks:
+    description: The tasks the job runs, separated by spaces, as `prerequisites.ts packages` takes them.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TASKS: ${{ inputs.tasks }}
+      run: |
+        sudo apt-get update
+        # Word splitting is wanted: each task is one argument.
+        # shellcheck disable=SC2086
+        node build/lib/prerequisites.ts packages debian $TASKS | xargs sudo apt-get install -y --no-install-recommends

@@ -83,7 +83,8 @@ export function resources(root: string, outputDirectory = join(root, 'out'), { r
 		['rust-toolchain.toml', 'relink/source/rust-toolchain.toml'],
 		['crates', 'relink/source/crates'],
 		['vendor', 'relink/source/vendor'],
-		['.github/workflows/ci.yml', 'relink/source/.github/workflows/ci.yml'],
+		// The packages each OS builds with, which the notice points to.
+		['build/prerequisites.json', 'relink/source/build/prerequisites.json'],
 	] : [];
 	return [
 		['src/workbench/index.html', 'renderer/index.html'],

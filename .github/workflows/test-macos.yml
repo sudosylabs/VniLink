@@ -1,0 +1,37 @@
+name: test-macos
+
+# The full suite on macOS, called by ci.yml.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-26
+    timeout-minutes: 120
+    # What these computers have, so a test that needs it fails rather than
+    # skips when its install breaks.
+    env:
+      VNILINK_REQUIRE: ffprobe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-node
+      - name: Install FFmpeg
+        run: command -v ffprobe || brew install ffmpeg
+      # postinstall installs the Rust toolchain rust-toolchain.toml names.
+      - run: npm ci
+      # The Rust build, vendored codecs included, from the last run with the
+      # same toolchain and lockfile.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: macos
+      - run: npm run doctor -- --require build,test:rust,test:ui
+      # The checks, the Rust checks and tests, the build and every test.
+      - run: npm run validate
+      - if: always()
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: scenarios-macos
