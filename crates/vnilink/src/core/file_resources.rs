@@ -102,6 +102,8 @@ pub(super) fn reserve(
         id,
     }))
 }
+/// A volume's space from `statvfs`'s block counts and fragment size.
+#[cfg(unix)]
 fn space_from(free_blocks: u64, blocks: u64, fragment: u64) -> Space {
     Space {
         free: free_blocks.saturating_mul(fragment),
