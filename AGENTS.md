@@ -29,17 +29,20 @@ VS Code is the TypeScript architectural reference. Read the corresponding upstre
 ## Placement and skills
 
 - `ARCHITECTURE.md` — contracts that span modules (pairing, consent, reconnect, desktop, files) and the code that implements each; how a module works is documented in the module itself.
-- `src/AGENTS.md` — TypeScript layers and file placement; `workbench-architecture` — how views, services, contributions and IPC are written, with `src/workbench/contrib/devices` as the reference; `recipes` — step lists for common additions.
+- `src/AGENTS.md` — TypeScript layers and file placement; `workbench-architecture` — how views, services, contributions and IPC are written, with `src/workbench/contrib/devices` as the reference; `recipes` — step lists for common additions; `handwriting` — how a source file reads.
+- `component` — the design to write before building a substantial new service, feature, bridge capability or crate.
 - `crates/AGENTS.md` — Rust ownership and dependency direction; `engine-bridge` and `ffi-boundary` — control and binary contracts.
 - `build/AGENTS.md`, `test/AGENTS.md` — maintained build/test infrastructure; `build-test-infrastructure` — build tasks as functions, runners and fixtures; `smoke-tests` — running scenarios and validating UI changes.
 - `design-philosophy`, `ux-css-layout`, `ux-theming`, `accessibility` — product design and interaction requirements.
 - `async-cancellation`, `memory-leak-audit`, `error-doc-voice` — lifecycle, resources and error semantics.
 - `licensing` — license notice of each source file, copied-code provenance and license metadata.
-- `unit-tests` — authoritative validation selection and completion policy; `cross-platform-validation` — environments, prerequisites and limits of evidence.
+- `unit-tests` — authoritative validation selection and completion policy; `cross-platform-validation` — environments, prerequisites and limits of evidence; `fix-ci-failures` — reading and fixing a failing CI run.
+- `measurements` — before-and-after numbers for a speed, latency or resource change (`bench:service`, `measure:latency`, `measure:impaired`, `test:stress`).
 - `code-review` — review scope and the architecture checklist every change answers.
 - `commit-organization` — coherent commit boundaries, selective staging and verification of each commit; use when committing work or planning a commit series.
+- `update-instructions` — changing these instructions or the skills, including turning a user's correction into a lasting rule.
 
-Skill names refer to `.agents/skills/<name>/SKILL.md`. Read the applicable guidance, not every skill as a ritual. New instructions belong to one owner; other documents link to that owner.
+Skill names refer to `.agents/skills/<name>/SKILL.md`; `.claude/skills` links there, so Claude Code lists them by their descriptions. Read the applicable guidance, not every skill as a ritual. New instructions belong to one owner; other documents link to that owner.
 
 ## Completion
 

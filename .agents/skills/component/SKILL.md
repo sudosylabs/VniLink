@@ -1,23 +1,23 @@
 ---
 name: component
-description: "Specify a new service, feature, bridge family or crate through purpose, ownership, class/contracts, lifecycle, platform prerequisites and verification before implementing uncertain seams."
+description: "Specify a substantial new service, feature, bridge capability or crate before building it: purpose, owner, contracts, lifecycle, presentation and verification. Use when asked to design or spec a component, or when a request's boundaries or owner are unclear before implementing it."
 ---
 
-# Component Design Contract
+# Component Design
 
-Use for a substantial new component or an uncertain architectural boundary. Read the originating request/specification and analogous upstream implementation before choosing shape. Existing code is not the target standard; placement follows layer AGENTS and architecture follows `workbench-architecture`/Rust ownership.
+For a substantial new component or an unclear boundary, write the design before the code. Read the request and the analogous upstream implementation first; placement follows the layer `AGENTS.md` files, and how TypeScript is written follows `workbench-architecture` (for a common addition, `recipes` already has the steps).
 
-## Define the component
+## What the design answers
 
-- **Purpose and scope:** user-visible capability, state/operations owned, neighboring owners and necessary supporting work. Distinguish global settings, per-device overrides and runtime actions.
-- **Architecture:** layer/home, owning classes or Rust structs/traits, injected contracts, registration/composition and dependency direction. Include native/facade/bridge responsibilities where relevant. A class wrapper around a procedural initializer is not a complete design.
-- **Contracts:** input/output shapes, observable effects, availability/permissions, persistence/readback, error categories and compatibility. `engine-bridge` and `ffi-boundary` cover crossing contracts.
-- **Lifecycle:** creation/startup, async fences, replacement, cancellation, resource ownership and disposal, including failure paths. See `async-cancellation` and `memory-leak-audit`.
-- **Presentation:** relevant design references, interaction states, keyboard/accessibility, theme/material behavior and responsive placement.
-- **Verification/prerequisites:** meaningful covering scenarios, required native/container/hardware/peer environments, reproducible setup and the limits of unavailable evidence. Use `unit-tests`, `cross-platform-validation` and `build-test-infrastructure`.
+- **Purpose and scope:** the capability people get, the state and operations it owns, its neighbours, and whether it is a global default, a per-device override or a runtime action.
+- **Owner and shape:** the layer, the owning classes or Rust types, what is injected, where it is registered, and the dependency direction. Crossing to the engine names its command or channel (`engine-bridge`, `ffi-boundary`).
+- **Contracts:** inputs and outputs, effects, permissions, persistence and how a write is read back, error categories (`error-doc-voice`).
+- **Lifecycle:** start, replacement, cancellation, failure and disposal (`async-cancellation`, `memory-leak-audit`).
+- **Presentation:** states (loading, empty, error, unavailable), keyboard and accessibility, themes and layout (`design-philosophy`).
+- **Verification:** the tests that prove it and the environments it needs (`unit-tests`, `cross-platform-validation`).
 
-State assumptions and unresolved decisions that affect implementation; investigate them or obtain required input instead of burying guesses in code. Keep the specification proportionate to the component; a fixed paragraph count does not determine its boundaries.
+State the assumptions and open decisions that change the implementation, and settle them with the user rather than guessing in code. A missing foundation (a service, a widget, an import) is a named part of the scope.
 
-## Deliver according to the request
+## Deliver what was asked
 
-A specification-only request ends with a concrete reviewable design and no implementation. An authorized implementation request continues after clarifying necessary seams; this skill does not add an approval stop. Missing foundation work is an explicit dependency/scope item, not a reason to silently import an editor or pretend a service exists.
+A request for a design ends with the design. A request to build it goes on to the implementation once the open decisions are settled.

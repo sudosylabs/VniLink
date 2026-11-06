@@ -1,9 +1,15 @@
 ---
 name: async-cancellation
-description: "Implement or review async ownership, session generation fencing, disposal, cancellation and safe retry/resume semantics in Rust and TypeScript."
+description: "Keep background work owned and cancellable: session and service generations, StaleSession versus NoSession, disposal during an await, AbortSignal and CancellationToken, and safe retry or resume. Use when writing or reviewing work that outlives a call (a task, worker, timer, stream or job), reconnect logic, or anything that acts after an await."
 ---
 
 # Async Ownership and Cancellation
+
+## Where it lives
+
+- **Rust core:** a session or service is addressed by id and generation, and every action looks it up again before it acts (`runtime(state, id, generation, hosted)` in `crates/vnilink/src/core/desktop_stream.rs` is the pattern). A replaced owner answers `Error::StaleSession`; one that is gone answers `Error::NoSession`.
+- **Workbench:** a view registers what it owns, and after an `await` checks `isDisposed()` and its revision before touching state (`DeviceDetails.run` in `src/workbench/contrib/devices/deviceDetails.ts`). Requests that can be abandoned take a `CancellationToken` (`src/base/common/cancellation.ts`).
+- **Build tasks:** one `AbortSignal` from `build/run.ts`, passed down to every `ProcessRunner` (`build-test-infrastructure`).
 
 ## Owner and generation
 

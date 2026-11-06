@@ -1,6 +1,6 @@
 ---
 name: ux-theming
-description: "Implement semantic theme colors, native vibrancy/Mica, opaque fallbacks and accessible interaction states across light, dark and forced-colors presentations."
+description: "Colours, themes and native materials: semantic colour tokens, light and dark, macOS vibrancy and Windows Mica, focus and interaction states, forced colors. Use when changing colours, theme behaviour, window materials, or hover, focus and selected states."
 ---
 
 # Workbench Theming

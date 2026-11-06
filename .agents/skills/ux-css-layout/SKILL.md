@@ -1,6 +1,6 @@
 ---
 name: ux-css-layout
-description: "Implement workbench layout, tab/content geometry, scrolling and responsive spacing with shared component styles and container-aware sizing."
+description: "Workbench layout and CSS: geometry, tabs and titlebar, scrolling, responsive sizing and shared style values. Use when writing or changing CSS, or the size and placement of a view."
 ---
 
 # Workbench Layout

@@ -1,6 +1,6 @@
 ---
 name: cross-platform-validation
-description: "Validate cross-platform changes from any development OS using Linux containers, native Windows/macOS runners and real desktop or peer tests; distinguish evidence and missing prerequisites."
+description: "Choose and run the environments a change needs beyond this computer (the Linux container, a Windows machine, a Mac, real desktops, two computers) and say what each run proves. Use when a change touches native code, the bridge, the protocol, the build or platform behaviour, and before claiming it works on macOS, Windows or Linux."
 ---
 
 # Cross-Platform Validation

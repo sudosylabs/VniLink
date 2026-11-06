@@ -1,6 +1,6 @@
 ---
 name: workbench-architecture
-description: "Write or review Electron/TypeScript workbench code (views, services, contributions, commands, IPC) in VS Code's style, using the devices feature as the in-repo reference."
+description: "Write or review Electron/TypeScript workbench code (views, services, contributions, commands, IPC) in VS Code's style, with the devices feature as the in-repo reference. Use when adding or changing anything under src/, or copying code from VS Code."
 ---
 
 # Workbench Architecture
@@ -48,7 +48,7 @@ export class DeviceDetails extends Disposable {
 - **DOM:** build it with `h`, `$` and `append` from `base/browser/dom.ts`. `document.createElement` and `element.click()` fail lint (`vnilink/workbench-dom`). Use `triggerUpload` and `triggerDownload` for file pickers and downloads.
 - **Widgets:** use VS Code's widgets for controls:
   - `List` (`deviceList.ts`)
-  - `Button` and `InputBox` (`deviceDetails.ts`, `devicePairing.ts`)
+  - `Button` and `InputBox` (`deviceDetails.ts`; `Button` also in `devicePairingPopover.ts`)
   - `ActionBar` (`viewActionsToolbar.ts`)
 
   Pass styles from `platform/theme/browser/defaultStyles.ts` and adjust appearance in the feature CSS. Lists use a CSS style controller (see `deviceList.ts`), so no inline `<style>` element breaks the CSP.
@@ -95,12 +95,4 @@ Rules:
 
 ## Review bar
 
-Before finishing, answer these against the devices reference:
-- Who owns each piece of state?
-- Which service boundary does the code cross?
-- Where is it registered?
-- How is it disposed?
-- Which widget renders each control?
-- Which upstream class did you compare with?
-
-Existing code outside the area you were asked to change is not precedent. Report its debt instead of copying it.
+Before finishing, answer the architecture checklist in `code-review` against the devices reference. Existing code outside the area you were asked to change is not precedent: report its debt rather than copying it.

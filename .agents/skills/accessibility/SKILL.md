@@ -1,6 +1,6 @@
 ---
 name: accessibility
-description: "Implement accessible VniLink interactions, keyboard/focus behavior, screen-reader semantics and shared help/announcement infrastructure for new or changed UI."
+description: "Make new or changed UI usable by keyboard and assistive technology: semantics, labels, focus, announcements, reduced motion and forced colors. Use whenever a change adds or alters an interactive control, page, dialog or dynamic status, even when accessibility is not mentioned."
 ---
 
 # Accessibility

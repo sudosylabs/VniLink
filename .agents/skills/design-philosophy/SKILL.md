@@ -1,6 +1,6 @@
 ---
 name: design-philosophy
-description: "Design or review VniLink surfaces for integrated window/content continuity, clear hierarchy, meaningful controls and truthful remote-access state rather than generic page templates."
+description: "VniLink's product design direction: window and tab continuity, hierarchy, truthful state and wording. Use when designing or reviewing a page, dialog, setting or visual change, or choosing the labels and messages people read."
 ---
 
 # VniLink Design Philosophy

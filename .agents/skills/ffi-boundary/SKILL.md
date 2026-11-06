@@ -1,6 +1,6 @@
 ---
 name: ffi-boundary
-description: "Define and review napi control/data contracts, lossless values, runtime validation, subscription ownership, binary buffers and preserved error semantics."
+description: "Value contracts at the napi boundary: transfer types, lossless 64-bit values, runtime validation, handle ownership, binary buffers and error mapping. Use when adding, changing or reviewing a type, command or handle that crosses crates/vnilink-node."
 ---
 
 # FFI Boundary

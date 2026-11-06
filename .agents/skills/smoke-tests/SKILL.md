@@ -1,6 +1,6 @@
 ---
 name: smoke-tests
-description: "Run and diagnose Electron end-to-end scenarios, and validate a UI change in a real window: isolated profiles, maintained scenario selection, screenshots, accessibility and platform-aware expectations."
+description: "Run the Electron UI scenarios and validate a UI change in a real window: scenario selection, isolated profiles, screenshots, readiness waits and diagnosis. Use when running or writing `npm run test:ui` scenarios, when one fails, or to confirm a visual or interaction change in the real app."
 ---
 
 # Electron Smoke Tests

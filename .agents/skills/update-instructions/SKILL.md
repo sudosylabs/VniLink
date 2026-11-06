@@ -1,26 +1,24 @@
 ---
 name: update-instructions
-description: "Maintain AGENTS.md and skills against verified sources, target standards and user decisions, with clear ownership, reference validation and no unrelated implementation changes."
+description: "Change AGENTS.md files or skills, or turn a user's correction into durable guidance. Use when asked to add, rewrite or audit instructions or skills, when the user corrects how work should be done and the rule should outlast the conversation, or when guidance turns out stale or contradictory."
 ---
 
 # Maintain Instructions
 
-Use `skill-creator`/`writing-for-agents` guidance when available. Preserve current user intent and scope; explicit permission to update instructions does not authorize application refactors or environment setup.
+Use `writing-for-agents` (or `skill-creator`) guidance when available. Permission to change instructions covers instructions only: application refactors and environment setup stay separate work.
 
-## Audit before editing
+## From a correction to a rule
 
-Read supplied paths and applicable instructions, then compare relevant upstream/current implementations. Cover the concern broadly enough to include architecture, runtime/contracts, UX, portability and reproducibility where relevant. Examples are evidence, not necessarily the entire requested scope. For a substantial rewrite, map observed problems and accepted decisions to their instruction owners; see [coverage.md](references/coverage.md) for this rewrite's coverage and migration boundaries.
+Read the user's examples and the files they name before interpreting a correction. Decide whether the example illustrates a broader quality concern or is the whole request; use the surrounding conversation and newer decisions to set the scope, and keep an isolated incident from becoming a universal ban.
 
-Distinguish target standard, existing facility and missing prerequisite/migration. The current repository is not the quality ceiling; missing infrastructure cannot silently waive the standard or be described as implemented.
+Name what went wrong: missing guidance, weak discovery (the rule exists but nothing points to it), conflicting rules, a stale fact, or guidance that was there and not followed. Each has a different fix; only the first needs new text. For an architectural correction, state ownership and lifecycle against the upstream reference; for a platform correction, the prerequisites and evidence; for a UI correction, the product intent rather than one example's pixel values.
 
-## Rewrite and route
+## Where it goes
 
-One rule has one owning document; other guidance points to it. Root AGENTS routes, layer AGENTS defines placement/ownership, skills explain workflows/contracts. Preserve useful non-obvious guarantees while deleting contradictions, stale examples and generic boilerplate. Descriptions must trigger on the actual work; avoid requiring every skill on every task.
+One rule has one owning document; others point to it. Root `AGENTS.md` routes, layer `AGENTS.md` files own placement, skills own workflows and contracts. A fact the repository already states (a list in code, a script, a config) is pointed to, not copied: a copy goes stale when the source changes. A new rule supersedes older conflicting guidance; keep the non-obvious guarantees and delete the contradiction.
 
-Verify source facts and referenced paths/commands before publishing them. Do not rewrite user goals merely because current tooling is incomplete. Keep implementation plans distinct from instruction changes.
+A skill is reached through `.claude/skills`, a link to `.agents/skills`, by its `description`, and through the root `AGENTS.md` line that names it. The description says what the skill is for and when to use it ("Use when …"), in the words a task arrives in. Every skill has a line in the root `AGENTS.md`.
 
 ## Validate
 
-Run `MUSE_NO_AUTO_UPDATE=1 muse skills validate <skill-directory> --json` for changed skills if available; inspect validity, diagnostics and warnings. `skill-creator` quick validation is a fallback where available. Verify links/reference paths, duplicated/conflicting completion rules and realistic task decisions; metadata validation alone does not prove useful guidance.
-
-Check that changes stayed in the authorized instruction scope. Instruction-only changes do not need application builds or platform test runs. Report the instructions changed, validation outcomes and migrations still required.
+Run `MUSE_NO_AUTO_UPDATE=1 muse skills validate <skill-directory> --json` for each changed skill when `muse` is installed, and read its diagnostics. Check every path, command and skill name the change cites against the repository, and walk one realistic task through the changed guidance. Instruction-only changes need no application build. Report what changed, the validation results, and any remediation the new guidance implies but this change did not do.
