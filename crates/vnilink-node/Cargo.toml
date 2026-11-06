@@ -68,7 +68,7 @@ required-features = ["reset-installation"]
 [build-dependencies]
 napi-build = "=2.4.1"
 # Later 6.1.x backends switched to syn 3 while napi-derive 3.6.3 uses syn 2.
-napi-derive-backend = "=6.1.2"
+napi-derive-backend = "=7.0.0"
 
 [dev-dependencies]
 vnilink-app = { path = "../vnilink-app", features = ["test-support"] }
