@@ -116,6 +116,7 @@ suite('hygiene', () => {
 			});
 			test(`allows the ${name} in the contact documents`, () => {
 				assert.deepStrictEqual(findHygieneViolations('SECURITY.md', value, rules), []);
+				assert.deepStrictEqual(findHygieneViolations('README.md', value, rules), []);
 			});
 		}
 	});

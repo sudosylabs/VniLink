@@ -51,6 +51,27 @@ take it away.
 Normal startup on Linux reads its key from the desktop's Secret Service, such
 as GNOME Keyring.
 
+### The development loop
+
+`npm run dev` rebuilds the Rust addon when it is missing or older than its
+sources, then starts Electron with incremental TypeScript and CSS builds and
+background type checking (`npm run watch` runs the same watchers without
+Electron). Save, wait for the watcher, then press Cmd+R on macOS or Ctrl+R on
+Windows and Linux to reload the window: the Rust engine keeps running.
+Main-process, preload and utility-process changes need the app restarted. Rust
+is not watched: quit, then run `npm run dev` again. Generated code lives in
+`out/`; `dist/` holds packages.
+
+`npm test` runs the Electron unit tests and the UI scenarios in a hidden window
+with a temporary profile and engine, so it never opens your installation or its
+key. `npm run test:ui -- --list` names the scenario areas, and
+`npm run test:ui -- --scenario appearance` runs one (repeat `--scenario` for
+more); logs and screenshots stay in `.build/test-runs`. `npm run test:linux`
+runs the checks, the Rust tests and the scenarios in the maintained Debian
+container (it needs Docker), and on Windows `npm run test:windows` installs and
+runs the whole suite, as CI does. `npm run package:installers` builds this
+computer's installers.
+
 <!-- prerequisites:start -->
 <!-- Generated from build/prerequisites.json by `node build/run.ts docs:prerequisites`; edit the manifest, not this section. -->
 
