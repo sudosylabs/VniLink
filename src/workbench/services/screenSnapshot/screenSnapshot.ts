@@ -14,7 +14,7 @@ const MAX_SNAPSHOT_WIDTH = 640;
 
 const MAX_SNAPSHOT_HEIGHT = 360;
 
-type ScreenSnapshotFailure = 'needsPermission' | 'needsSourceSelection' | 'unavailable' | 'busy' | 'timedOut' | 'sharingDisabled' | 'disconnected' | 'replaced' | 'unpaired' | 'unsupported' | 'failed' | 'cancelled';
+type ScreenSnapshotFailure = 'needsPermission' | 'needsSourceSelection' | 'unavailable' | 'busy' | 'timedOut' | 'sharingDisabled' | 'disconnected' | 'replaced' | 'unpaired' | 'unsupported' | 'notAdmitted' | 'failed' | 'cancelled';
 
 export type ScreenSnapshotResult =
 	| {
@@ -34,7 +34,7 @@ export type ScreenAccess =
 	| { readonly status: 'allowed'; readonly endpointId: string; readonly sessionId: string; readonly generation: string }
 	| { readonly status: 'denied' | 'unavailable' | 'disconnected' | 'replaced' | 'unpaired' | 'unsupported' | 'timedOut' | 'busy' | 'failed' | 'cancelled' };
 
-const FAILURES: readonly ScreenSnapshotFailure[] = ['needsPermission', 'needsSourceSelection', 'unavailable', 'busy', 'timedOut', 'sharingDisabled', 'disconnected', 'replaced', 'unpaired', 'unsupported', 'failed', 'cancelled'];
+const FAILURES: readonly ScreenSnapshotFailure[] = ['needsPermission', 'needsSourceSelection', 'unavailable', 'busy', 'timedOut', 'sharingDisabled', 'disconnected', 'replaced', 'unpaired', 'unsupported', 'notAdmitted', 'failed', 'cancelled'];
 
 const ACCESS_OUTCOMES = ['allowed', 'sharingDisabled', 'unavailable', 'disconnected', 'replaced', 'unpaired', 'unsupported', 'timedOut', 'busy', 'failed', 'cancelled'] as const;
 

@@ -18,12 +18,14 @@ use std::time::{Duration, Instant};
 use vnilink::power::{HostPowerFactory, PowerInhibitor, PowerKind, PowerPhase, PowerPolicy};
 use vnilink::{
     usage, BackendStartup, CoreEvent, DesktopControlState, Error, HostSystemActions, InputEvent,
-    RemoteDesktopService, ServiceKind, SessionPhase, SystemSupport,
+    JobState, RemoteDesktopService, ServiceKind, SessionPhase, SystemSupport,
 };
 use vnilink_testkit::desktop::{keyframe, next_picture, InputLog, MonitorCapture, SCREEN};
 use vnilink_testkit::events::next_event;
+use vnilink_testkit::files::{write_files, Job, Way};
 use vnilink_testkit::power::{active, lease, status, Counts, Leases, Refusing};
 use vnilink_testkit::system::FakeSystem;
+use vnilink_testkit::terminal::{options, Hosting};
 use vnilink_testkit::{holds, traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT};
 
 /// A host that may be seen and controlled, capturing one monitor, and a
@@ -138,6 +140,141 @@ fn inhibitors_are_counted_by_live_desktop_owners_and_roles() -> TestResult {
         b.core.controller_sessions()?.len(),
         1,
         "the second connection outlives its desktop"
+    );
+    Ok(())
+}
+
+/// Both engines keep their systems awake while `pair` copies, each with a
+/// lease counted in what this returns: the host's, then the controller's.
+fn keeping_awake(pair: &Pair) -> Result<(Arc<Counts>, Arc<Counts>), Error> {
+    let host_counts = Arc::new(Counts::default());
+    let controller_counts = Arc::new(Counts::default());
+    pair.host
+        .core
+        .set_power_factory(Some(Arc::new(Leases(Arc::clone(&host_counts)))))?;
+    pair.controller
+        .core
+        .set_power_factory(Some(Arc::new(Leases(Arc::clone(&controller_counts)))))?;
+    pair.host.core.set_power_policy(PowerPolicy {
+        incoming_system: true,
+        ..Default::default()
+    })?;
+    pair.controller.core.set_power_policy(PowerPolicy {
+        outgoing_system: true,
+        ..Default::default()
+    })?;
+    Ok((host_counts, controller_counts))
+}
+
+/// A copy keeps both computers awake while it runs, and gives the lease
+/// back when it ends: the Files tab left open keeps nothing awake.
+#[test]
+fn a_running_copy_keeps_both_computers_awake_until_it_ends() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_files();
+    let (host_counts, controller_counts) = keeping_awake(&pair)?;
+    write_files(&pair.controller.folder().join("set"), &[("a.bin", 4096)]);
+    std::fs::create_dir_all(pair.host.folder().join("inbox"))?;
+    let files = pair.open_files();
+    let job = Job::submit(&pair, &files, Way::Upload, "set", "inbox")?;
+    wait_for(
+        "both engines to keep awake for the copy",
+        DEFAULT_WAIT,
+        || {
+            (active(&pair.host.core, PowerKind::System, 1)
+                && active(&pair.controller.core, PowerKind::System, 1))
+            .then_some(())
+        },
+    );
+    let (sent, got) = job.drive_to_end(&pair, DEFAULT_WAIT);
+    assert_eq!(
+        (sent.state, got.state),
+        (JobState::Complete, JobState::Complete),
+        "the copy ends"
+    );
+    wait_for("both leases to go with the copy", DEFAULT_WAIT, || {
+        (host_counts.released(PowerKind::System) == 1
+            && controller_counts.released(PowerKind::System) == 1)
+            .then_some(())
+    });
+    assert!(!files.pipe.is_cancelled(), "the Files tab stays open");
+    assert_eq!(
+        (
+            host_counts.acquired(PowerKind::System),
+            controller_counts.acquired(PowerKind::System)
+        ),
+        (1, 1),
+        "one lease each for the copy"
+    );
+    vnilink_testkit::assert_story(
+        expect![[r#"
+            controller:
+              power: power held kind=System owners=1
+              power: power hold released kind=System
+            host:
+              power: power held kind=System owners=1
+              power: power hold released kind=System
+        "#]],
+        || trace.story(&["power"]),
+    );
+    Ok(())
+}
+
+/// An attached terminal keeps both computers awake. A shell the host keeps
+/// once its connection ended keeps nothing awake.
+#[test]
+fn an_attached_terminal_keeps_awake_and_a_detached_shell_does_not() -> TestResult {
+    let trace = traced();
+    let hosting = Hosting::shell()?;
+    let pair = &hosting.pair;
+    let (host_counts, controller_counts) = keeping_awake(pair)?;
+    let terminal = hosting.open_with(options(true, None))?;
+    let shell = terminal.session();
+    assert!(shell.persistent, "the host keeps this shell: {shell:?}");
+    wait_for(
+        "both engines to keep awake for the terminal",
+        DEFAULT_WAIT,
+        || {
+            (active(&pair.host.core, PowerKind::System, 1)
+                && active(&pair.controller.core, PowerKind::System, 1))
+            .then_some(())
+        },
+    );
+    pair.controller
+        .core
+        .disconnect_session(hosting.connection.id)?;
+    wait_for("the host to keep the shell detached", DEFAULT_WAIT, || {
+        pair.host
+            .core
+            .hosted_terminal_sessions()
+            .ok()?
+            .iter()
+            .any(|kept| kept.id == shell.id && !kept.attached)
+            .then_some(())
+    });
+    wait_for("both leases to go with the terminal", DEFAULT_WAIT, || {
+        (host_counts.released(PowerKind::System) == 1
+            && controller_counts.released(PowerKind::System) == 1)
+            .then_some(())
+    });
+    assert!(
+        pair.host
+            .core
+            .power_status()?
+            .iter()
+            .all(|status| status.owners == 0),
+        "a detached shell keeps nothing awake"
+    );
+    vnilink_testkit::assert_story(
+        expect![[r#"
+            controller:
+              power: power held kind=System owners=1
+              power: power hold released kind=System
+            host:
+              power: power held kind=System owners=1
+              power: power hold released kind=System
+        "#]],
+        || trace.story(&["power"]),
     );
     Ok(())
 }

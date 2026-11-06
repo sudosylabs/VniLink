@@ -1,0 +1,26 @@
+name: test-linux-container
+
+# The maintained Debian image the macOS workstation also uses
+# (npm run test:linux), called by ci.yml.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-container:
+    name: Debian image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-node
+      - run: npm ci
+      - run: npm run doctor -- --require test:linux
+      - run: npm run test:linux
+      - if: always()
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: scenarios-linux-container
+          path: .build/linux-validation

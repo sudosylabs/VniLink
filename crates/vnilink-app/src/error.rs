@@ -145,5 +145,8 @@ pub(crate) fn map_error(error: Error) -> FfiError {
         Error::NotAdmitted => FfiError::NotAdmitted,
         Error::Unanswered => FfiError::Unanswered,
         Error::NoAdmissionRequest => FfiError::NoAdmissionRequest,
+        Error::InsufficientStorage { needed, free } => FfiError::InvalidSetting {
+            message: format!("this file needs {needed} bytes free and {free} bytes are free"),
+        },
     }
 }

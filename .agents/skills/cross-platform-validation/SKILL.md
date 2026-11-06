@@ -1,13 +1,13 @@
 ---
 name: cross-platform-validation
-description: "Validate cross-platform changes from any development OS using Linux containers, native Windows/macOS runners and real desktop or peer tests; distinguish evidence and missing prerequisites."
+description: "Choose and run the environments a change needs beyond this computer (the Linux container, a Windows machine, a Mac, real desktops, two computers) and say what each run proves. Use when a change touches native code, the bridge, the protocol, the build or platform behaviour, and before claiming it works on macOS, Windows or Linux."
 ---
 
 # Cross-Platform Validation
 
 ## Choose environments by affected behavior
 
-VniLink targets macOS, Windows and Linux. Inspect the changed dependency/OS branches and `.github/workflows/ci.yml` before selecting checks. Shared bridge, protocol, native build and session changes require evidence beyond the development OS. Platform-only work exercises that backend and relevant shared contracts, without unrelated matrix runs as a ritual.
+VniLink targets macOS, Windows and Linux. Inspect the changed dependency/OS branches and the OS workflows `.github/workflows/ci.yml` calls (`test-*.yml`) before selecting checks. Shared bridge, protocol, native build and session changes require evidence beyond the development OS. Platform-only work exercises that backend and relevant shared contracts, without unrelated matrix runs as a ritual.
 
 | Environment | Establishes | Does not establish |
 |---|---|---|

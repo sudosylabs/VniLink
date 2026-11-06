@@ -45,6 +45,24 @@ pub(super) struct JobOwner {
     hosted: bool,
 }
 
+/// The Files services whose jobs are moving files now, as `(hosted, id,
+/// generation)`: a job preparing, serving or transferring. A job that waits
+/// for a decision, or has ended, moves nothing. Takes `jobs`, so the caller
+/// holds no `state` (see the lock order).
+pub(super) fn copying_owners(shared: &Shared) -> std::collections::HashSet<(bool, u64, u64)> {
+    lock(&shared.jobs)
+        .values()
+        .filter(|record| {
+            matches!(
+                record.state,
+                JobState::Preparing | JobState::Serving | JobState::Transferring
+            )
+        })
+        .filter_map(|record| record.owner)
+        .map(|owner| (owner.hosted, owner.id, owner.generation))
+        .collect()
+}
+
 pub(super) fn check_owner(state: &State, owner: Option<JobOwner>) -> Result<(), Error> {
     let Some(owner) = owner else {
         return Ok(());

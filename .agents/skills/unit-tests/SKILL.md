@@ -1,11 +1,11 @@
 ---
 name: unit-tests
-description: "Select meaningful covering checks and completion evidence for Rust, TypeScript, native bridge, UI or instruction changes without unnecessary full-suite rituals."
+description: "Choose the tests and checks that prove a change, and write Rust and TypeScript tests in the project's style (test-kit stories, unit tests beside the module, mocha suites). Use before finishing any change, when writing or fixing a test, or when deciding how much to run."
 ---
 
 # Validation Selection and Completion
 
-This skill owns check selection for the repository. Read current `package.json`, Cargo manifests and `.github/workflows/ci.yml` to confirm executable entry points; a documented command is not evidence that it ran.
+This skill owns check selection for the repository. Read current `package.json`, Cargo manifests and `.github/workflows/` (`ci.yml` calls one `test-*.yml` per OS) to confirm executable entry points; a documented command is not evidence that it ran.
 
 ## Select by impact
 

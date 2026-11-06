@@ -44,6 +44,34 @@ fn wait_presence(controller: &Core, host: &Engine, wanted: DevicePresence) {
     );
 }
 
+/// After a link drops, asking for it again shows Connecting at once,
+/// rather than leaving the computer Offline for the backoff.
+#[test]
+fn a_wake_after_a_failure_dials_at_once_and_shows_connecting() -> TestResult {
+    let _trace = traced();
+    let pair = Pair::for_desktop();
+    let controller = &pair.controller.core;
+    controller.set_presence_links(true)?;
+    wait_presence(controller, &pair.host, DevicePresence::Connected);
+    pair.host.core.shutdown();
+    wait_presence(controller, &pair.host, DevicePresence::Disconnected);
+    let started = std::time::Instant::now();
+    let _ = controller.begin_connect_services(&pair.host.endpoint());
+    wait_for(
+        "the wake to show the computer as connecting",
+        Duration::from_millis(800),
+        || {
+            (presence(controller, &pair.host.endpoint()).ok()? == DevicePresence::Connecting)
+                .then_some(())
+        },
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "asking for the link waited out the backoff"
+    );
+    Ok(())
+}
+
 /// With presence links on, a paired host shows as connected and the change
 /// is published, while nothing runs on it; asking for a link again reuses
 /// the one there is.
@@ -125,8 +153,10 @@ fn a_host_that_stops_accepting_shows_as_such_and_comes_back() -> TestResult {
           relay: presence presence=Connected
           relay: presence presence=Disconnected
           relay: a link to a paired computer is down; trying again failures=1 refused=false
+          relay: presence presence=Connecting
           relay: presence presence=NotAccepting
           relay: a link to a paired computer is down; trying again failures=2 refused=true
+          relay: presence presence=Connecting
           relay: a link to a paired computer is up paths=1 relayed=false
           relay: presence presence=Connected
         host:

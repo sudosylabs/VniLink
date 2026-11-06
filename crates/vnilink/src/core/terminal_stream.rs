@@ -492,9 +492,17 @@ pub(super) async fn serve(
         let bytes = tokio::time::timeout(TIMEOUT, read(&mut recv))
             .await
             .map_err(|_| Error::Timeout)??;
-        let options: TerminalOptions =
+        let mut options: TerminalOptions =
             serde_json::from_slice(&bytes).map_err(|_| Error::Malformed)?;
         options.size.validate()?;
+        // A host that does not keep shells still opens one. The session it
+        // sends back says it is ordinary, so a disconnect ends it.
+        if options.resume_id.is_none()
+            && options.persistent
+            && !lock(&shared.state).terminal_policy.allow_persistence
+        {
+            options.persistent = false;
+        }
         // Fast-path refusal when cancellation already arrived before startup.
         if *startup_parent.borrow() || *startup_stop.borrow() {
             return Err(Error::NoSession);

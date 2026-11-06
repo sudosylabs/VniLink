@@ -1,6 +1,6 @@
 ---
-name: code-review
-description: "Review branch, commit or local changes against product contracts, correctness, architectural standards, lifecycle, security and cross-platform evidence."
+name: review-changes
+description: "Review a branch, commit or working tree for correctness, security, lifecycle, architecture and platform evidence, using the architecture checklist every change answers. Use when asked to review changes or a pull request, and before calling substantial work finished."
 ---
 
 # Code Review

@@ -741,6 +741,98 @@ fn lone_capture_serves_unselected_viewers_before_any_selection() {
     worker.join().unwrap().unwrap();
 }
 
+/// A viewer that controls selects the display of the first picture it is
+/// shown. That capture already serves it, so its encoder goes on: opening
+/// another would cost the viewer a second open and a second keyframe.
+#[test]
+fn selecting_the_display_already_shown_keeps_its_encoder() {
+    let host = Arc::new(boot());
+    let viewer = boot();
+    host.set_capture(Box::new(Source {
+        idle: false,
+        frames: Arc::new(AtomicUsize::new(0)),
+        thread: Mutex::new(None),
+        wrong_thread: Arc::new(AtomicBool::new(false)),
+    }))
+    .unwrap();
+    for core in [&host, &viewer] {
+        core.set_video_codecs(vnilink::VideoCodecCaps::h264_full(4096, 4096, "test"))
+            .unwrap();
+    }
+    host.set_topology(9, &[twin(7, 0)]).unwrap();
+    pair(&host, &viewer);
+    host.start_hosting().unwrap();
+    let parent = viewer.begin_connect_services(&host.endpoint_id()).unwrap();
+    wait_active(&viewer, parent.id);
+    let parent = viewer.controller_session(parent.id).unwrap();
+    let owner = viewer
+        .attach_controller_service(parent.id, parent.generation, ServiceKind::Desktop)
+        .unwrap();
+    let handle = viewer
+        .open_desktop_service(owner.id, owner.generation)
+        .unwrap();
+    let frames = handle.subscribe_video().unwrap();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let encodes = Arc::new(AtomicUsize::new(0));
+    let noted = Arc::new(Mutex::new(Vec::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let worker_host = Arc::clone(&host);
+    let worker_opens = Arc::clone(&opens);
+    let worker_encodes = Arc::clone(&encodes);
+    let worker_noted = Arc::clone(&noted);
+    let worker = std::thread::spawn(move || {
+        crate::serve_shared_capture(
+            &Source {
+                idle: false,
+                frames: Arc::new(AtomicUsize::new(0)),
+                thread: Mutex::new(None),
+                wrong_thread: Arc::new(AtomicBool::new(false)),
+            },
+            &worker_host,
+            &worker_stop,
+            false,
+            7,
+            move |targets| {
+                *worker_noted.lock().unwrap() =
+                    targets.iter().map(|target| target.display_id).collect();
+            },
+            move |_, width, height, fps, bps| {
+                if width != 64 || height != 64 || fps == 0 || bps == 0 {
+                    return Err(Error::InvalidSetting("encoder parameters are invalid"));
+                }
+                worker_opens.fetch_add(1, Ordering::Relaxed);
+                Ok(Encoder {
+                    held: None,
+                    encodes: Arc::clone(&worker_encodes),
+                    opens: Arc::new(AtomicUsize::new(0)),
+                })
+            },
+        )
+    });
+    let frame = frames
+        .recv_timeout(Duration::from_secs(5))
+        .expect("first picture");
+    assert_eq!(frame.display_id, 7);
+    handle.select_displays(&[7]).unwrap();
+    // The capture has seen the selection once it names the target's display.
+    wait_until("the capture to see the selection", || {
+        *noted.lock().unwrap() == vec![7]
+    });
+    // Pictures encoded after it come from whichever encoder serves now.
+    let seen = encodes.load(Ordering::Relaxed);
+    wait_until("pictures after the selection", || {
+        encodes.load(Ordering::Relaxed) >= seen + 3
+    });
+    assert_eq!(
+        opens.load(Ordering::Relaxed),
+        1,
+        "the encoder was opened again"
+    );
+    stop.store(true, Ordering::Relaxed);
+    worker.join().unwrap().unwrap();
+}
+
 /// A source that attests its pixels and never changes them, and whose
 /// reads a test can hold.
 struct Still {

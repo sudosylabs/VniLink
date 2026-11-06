@@ -27,7 +27,15 @@ interface NativeEngine {
 	execute(command: string): Promise<string>;
 	/** Calls `wake` when events are waiting; calls that wait to run merge. */
 	watchEvents(wake: () => void): NativeEventWatch;
-	openDataChannel(kind: string, sessionId: string, generation: string, rows: number, columns: number, media?: string): Promise<NativeDataChannel>;
+	openDataChannel(
+		kind: string,
+		sessionId: string,
+		generation: string,
+		rows: number,
+		columns: number,
+		media?: string,
+		resumeId?: string,
+	): Promise<NativeDataChannel>;
 	/** Resolves once the other computer admits this one to `kind`, which may wait for its person to answer. */
 	admit(kind: string, sessionId: string, generation: string): Promise<void>;
 }
@@ -184,7 +192,15 @@ export class EngineHost implements IClientConnectionFilter {
 		const engine = this.engine;
 		const open = async (): Promise<NativeDataChannel> => {
 			await this.admit(channelAdmission(request));
-			return engine.openDataChannel(request.kind, request.sessionId, request.generation, request.rows ?? 24, request.columns ?? 80, media);
+			return engine.openDataChannel(
+				request.kind,
+				request.sessionId,
+				request.generation,
+				request.rows ?? 24,
+				request.columns ?? 80,
+				media,
+				request.resumeId,
+			);
 		};
 		void open().then(native => {
 			channel.start(native);

@@ -226,22 +226,28 @@ export class EngineMainService extends Disposable implements IEngineSettingsServ
 	 * a new one, as its person chose: this computer becomes new to its paired
 	 * computers. Refused unless that is why the engine is stopped; the engine
 	 * itself also keeps an installation it can read.
+	 *
+	 * The notice stays until this start is ready. A failure leaves it,
+	 * including one that set the database aside and then could not finish,
+	 * so the same action can be tried again. A plain restart would open
+	 * those same files.
 	 */
 	public async startFresh(): Promise<void> {
 		if (!this.installationUnreadable || this.closing || this.child) {
 			throw new Error('The engine has no unreadable installation to start fresh from');
 		}
-		this.setInstallationUnreadable(false);
 		this.setRestarting(true);
 		try {
 			await this.launch(['--start-fresh']);
 			this.ready = true;
 			await this.restartHandler?.();
+			this.setInstallationUnreadable(false);
 			this.markAvailable();
 		} catch (error) {
 			this.logService.error('[engine] could not start fresh.', error);
 			this.fail(error instanceof Error ? error : new Error('Engine start failed'));
-			this.afterFailedStart(error);
+			this.setRestarting(false);
+			this.setInstallationUnreadable(true);
 			throw error;
 		}
 	}

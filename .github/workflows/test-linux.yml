@@ -1,0 +1,85 @@
+name: test-linux
+
+# The full suite on the runner's Ubuntu and in Fedora, called by ci.yml. Both
+# run the same steps (actions/linux-suite); they differ in how the computer
+# is prepared.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: Ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # What these computers have, so a test that needs it fails rather than
+    # skips when its install breaks.
+    env:
+      VNILINK_REQUIRE: ffprobe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-node
+      - uses: ./.github/actions/install-ubuntu-packages
+        with:
+          tasks: build test:ui test:rust
+      - run: npm ci
+      # The Rust build, vendored codecs included, from the last run with the
+      # same toolchain and lockfile.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ubuntu
+      # Ubuntu restricts the user namespaces Chromium's sandbox needs.
+      - run: npm run sandbox:linux
+      - uses: ./.github/actions/linux-suite
+      - if: always()
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: scenarios-ubuntu
+
+  fedora:
+    name: Fedora
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: fedora:43@sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42
+      # An init reaps orphans, as in the Debian image: the job's own PID 1 keeps
+      # them as zombies, which still answer kill(pid, 0). Without a GPU every
+      # canvas is shared memory until collected, and the unit suite's peak
+      # (about 740 MB) outgrows Docker's default, as a desktop's never does.
+      options: --shm-size=2g --init
+    env:
+      # Root in a container: Electron runs without its sandbox, as in the Debian image.
+      VNILINK_TEST_CONTAINER: '1'
+    steps:
+      - name: Install checkout and Node prerequisites
+        run: dnf install -y git tar xz
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # The job runs as root over a checkout the runner's user owns, which
+      # git refuses unless told the folder is trusted; hygiene reads its log.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/setup-node
+      - name: Install Fedora packages
+        run: node build/lib/prerequisites.ts packages fedora build test:ui test:rust | xargs dnf install -y
+      # A pinned rustup, checked against its published hash, rather than whatever the install script fetches.
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSfo rustup-init https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init
+          echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  rustup-init' | sha256sum --check
+          chmod +x rustup-init
+          ./rustup-init -y --default-toolchain none --profile minimal
+          rm rustup-init
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      # The Rust build, vendored codecs included, from the last run with the
+      # same toolchain and lockfile.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: fedora
+      - uses: ./.github/actions/linux-suite
+      - if: always()
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: scenarios-fedora

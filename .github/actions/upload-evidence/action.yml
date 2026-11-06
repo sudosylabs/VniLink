@@ -1,0 +1,19 @@
+name: Upload scenario evidence
+description: What the UI scenarios left, kept with the run; nothing when they left nothing.
+
+inputs:
+  name:
+    description: The artifact's name.
+    required: true
+  path:
+    description: Where the evidence is.
+    default: .build/test-runs
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ignore

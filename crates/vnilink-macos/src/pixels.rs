@@ -61,28 +61,33 @@ impl vnilink_media::NativePicture for MacPicture {
 }
 
 /// Where ScreenCaptureKit says a frame changed, as `[x, y, width, height]`
-/// rects, without reading a pixel. Whether they are points or pixels of the
-/// picture is only certain on a display that has no scale (`scale_factor`
-/// 1.0); on any other they are not trusted and the pixels say. `None` when
-/// there are no rects.
+/// rects, without reading a pixel. The rects are in the units of the frame's
+/// content rect, `content` (its width and height): points of the picture,
+/// which on a scaled display are half its pixels, or fewer once the picture
+/// is delivered smaller than the display. They are scaled by the picture's
+/// size over `content`. `None` when there are no rects or no usable content
+/// rect: the pixels say.
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn reported_changes(
     rects: &[[f64; 4]],
-    scale_factor: Option<f64>,
+    content: Option<(f64, f64)>,
     (width, height): (u16, u16),
 ) -> Option<vnilink_media::Changes> {
-    if rects.is_empty() || scale_factor != Some(1.0) {
+    let (content_width, content_height) = content?;
+    if rects.is_empty() || content_width <= 0.0 || content_height <= 0.0 {
         return None;
     }
+    let across = f64::from(width) / content_width;
+    let down = f64::from(height) / content_height;
     Some(vnilink_media::Changes::of(
         rects.iter().map(|[x, y, w, h]| {
             // Outwards to whole pixels: a fraction of one has changed.
-            let (left, top) = (x.floor(), y.floor());
+            let (left, top) = ((x * across).floor(), (y * down).floor());
             [
                 left as i64,
                 top as i64,
-                (x + w).ceil() as i64 - left as i64,
-                (y + h).ceil() as i64 - top as i64,
+                ((x + w) * across).ceil() as i64 - left as i64,
+                ((y + h) * down).ceil() as i64 - top as i64,
             ]
         }),
         u32::from(width),

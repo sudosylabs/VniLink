@@ -50,6 +50,8 @@ export class TestFilesDisk implements IFilesDisk {
 	public readonly watchers = new Map<string, () => void>();
 	/** Names whose place has no Trash, as a network share has none. */
 	public readonly noTrash = new Set<string>();
+	/** Names in each listing that are not text, so the pane can say they were left out. */
+	public skipped = 0;
 
 	constructor(private placeList: FilePlaces, private readonly folders: Map<string, FileEntry[]>) { }
 
@@ -67,7 +69,7 @@ export class TestFilesDisk implements IFilesDisk {
 		const key = `${folder.root}:${folder.path}`;
 		this.lists.push(key);
 		const entries = this.folders.get(key);
-		return entries ? Promise.resolve({ entries: [...entries], truncated: false, skipped: 0 }) : Promise.reject(new Error('InvalidSetting: the path is not a directory'));
+		return entries ? Promise.resolve({ entries: [...entries], truncated: false, skipped: this.skipped }) : Promise.reject(new Error('InvalidSetting: the path is not a directory'));
 	}
 
 	public mkdir(folder: FolderLocation, name: string): Promise<void> {

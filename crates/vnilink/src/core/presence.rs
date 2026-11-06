@@ -145,7 +145,6 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
         wake: Arc::clone(&wake),
     };
     let mut failures = 0usize;
-    let mut reached = false;
     while running(&shared) {
         let Some(display_id) = lock(&shared.state)
             .trust
@@ -154,13 +153,12 @@ async fn keep_link(shared: Arc<Shared>, handle: tokio::runtime::Handle, peer: [u
         else {
             break;
         };
-        if !reached && failures == 0 {
-            set_presence(&shared, &display_id, DevicePresence::Connecting);
-        }
+        // Every dial, including one after a failure, reads as connecting.
+        // The first attempt is not special: a later one is the same kind of wait.
+        set_presence(&shared, &display_id, DevicePresence::Connecting);
         match start_outgoing(&shared, &handle, &display_id) {
             Ok(info) => {
                 if watch_link(&shared, info.id, &peer, &display_id).await {
-                    reached = true;
                     failures = 0;
                 }
                 release_link(&shared, info.id);

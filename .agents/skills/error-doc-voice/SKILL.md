@@ -1,6 +1,6 @@
 ---
 name: error-doc-voice
-description: "Preserve Rust/bridge error categories and write clear localized user feedback, diagnostic details, ownership/invariant documentation, and project-neutral comments, docs and fixtures."
+description: "Errors, messages, comments and docs: Rust error categories kept through the bridge, plain localized messages, code documented in its module, and text that reads true in any contributor's checkout. Use when adding or changing an error, a message people read, a comment, a doc or a fixture."
 ---
 
 # Errors and Documentation
@@ -11,13 +11,13 @@ Domain failures live in the owning shared Rust taxonomy and map through facade/b
 
 Messages name the actual state in plain language. Rust diagnostic reasons use the existing lowercase style; bound dynamic detail at its constructor/owner. Preserve native/transport diagnostic context for logs without exposing secrets, unrestricted paths or large payloads in user-facing messages. Verify actual source bounds instead of caching numeric limits in this skill.
 
-Match error categories, not mutable message text. Do not collapse stale/absent, denied/unavailable or saved-but-unconfirmed states. Preserve structured information through layers; logging every stage must not duplicate user notifications.
+Match error categories, not mutable message text. Keep stale and absent, denied and unavailable, and saved-but-unconfirmed as distinct states, with their structure intact through every layer. Each failure reaches the user once, however many stages log it.
 
 ## User presentation
 
-The bridge preserves core semantics; the UI may provide localized, contextual explanations and actionable recovery without inventing success or a new domain meaning. Raw technical exception strings are diagnostic evidence, not automatically good interface copy. Say what failed and what the user can do; do not prescribe restarting for every failure or expose implementation details that do not affect a decision.
+The bridge preserves core semantics; the UI may provide localized, contextual explanations and actionable recovery without inventing success or a new domain meaning. Raw technical exception strings are diagnostic evidence, not automatically good interface copy. Say what failed and what the user can do about it; suggest restarting only when a restart is what fixes it, and mention an implementation detail only when it changes the user's decision.
 
-Separate configuration validation, save failure and runtime reconciliation. Permission/capability explanations come from actual OS/backend state. Avoid routine reassurance and verbosity that `design-philosophy` identifies as unnecessary.
+Separate configuration validation, save failure and runtime reconciliation. Permission/capability explanations come from actual OS/backend state. Say only what helps a decision; `design-philosophy` owns the product's tone.
 
 ## Documentation
 
@@ -25,12 +25,12 @@ How an implementation works is documented in the module that owns it: the file-h
 
 Module docs state ownership, neighboring boundaries and important effects. Public contracts document meanings that names/types do not make obvious, particularly lifecycle, permission, persistence, thread/resource and generation semantics. Preserve upstream license/provenance headers.
 
-Comments explain reasons, invariants and traps rather than narrating obvious code. Keep them close to the relevant contract; do not repeat the same architectural rule throughout callers. Avoid blanket boilerplate stating negative scope in every trivial file. Documentation describes current facts or explicitly labeled target/migration work, not proposals presented as implemented behavior.
+Comments explain reasons, invariants and traps rather than narrating obvious code. Keep each one beside the contract it explains, once, rather than restated in every caller; a file states what it does, not what it leaves to others. Documentation describes current facts or explicitly labeled target/migration work, not proposals presented as implemented behavior.
 
 ## Writing about the project
 
 Comments, docs, skills and fixtures describe the project, so they read true in any contributor's checkout. State behaviour and constraints by platform or hardware class: "on a hybrid Intel+NVIDIA laptop", "on Apple silicon". A measured number keeps its hardware class, the date it was measured and where the evidence lives (a test, the module doc of the measuring task, or the commit that measured it).
 
-Name what a contributor supplies by its role: "a VS Code checkout at the ref in `build/vscode-source.json`", "the remote computer's SSH destination". Fixtures use neutral placeholders: `/Users/someone`, `C:\Users\someone`, `/home/someone`, and a device such as `Studio PC`. Product identity (app id, publisher, repository, support address) is read from `product.json`; only the contact documents `SECURITY.md`, `CODE_OF_CONDUCT.md` and `CONTRIBUTING.md` spell it out.
+Name what a contributor supplies by its role: "a VS Code checkout at the ref in `build/vscode-source.json`", "the remote computer's SSH destination". Fixtures use neutral placeholders: `/Users/someone`, `C:\Users\someone`, `/home/someone`, and a device such as `Studio PC`. Product identity (app id, publisher, repository, support address) is read from `product.json`; only the contact documents (`identityFiles` in `build/lib/hygiene.ts`) spell it out.
 
 `npm run check:hygiene` rejects home directories other than the placeholders, git authors' handles and product identity outside those files, and comments in the project's own Rust and TypeScript that cite a markdown document, the README, a skill or `docs/`, or a step or phase.

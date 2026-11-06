@@ -197,6 +197,8 @@ interface EngineSnapshot {
 
 export type EngineCommand =
 	| { type: 'beginConnectServices'; endpointId: string }
+	/** The computer woke or changed network. Dial paired computers again. */
+	| { type: 'noteNetworkChange' }
 	| { type: 'snapshot' }
 	/** The engine's bounded diagnostic snapshot, as the JSON it exports. */
 	| { type: 'diagnosticSnapshot' }
@@ -787,6 +789,7 @@ export function isEngineCommand(value: unknown): value is EngineCommand {
 	let valid = false;
 	switch (value.type) {
 		case 'beginConnectServices': keys = ['endpointId']; valid = text(value.endpointId); break;
+		case 'noteNetworkChange': keys = []; valid = true; break;
 		case 'snapshot': case 'diagnosticSnapshot': case 'diagnosticRecorder': keys = []; valid = true; break;
 		case 'logFilter': case 'engineLogTail': keys = []; valid = true; break;
 		case 'setLogFilter': keys = ['directives']; valid = logFilter(value.directives); break;

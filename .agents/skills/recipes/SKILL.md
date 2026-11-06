@@ -1,6 +1,6 @@
 ---
 name: recipes
-description: "Step lists for common VniLink changes: a Home page, a setting, a workbench service, a main-process capability, a toolbar action, a startup contribution, copying VS Code code. Use when adding one of these."
+description: "Step lists for common VniLink changes: a Home page, a setting, a workbench service, a main-process capability, a toolbar action, startup work, copying VS Code code. Use when adding one of these."
 ---
 
 # Recipes

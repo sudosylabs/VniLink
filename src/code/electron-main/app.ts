@@ -194,6 +194,14 @@ export class VniLinkApplication extends Disposable {
 			});
 			mark('vnilink/appReady');
 			await this.startEngine();
+			this.instantiationService.invokeFunction(accessor => {
+				const engine = accessor.get(IEngineMainService);
+				accessor.get(ILifecycleMainService).listenForResume(() => {
+					void engine.execute({ type: 'noteNetworkChange' }).catch((error: unknown) => {
+						this.logService.warn('Paired computers were not dialled after wake', error);
+					});
+				});
+			});
 			this.checkRunning();
 			this.instantiationService.invokeFunction(accessor => {
 				accessor.get(IHostingMainService).start();

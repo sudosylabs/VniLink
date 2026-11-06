@@ -29,6 +29,8 @@ interface ShellOptions {
 	readonly openFails?: boolean;
 	/** Writes stay in flight until a test releases them from `pendingWrites`. */
 	readonly writeDelay?: boolean;
+	/** A kept shell the paired computer still has, detached. */
+	readonly kept?: { readonly id: string; readonly persistent: boolean; readonly attached: boolean };
 }
 
 /** Output an event carries, as text. */
@@ -40,7 +42,7 @@ suite('EnginePty', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	/** A shell on `deviceId` at 100×30, with its channel, its engine and what it fired recorded. */
-	function shell({ status = 'available', sessions = [session], openFails = false, writeDelay = false }: ShellOptions = {}) {
+	function shell({ status = 'available', sessions = [session], openFails = false, writeDelay = false, kept }: ShellOptions = {}) {
 		const dataChannels = new TestDataChannelService();
 		const pendingWrites: (() => void)[] = [];
 		if (openFails) {
@@ -59,6 +61,9 @@ suite('EnginePty', () => {
 			return terminal;
 		};
 		const engine = disposables.add(new TestEngineService(command => {
+			if (command.type === 'remoteTerminalSessions') {
+				return { type: 'terminalSessions', sessions: kept ? [{ id: kept.id, process_id: 4, shell: '/bin/sh', rows: 24, columns: 80, persistent: kept.persistent, attached: kept.attached }] : [] };
+			}
 			assert.strictEqual(command.type, 'controllerSessions');
 			return { type: 'sessions', sessions };
 		}));
@@ -112,6 +117,18 @@ suite('EnginePty', () => {
 		assert.strictEqual(await f.pty.start(), undefined);
 		assert.deepStrictEqual(f.requests, [{ kind: 'terminal', sessionId: '7', generation: '3', rows: 30, columns: 100 }]);
 		assert.strictEqual(f.ready, 1);
+	});
+	test('closing the shell closes its channel and does not report an exit', async () => {
+		const f = shell();
+		assert.strictEqual(await f.pty.start(), undefined);
+		f.pty.dispose();
+		assert.strictEqual(f.closed, 1, 'closing the tab did not close the channel');
+		assert.deepStrictEqual(f.exits, [], 'closing the tab looked like the shell exiting');
+	});
+	test('a detached shell is resumed instead of starting another', async () => {
+		const f = shell({ kept: { id: 'a'.repeat(32), persistent: true, attached: false } });
+		assert.strictEqual(await f.pty.start(), undefined);
+		assert.strictEqual(f.requests[0]?.resumeId, 'a'.repeat(32));
 	});
 	test('a started shell cannot be started again', async () => {
 		const f = shell();

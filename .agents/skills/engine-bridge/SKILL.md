@@ -1,6 +1,6 @@
 ---
 name: engine-bridge
-description: "Expose or diagnose Rust capabilities through Electron control commands and binary data channels with complete facade, validation, service and live-runtime wiring."
+description: "Expose a Rust engine capability to the Electron app, or diagnose one: control commands through IEngineService and EngineChannel, and binary data channels for frames, terminal bytes and transfers. Use when adding or changing an engine command, reply, event or data channel, or when the UI cannot reach something the engine does."
 ---
 
 # Engine Bridge

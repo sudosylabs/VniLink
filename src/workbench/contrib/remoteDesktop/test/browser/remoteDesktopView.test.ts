@@ -260,6 +260,22 @@ suite('RemoteDesktopView', () => {
 			assert.strictEqual(tab.required('.desktop-stats').dataset.corner, 'bottomLeft');
 			assert.strictEqual(fixture.uiState.values.get('desktop.statsCorner.studio'), 'bottomLeft');
 		});
+		test('a capture the window refuses still lets the drag move the details', async () => {
+			const { tab } = await live();
+			const stats = tab.required('.desktop-stats');
+			const grip = tab.required('.desktop-stats-grip');
+			const viewBox = tab.element.getBoundingClientRect();
+			const gripBox = grip.getBoundingClientRect();
+			stats.setPointerCapture = () => {
+				throw new DOMException('The element has no pointer capture');
+			};
+			grip.dispatchEvent(new PointerEvent('pointerdown', { clientX: gripBox.left + 4, clientY: gripBox.top + 4, button: 0, pointerId: 7, bubbles: true }));
+			// A refused capture delivers the rest of the drag to the window.
+			window.dispatchEvent(new PointerEvent('pointermove', { clientX: viewBox.left + 40, clientY: viewBox.bottom - 40, pointerId: 7, bubbles: true }));
+			assert.ok(stats.classList.contains('dragging'));
+			window.dispatchEvent(new PointerEvent('pointerup', { clientX: viewBox.left + 40, clientY: viewBox.bottom - 40, pointerId: 7, bubbles: true }));
+			assert.strictEqual(stats.dataset.corner, 'bottomLeft');
+		});
 		test('the arrow keys move the details between corners from the grip', async () => {
 			const { tab } = await live();
 			drag(tab);

@@ -25,7 +25,7 @@ import { readProduct, type Product } from './product.ts';
 const placeholderHomes = new Set(['someone', 'Shared', 'Public']);
 
 /** The contact documents, which spell out the publisher's address and repository for people. */
-const identityFiles = new Set(['product.json', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md', 'REUSE.toml']);
+const identityFiles = new Set(['product.json', 'README.md', 'SECURITY.md', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md', 'REUSE.toml']);
 
 // `Users/<name>` in macOS, Windows and root-relative forms; `/home/<name>` only as a path's start,
 // so `contrib/home/...` is not a home. A name starts with a letter or digit, so `Users/..` is none.
@@ -155,8 +155,10 @@ export async function checkHygiene(root: string): Promise<void> {
 		try {
 			contents = await readFile(join(root, path));
 		} catch (error) {
-			// Deleted in the working tree but still in the index.
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			// Deleted in the working tree but still in the index; or a link to a
+			// folder, whose files git lists under the folder's own path.
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'EISDIR') {
 				continue;
 			}
 			throw error;

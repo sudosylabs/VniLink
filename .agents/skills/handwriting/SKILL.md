@@ -1,6 +1,6 @@
 ---
 name: handwriting
-description: "Write and review readable Rust and TypeScript files with deliberate imports, declarations, method structure, comments and formatting, while preserving copied-source provenance."
+description: "How Rust and TypeScript files read: imports, declarations, method shape, comments and formatting, after VS Code's style. Use when writing or tidying a source file, or when a review asks for readability."
 ---
 
 # Handwriting

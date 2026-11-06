@@ -1,0 +1,23 @@
+name: Linux suite
+description: >
+  After npm ci and the Rust cache: what the computer has, the checks, the Rust
+  checks and tests, the build, the native tests, and every test under Xvfb.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: npm run doctor -- --require build,test:rust,test:ui
+    - shell: bash
+      run: npm run check
+    - shell: bash
+      run: npm run check:rust
+    - shell: bash
+      run: npm run test:rust
+    - shell: bash
+      run: npm run build
+    - shell: bash
+      run: npm run test:native
+    # No display on the runner: Xvfb, Openbox and a temporary keyring.
+    - shell: bash
+      run: scripts/test.sh

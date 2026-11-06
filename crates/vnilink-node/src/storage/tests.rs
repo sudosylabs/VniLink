@@ -11,22 +11,26 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use vnilink_app::{CredentialStore, FfiError};
 
+use super::crypto::KEY_LEN;
 use super::database::{
     arm_schema_fault, bundled_sqlite_version, expected_vfs_name, SchemaFault, CREATE_SQL,
 };
-use super::key::{FileVault, KeyVault, KeyringVault, MemoryVault, KEY_ACCOUNT, KEY_SERVICE};
+use super::key::{
+    FileVault, KeyAccess, KeyVault, KeyringVault, MemoryVault, KEY_ACCOUNT, KEY_SERVICE,
+};
 #[cfg(unix)]
 use super::paths::linux_app_dir;
 use super::paths::{self, linux_fstype_is_remote, linux_mount_fstype};
 #[cfg(unix)]
 use super::paths::{linux_path_is_remote, resolve_mount_path};
 use super::{recover_installation, EncryptedInstallationStore, Failure};
+use zeroize::Zeroizing;
 
 const OLD_SENTINEL: &[u8] = b"VNILINK-PLAINTEXT-SENTINEL-OLD-9f3c1a";
 const NEW_SENTINEL: &[u8] = b"VNILINK-PLAINTEXT-SENTINEL-NEW-9f3c1b";
@@ -324,7 +328,7 @@ fn plaintext_bounds_reject_an_empty_or_oversized_record_before_sql() {
 }
 
 #[test]
-fn missing_halves_are_unavailable_and_are_left_in_place() {
+fn missing_halves_are_left_in_place() {
     let fixture = Fixture::new();
     let vault = memory();
     let store = open(&fixture.engine, as_vault(&vault));
@@ -342,8 +346,9 @@ fn missing_halves_are_unavailable_and_are_left_in_place() {
     restored.copy_from_slice(&key);
     vault.write(&restored).unwrap();
     fs::remove_file(fixture.database()).unwrap();
+    // A key with no database is unreadable, so Start Fresh can replace it.
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_vault(&vault));
-    assert_eq!(err.unwrap_err(), FfiError::StoreUnavailable);
+    assert_eq!(err.unwrap_err(), FfiError::CorruptRecord);
     assert!(!fixture.database().exists());
     assert_eq!(vault.stored_len(), Some(32));
     assert_eq!(vault.writes(), 2);
@@ -420,7 +425,7 @@ fn provisioning_that_stops_after_the_key_does_not_adopt_a_new_database() {
     assert!(!fixture.database().exists());
     assert_eq!(vault.writes(), 1);
     let err = EncryptedInstallationStore::open_fixture(&fixture.engine, as_vault(&vault));
-    assert_eq!(err.unwrap_err(), FfiError::StoreUnavailable);
+    assert_eq!(err.unwrap_err(), FfiError::CorruptRecord);
     assert_eq!(vault.writes(), 1);
     assert!(!fixture.database().exists());
 }
@@ -1341,6 +1346,110 @@ fn starting_fresh_sets_an_unreadable_installation_aside_and_opens_a_new_one() {
     );
     assert!(
         open_engine_at(&fixture.engine, &vault).is_ok(),
+        "the new installation reopens"
+    );
+}
+
+/// A key store whose delete can be refused, as a credential service that
+/// keeps the key after the database has already been moved.
+struct HoldKey {
+    inner: MemoryVault,
+    hold: AtomicBool,
+}
+
+impl HoldKey {
+    fn new() -> Self {
+        Self {
+            inner: MemoryVault::new(),
+            hold: AtomicBool::new(false),
+        }
+    }
+
+    fn hold_delete(&self, hold: bool) {
+        self.hold.store(hold, Ordering::SeqCst);
+    }
+
+    fn stored_len(&self) -> Option<usize> {
+        self.inner.stored_len()
+    }
+}
+
+impl KeyVault for HoldKey {
+    fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, KeyAccess> {
+        self.inner.read()
+    }
+
+    fn write(&self, key: &[u8; KEY_LEN]) -> Result<(), KeyAccess> {
+        self.inner.write(key)
+    }
+
+    fn delete(&self) -> Result<(), KeyAccess> {
+        if self.hold.load(Ordering::SeqCst) {
+            return Err(KeyAccess::Unavailable);
+        }
+        self.inner.delete()
+    }
+}
+
+#[test]
+fn a_key_kept_after_the_database_moved_stays_unreadable() {
+    let fixture = Fixture::new();
+    let vault = Arc::new(HoldKey::new());
+    let store = open(&fixture.engine, vault.clone());
+    store.save(b"not an installation record".to_vec()).unwrap();
+    drop(store);
+    vault.hold_delete(true);
+    let paths = paths::InstallationPaths::from_engine(fixture.engine.clone());
+    let failure = recover_installation(&paths, vault.as_ref()).unwrap_err();
+    assert!(
+        matches!(
+            failure,
+            super::recover::RecoverFailure::Partial {
+                step: "delete-key",
+                ..
+            }
+        ),
+        "the database moved and the key stayed: {failure}"
+    );
+    assert_eq!(recovery_dirs(&fixture), 1);
+    assert!(!fixture.database().exists(), "the database was set aside");
+    assert_eq!(vault.stored_len(), Some(32), "the key is still stored");
+    let reset_early =
+        || -> Result<(), FfiError> { panic!("an open without start fresh reset the installation") };
+    assert!(
+        matches!(
+            super::open_or_start_fresh(
+                false,
+                || {
+                    let store =
+                        EncryptedInstallationStore::open_fixture(&fixture.engine, vault.clone())?;
+                    vnilink_app::VnilinkCore::open_persistent_direct(Box::new(store))
+                },
+                reset_early,
+            ),
+            Err(FfiError::CorruptRecord)
+        ),
+        "a key with no database is unreadable"
+    );
+    vault.hold_delete(false);
+    let reset = || {
+        recover_installation(&paths, vault.as_ref())
+            .map(|_| ())
+            .map_err(|_| FfiError::StoreUnavailable)
+    };
+    let core = super::open_or_start_fresh(
+        true,
+        || {
+            let store = EncryptedInstallationStore::open_fixture(&fixture.engine, vault.clone())?;
+            vnilink_app::VnilinkCore::open_persistent_direct(Box::new(store))
+        },
+        reset,
+    )
+    .expect("the next start fresh opens a new installation");
+    drop(core);
+    assert_eq!(vault.stored_len(), Some(32));
+    assert!(
+        EncryptedInstallationStore::open_fixture(&fixture.engine, vault.clone()).is_ok(),
         "the new installation reopens"
     );
 }

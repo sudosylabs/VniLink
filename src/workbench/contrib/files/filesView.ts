@@ -18,7 +18,7 @@ import { IFilesService, type FilesFailure, type FilesItem, type IFilesSession } 
 import type { WorkbenchTab } from '../../services/tabs/tabService.js';
 import { FilesPaneView } from './filesPane.js';
 import { FilesActivity, type TransferPlace } from './filesActivity.js';
-import { folderName, formatSize } from './filesText.js';
+import { folderName, formatSize, hiddenNames } from './filesText.js';
 
 /** This computer, as file managers call it. */
 function thisComputer(): string {
@@ -308,7 +308,7 @@ export class FilesView extends Disposable implements WorkbenchTab {
 	private update(): void {
 		const source = this.active === 'local' ? this.local : this.remote;
 		const target = this.active === 'local' ? this.remote : this.local;
-		const { shown, selected, bytes, truncated } = source.summary();
+		const { shown, selected, bytes, truncated, skipped } = source.summary();
 		const into = target.folder;
 		const usable = selected > 0 && into !== undefined && this.session !== undefined && !this.session.ended;
 		const where = into ? nls.localize('files.copyWhere', '{0} on {1}', folderName(into, target.knownPlaces, target.computer), target.computer) : target.computer;
@@ -325,12 +325,13 @@ export class FilesView extends Disposable implements WorkbenchTab {
 			$('span', undefined, usable ? nls.localize('files.copyCount', 'Copy {0} to', selected) : nls.localize('files.selectToCopy', 'Select files')),
 			$('span', undefined, usable ? where : nls.localize('files.toCopyThem', 'to copy them')),
 		);
-		this.selection.textContent = selected
+		const hidden = skipped > 0 ? ` ${hiddenNames(skipped)}.` : '';
+		this.selection.textContent = (selected
 			? bytes > 0
 				? nls.localize('files.selectedSummary', '{0}: {1} of {2} selected, {3}', source.computer, selected, shown, formatSize(bytes))
 				: nls.localize('files.selectedFolders', '{0}: {1} of {2} selected', source.computer, selected, shown)
 			: truncated
 				? nls.localize('files.truncatedSummary', '{0}: showing the first {1} items', source.computer, shown)
-				: nls.localize('files.shownSummary', '{0}: {1} items', source.computer, shown);
+				: nls.localize('files.shownSummary', '{0}: {1} items', source.computer, shown)) + hidden;
 	}
 }

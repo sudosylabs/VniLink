@@ -69,6 +69,7 @@ suite('isEngineCommand', () => {
 			['a pairing confirmation with the largest preview id', { type: 'confirmPairing', previewId: '18446744073709551615', digits: '123456' }],
 			['an invitation with a lifetime', { type: 'createInvitation', ttlSeconds: 60 }],
 			['a services connection to a device', { type: 'beginConnectServices', endpointId: 'peer' }],
+			['a wake after the computer resumes', { type: 'noteNetworkChange' }],
 			['disconnecting everything', { type: 'disconnect' }],
 			['disconnecting one session', { type: 'disconnectSession', sessionId: '1' }],
 			['a base64 pairing file', { type: 'openPairingFileBase64', data: 'AQID' }],

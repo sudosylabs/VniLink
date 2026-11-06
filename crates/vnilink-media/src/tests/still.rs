@@ -66,6 +66,22 @@ fn a_still_keeps_coloured_text_sharp_within_its_budget() {
     assert!(encoder.encode(&page, 1_000).unwrap().is_none());
 }
 
+/// A stream starts at 4 Mb/s and a still screen does not raise it: a still
+/// then has what that rate carries in `STILL_DRAIN`, about 110 kB. A 1080p
+/// page of coloured text still gets one that fits, and it is still clearly
+/// sharper than the best 4:2:0 picture of it.
+#[test]
+fn a_1080p_page_gets_a_still_within_what_a_starting_stream_carries() {
+    let page = colour_text_page(1920, 1080, 0);
+    let picture = StillEncoder::new()
+        .encode(&page, 110_000)
+        .unwrap()
+        .expect("a still fits a starting stream's budget");
+    assert!(picture.len() <= 110_000, "{} bytes", picture.len());
+    let shown = decode(&picture);
+    assert!(psnr(&page, &shown) > 28.0, "{:.1} dB", psnr(&page, &shown));
+}
+
 /// The browser scenario's still: a page of coloured text as `StillEncoder`
 /// makes it, and the crop of its source where 4:2:0 loses most.
 const FIXTURE: &str = concat!(

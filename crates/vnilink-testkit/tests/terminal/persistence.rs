@@ -10,7 +10,7 @@
 
 use expect_test::expect;
 
-use vnilink::terminal::{TerminalOptions, TerminalSize, TERMINAL_CHUNK};
+use vnilink::terminal::{TerminalOptions, TerminalPolicy, TerminalSize, TERMINAL_CHUNK};
 use vnilink::{Error, ServiceKind, SessionPhase};
 use vnilink_testkit::terminal::{
     contains, open_shell, options, read_until, wait_shells_ended, Hosting, ENTER,
@@ -143,6 +143,45 @@ fn a_persistent_shell_resumes_with_its_identity_history_and_environment() -> Tes
         },
     );
     trace.assert_unrecorded("terminal content", &["VNI_KEEP", "BEFORE_", "AFTER:"]);
+    Ok(())
+}
+
+/// A host whose policy does not keep shells still opens the one it was
+/// asked for, as an ordinary shell, and a disconnect ends that process.
+#[test]
+fn a_host_that_does_not_keep_shells_opens_an_ordinary_one() -> TestResult {
+    let trace = traced();
+    let hosting = Hosting::shell()?;
+    let policy = hosting.pair.host.core.terminal_policy()?;
+    hosting.pair.host.core.set_terminal_policy(TerminalPolicy {
+        allow_persistence: false,
+        ..policy
+    })?;
+    let terminal = hosting.open_with(options(true, None))?;
+    let metadata = terminal.session();
+    assert!(
+        !metadata.persistent,
+        "the opened shell is not kept: {metadata:?}"
+    );
+    hosting
+        .pair
+        .controller
+        .core
+        .disconnect_session(hosting.connection.id)?;
+    hosting.wait_shells_ended();
+    trace.wait_for_records("terminal opened", 1);
+    vnilink_testkit::assert_story(
+        expect![[r#"
+        host:
+          terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
+    "#]],
+        || {
+            trace
+                .tell(&["terminal"])
+                .only(ACROSS_A_DISCONNECT)
+                .to_string()
+        },
+    );
     Ok(())
 }
 

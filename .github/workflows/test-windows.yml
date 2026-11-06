@@ -1,0 +1,50 @@
+name: test-windows
+
+# The full suite on Windows, called by ci.yml.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-2025
+    timeout-minutes: 150
+    # What these computers have, so a test that needs it fails rather than
+    # skips when its install breaks.
+    env:
+      VNILINK_REQUIRE: ffprobe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-node
+      - uses: ./.github/actions/setup-msys2
+        with:
+          tasks: build test:ui test:rust
+      # The toolchain rust-toolchain.toml names, with its components, before
+      # anything runs cargo: an interrupted download can leave one without
+      # cargo, so it is checked and tried again.
+      - name: Install the Rust toolchain
+        shell: pwsh
+        run: |
+          foreach ($Attempt in 1..3) {
+            rustup toolchain install
+            if ($LASTEXITCODE -eq 0) { cargo --version }
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            rustup toolchain uninstall (rustup show active-toolchain).Split(' ')[0]
+          }
+          throw 'The Rust toolchain could not be installed.'
+      # The Rust build, vendored codecs included, from the last run with the
+      # same toolchain and lockfile.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows
+      # npm ci, the doctor, the checks, the Rust checks and tests, and UI tests.
+      - name: Test (native Windows environment)
+        shell: pwsh
+        run: ./scripts/test-windows.ps1 -MsysRoot $env:VNILINK_MSYS_ROOT
+      - if: always()
+        uses: ./.github/actions/upload-evidence
+        with:
+          name: scenarios-windows

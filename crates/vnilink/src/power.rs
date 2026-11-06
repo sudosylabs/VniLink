@@ -22,8 +22,10 @@ impl PowerKind {
     }
     pub(crate) const ALL: [Self; 2] = [Self::Display, Self::System];
 }
-/// Opt-in installation policy. Connections carrying only Files, detached shells,
-/// keepalives and ordinary frame traffic do not acquire these assertions.
+/// Opt-in installation policy. A desktop, an attached terminal, and a Files
+/// service while one of its jobs moves files acquire these assertions. An
+/// open Files tab with no job moving, a detached shell, keepalives and
+/// ordinary frame traffic do not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PowerPolicy {

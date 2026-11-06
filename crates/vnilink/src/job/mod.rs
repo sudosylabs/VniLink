@@ -181,7 +181,9 @@ impl Default for FileResourcePolicy {
     fn default() -> Self {
         Self {
             max_concurrent_receivers: 4,
-            max_reserved_bytes: 64 * 1024 * 1024 * 1024,
+            // The policy range, not a product ceiling on one file.
+            max_reserved_bytes: 1024 * 1024 * 1024 * 1024,
+            // Cap on the free reserve. The reserve itself is 1% of the volume.
             minimum_free_bytes: 256 * 1024 * 1024,
         }
     }

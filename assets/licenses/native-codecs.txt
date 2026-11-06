@@ -32,7 +32,7 @@ To replace the decoder:
 Build prerequisites: the Rust version in rust-toolchain.toml, C/C++ compilers,
 CMake and libclang. Windows builds use Rust x86_64-pc-windows-gnu and the
 MSYS2 MINGW64 gcc/clang/nasm/make tools. Linux also needs nasm and the desktop development packages
-listed in .github/workflows/ci.yml. Cargo fetches pinned registry dependencies;
+listed in build/prerequisites.json. Cargo fetches pinned registry dependencies;
 codec build scripts fetch pinned upstream codec source tags; prebuilt binaries
 are checksum verified. Native HEVC uses the bundled source tree.
 For a locally modified macOS application, use an ad-hoc signature or launch

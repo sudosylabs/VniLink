@@ -61,6 +61,10 @@ suite('DevicesPage', () => {
 			click(fixture.row(1));
 			assert.strictEqual(panel()?.hidden, false);
 		});
+		test('selecting a device dials it', () => {
+			click(fixture.row(1));
+			assert.deepStrictEqual(fixture.connections, [LAB]);
+		});
 		test('selecting a device opens no tab', () => {
 			const tabs = document.querySelectorAll('[role="tab"]').length;
 			click(fixture.row(1));
@@ -465,6 +469,11 @@ suite('DevicesPage screen', () => {
 		click(button('Allow screen capture'));
 		assert.strictEqual(snapshots.prompts.at(-1), true);
 		assert.strictEqual(page.querySelector('.device-screen .monaco-button')?.classList.contains('disabled'), true);
+	});
+	test('a computer that has not been allowed yet says so', async () => {
+		await selectStudio({ status: 'notAdmitted' });
+		assert.strictEqual(caption(), 'This computer has not been allowed yet.');
+		assert.strictEqual(button('Allow screen capture'), undefined);
 	});
 	test('a cancelled screenshot enables Refresh again and says the screen could not be captured', async () => {
 		await selectStudio({ status: 'needsPermission' });

@@ -107,6 +107,8 @@ export class DevicesPage extends Disposable implements IHomePage {
 		this._register(this.list.onDidSelect(device => {
 			this.selectedId = device.id;
 			this.render();
+			// Opening the computer dials it now if its link is waiting.
+			void this.devices.connect(device.id).catch(() => undefined);
 		}));
 		this._register(this.details.onDidClose(() => {
 			this.closeDetails();
