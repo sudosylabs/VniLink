@@ -95,4 +95,4 @@ Rules:
 
 ## Review bar
 
-Before finishing, answer the architecture checklist in `code-review` against the devices reference. Existing code outside the area you were asked to change is not precedent: report its debt rather than copying it.
+Before finishing, answer the architecture checklist in `review-changes` against the devices reference. Existing code outside the area you were asked to change is not precedent: report its debt rather than copying it.

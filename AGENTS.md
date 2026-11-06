@@ -38,7 +38,7 @@ VS Code is the TypeScript architectural reference. Read the corresponding upstre
 - `licensing` — license notice of each source file, copied-code provenance and license metadata.
 - `unit-tests` — authoritative validation selection and completion policy; `cross-platform-validation` — environments, prerequisites and limits of evidence; `fix-ci-failures` — reading and fixing a failing CI run.
 - `measurements` — before-and-after numbers for a speed, latency or resource change (`bench:service`, `measure:latency`, `measure:impaired`, `test:stress`).
-- `code-review` — review scope and the architecture checklist every change answers.
+- `review-changes` — review scope and the architecture checklist every change answers.
 - `commit-organization` — coherent commit boundaries, selective staging and verification of each commit; use when committing work or planning a commit series.
 - `update-instructions` — changing these instructions or the skills, including turning a user's correction into a lasting rule.
 

@@ -1,5 +1,5 @@
 ---
-name: code-review
+name: review-changes
 description: "Review a branch, commit or working tree for correctness, security, lifecycle, architecture and platform evidence, using the architecture checklist every change answers. Use when asked to review changes or a pull request, and before calling substantial work finished."
 ---
 
