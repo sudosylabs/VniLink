@@ -37,4 +37,4 @@ vnilink-linux = { path = "../vnilink-linux" }
 vnilink-windows = { path = "../vnilink-windows" }
 
 [dev-dependencies]
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"

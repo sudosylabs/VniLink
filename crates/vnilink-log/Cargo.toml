@@ -11,6 +11,6 @@ publish = false
 workspace = true
 
 [dependencies]
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["registry", "std", "env-filter"] }
