@@ -7,13 +7,14 @@
 
 import assert from 'assert';
 import { execFile } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { after, before, suite, test } from 'node:test';
 import { checkHygiene, findCommentViolations, findHygieneViolations, hygieneRules, productIdentity } from '../hygiene.ts';
+import { isWindows } from '../platform.ts';
 import { readProduct } from '../product.ts';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -133,6 +134,12 @@ suite('hygiene', () => {
 			await writeFile(join(directory, 'build', 'vscode-source.json'), '{"files":[],"tooling":[]}');
 			await writeFile(join(directory, 'vendor', 'notes.md'), home('', 'Users', 'jane'));
 			await writeFile(join(directory, 'README.md'), 'VniLink.\n');
+			// A link to a folder whose files git lists under the folder; Windows checks links out as files.
+			if (!isWindows) {
+				await mkdir(join(directory, 'skills'));
+				await writeFile(join(directory, 'skills', 'notes.md'), 'Notes.\n');
+				await symlink('skills', join(directory, 'linked'));
+			}
 			await git('init', '--quiet');
 			await git('add', '.');
 			await git('commit', '--quiet', '-m', 'start');

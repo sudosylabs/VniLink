@@ -155,8 +155,10 @@ export async function checkHygiene(root: string): Promise<void> {
 		try {
 			contents = await readFile(join(root, path));
 		} catch (error) {
-			// Deleted in the working tree but still in the index.
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			// Deleted in the working tree but still in the index; or a link to a
+			// folder, whose files git lists under the folder's own path.
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'EISDIR') {
 				continue;
 			}
 			throw error;
