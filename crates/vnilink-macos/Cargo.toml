@@ -19,7 +19,7 @@ vnilink-audio = { path = "../vnilink-audio" }
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-cf = "=0.11.0"
 screencapturekit = { version = "=11.0.0", features = ["macos_14_0"] }
-videotoolbox = { version = "=0.21.0", default-features = false, features = ["compression", "decompression"] }
+videotoolbox = { version = "=0.21.2", default-features = false, features = ["compression", "decompression"] }
 objc2 = { version = "=0.6.5", features = ["exception"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSDictionary", "NSError", "NSValue", "NSObject", "NSString"] }
 objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVCaptureInput", "AVCaptureOutputBase", "AVCaptureSession", "AVCaptureVideoDataOutput", "AVMediaFormat", "objc2-core-media", "objc2-core-video", "dispatch2"] }
