@@ -769,9 +769,4 @@ pub(crate) fn expected_vfs_name() -> &'static str {
     required_vfs_name()
 }
 
-#[cfg(test)]
-pub(crate) fn bundled_sqlite_version() -> &'static str {
-    rusqlite::version()
-}
-
 const _: usize = crypto::MAX_PLAINTEXT;

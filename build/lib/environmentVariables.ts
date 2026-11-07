@@ -101,7 +101,6 @@ export const environmentVariables: Readonly<Record<string, EnvironmentVariable>>
 	VNILINK_AUDIO_CAPTURE_ID: { kind: 'manualTest', description: 'The capture device the audio loopback test records.' },
 	VNILINK_AUDIO_OUTPUT_ID: { kind: 'manualTest', description: 'The output device the audio loopback test plays its tone on.' },
 	VNILINK_MAC_SYSTEM_AUDIO_ID: { kind: 'manualTest', description: 'The system audio source the macOS audio test captures.' },
-	VNILINK_PICTURES: { kind: 'manualTest', description: 'Where the macOS recovery-keyframe test writes its pictures; `target/recovery-pictures` by default.' },
 	VNILINK_RECORDING_FIXTURE: { kind: 'manualTest', description: 'An absolute path the macOS recording test exports its synthetic recording to.' },
 	VNILINK_RECOVERED_FIXTURE: { kind: 'manualTest', description: 'A path the macOS recording test exports its recovered recording to.' },
 };

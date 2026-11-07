@@ -287,8 +287,7 @@ fn feed(transform: &IMFTransform, annex_b: &[u8], timestamp_us: u64) -> Result<V
 /// Measured on one hybrid Intel + NVIDIA laptop (2026-10-22): Microsoft's
 /// decoder, which decodes on the CPU, with streams from Intel's and
 /// Microsoft's encoders. Streams from NVIDIA's and AMD's encoders and
-/// slower CPUs take the same bound unmeasured; `decode_wait` in the decoder
-/// tests measures them.
+/// slower CPUs take the same bound unmeasured.
 #[cfg(windows)]
 pub(crate) const DECODE_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 

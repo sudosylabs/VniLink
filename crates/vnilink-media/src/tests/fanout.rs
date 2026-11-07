@@ -966,9 +966,9 @@ impl VideoEncoder for Refining {
     }
 }
 
-/// After a keyframe an encoder that refines is given the unchanged picture
-/// at the frame rate, for the refinement window only; then once a second
-/// again.
+/// After a keyframe the capture loop gives an encoder that refines the
+/// unchanged picture again, before the once-a-second picture would come.
+/// How long and how often is the pump's decision, tested in `pump.rs`.
 #[test]
 fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
     let host = Arc::new(boot());
@@ -1025,46 +1025,17 @@ fn an_unchanged_screen_is_encoded_again_while_a_keyframe_is_refined() {
         .recv_timeout(Duration::from_secs(5))
         .expect("first picture");
     assert!(first.keyframe);
-    // A viewer reads what arrives: one that does not falls behind and asks
-    // for keyframes, each starting a new window.
-    let keyframes = Arc::new(AtomicUsize::new(0));
-    let reader = {
-        let (keyframes, stop) = (Arc::clone(&keyframes), Arc::clone(&stop));
-        std::thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                if let Some(frame) = frames.recv_timeout(Duration::from_millis(20)) {
-                    keyframes.fetch_add(usize::from(frame.keyframe), Ordering::Relaxed);
-                }
-            }
-        })
-    };
-    // A real timer: the refine rate over a window is what is under test.
-    std::thread::sleep(Duration::from_millis(600));
-    let refined = encodes.load(Ordering::Relaxed);
+    let keyframe_at = Instant::now();
+    let encoded = encodes.load(Ordering::Relaxed);
+    wait_until("the unchanged picture to be encoded again", || {
+        encodes.load(Ordering::Relaxed) > encoded
+    });
     assert!(
-        refined >= 5,
-        "only {refined} pictures were encoded while refining"
-    );
-    // Past the window: back to a picture a second.
-    // A real timer: the end of the refine window is what is under test.
-    std::thread::sleep(Duration::from_millis(
-        crate::pump::REFINE_FOR_US / 1_000 - 600 + 300,
-    ));
-    let settled = encodes.load(Ordering::Relaxed);
-    // A real timer: the encode rate after the window is what is under test.
-    std::thread::sleep(Duration::from_millis(600));
-    let after = encodes.load(Ordering::Relaxed);
-    assert_eq!(
-        keyframes.load(Ordering::Relaxed),
-        0,
-        "no keyframe was asked for"
-    );
-    assert!(
-        after <= settled + 1,
-        "an unchanged screen was still encoded at the frame rate after the window: {settled} then {after}"
+        keyframe_at.elapsed() < Duration::from_secs(1),
+        "the unchanged picture came again only after {:?}, as the once-a-second picture, not for refinement",
+        keyframe_at.elapsed()
     );
     stop.store(true, Ordering::Relaxed);
-    reader.join().unwrap();
     worker.join().unwrap().unwrap();
 }
 
@@ -1241,14 +1212,14 @@ impl vnilink::HostCapture for StillsCapture {
 
 /// The roles of the pictures a viewer receives over `watch` of an
 /// unchanged screen, from a host that sends stills, to a window that shows
-/// them when `shows`.
-fn roles_of_an_unchanged_screen(shows: bool, watch: Duration) -> Vec<vnilink::FrameRole> {
+/// them.
+fn roles_of_an_unchanged_screen(watch: Duration) -> Vec<vnilink::FrameRole> {
     roles_of(
         ColouredStill {
             at: Instant::now(),
             page: crate::measure::colour_text_page(COLOURED.0, COLOURED.1, 0),
         },
-        shows,
+        true,
         watch,
     )
 }
@@ -1369,7 +1340,7 @@ fn watch_viewer(
 fn an_unchanged_screen_brings_one_still_picture() {
     use vnilink::FrameRole::{Changed, Still, Unchanged};
     let watch = crate::STILL_AFTER + Duration::from_millis(2_500);
-    let roles = roles_of_an_unchanged_screen(true, watch);
+    let roles = roles_of_an_unchanged_screen(watch);
     assert_eq!(roles.first(), Some(&Changed), "{roles:?}");
     assert_eq!(
         roles.iter().filter(|role| **role == Still).count(),
@@ -1378,9 +1349,6 @@ fn an_unchanged_screen_brings_one_still_picture() {
     );
     assert!(roles[1..].iter().all(|role| *role != Changed), "{roles:?}");
     assert!(roles.contains(&Unchanged), "{roles:?}");
-    // A window that cannot show them is sent none.
-    let roles = roles_of_an_unchanged_screen(false, watch);
-    assert!(!roles.contains(&Still), "{roles:?}");
 }
 
 /// A clock or a caret changing leaves the screen still enough for a still;

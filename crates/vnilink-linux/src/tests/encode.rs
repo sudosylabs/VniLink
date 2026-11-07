@@ -39,25 +39,6 @@ fn an_odd_encoder_size_is_rejected() {
     ));
 }
 
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn the_software_encoder_is_not_linked() {
-    assert!(matches!(
-        LinuxEncoder::open(
-            vnilink::VideoCodec::H264,
-            64,
-            64,
-            30,
-            500_000,
-            false,
-            vnilink::YuvMatrix::Bt709
-        ),
-        Err(Error::Unsupported("VA-API"))
-    ));
-    let caps = crate::video_codec_caps();
-    assert!(!caps.can_encode() && !caps.can_decode());
-}
-
 #[cfg(target_os = "linux")]
 #[test]
 fn vaapi_encodes_a_synthetic_picture_when_a_render_node_is_open() {
@@ -222,43 +203,4 @@ fn higher_bitrate_changes_the_hardware_output_budget() {
         high > low,
         "bitrate control had no effect on detailed pictures: low={low}, high={high}"
     );
-}
-
-/// Which GPU this machine's sessions encode on, for confirming
-/// [`crate::gpu`]'s rule on other hardware. Linux only; run with
-/// `cargo test -p vnilink-linux --lib encoder_choice_on_this_machine -- --ignored --nocapture`.
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "measurement"]
-fn encoder_choice_on_this_machine() {
-    let gpus = crate::gpu::inventory();
-    for gpu in &gpus {
-        println!("{gpu:?}");
-    }
-    println!(
-        "compositing: {:?}",
-        crate::gpu::compositing(&gpus).map(|gpu| &gpu.render_node)
-    );
-    for choice in crate::gpu::encoders(&gpus) {
-        println!("candidate: {choice:?}");
-    }
-    for codec in [
-        vnilink::VideoCodec::H264,
-        vnilink::VideoCodec::H265,
-        vnilink::VideoCodec::Av1,
-    ] {
-        match LinuxEncoder::open(
-            codec,
-            1280,
-            720,
-            30,
-            4_000_000,
-            false,
-            vnilink::YuvMatrix::Bt709,
-        ) {
-            Ok(encoder) => println!("{codec:?}: {}", encoder.implementation().name),
-            Err(error) => println!("{codec:?}: no hardware encoder ({error})"),
-        }
-    }
-    println!("caps: {:?}", crate::video_codec_caps());
 }

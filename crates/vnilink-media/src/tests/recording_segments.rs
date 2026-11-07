@@ -177,9 +177,13 @@ fn duration_limit_rolls_and_skips_mid_gop_until_the_next_idr() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Retention counts only the segments this writer made: a numbered file
+/// that was already there is neither counted nor removed.
 #[test]
 fn retention_by_count_keeps_the_newest_segments() {
     let dir = scratch("retention-count");
+    let foreign = dir.join("talk.000005.mkv");
+    std::fs::write(&foreign, b"another recording").unwrap();
     let mut writer = SegmentWriter::create(
         &dir.join("talk.mkv"),
         RecordingLimits {
@@ -200,6 +204,7 @@ fn retention_by_count_keeps_the_newest_segments() {
     assert!(dir.join("talk.000002.mkv").exists());
     assert!(dir.join("talk.000003.mkv").exists());
     assert_eq!(scanned_clusters(&dir.join("talk.000003.mkv")), 1);
+    assert_eq!(std::fs::read(&foreign).unwrap(), b"another recording");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -509,34 +514,6 @@ fn uncreatable_segment_file_fails_prime_as_storage() {
         b"stale partial"
     );
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn retention_expires_owned_segments_and_preserves_foreign_ones() {
-    let dir = scratch("ownership");
-    let foreign = dir.join("talk.000005.mkv");
-    std::fs::write(&foreign, b"another recording").unwrap();
-    let mut writer = SegmentWriter::create(
-        &dir.join("talk.mkv"),
-        RecordingLimits {
-            max_bytes: 8 * 1024 * 1024,
-            max_duration_ms: 1000,
-        },
-        Some(RecordingRetention {
-            max_segments: 2,
-            max_total_bytes: 1024 * 1024,
-        }),
-    )
-    .unwrap();
-    for segment in 0..3u64 {
-        writer.push(&idr64(segment * 1_100_000)).unwrap();
-    }
-    writer.finish().unwrap();
-    // Owned oldest expired, owned newest kept, foreign untouched.
-    assert!(!dir.join("talk.000001.mkv").exists());
-    assert!(dir.join("talk.000003.mkv").is_file());
-    assert_eq!(std::fs::read(&foreign).unwrap(), b"another recording");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

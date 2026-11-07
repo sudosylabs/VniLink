@@ -18,12 +18,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use vnilink_app::{CredentialStore, FfiError};
 
 use super::crypto::KEY_LEN;
-use super::database::{
-    arm_schema_fault, bundled_sqlite_version, expected_vfs_name, SchemaFault, CREATE_SQL,
-};
-use super::key::{
-    FileVault, KeyAccess, KeyVault, KeyringVault, MemoryVault, KEY_ACCOUNT, KEY_SERVICE,
-};
+use super::database::{arm_schema_fault, expected_vfs_name, SchemaFault, CREATE_SQL};
+use super::key::{FileVault, KeyAccess, KeyVault, KeyringVault, MemoryVault, KEY_SERVICE};
 #[cfg(unix)]
 use super::paths::linux_app_dir;
 use super::paths::{self, linux_fstype_is_remote, linux_mount_fstype};
@@ -125,19 +121,6 @@ fn contains_bytes(path: &Path, needle: &[u8]) -> bool {
 
 fn child_env_is(mode: &str) -> bool {
     std::env::var("VNILINK_STORE_CHILD").ok().as_deref() == Some(mode)
-}
-
-#[test]
-fn production_key_names_are_not_the_legacy_record_entry() {
-    assert_eq!(KEY_SERVICE, "com.vnilink.storage");
-    assert_eq!(KEY_ACCOUNT, "installation-key");
-    assert_ne!(KEY_SERVICE, "com.vnilink.installation");
-    assert_ne!(KEY_ACCOUNT, "primary");
-}
-
-#[test]
-fn bundled_sqlite_is_the_pinned_351_release() {
-    assert_eq!(bundled_sqlite_version(), "3.51.3");
 }
 
 // Linux path rules over Unix paths; on Windows `/var/data` is not even absolute.

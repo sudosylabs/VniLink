@@ -56,11 +56,10 @@ pub(crate) enum Vendor {
 /// laptop GPU), Intel's (an integrated UHD-class GPU) and Microsoft's
 /// transforms, one GPU of each on one hybrid laptop; other GPU generations of those vendors are assumed
 /// to behave the same. AMD and other hardware are not measured and keep
-/// the settings that are harmless where ignored. The measurements are
-/// `recovery_tests` (`cargo test -p vnilink-windows --release --lib
-/// recovery_tests -- --ignored --nocapture`), which print each transform's
-/// figures on the machine they run on: a vendor that measures differently
-/// changes its answer here.
+/// the settings that are harmless where ignored. Each transform encoded a
+/// page of text: full against recovery keyframe sizes, refinement of the
+/// unchanged page after a keyframe, keyframe caps, and a bitrate cut and
+/// retune. A vendor that measures differently changes its answer here.
 impl Vendor {
     /// Short fixed name for diagnostics.
     pub(crate) fn label(self) -> &'static str {
