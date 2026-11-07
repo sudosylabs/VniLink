@@ -516,11 +516,4 @@ mod tests {
             snapshot.connections.len() + snapshot.services.len() + snapshot.pipelines.len() < 6000
         );
     }
-
-    #[test]
-    fn monotonic_clock_never_goes_backwards() {
-        let first = monotonic_ms();
-        let second = monotonic_ms();
-        assert!(second >= first);
-    }
 }

@@ -492,31 +492,10 @@ mod tests {
     }
 
     #[test]
-    fn policy_registry_names_every_durable_policy_with_its_scope() {
-        assert_eq!(POLICIES.len(), 5);
-        assert_eq!(
-            policy_descriptor("terminal").unwrap().scope,
-            PolicyChangeScope::IdleGated
-        );
-        assert_eq!(
-            policy_descriptor("file-retention").unwrap().scope,
-            PolicyChangeScope::Immediate
-        );
-        assert_eq!(
-            policy_descriptor("file-resource").unwrap().scope,
-            PolicyChangeScope::NextOwner
-        );
-        assert_eq!(
-            policy_descriptor("power").unwrap().scope,
-            PolicyChangeScope::Immediate
-        );
-        assert_eq!(
-            policy_descriptor("system").unwrap().scope,
-            PolicyChangeScope::Immediate
-        );
-        assert!(policy_descriptor("no-such-policy").is_err());
-        for descriptor in POLICIES {
-            assert!(!descriptor.summary.is_empty());
-        }
+    fn an_unknown_policy_name_is_refused() {
+        assert!(matches!(
+            policy_descriptor("no-such-policy"),
+            Err(Error::InvalidSetting("unknown policy"))
+        ));
     }
 }

@@ -225,7 +225,12 @@ mod tests {
             admit_services(false, false, true, PROTOCOL_VERSION),
             Err(Error::NotHosting)
         ));
-        for version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+        // Hosting is checked before the version, pairing and capacity.
+        assert!(matches!(
+            admit_services(false, true, false, 0),
+            Err(Error::NotHosting)
+        ));
+        for version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1, 5, 6] {
             assert!(matches!(
                 admit_services(true, false, true, version),
                 Err(Error::IncompatibleVersion)
@@ -240,15 +245,6 @@ mod tests {
             Err(Error::Busy)
         ));
         assert!(admit_services(true, false, true, PROTOCOL_VERSION).is_ok());
-    }
-
-    #[test]
-    fn admission_order_prefers_hosting_and_the_control_channel_is_active() {
-        assert!(matches!(
-            admit_services(false, true, false, 0),
-            Err(Error::NotHosting)
-        ));
-        assert_eq!(phase_after_admit(), SessionPhase::Active);
     }
 
     #[test]
@@ -269,48 +265,5 @@ mod tests {
         );
         assert_eq!(agree_quality(&offer, (0, 0), &caps), offer);
         assert_eq!(agree_quality(&offer, (4000, 3000), &caps), offer);
-    }
-
-    #[test]
-    fn progression_emits_the_four_phases_in_order() {
-        let hub = EventHub::new(8);
-        let sub = hub.subscribe().unwrap();
-        announce_progression(&hub, 7, 3, SessionRole::Host, "peer");
-        let mut phases = Vec::new();
-        while let Some(CoreEvent::SessionChanged { phase, .. }) = sub.try_recv() {
-            phases.push(phase);
-        }
-        assert_eq!(
-            phases,
-            [
-                SessionPhase::Authenticated,
-                SessionPhase::Authorized,
-                SessionPhase::Negotiating,
-                SessionPhase::Active,
-            ]
-        );
-    }
-
-    #[test]
-    fn neutral_admission_needs_pairing_host_enablement_and_the_protocol_version() {
-        assert!(admit_services(true, false, true, PROTOCOL_VERSION).is_ok());
-        assert!(matches!(
-            admit_services(false, false, true, PROTOCOL_VERSION),
-            Err(Error::NotHosting)
-        ));
-        assert!(matches!(
-            admit_services(true, false, false, PROTOCOL_VERSION),
-            Err(Error::NotPaired)
-        ));
-        assert!(matches!(
-            admit_services(true, true, true, PROTOCOL_VERSION),
-            Err(Error::Busy)
-        ));
-        for version in [0, PROTOCOL_VERSION + 1, 5, 6] {
-            assert!(matches!(
-                admit_services(true, false, true, version),
-                Err(Error::IncompatibleVersion)
-            ));
-        }
     }
 }

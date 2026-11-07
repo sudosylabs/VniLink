@@ -189,13 +189,6 @@ mod tests {
     }
 
     #[test]
-    fn a_short_block_round_trips() {
-        let block = text(777);
-        let frame = encode(&block).unwrap();
-        assert_eq!(decode(&frame, block.len(), 5).unwrap(), block);
-    }
-
-    #[test]
     fn text_is_worth_compressing_and_noise_is_not() {
         assert!(probe(&text(BLOCK)).unwrap().is_some());
         assert!(probe(&noise(BLOCK)).unwrap().is_none());

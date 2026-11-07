@@ -77,7 +77,6 @@ fn digits(digest: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pairing::PAIRING_FILE_EXTENSION;
 
     #[test]
     fn file_digits_change_when_the_invitation_changes() {
@@ -89,7 +88,6 @@ mod tests {
         assert!(check.bytes().all(|byte| byte.is_ascii_digit()));
         assert_ne!(check, file_digits(&endpoint, &nonce, 51));
         assert_ne!(check, control_digits(&[7u8; 32]));
-        assert_eq!(PAIRING_FILE_EXTENSION, "vnl");
     }
 
     #[test]

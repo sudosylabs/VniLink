@@ -473,6 +473,9 @@ fn impaired_transfer_matrix() {
     }
 }
 
+/// Runs a small matrix on loopback with every test run, so the
+/// `measure:impaired` transfer harness cannot break silently between
+/// measurements.
 #[test]
 fn transfer_matrix_completes_on_loopback() {
     let report = run_matrix(&Matrix {
