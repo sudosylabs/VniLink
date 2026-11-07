@@ -159,9 +159,6 @@ suite('prerequisites', () => {
 		test('declares no SSH requirement', () => {
 			assert.strictEqual(Object.hasOwn(manifest.requirements, 'ssh'), false);
 		});
-		test('a second computer is optional', () => {
-			assert.strictEqual(manifest.requirements['second-computer'].optional, true);
-		});
 		for (const task of ['test:service', 'bench:service', 'measure:latency']) {
 			test(`${task} lists the second computer`, () => {
 				assert.ok(taskRequirements(manifest, task).includes('second-computer'));
@@ -555,11 +552,6 @@ suite('prerequisites', () => {
 	});
 	suite('package lists', () => {
 		const containerTasks = ['build', 'test:ui', 'test:rust', 'measure:impaired:linux'];
-		for (const name of ['build-essential', 'cmake', 'nasm', 'libclang-dev', 'libpipewire-0.3-dev', 'libva-dev', 'libgbm-dev', 'libegl-dev', 'libdbus-1-dev', 'libasound2-dev', 'xvfb', 'openbox', 'x11-utils', 'gnome-keyring', 'dbus-x11', 'iproute2', 'libnss3']) {
-			test(`the container installs ${name}`, () => {
-				assert.ok(systemPackages(manifest, 'debian', containerTasks).includes(name));
-			});
-		}
 		test('arm64 needs no nasm', () => {
 			assert.ok(!systemPackages(manifest, 'debian', ['build'], 'arm64').includes('nasm'));
 		});

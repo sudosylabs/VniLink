@@ -45,9 +45,8 @@ export class ApplicationWatcher {
 	#started: Promise<this> | undefined;
 	#disposed: Promise<void> | undefined;
 
-	constructor(root: string, onError: (error: unknown) => void = error => {
-		console.error('[watch]', error);
-	}) {
+	/** `onError` receives what fails after startup, as a resource the watcher cannot copy. */
+	constructor(root: string, onError: (error: unknown) => void) {
 		this.#root = root;
 		this.#onError = onError;
 	}
@@ -154,8 +153,4 @@ export class ApplicationWatcher {
 		});
 		return this.#disposed;
 	}
-}
-
-export function watchApplication(root: string): Promise<ApplicationWatcher> {
-	return new ApplicationWatcher(root).start();
 }

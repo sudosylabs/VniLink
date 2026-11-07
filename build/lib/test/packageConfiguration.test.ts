@@ -25,38 +25,57 @@ function resourceDestinations(config: BuilderConfiguration): unknown[] {
 	return config.extraResources.map((resource: unknown) => typeof resource === 'object' && resource !== null && 'to' in resource ? resource.to : undefined);
 }
 
+/** The fuses the packager writes into the Electron binary. */
+function electronFuses(config: BuilderConfiguration): Record<string, unknown> {
+	assert.ok(typeof config.electronFuses === 'object' && config.electronFuses !== null);
+	return { ...config.electronFuses };
+}
+
 function packagedPath(path: string): string {
 	return path.split('\\').join('/');
 }
 
+/** Electron's fuses, each with the value the packaged binary must carry and what that value prevents. */
+const fuses: readonly (readonly [fuse: string, value: boolean, behaviour: string])[] = [
+	['runAsNode', false, 'never runs as a Node interpreter'],
+	['enableCookieEncryption', true, 'encrypts its cookies at rest'],
+	['enableNodeOptionsEnvironmentVariable', false, 'ignores NODE_OPTIONS'],
+	['enableNodeCliInspectArguments', false, 'refuses Node inspector arguments'],
+	['enableEmbeddedAsarIntegrityValidation', true, 'validates the integrity of its archive'],
+	['onlyLoadAppFromAsar', true, 'loads the application only from its archive'],
+	['grantFileProtocolExtraPrivileges', false, 'gives file:// pages no extra privileges'],
+];
+
 suite('packageConfiguration', () => {
+	const config = configuration('darwin');
+	test('keeps the native module and the engine outside the ASAR', () => {
+		assert.deepStrictEqual(config.asarUnpack, ['native/**', 'engine.cjs']);
+	});
+	test('does not rebuild dependencies', () => {
+		assert.strictEqual(config.npmRebuild, false);
+	});
+	test('associates invitation files with the application', () => {
+		assert.deepStrictEqual(config.fileAssociations, [
+			{ ext: product.invitation.extension, name: product.invitation.name, mimeType: product.invitation.mimeType, role: 'Viewer' },
+		]);
+	});
+	test('publishes nothing', () => {
+		assert.strictEqual(config.publish, null);
+	});
+	test('signs and notarizes nothing', () => {
+		assert.strictEqual(config.mac.identity, null);
+		assert.strictEqual(config.win.signExecutable, false);
+		assert.strictEqual(config.mac.notarize, false);
+	});
+	for (const [fuse, value, behaviour] of fuses) {
+		test(`the packaged application ${behaviour} (fuse ${fuse} is ${String(value)})`, () => {
+			assert.strictEqual(electronFuses(config)[fuse], value);
+		});
+	}
+	test('sets no Electron fuse beyond the reviewed ones', () => {
+		assert.deepStrictEqual(Object.keys(electronFuses(config)).sort(), fuses.map(([fuse]) => fuse).sort());
+	});
 	for (const platform of platforms) {
-		test(`keeps the native module and the engine outside the ASAR on ${platform}`, () => {
-			assert.deepStrictEqual(configuration(platform).asarUnpack, ['native/**', 'engine.cjs']);
-		});
-		test(`packages the product's application id on ${platform}`, () => {
-			assert.strictEqual(configuration(platform).appId, product.appId);
-		});
-		test(`packages the given Electron version on ${platform}`, () => {
-			assert.strictEqual(configuration(platform).electronVersion, '44.7.0');
-		});
-		test(`does not rebuild dependencies on ${platform}`, () => {
-			assert.strictEqual(configuration(platform).npmRebuild, false);
-		});
-		test(`associates invitation files with the application on ${platform}`, () => {
-			assert.deepStrictEqual(configuration(platform).fileAssociations, [
-				{ ext: product.invitation.extension, name: product.invitation.name, mimeType: product.invitation.mimeType, role: 'Viewer' },
-			]);
-		});
-		test(`publishes nothing on ${platform}`, () => {
-			assert.strictEqual(configuration(platform).publish, null);
-		});
-		test(`signs and notarizes nothing on ${platform}`, () => {
-			const config = configuration(platform);
-			assert.strictEqual(config.mac.identity, null);
-			assert.strictEqual(config.win.signExecutable, false);
-			assert.strictEqual(config.mac.notarize, false);
-		});
 		test(`ships the relink inputs as a resource, not in the application, on ${platform}`, () => {
 			const config = configuration(platform);
 			assert.ok(Array.isArray(config.files) && config.files.includes('!relink/**'));

@@ -11,7 +11,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { afterEach, beforeEach, suite, test } from 'node:test';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { replaceFile, watchApplication, type ApplicationWatcher } from '../watch.ts';
+import { ApplicationWatcher, replaceFile } from '../watch.ts';
 
 /** Resolves once `file` has content `accept` takes, `undefined` when it does not exist; checked on each change in its folder. */
 function whenFile(file: string, accept: (text: string | undefined) => boolean): Promise<void> {
@@ -57,6 +57,8 @@ suite('watch', () => {
 		const entries = ['src/main.ts', 'src/preload.ts', 'src/noticePreload.ts', 'src/notice.ts', 'src/platform/engine/electron-utility/engineMain.ts', 'test/smoke/src/main.ts', 'test/latency/main.ts', 'test/smoke/fixtures/index.ts'];
 		let root: string;
 		let watcher: ApplicationWatcher;
+		/** The first error the watcher reports after startup. */
+		let reported: PromiseWithResolvers<unknown>;
 		async function put(path: string, text: string): Promise<void> {
 			const filename = join(root, path);
 			await mkdir(dirname(filename), { recursive: true });
@@ -78,7 +80,10 @@ suite('watch', () => {
 			await put('LICENSE.vscode.txt', 'MIT');
 			await put('ThirdPartyNotices.vscode.txt', 'notices');
 			await put('out/native/vnilink.node', 'native-sentinel');
-			watcher = await watchApplication(root);
+			reported = Promise.withResolvers();
+			watcher = await new ApplicationWatcher(root, error => {
+				reported.resolve(error);
+			}).start();
 		});
 		afterEach(async () => {
 			await watcher.dispose();
@@ -110,6 +115,13 @@ suite('watch', () => {
 			await whenFile(output('renderer/index.html'), text => text === undefined);
 			await put('src/workbench/index.html', '<title>restored</title>');
 			await whenFile(output('renderer/index.html'), text => text?.includes('restored') === true);
+		});
+		test('reports a page it cannot copy', async () => {
+			await rm(output('renderer'), { recursive: true, force: true });
+			await put('out/renderer', 'a file where the renderer folder belongs');
+			await put('src/workbench/index.html', '<title>uncopyable</title>');
+			const error = await reported.promise;
+			assert.match(String((error as NodeJS.ErrnoException).code), /^(EEXIST|ENOTDIR)$/);
 		});
 		test('leaves the native addon alone when Rust changes', async () => {
 			await put('crates/example/src/lib.rs', 'this deliberately is not valid Rust');

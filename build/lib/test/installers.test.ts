@@ -99,12 +99,6 @@ suite('installers', () => {
 		test(`the ${platform} configuration validates against the pinned builder schema`, async () => {
 			await validateConfiguration(configuration(platform), new DebugLogger(false));
 		});
-		test(`publishes no ${platform} installer`, () => {
-			assert.strictEqual(configuration(platform).publish, null);
-		});
-		test(`signs no Windows executable in the ${platform} configuration`, () => {
-			assert.strictEqual(configuration(platform).win.signExecutable, false);
-		});
 		test(`${platform === 'win32' ? 'sets' : 'does not set'} NSIS options on ${platform}`, () => {
 			assert.strictEqual(configuration(platform).nsis === undefined, platform !== 'win32');
 		});

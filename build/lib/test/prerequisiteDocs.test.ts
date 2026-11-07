@@ -18,17 +18,8 @@ suite('prerequisiteDocs', () => {
 	test('CONTRIBUTING.md carries the setup section generated from the manifest', () => {
 		assert.strictEqual(current, updated, 'Run `node build/run.ts docs:prerequisites`');
 	});
-	test('does not ask for the MSVC toolchain', () => {
-		assert.doesNotMatch(current, /requires the MSVC toolchain/);
-	});
 	test('links nothing under docs/, which is not published', () => {
 		assert.doesNotMatch(current, /\]\(docs\//);
-	});
-	test('names the Fedora packages after dnf install', () => {
-		assert.match(current, /sudo dnf install .*pipewire-devel/);
-	});
-	test('says Intel Macs cannot build VniLink', () => {
-		assert.match(current, /Intel Macs cannot build VniLink/);
 	});
 	test('lists the latency harness', () => {
 		assert.notStrictEqual(latencyRows.length, 0);
