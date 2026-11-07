@@ -738,7 +738,7 @@
     "test:rust": {
       "description": "Run the Rust tests",
       "same": "build",
-      "requires": ["process-tools", "ffprobe"]
+      "requires": ["process-tools", "ffprobe", "test-display"]
     },
     "test:loom": {
       "description": "Run the loom models of the core's concurrent pieces",
@@ -837,7 +837,7 @@
     "validate": {
       "description": "Run what CI runs on this computer: the checks, the Rust checks and tests, the build and every test",
       "same": "test",
-      "requires": ["process-tools", "ffprobe"]
+      "requires": ["process-tools", "ffprobe", "test-display"]
     },
     "lint": {
       "description": "Lint the TypeScript and the stylesheets",
