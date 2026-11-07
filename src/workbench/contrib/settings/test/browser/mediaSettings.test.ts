@@ -30,7 +30,7 @@ suite('Media settings page', () => {
 	const offered = (): HTMLButtonElement | null => cameraRow().querySelector<HTMLButtonElement>('button.settings-button');
 	const request = (): HTMLButtonElement => element<HTMLButtonElement>(cameraRow(), 'button.settings-button');
 	test('each media source has a picker', () => {
-		assert.strictEqual(page.querySelectorAll('.settings-select > .vnilink-icon').length, 3);
+		assert.deepStrictEqual(Array.from(page.querySelectorAll<HTMLSelectElement>('select'), select => select.dataset.setting), ['media.camera', 'media.microphone', 'media.systemAudio']);
 	});
 	test('the camera picker offers every camera, the default and this computer\'s cameras', () => {
 		assert.deepStrictEqual(Array.from(cameras.options).map(option => option.value), ['vnilink:all-cameras', '', 'camera-one']);

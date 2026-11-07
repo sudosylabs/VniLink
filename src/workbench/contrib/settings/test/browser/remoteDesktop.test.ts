@@ -78,6 +78,7 @@ suite('Remote desktop settings page', () => {
 		edit(frameRate(), '60');
 		await fixture.settleEdit();
 		assert.strictEqual(fixture.configuration.updateCount(), 1);
+		assert.strictEqual(fixture.configuration.getValue<{ max_frame_rate?: unknown } | null>('desktop.quality')?.max_frame_rate, 60);
 	}));
 	test('the codec choice offers only what this computer decodes', async () => {
 		await open();

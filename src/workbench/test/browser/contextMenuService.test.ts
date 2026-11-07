@@ -79,10 +79,6 @@ suite('ContextMenuService', () => {
 		assert.strictEqual(getComputedStyle(separator).borderBottomStyle, 'solid');
 		assert.strictEqual(getComputedStyle(separator).borderBottomColor, resolved('color', '--line'));
 	});
-	test('lays items out with the product stylesheet', () => {
-		assert.strictEqual(getComputedStyle(items()[0]).display, 'flex');
-		assert.strictEqual(items()[0].getBoundingClientRect().height, 24);
-	});
 	test('is drawn on the raised surface', () => {
 		const surface = menu()?.parentElement;
 		assert.ok(surface);

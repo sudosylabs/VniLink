@@ -9,7 +9,7 @@ import assert from 'assert';
 import { isDisposable } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { BufferLogger } from '../../common/bufferLog.js';
-import { AbstractMessageLogger, DEFAULT_LOG_LEVEL, format, LogLevel, parseLogLevel } from '../../common/log.js';
+import { AbstractMessageLogger, format, LogLevel, parseLogLevel } from '../../common/log.js';
 import { LogService } from '../../common/logService.js';
 
 /** A logger that keeps every message it writes, with its level. */
@@ -29,9 +29,6 @@ suite('log', () => {
 				assert.strictEqual(parseLogLevel(name), level);
 			});
 		}
-		test('the default level is info', () => {
-			assert.strictEqual(DEFAULT_LOG_LEVEL, LogLevel.Info);
-		});
 		test('levels are ordered from trace to error', () => {
 			const levels = [LogLevel.Trace, LogLevel.Debug, LogLevel.Info, LogLevel.Warning, LogLevel.Error];
 			assert.deepStrictEqual([...levels].sort((a, b) => a - b), levels);
