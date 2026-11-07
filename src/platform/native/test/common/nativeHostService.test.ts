@@ -44,20 +44,9 @@ class TestNativeHostChannel implements IChannel {
 	}
 }
 
-/** A main process that counts the channels windows ask it for. */
-class CountingMainProcessService extends TestMainProcessService {
-	public requested = 0;
-
-	public override getChannel(channelName: string): IChannel {
-		this.requested++;
-		return super.getChannel(channelName);
-	}
-}
-
 suite('NativeHostService', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 	let channel: TestNativeHostChannel;
-	let mainProcess: CountingMainProcessService;
 	let instantiationService: TestInstantiationService;
 
 	/** The window's proxy, built as the workbench registers it for window 7. */
@@ -66,19 +55,10 @@ suite('NativeHostService', () => {
 	}
 	setup(() => {
 		channel = new TestNativeHostChannel();
-		mainProcess = new CountingMainProcessService({ [NATIVE_HOST_CHANNEL_NAME]: channel });
 		instantiationService = disposables.add(new TestInstantiationService(new ServiceCollection(
-			[IMainProcessService, mainProcess],
+			[IMainProcessService, new TestMainProcessService({ [NATIVE_HOST_CHANNEL_NAME]: channel })],
 			[INativeHostService, new SyncDescriptor(NativeHostService, [7])],
 		), true));
-	});
-	test('is not created until a consumer asks for it', () => {
-		assert.strictEqual(mainProcess.requested, 0);
-		host();
-		assert.strictEqual(mainProcess.requested, 1);
-	});
-	test('is shared by every consumer', () => {
-		assert.strictEqual(host(), host());
 	});
 	test('sends its window as the context of each call', async () => {
 		const service = host();

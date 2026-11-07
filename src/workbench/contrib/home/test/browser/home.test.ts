@@ -170,13 +170,6 @@ suite('Home', () => {
 		test('Files settings do not appear in the sidebar', () => {
 			assert.strictEqual(home.element.querySelector('[data-section-id="files"]'), null);
 		});
-		test('Home creates the devices and connection pages through its services', () => {
-			const devicesPage = shown();
-			assert.ok(devicesPage, 'the devices page is not shown');
-			click(button('connection'));
-			assert.ok(shown(), 'the connection page is not shown');
-			assert.notStrictEqual(shown(), devicesPage);
-		});
 		test('restart is not offered while nothing needs it', () => {
 			requireRestart(false);
 			assert.strictEqual(restartActions().length, 0);
@@ -217,6 +210,7 @@ suite('Home', () => {
 			const devicesPage = shown();
 			click(button('connection'));
 			const settingsPage = shown();
+			assert.ok(devicesPage && settingsPage && settingsPage !== devicesPage, 'the devices and connection pages are not each shown');
 			click(button('devices'));
 			assert.strictEqual(shown(), devicesPage);
 			click(button('connection'));

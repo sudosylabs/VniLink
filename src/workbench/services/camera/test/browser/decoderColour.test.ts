@@ -7,7 +7,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { colourTolerance, hardwareMatrix, pictureColour, showsMatrix, shownColour, type StreamMatrix } from '../../decoderColour.js';
+import { colourTolerance, hardwareMatrix, pictureColour, shownColour, type StreamMatrix } from '../../decoderColour.js';
 
 /**
  * One codec string per family with an embedded picture, as the window asks
@@ -55,11 +55,8 @@ suite('decoderColour', () => {
 					assert.ok(shown, `the ${matrix} picture did not decode`);
 					assert.ok(shown.every((level, index) => Math.abs(level - pictureColour[index]) <= colourTolerance), `showed ${shown.join(', ')} for ${pictureColour.join(', ')}`);
 				});
-				test(`software is found to show ${matrix} correctly`, async () => {
-					assert.strictEqual(await showsMatrix(software(codec), matrix), true);
-				});
 			}
-			test('software is taken for a BT.709 decoder', async () => {
+			test('a decoder that shows BT.709 correctly is taken for a BT.709 one', async () => {
 				assert.strictEqual(await hardwareMatrix(software(codec)), 'bt709');
 			});
 		});

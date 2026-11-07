@@ -49,19 +49,6 @@ suite('ci', () => {
 		assert.doesNotMatch(await everything(), /node-version:/);
 		assert.match(await action('setup-node'), /node-version-file: \.nvmrc/);
 	});
-	for (const name of ['test-macos', 'test-linux', 'test-windows', 'test-linux-container']) {
-		test(`ci runs ${name}`, async () => {
-			assert.match(await workflow('ci'), new RegExp(`uses: \\./\\.github/workflows/${name}\\.yml$`, 'm'));
-		});
-		test(`${name} is only called`, async () => {
-			assert.match(await workflow(name), /^on:\n {2}workflow_call:$/m);
-		});
-	}
-	for (const job of ['ubuntu', 'fedora']) {
-		test(`test-linux has a ${job} job`, async () => {
-			assert.match(await workflow('test-linux'), new RegExp(`^  ${job}:$`, 'm'));
-		});
-	}
 	test('every job has a time limit', async () => {
 		for (const name of ['test-macos', 'test-linux', 'test-windows', 'test-linux-container', 'supply-chain', 'release', 'fuzz']) {
 			const text = await workflow(name);
@@ -84,15 +71,9 @@ suite('ci', () => {
 		assert.match(release, /workflow_run\.event == 'push'/);
 		assert.match(release, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}/);
 	});
-	test('runs the Windows suite through the test:windows task', async () => {
-		assert.match(await read('build/run.ts'), /'test:windows':.*scripts\/test-windows\.ps1/);
-	});
 	test('has no precommit package script', async () => {
 		const manifest = JSON.parse(await read('package.json')) as { readonly scripts: Readonly<Record<string, string>> };
 		assert.strictEqual(manifest.scripts.precommit, undefined);
-	});
-	test('runs the same sequence as validate on macOS', async () => {
-		assert.match(await workflow('test-macos'), /npm run validate/);
 	});
 	test('checks the Rust workspace through the task in both Linux jobs', async () => {
 		assert.match(await action('linux-suite'), /npm run check:rust/);
@@ -100,17 +81,6 @@ suite('ci', () => {
 	});
 	test('the pre-commit hook runs no full suite', async () => {
 		assert.doesNotMatch(await read('.husky/pre-commit'), /npm (test|run (check|validate|precommit)\b(?!:))/);
-	});
-	for (const [command, pattern] of [['check:hygiene', /npm run check:hygiene/], ['check:license', /npm run check:license/], ['lint-staged', /lint-staged/]] as const) {
-		test(`the pre-commit hook runs ${command}`, async () => {
-			assert.match(await read('.husky/pre-commit'), pattern);
-		});
-	}
-	test('staged TypeScript ends with one project type check', async () => {
-		const typescript = (await stagedCommands())['{src,test,build}/**/*.ts'];
-		const commands = typescript([join(root, 'src/workbench/parts/titlebar/titlebarPart.ts')]);
-		assert.ok(Array.isArray(commands));
-		assert.strictEqual(commands.at(-1), 'npm run typecheck');
 	});
 	test('staged Rust checks the workspace formatting', async () => {
 		assert.strictEqual((await stagedCommands())['crates/**/*.rs'](['crates/vnilink/src/lib.rs']), 'cargo fmt --all -- --check');

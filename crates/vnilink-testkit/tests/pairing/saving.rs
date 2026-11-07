@@ -91,9 +91,11 @@ fn a_failed_save_keeps_the_previous_record() -> TestResult {
         Some(before),
         "the record keeps the previous relay"
     );
+    let snapshot = host.core.snapshot()?;
+    assert!(snapshot.public_relay, "and the engine shows it");
     assert!(
-        host.core.snapshot()?.public_relay,
-        "and the engine shows it"
+        snapshot.relay_urls.is_empty(),
+        "without any of the refused relay"
     );
 
     let controller = Engine::start("controller");

@@ -111,6 +111,15 @@ suite('TabService', () => {
 			await approval.complete(true);
 			assert.strictEqual(await first, true);
 		});
+		test('a tab that refuses to close stays open', async () => {
+			const service = createService();
+			service.open(guarded);
+			const closing = service.close('guarded');
+			await approval.complete(false);
+			assert.strictEqual(await closing, false);
+			assert.deepStrictEqual(ids(service), ['guarded']);
+			assert.strictEqual(guarded.disposals, 0);
+		});
 		test('an approval that arrives after the service is disposed closes nothing', async () => {
 			const service = createService();
 			service.open(guarded);

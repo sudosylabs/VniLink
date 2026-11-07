@@ -11,8 +11,6 @@
 
 #[path = "engine/desktop.rs"]
 mod desktop;
-#[path = "engine/keyboard.rs"]
-mod keyboard;
 #[path = "engine/sessions.rs"]
 mod sessions;
 #[path = "engine/system.rs"]

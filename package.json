@@ -87,7 +87,8 @@
     "typescript-eslint": "8.71.1"
   },
   "overrides": {
-    "serialize-javascript": "7.1.4"
+    "serialize-javascript": "7.1.4",
+    "minimatch@>=7 <11.0.1": "11.0.5"
   },
   "type": "module",
   "optionalDependencies": {

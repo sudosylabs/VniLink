@@ -36,10 +36,7 @@ const STEPS_PER_HALVING: f64 = 6.0;
 /// hardware H.264 only. The other encoders that take a floor, Media
 /// Foundation's AMD and unlisted hardware transforms, start from the same
 /// share unmeasured; it only seeds the first recovery keyframe, and
-/// [`RecoveryQp::observe`] corrects the floor from there. The
-/// `recovery_keyframe_sizes` measurements of `vnilink-macos` and
-/// `vnilink-windows` show whether recovery keyframes fit their budget on
-/// another encoder.
+/// [`RecoveryQp::observe`] corrects the floor from there.
 const FIRST_FLOOR_SHARE: f64 = 0.65;
 
 /// The quantiser floor for one encoder's recovery keyframes.

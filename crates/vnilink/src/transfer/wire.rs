@@ -84,35 +84,6 @@ impl FileRequest {
 mod tests {
     use super::*;
 
-    #[test]
-    fn request_round_trips() {
-        let request = FileRequest {
-            job: u64::MAX - 3,
-            file: 70_000,
-            offset: 5 << 33,
-            held: (1 << 24) - 1,
-        };
-        assert_eq!(FileRequest::decode(&request.encode()).unwrap(), request);
-    }
-
-    #[test]
-    fn request_of_the_wrong_length_is_malformed() {
-        let bytes = FileRequest {
-            job: 1,
-            file: 2,
-            offset: 3,
-            held: 4,
-        }
-        .encode();
-        assert!(matches!(
-            FileRequest::decode(&bytes[..REQUEST_LEN - 1]),
-            Err(Error::Malformed)
-        ));
-        let mut long = bytes.to_vec();
-        long.push(0);
-        assert!(matches!(FileRequest::decode(&long), Err(Error::Malformed)));
-    }
-
     /// Every 28 bytes decode to a request that encodes back to them, and no
     /// other length decodes at all.
     #[test]

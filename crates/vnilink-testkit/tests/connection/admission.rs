@@ -12,7 +12,6 @@
 //! that can decode.
 
 use expect_test::expect;
-use std::time::Duration;
 
 use vnilink::{CoreEvent, Error, Grants, SessionPhase, SessionRole, VideoCodecCaps};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
@@ -44,8 +43,11 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
     let controller = Engine::start("controller");
     let capabilities = host.core.capabilities();
     assert!(
-        !capabilities.desktop_capture && !capabilities.keyboard,
-        "a host without adapters reports neither capture nor keyboard"
+        !capabilities.desktop_capture
+            && !capabilities.keyboard
+            && !capabilities.pointer
+            && capabilities.monitors == 0,
+        "a host without adapters reports no capture, keyboard, pointer or display"
     );
     InputLog::install(&host, MONITOR)?;
     InputLog::install(&controller, MONITOR)?;
@@ -132,41 +134,6 @@ fn pairing_does_not_grant_control_and_a_grant_is_directional() -> TestResult {
     "#]],
         || trace.story(&["session", "hosting", "pairing"]),
     );
-    Ok(())
-}
-
-/// An invitation lives more than nothing and at most fifteen minutes, and a
-/// token that is not one is refused as invalid.
-#[test]
-fn invitation_lifetimes_and_malformed_tokens_are_rejected() -> TestResult {
-    let _trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    assert!(
-        matches!(
-            host.core.create_invitation(Duration::ZERO),
-            Err(Error::InvalidInvitation(_))
-        ),
-        "an invitation that lives no time is refused"
-    );
-    assert!(
-        matches!(
-            host.core
-                .create_invitation(Duration::from_secs(15 * 60 + 1)),
-            Err(Error::InvalidInvitation(_))
-        ),
-        "an invitation that lives past fifteen minutes is refused"
-    );
-    host.core.create_invitation(Duration::from_secs(15 * 60))?;
-    for token in ["", "nope", "vnl1.zz"] {
-        assert!(
-            matches!(
-                controller.core.accept_invitation(token),
-                Err(Error::InvalidInvitation(_))
-            ),
-            "a malformed token is refused as invalid: {token:?}"
-        );
-    }
     Ok(())
 }
 

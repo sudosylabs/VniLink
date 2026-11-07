@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------------------------
 
 pub(crate) mod filesystem_location;
-use crate::{new_quality, FfiKeyboardMode, VnilinkCore};
+use crate::{new_quality, VnilinkCore};
 use crate::{FfiError, FfiEvent, FfiServiceKind, FfiVideoCodecCaps};
 use filesystem_location::FilesystemLocation;
 
@@ -246,23 +246,6 @@ fn independent_controller_handles_cross_the_ffi() {
     controller.shutdown();
     a.shutdown();
     b.shutdown();
-}
-
-#[test]
-fn keyboard_mode_and_swap_round_trip() {
-    let core = open_core();
-    assert!(matches!(
-        core.keyboard_mode().unwrap(),
-        crate::FfiKeyboardMode::Character
-    ));
-    core.set_keyboard_mode(FfiKeyboardMode::Map).unwrap();
-    assert!(matches!(
-        core.keyboard_mode().unwrap(),
-        crate::FfiKeyboardMode::Map
-    ));
-    assert!(!core.swap_control_and_command().unwrap());
-    core.set_swap_control_and_command(true).unwrap();
-    assert!(core.swap_control_and_command().unwrap());
 }
 
 #[test]

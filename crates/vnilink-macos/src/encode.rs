@@ -389,9 +389,9 @@ impl VideoEncoder for MacEncoder {
         cfg!(target_os = "macos")
     }
 
-    /// Measured with `still_screen_refinement`: H.264 in low-latency mode
-    /// took a recovery keyframe of a page of text from 15 to 46 dB over two
-    /// seconds of the unchanged page at 30 fps.
+    /// Measured: H.264 in low-latency mode took a recovery keyframe of a page
+    /// of text from 15 to 46 dB over two seconds of the unchanged page at
+    /// 30 fps.
     fn refines_still_pictures(&self) -> bool {
         true
     }

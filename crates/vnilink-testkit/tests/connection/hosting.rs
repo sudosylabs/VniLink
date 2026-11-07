@@ -13,8 +13,7 @@
 use expect_test::expect;
 
 use vnilink::{
-    usage, DesktopControlState, Error, Grants, InputEvent, PointerButton, ServiceKind,
-    SessionPhase, SessionRole,
+    usage, DesktopControlState, Error, Grants, InputEvent, PointerButton, ServiceKind, SessionPhase,
 };
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::{traced, wait_for, Engine, TestResult, DEFAULT_WAIT};
@@ -137,40 +136,6 @@ fn disconnect_closes_both_sides() -> TestResult {
     Ok(())
 }
 
-/// Revoking the controller ends its session; the host forgets it, and a
-/// connect is refused.
-#[test]
-fn revoke_stops_the_session_and_blocks_reconnect() -> TestResult {
-    let trace = traced();
-    let (host, _controller) = check(
-        &trace,
-        Closing {
-            by: SessionEnd::Revoke,
-            later: Later::Refused(Error::Unauthorized),
-        },
-        expect![[r#"
-            controller:
-              pairing: invitation accepted
-              pairing: invitation issued direct=1 relays=0 ttl_s=60
-              session: session phase from=connecting generation=1 role=Controller session=1 to=active
-              session: session phase from=active generation=1 role=Controller session=1 to=closed
-              session: session failed failure=unauthorized session=2
-              session: session phase from=connecting generation=0 role=Controller session=2 to=failed
-            host:
-              pairing: invitation issued direct=1 relays=0 ttl_s=60
-              pairing: invitation accepted
-              pairing: unpair requested
-              session: session phase from=active generation=1 role=Host session=1 to=stopping
-              session: session phase from=stopping generation=1 role=Host session=1 to=closed
-        "#]],
-    )?;
-    assert!(
-        host.core.snapshot()?.devices.is_empty(),
-        "a revoked controller is forgotten"
-    );
-    Ok(())
-}
-
 /// The host unpairing the controller forgets it rather than keeping it with
 /// no grants and ends its session; the controller still dials, and the host
 /// refuses a peer it no longer knows.
@@ -202,39 +167,6 @@ fn unpair_forgets_the_device_stops_the_session_and_blocks_reconnect() -> TestRes
     assert!(
         host.core.snapshot()?.devices.is_empty(),
         "an unpaired controller is forgotten, not kept without grants"
-    );
-    Ok(())
-}
-
-/// Unpairing a peer the engine does not know reports it and disturbs
-/// nothing; a controller that forgets its host ends its session and is
-/// refused before dialing.
-#[test]
-fn unpairing_an_unknown_device_reports_not_paired() -> TestResult {
-    let _trace = traced();
-    let host = Engine::start("host");
-    let controller = Engine::start("controller");
-    assert!(
-        matches!(
-            host.core.unpair(&controller.endpoint()),
-            Err(Error::NotPaired)
-        ),
-        "an unknown peer is not paired"
-    );
-    host.pair_for_control(&controller)?;
-    assert_eq!(
-        controller.connect_services(&host)?.phase,
-        SessionPhase::Active,
-        "pairing still works afterwards"
-    );
-    controller.core.unpair(&host.endpoint())?;
-    controller.wait_closed(SessionRole::Controller);
-    assert!(
-        matches!(
-            controller.core.begin_connect_services(&host.endpoint()),
-            Err(Error::NotPaired)
-        ),
-        "a controller that forgot its host is refused before dialing"
     );
     Ok(())
 }
@@ -435,39 +367,9 @@ fn each_end_of_a_connection_releases_what_its_desktop_held() -> TestResult {
     Ok(())
 }
 
-/// Stopping hosting fences every live peer at once, not only the first;
-/// their transports may close later.
-#[test]
-fn stopping_hosting_stops_every_peer() -> TestResult {
-    let _trace = traced();
-    let host = Engine::start("host");
-    let peers = [Engine::start("viewer-a"), Engine::start("viewer-b")];
-    for peer in &peers {
-        host.pair_for_control(peer)?;
-        peer.connect_services(&host)?;
-    }
-    let live = || -> Result<usize, Error> {
-        Ok(host
-            .core
-            .hosted_sessions()?
-            .iter()
-            .filter(|session| session.phase == SessionPhase::Active)
-            .count())
-    };
-    wait_for("both peers to be hosted", DEFAULT_WAIT, || {
-        (live().ok()? == 2).then_some(())
-    });
-    host.core.stop_hosting()?;
-    assert_eq!(
-        live()?,
-        0,
-        "stopping hosting leaves no peer active, at once"
-    );
-    Ok(())
-}
-
-/// Stopping hosting cancels each peer's open desktop and refuses a new
-/// session.
+/// Stopping hosting fences every live peer at once, not only the first,
+/// though their transports may close later; it cancels each peer's open
+/// desktop and refuses a new session.
 #[test]
 fn stop_hosting_cancels_live_owners_and_refuses_new_sessions() -> TestResult {
     let trace = traced();
@@ -487,7 +389,23 @@ fn stop_hosting_cancels_live_owners_and_refuses_new_sessions() -> TestResult {
         let connection = peer.connect_services(&host)?;
         desktops.push(peer.open_desktop(&connection)?);
     }
+    let live = || -> Result<usize, Error> {
+        Ok(host
+            .core
+            .hosted_sessions()?
+            .iter()
+            .filter(|session| session.phase == SessionPhase::Active)
+            .count())
+    };
+    wait_for("both peers to be hosted", DEFAULT_WAIT, || {
+        (live().ok()? == 2).then_some(())
+    });
     host.core.stop_hosting()?;
+    assert_eq!(
+        live()?,
+        0,
+        "stopping hosting leaves no peer active, at once"
+    );
     for desktop in &desktops {
         wait_for("the peer's desktop to be cancelled", DEFAULT_WAIT, || {
             desktop.is_cancelled().then_some(())

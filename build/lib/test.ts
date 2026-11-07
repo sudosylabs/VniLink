@@ -50,9 +50,37 @@ export async function testRust(root: string, signal: AbortSignal): Promise<void>
 		// The addon's target and toolchain: on Windows, the GNU target with MSYS2's MinGW tools.
 		const test = nativeCargo('test', ['--no-fail-fast', ...packages.flatMap(name => ['-p', name])]);
 		await processes.run('cargo', test.args, { cwd: root, env: test.env });
+		if (isLinux) {
+			await testLinuxSession(root, processes);
+		}
 	} finally {
 		await processes.stop();
 	}
+}
+
+/**
+ * Ignored `vnilink-linux` tests that need a D-Bus session or an X server of
+ * their own: the power inhibitors and the screen-sharing portal against fake
+ * services on the bus, and the XFixes cursor on Xvfb. Ignored in the plain run
+ * because a desktop's own session would answer them.
+ */
+const linuxSessionTests = [
+	'power::bus_tests::private_bus_missing_gnome_uses_standard_screensaver_path',
+	'power::bus_tests::a_display_inhibition_is_released_from_the_runtime_itself',
+	'power::bus_tests::private_bus_cookie_and_fd_are_released_independently',
+	'wayland::tests::real_portal_notify_transport_preserves_all_events',
+	'tests::x11_tests::real_xfixes_cursor_is_independent_from_capture_and_uses_shared_shape_storage',
+];
+
+/**
+ * Runs `linuxSessionTests` on a private session bus and Xvfb, as
+ * `scripts/test.sh` runs the UI scenarios. One at a time: two of them own the
+ * same bus name, and one expects no GNOME service where another serves it.
+ */
+async function testLinuxSession(root: string, processes: ProcessRunner): Promise<void> {
+	const test = nativeCargo('test', ['-p', 'vnilink-linux', '--lib', '--', '--ignored', '--exact', '--test-threads=1', ...linuxSessionTests]);
+	const env = { ...test.env, VNILINK_TEST_X11: 'private', VNILINK_TEST_PORTAL_BUS: 'private' };
+	await processes.run('dbus-run-session', ['--', 'xvfb-run', '-a', '-s', '-screen 0 1280x1024x24', 'cargo', ...test.args], { cwd: root, env });
 }
 
 /**

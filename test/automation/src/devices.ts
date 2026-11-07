@@ -20,6 +20,18 @@ const CODE = `${POPOVER} .device-pairing-code:not([hidden])`;
 
 const DIGITS = `${POPOVER} .device-pairing-field:not([hidden]) .code-input-digit`;
 
+const SELECTED_ROW = `${LIST} .monaco-list-row[aria-selected="true"]`;
+
+const INSPECTOR_TITLE = `${FIXTURE} .device-panel-identity h2`;
+
+const EMPTY_TITLE = `${FIXTURE} .device-empty h2`;
+
+/** The selected computer's list row and the computer the inspector shows. */
+export interface Selection {
+	readonly rows: readonly string[];
+	readonly inspector: string;
+}
+
 /** How the inspector sits beside, or over, the device list. */
 export interface InspectorSheet {
 	readonly scrolls: boolean;
@@ -60,6 +72,18 @@ export class Devices {
 			atRightEdge: Math.abs(panel.right - host.right) < 1,
 			overList: panel.left < list.right,
 		};
+	}
+
+	/** The text of each selected list row, and the title the inspector shows. */
+	public async selection(): Promise<Selection> {
+		const rows = await this.code.waitForElements(SELECTED_ROW, false, found => found.length > 0);
+		const inspector = await this.code.waitForTextContent(INSPECTOR_TITLE);
+		return { rows: rows.map(row => row.textContent), inspector };
+	}
+
+	/** Waits for the page with no computers to show `title`. */
+	public async waitForEmptyTitle(title: string): Promise<void> {
+		await this.code.waitForTextContent(EMPTY_TITLE, title);
 	}
 
 	public async overflows(): Promise<boolean> {
@@ -107,11 +131,11 @@ export class Devices {
 		await this.code.driver.renderer.whenRendered();
 	}
 
-	/** Types the last digit, confirms, and waits for the computer's own code. */
-	public async finishInvitation(digit: string): Promise<void> {
+	/** Types the last digit, confirms, and returns the computer's own code once it shows. */
+	public async finishInvitation(digit: string): Promise<string> {
 		await this.code.driver.renderer.insertText(DIGITS, digit, 5);
 		await this.code.driver.renderer.sendKey('Enter', 13, DIGITS, 5);
-		await this.code.waitForElement(CODE, undefined, 30);
+		return this.code.waitForTextContent(CODE, undefined, undefined, 30);
 	}
 
 	private async typeDigits(digits: string): Promise<void> {

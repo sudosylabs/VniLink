@@ -642,11 +642,6 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 #[cfg(test)]
-pub(crate) fn checksum(bytes: &[u8]) -> u32 {
-    crc32(bytes)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{OperatingSystem, SharingPolicy};
@@ -679,7 +674,7 @@ mod tests {
 
     fn resign(bytes: &mut [u8]) {
         let end = bytes.len() - 4;
-        let checksum = checksum(&bytes[..end]);
+        let checksum = crc32(&bytes[..end]);
         bytes[end..].copy_from_slice(&checksum.to_be_bytes());
     }
 
@@ -702,7 +697,7 @@ mod tests {
 
     #[test]
     fn installation_roundtrips_global_policy_and_authenticated_device_metadata() {
-        assert_eq!(checksum(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
         let secret = SecretKey::generate().to_bytes();
         let mut trust = Trust::default();
         let id = peer(&mut trust);
@@ -754,6 +749,21 @@ mod tests {
         invalid[end - 7] = 0xff;
         resign(&mut invalid);
         assert!(matches!(decode(&invalid), Err(Error::CorruptRecord)));
+    }
+
+    #[test]
+    fn a_record_of_another_format_version_is_refused_even_with_a_valid_checksum() {
+        let secret = SecretKey::generate().to_bytes();
+        let mut trust = Trust::default();
+        peer(&mut trust);
+        let mut bytes = encode(&secret, &trust);
+        assert!(decode(&bytes).is_ok(), "the current format version opens");
+        bytes[4] = 4;
+        resign(&mut bytes);
+        assert!(
+            matches!(decode(&bytes), Err(Error::CorruptRecord)),
+            "any other format version is refused"
+        );
     }
 
     #[test]

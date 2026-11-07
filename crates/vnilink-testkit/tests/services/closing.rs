@@ -410,20 +410,33 @@ fn a_desktop_the_host_stops_sharing_releases_what_it_held_and_keeps_files() -> T
     )
 }
 
-/// A Desktop whose handle is dropped releases what it held and leaves the
-/// connection and Files; a redial keeps it closed by its owner.
+/// Dropping a Desktop's handle closes the Desktop as its owner would.
 #[test]
-fn a_desktop_whose_handle_is_dropped_releases_what_it_held_and_keeps_files() -> TestResult {
+fn a_desktop_whose_handle_is_dropped_is_closed_by_its_owner() -> TestResult {
     let trace = traced();
-    check(
-        &trace,
-        DesktopClose::HandleDropped,
+    let pair = Pair::for_desktop();
+    InputLog::install(&pair.host, (1920, 1080))?;
+    let session = pair.connect_services();
+    let desktop = pair.attach(&session, ServiceKind::Desktop);
+    let handle = pair
+        .controller
+        .core
+        .open_desktop_service(desktop.id, desktop.generation)?;
+    drop(handle);
+    wait_for("the dropped Desktop to close", DEFAULT_WAIT, || {
+        (phase(&pair.controller, &desktop).ok()? == ServicePhase::Closed(CloseCause::OwnerClose))
+            .then_some(())
+    });
+    pair.host.wait_released(Some(ServiceKind::Desktop));
+    trace.wait_for_records("service phase", 2);
+    vnilink_testkit::assert_story(
         expect![[r#"
         controller:
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: OwnerClose
         host:
-          hosting: service opened connection=1 kind=Some(Files) service=2
           service: service phase from=active generation=1 kind=Desktop service=1 to=closed: PeerClose
     "#]],
-    )
+        || trace.story(&["service"]),
+    );
+    Ok(())
 }

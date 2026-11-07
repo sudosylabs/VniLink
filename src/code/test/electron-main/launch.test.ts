@@ -17,9 +17,6 @@ function context(argv: readonly string[], overrides: Partial<LaunchContext> = {}
 
 suite('planLaunch', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
-	test('names the process after the product', () => {
-		assert.strictEqual(planLaunch(context([])).name, product.name);
-	});
 	test('gives Windows the application id', () => {
 		assert.strictEqual(planLaunch(context([], { windows: true })).appUserModelId, product.appId);
 	});

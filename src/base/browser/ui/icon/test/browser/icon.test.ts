@@ -35,36 +35,36 @@ suite('renderIcon', () => {
 					assert.notStrictEqual(icon.querySelector('svg path'), null);
 				}
 			});
-			test('is sixteen pixels wide in both variants', () => {
-				for (const icon of both(id)) {
-					assert.strictEqual(icon.querySelector('svg')?.getBoundingClientRect().width, 16);
-				}
-			});
-			test('is hidden from assistive technology and takes no focus', () => {
-				for (const icon of both(id)) {
-					assert.strictEqual(icon.querySelector('svg')?.getAttribute('focusable'), 'false');
-					assert.strictEqual(icon.getAttribute('aria-hidden'), 'true');
-				}
-			});
-			test('fills with the colour of the text around it', () => {
-				for (const icon of both(id)) {
-					const svg = icon.querySelector('svg');
-					assert.ok(svg);
-					assert.strictEqual(getComputedStyle(svg).fill, getComputedStyle(icon).color);
-				}
-			});
 			test('draws the filled variant differently from the outlined one', () => {
 				const [outlined, filled] = both(id);
 				assert.notStrictEqual(outlined.querySelector('svg')?.innerHTML, filled.querySelector('svg')?.innerHTML);
 			});
-			test('changing one rendered icon leaves the others intact', () => {
-				const [outlined, filled] = both(id);
-				outlined.querySelector('path')?.remove();
-				assert.notStrictEqual(filled.querySelector('path'), null);
-				assert.notStrictEqual(renderIcon(id).querySelector('path'), null);
-			});
 		});
 	}
+	test('an icon is sixteen pixels wide in both variants', () => {
+		for (const icon of both(Icons.home)) {
+			assert.strictEqual(icon.querySelector('svg')?.getBoundingClientRect().width, 16);
+		}
+	});
+	test('an icon is hidden from assistive technology and takes no focus', () => {
+		for (const icon of both(Icons.home)) {
+			assert.strictEqual(icon.querySelector('svg')?.getAttribute('focusable'), 'false');
+			assert.strictEqual(icon.getAttribute('aria-hidden'), 'true');
+		}
+	});
+	test('an icon fills with the colour of the text around it', () => {
+		for (const icon of both(Icons.home)) {
+			const svg = icon.querySelector('svg');
+			assert.ok(svg);
+			assert.strictEqual(getComputedStyle(svg).fill, getComputedStyle(icon).color);
+		}
+	});
+	test('changing one rendered icon leaves the others intact', () => {
+		const [outlined, filled] = both(Icons.home);
+		outlined.querySelector('path')?.remove();
+		assert.notStrictEqual(filled.querySelector('path'), null);
+		assert.notStrictEqual(renderIcon(Icons.home).querySelector('path'), null);
+	});
 	test('a labelled icon is an image named by its label', () => {
 		const named = renderIcon(Icons.home, { label: '<Home>' });
 		assert.strictEqual(named.getAttribute('role'), 'img');

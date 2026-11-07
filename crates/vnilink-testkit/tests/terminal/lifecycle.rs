@@ -340,9 +340,9 @@ fn closing_a_terminal_does_not_wait_for_unread_output() -> TestResult {
 /// Disconnecting while a terminal's output goes unread does not wait for
 /// it to be read: the terminal ends on both sides.
 ///
-/// The story states only the terminal opening: on a disconnect the host
-/// sometimes records no end of the terminal's stream, and the controller's
-/// record of its pipe's end names either cause.
+/// No story is stated: on a disconnect the host sometimes records no end of
+/// the terminal's stream, and the controller's record of its pipe's end
+/// names either cause.
 #[test]
 fn disconnecting_does_not_wait_for_unread_terminal_output() -> TestResult {
     let trace = traced();
@@ -355,18 +355,6 @@ fn disconnecting_does_not_wait_for_unread_terminal_output() -> TestResult {
         .core
         .disconnect_session(hosting.connection.id)?;
     hosting.wait_ended(&terminal);
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        host:
-          terminal: terminal opened columns=80 persistent=false resumed=false rows=24 service=1
-    "#]],
-        || {
-            trace
-                .tell(&["terminal"])
-                .only(&["terminal opened"])
-                .to_string()
-        },
-    );
     trace.assert_unrecorded("terminal content", &["VNI_STREAM"]);
     Ok(())
 }

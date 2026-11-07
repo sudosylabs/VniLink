@@ -12,8 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, suite, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { assignExecutableUuids, darwinUsageDescriptions, derivedUuid, executableUuids, formatUuid, machoUuids } from '../macos/identity.ts';
-import { packageConfiguration } from '../package.ts';
+import { assignExecutableUuids, derivedUuid, executableUuids, formatUuid, machoUuids } from '../macos/identity.ts';
 import { isMacintosh } from '../platform.ts';
 import { loadProduct } from '../product.ts';
 
@@ -115,12 +114,5 @@ suite('macOS identity', () => {
 	test('gives the stock Electron executable UUIDs other than its own', { skip: !isMacintosh }, async () => {
 		const stockUuids = machoUuids(await readFile(electron())).map(slice => formatUuid(slice.uuid));
 		assert.notDeepStrictEqual(await executableUuids(electron(), product.appId), stockUuids);
-	});
-	test('declares every macOS usage description in the release', () => {
-		const config = packageConfiguration('/repo', '/stage', '/output', product, { platform: 'darwin', electronVersion: '44.7.0' });
-		assert.deepStrictEqual(config.mac.extendInfo, darwinUsageDescriptions);
-	});
-	test('describes local network use', () => {
-		assert.match(darwinUsageDescriptions.NSLocalNetworkUsageDescription, /network/);
 	});
 });

@@ -28,11 +28,11 @@ suite('resolveWindowMaterial', () => {
 		test(`${platform} ${release} uses ${material}`, () => {
 			assert.strictEqual(resolveWindowMaterial(platform, release, false, false), material);
 		});
-		test(`${platform} ${release} is opaque when transparency is reduced`, () => {
-			assert.strictEqual(resolveWindowMaterial(platform, release, true, false), 'none');
-		});
-		test(`${platform} ${release} is opaque in high contrast`, () => {
-			assert.strictEqual(resolveWindowMaterial(platform, release, false, true), 'none');
-		});
 	}
+	test('a release with glass is opaque when transparency is reduced', () => {
+		assert.strictEqual(resolveWindowMaterial('darwin', '27.0.0', true, false), 'none');
+	});
+	test('a release with mica is opaque in high contrast', () => {
+		assert.strictEqual(resolveWindowMaterial('win32', '10.0.22621', false, true), 'none');
+	});
 });

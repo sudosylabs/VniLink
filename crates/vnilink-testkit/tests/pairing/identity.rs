@@ -5,14 +5,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ---------------------------------------------------------------------------------------------
 
-//! An engine's identity toward other computers: how a new one starts, the
-//! identity it can be started from, what a stopped engine still says and
-//! refuses, and the ids it will not take for a peer, its own included.
+//! An engine's identity toward other computers: the identity it can be
+//! started from, what a stopped engine still says and refuses, and the ids
+//! it will not take for a peer, its own included.
 
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{CoreConfig, CoreEvent, EncodedFrame, Error, Grants, Quality};
+use vnilink::{CoreConfig, CoreEvent, EncodedFrame, Error, Grants, KeyboardMode, Quality};
 use vnilink_testkit::desktop::{InputLog, MonitorCapture};
 use vnilink_testkit::relay::LocalRelay;
 use vnilink_testkit::store::start_storeless;
@@ -68,6 +68,14 @@ fn shutdown_is_idempotent_and_later_calls_report_it() -> TestResult {
     );
     shut(core.revoke(&other.endpoint()), "revoke");
     shut(
+        core.set_keyboard_mode(KeyboardMode::Character),
+        "set_keyboard_mode",
+    );
+    shut(
+        core.set_swap_control_and_command(true),
+        "set_swap_control_and_command",
+    );
+    shut(
         core.set_desktop_quality_defaults(Quality::new(1, 1, 1, 1)?),
         "set_desktop_quality_defaults",
     );
@@ -114,28 +122,6 @@ fn unknown_devices_and_garbage_ids_are_rejected() -> TestResult {
             "revoking {id:?} is refused"
         );
     }
-    Ok(())
-}
-
-/// A new engine is idle: it hosts nothing, knows nobody, has no session,
-/// uses the public relays, and offers no keyboard, pointer or capture.
-#[test]
-fn a_fresh_engine_starts_idle() -> TestResult {
-    let _trace = traced();
-    let engine = Engine::start("host");
-    let snapshot = engine.core.snapshot()?;
-    assert_eq!(snapshot.endpoint_id, engine.endpoint(), "it says who it is");
-    assert!(snapshot.public_relay, "it uses the public relays");
-    assert!(snapshot.relay_urls.is_empty(), "and no relay of its own");
-    assert!(!snapshot.hosting, "it hosts nothing");
-    assert!(snapshot.devices.is_empty(), "it knows nobody");
-    assert!(snapshot.incoming.is_none(), "it has no incoming session");
-    assert!(snapshot.outgoing.is_none(), "nor an outgoing one");
-    let capabilities = snapshot.capabilities;
-    assert!(!capabilities.keyboard, "it offers no keyboard");
-    assert!(!capabilities.pointer, "nor a pointer");
-    assert!(!capabilities.desktop_capture, "nor capture");
-    assert_eq!(capabilities.monitors, 0, "nor a display");
     Ok(())
 }
 

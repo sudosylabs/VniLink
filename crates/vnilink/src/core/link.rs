@@ -401,7 +401,6 @@ mod address_refresh_tests {
     use crate::invitation;
     use crate::relay::RelaySettings;
     use crate::session::{Grants, SessionPhase};
-    use crate::test_support::loopback_core;
 
     fn open_stored(store: &MemoryStore) -> Core {
         let core = Core::open_direct(Arc::new(store.clone()), RelaySettings::public_n0())
@@ -466,9 +465,11 @@ mod address_refresh_tests {
     }
 
     #[test]
-    fn a_session_replaces_stale_addresses_and_keeps_the_grant() {
-        let host = loopback_core();
-        let controller = loopback_core();
+    fn a_session_replaces_stale_addresses_and_keeps_the_grant_across_a_restart() {
+        let host_store = MemoryStore::empty();
+        let controller_store = MemoryStore::empty();
+        let host = open_stored(&host_store);
+        let controller = open_stored(&controller_store);
         let host_direct = pair(&host, &controller, Some(stale()));
         assert!(device(&controller, &host.endpoint_id())
             .direct
@@ -492,6 +493,20 @@ mod address_refresh_tests {
         assert!(granted.grants.control);
         assert!(!granted.grants.clipboard);
         assert!(!granted.grants.transfer);
+        // Both computers reopen their stores with the refreshed addresses and
+        // the grants as they were.
+        drop(controller);
+        drop(host);
+        let controller = open_stored(&controller_store);
+        let restored = device(&controller, &saved.endpoint_id);
+        assert_eq!(restored.direct, saved.direct);
+        assert_eq!(restored.relays, saved.relays);
+        assert_eq!(restored.grants, Grants::default());
+        let host = open_stored(&host_store);
+        let restored_grant = device(&host, &granted.endpoint_id);
+        assert_eq!(restored_grant.direct, granted.direct);
+        assert_eq!(restored_grant.relays, granted.relays);
+        assert_eq!(restored_grant.grants, granted.grants);
     }
 
     #[test]
@@ -522,41 +537,5 @@ mod address_refresh_tests {
             controller.snapshot().unwrap().outgoing.unwrap().phase,
             SessionPhase::Active
         );
-    }
-
-    #[test]
-    fn refreshed_addresses_survive_a_restart() {
-        let host_store = MemoryStore::empty();
-        let controller_store = MemoryStore::empty();
-        let host = open_stored(&host_store);
-        let controller = open_stored(&controller_store);
-        let host_direct = pair(&host, &controller, Some(stale()));
-        crate::test_support::connect_link(&controller, &host);
-        wait("the controller to save the host's addresses", || {
-            let saved = device(&controller, &host.endpoint_id());
-            !saved.direct.contains(&stale()) && saved.direct == host_direct
-        });
-        wait("the host to drop the stale address", || {
-            !device(&host, &controller.endpoint_id())
-                .direct
-                .contains(&stale())
-        });
-        let saved = device(&controller, &host.endpoint_id());
-        let granted = device(&host, &controller.endpoint_id());
-        assert!(granted.grants.control);
-        drop(controller);
-        drop(host);
-        let controller = open_stored(&controller_store);
-        let restored = device(&controller, &saved.endpoint_id);
-        assert_eq!(restored.direct, saved.direct);
-        assert_eq!(restored.relays, saved.relays);
-        assert_eq!(restored.grants, Grants::default());
-        let host = open_stored(&host_store);
-        let restored_grant = device(&host, &granted.endpoint_id);
-        assert_eq!(restored_grant.direct, granted.direct);
-        assert_eq!(restored_grant.relays, granted.relays);
-        assert!(restored_grant.grants.control);
-        assert!(!restored_grant.grants.clipboard);
-        assert!(!restored_grant.grants.transfer);
     }
 }

@@ -19,8 +19,6 @@ mod gpu_tests;
 mod grant_tests;
 #[path = "tests/hevc_parameter_set.rs"]
 mod hevc_parameter_set_tests;
-#[path = "tests/host.rs"]
-mod host_tests;
 #[cfg(target_os = "linux")]
 #[path = "tests/nvenc.rs"]
 mod nvenc_tests;

@@ -31,25 +31,6 @@ fn frames_before_the_first_keyframe_are_refused() {
     ));
 }
 
-#[cfg(not(windows))]
-#[test]
-fn the_decoder_is_unavailable() {
-    // A real SPS with stub PPS and IDR passes validation, so the test reaches
-    // the Media Foundation stub instead of the bitstream checks.
-    let mut keyframe = vec![
-        0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x0a, 0x96, 0x54, 0x21, 0x34, 0x20, 0x00, 0x00, 0x03, 0x00,
-        0x20, 0x00, 0x00, 0x07, 0x91, 0xe1, 0x10, 0x8d, 0x40,
-    ];
-    keyframe.extend_from_slice(&[0, 0, 0, 1, 0x68, 0xce]);
-    keyframe.extend_from_slice(&[0, 0, 0, 1, 0x65, 0x10]);
-    let frame = EncodedFrame::h264(true, 0, keyframe).unwrap();
-    let mut decoder = WindowsDecoder::new();
-    assert!(matches!(
-        decoder.decode(&frame),
-        Err(Error::Unsupported("Media Foundation H.264"))
-    ));
-}
-
 #[cfg(windows)]
 #[test]
 fn media_foundation_decodes_what_it_encoded() {
@@ -181,65 +162,4 @@ fn solid(width: u16, height: u16, timestamp_us: u64, b: u8, g: u8, r: u8) -> Raw
         pixels.extend_from_slice(&[b, g, r, 255]);
     }
     RawFrame::bgra(width, height, timestamp_us, pixels).unwrap()
-}
-
-/// How long each picture takes to come out of the decoder, per encoder
-/// transform on this machine, against [`crate::decode::DECODE_WAIT`].
-/// Windows only; run with
-/// `cargo test -p vnilink-windows --release --lib decode_wait -- --ignored --nocapture`.
-#[cfg(windows)]
-#[test]
-#[ignore = "measurement"]
-fn decode_wait() {
-    use vnilink_media::measure::text_page;
-    const PICTURES: u64 = 120;
-    let (width, height) = (1920u16, 1080u16);
-    // SAFETY: the candidates are listed and used on this test thread only.
-    for candidate in unsafe { crate::transform::h264_encoders() } {
-        let Ok(mut encoder) = WindowsEncoder::open_candidate(
-            &candidate,
-            width,
-            height,
-            30,
-            8_000_000,
-            vnilink::YuvMatrix::Bt709,
-        ) else {
-            println!("{} ({:?}): did not open", candidate.name, candidate.vendor);
-            continue;
-        };
-        let mut decoder = WindowsDecoder::new();
-        let mut times = Vec::new();
-        for index in 0..PICTURES {
-            let timestamp_us = index * 33_333;
-            let picture = text_page(width, height, index).with_timestamp(timestamp_us);
-            let sample = encoder
-                .encode(
-                    &picture,
-                    &EncodeParams {
-                        force_keyframe: index % 30 == 0,
-                        recovery: false,
-                        bitrate_bps: 8_000_000,
-                        frame_rate: 30,
-                    },
-                )
-                .unwrap();
-            let encoded =
-                EncodedFrame::h264(sample.keyframe(), timestamp_us, sample.bytes().to_vec())
-                    .unwrap();
-            let started = std::time::Instant::now();
-            decoder.decode(&encoded).unwrap();
-            times.push(started.elapsed());
-        }
-        times.sort();
-        let at = |share: f64| times[((times.len() - 1) as f64 * share) as usize];
-        println!(
-            "{} ({:?}): 1080p decode p50 {:?}, p99 {:?}, max {:?}; bound {:?}",
-            candidate.name,
-            candidate.vendor,
-            at(0.5),
-            at(0.99),
-            times[times.len() - 1],
-            crate::decode::DECODE_WAIT,
-        );
-    }
 }

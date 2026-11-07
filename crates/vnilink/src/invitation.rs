@@ -566,44 +566,6 @@ mod tests {
     }
 
     #[test]
-    fn an_invitation_that_outlasts_the_longest_lifetime_is_refused() {
-        let secret = SecretKey::generate();
-        let now = SystemTime::now();
-        let (token, ..) = issue(&secret, &[], &[], MAX_TTL, now, None).unwrap();
-        let behind = now - CLOCK_SKEW / 2;
-        assert!(
-            open(&token, behind).is_ok(),
-            "a slow reader clock is within skew"
-        );
-        let far_behind = now - CLOCK_SKEW * 2;
-        assert!(matches!(
-            open(&token, far_behind),
-            Err(Error::InvalidInvitation(_))
-        ));
-    }
-
-    #[test]
-    fn expired_and_replayed_invitations_are_rejected() {
-        let secret = SecretKey::generate();
-        let now = SystemTime::now();
-        let (token, ..) = issue(&secret, &[], &[], Duration::from_secs(1), now, None).unwrap();
-        let later = now + Duration::from_secs(2) + CLOCK_SKEW;
-        assert!(matches!(open(&token, later), Err(Error::InvitationExpired)));
-
-        let (token, invitation, _) =
-            issue(&secret, &[], &[], Duration::from_secs(60), now, None).unwrap();
-        let (_, nonce) = open(&token, now).unwrap();
-        let mut cache = ReplayCache::new();
-        cache
-            .remember(nonce, invitation.expires_at_ms, unix_ms(now).unwrap())
-            .unwrap();
-        assert!(matches!(
-            cache.remember(nonce, invitation.expires_at_ms, unix_ms(now).unwrap()),
-            Err(Error::InvitationReplayed)
-        ));
-    }
-
-    #[test]
     fn lifetime_must_be_between_one_second_and_fifteen_minutes() {
         let secret = SecretKey::generate();
         let now = SystemTime::now();

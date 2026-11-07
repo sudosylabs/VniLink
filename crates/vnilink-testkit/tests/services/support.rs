@@ -38,8 +38,6 @@ pub(super) enum DesktopClose {
     HostClose,
     /// The host stops sharing Desktop.
     HostStopsSharing,
-    /// The controller drops the Desktop's handle.
-    HandleDropped,
 }
 
 /// Opens a Desktop and Files on one services connection to a host sharing
@@ -88,28 +86,14 @@ pub(super) fn check(trace: &Traced, close: DesktopClose, expect: Expect) -> Test
         "{close:?}: the Desktop carries the host's pictures"
     );
 
-    let ended = match close {
-        DesktopClose::HandleClose => {
-            handle.close();
-            Some(handle)
-        }
+    match close {
+        DesktopClose::HandleClose => handle.close(),
         DesktopClose::OwnerClose => {
-            controller.close_controller_service(desktop.id, desktop.generation)?;
-            Some(handle)
+            controller.close_controller_service(desktop.id, desktop.generation)?
         }
-        DesktopClose::HostClose => {
-            host.close_hosted_service(remote.id, remote.generation)?;
-            Some(handle)
-        }
-        DesktopClose::HostStopsSharing => {
-            host.set_service_sharing(ServiceKind::Desktop, false)?;
-            Some(handle)
-        }
-        DesktopClose::HandleDropped => {
-            drop(handle);
-            None
-        }
-    };
+        DesktopClose::HostClose => host.close_hosted_service(remote.id, remote.generation)?,
+        DesktopClose::HostStopsSharing => host.set_service_sharing(ServiceKind::Desktop, false)?,
+    }
     assert_eq!(
         applied.wait_for(4),
         vec![
@@ -131,17 +115,15 @@ pub(super) fn check(trace: &Traced, close: DesktopClose, expect: Expect) -> Test
         DEFAULT_WAIT,
         || (phase(&pair.controller, &desktop).ok()? == expected).then_some(()),
     );
-    if let Some(handle) = ended {
-        wait_for(
-            &format!("{close:?}: the Desktop's handle to end"),
-            DEFAULT_WAIT,
-            || handle.is_cancelled().then_some(()),
-        );
-        assert!(
-            handle.submit_input(key).is_err(),
-            "{close:?}: a closed Desktop takes no input"
-        );
-    }
+    wait_for(
+        &format!("{close:?}: the Desktop's handle to end"),
+        DEFAULT_WAIT,
+        || handle.is_cancelled().then_some(()),
+    );
+    assert!(
+        handle.submit_input(key).is_err(),
+        "{close:?}: a closed Desktop takes no input"
+    );
     // The host ends its side of the desktop just after the controller's.
     pair.host.wait_released(Some(ServiceKind::Desktop));
     assert!(

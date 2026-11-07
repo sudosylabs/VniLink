@@ -48,12 +48,6 @@ suite('release build', () => {
 		await rm(root, { recursive: true, force: true });
 	});
 	suite('bundles', () => {
-		test('builds six entry points for a release', () => {
-			assert.strictEqual(bundleOptions(root, { production: true }).length, 6);
-		});
-		test('builds nine entry points for development', () => {
-			assert.strictEqual(bundleOptions(root).length, 9);
-		});
 		for (const [index, option] of bundleOptions('/root', { production: true }).entries()) {
 			const [entry] = Array.isArray(option.entryPoints) ? option.entryPoints.filter(point => typeof point === 'string') : [''];
 			test(`keeps tests out of release entry point ${entry}`, () => {

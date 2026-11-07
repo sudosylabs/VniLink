@@ -29,17 +29,12 @@ function scenarioRun(run: Pick<ScenarioRun, 'profile' | 'scenario' | 'status' | 
 
 suite('impaired network', () => {
 	suite('profiles', () => {
-		test('catalogues the clean, loss, delay and rate profiles', () => {
-			assert.deepStrictEqual(NETEM_PROFILES.map(item => item.name), ['clean', 'loss-0.5', 'loss-1', 'loss-2', 'loss-5', 'loss-burst', 'delay-20', 'delay-50', 'delay-100', 'rate-2', 'rate-5', 'rate-10']);
+		test('freezes every profile', () => {
+			assert.deepStrictEqual(NETEM_PROFILES.filter(item => !Object.isFrozen(item)).map(item => item.name), []);
 		});
-		for (const item of NETEM_PROFILES) {
-			test(`freezes the ${item.name} profile`, () => {
-				assert.ok(Object.isFrozen(item));
-			});
-			test(`describes the ${item.name} profile in a sentence`, () => {
-				assert.ok(item.description.endsWith('.'));
-			});
-		}
+		test('describes every profile in a sentence', () => {
+			assert.deepStrictEqual(NETEM_PROFILES.filter(item => !item.description.endsWith('.')).map(item => item.name), []);
+		});
 		test('expands a group in place and selects each profile once', () => {
 			assert.deepStrictEqual(selectProfiles(['loss-1', 'quick']).map(item => item.name), ['loss-1', 'clean', 'loss-5', 'loss-burst', 'delay-50', 'rate-5']);
 		});
