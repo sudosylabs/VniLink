@@ -293,24 +293,6 @@ impl WindowsEncoder {
         }
     }
 
-    /// Whether the transform takes the `ICodecAPI` setting `key`.
-    #[cfg(all(windows, test))]
-    pub(crate) fn supports(&self, key: &windows::core::GUID) -> bool {
-        // SAFETY: `api` is a live `ICodecAPI` of this encoder's transform and `key`
-        // outlives the call.
-        self.transform
-            .cast::<ICodecAPI>()
-            .is_ok_and(|api| unsafe { api.IsSupported(key) }.is_ok())
-    }
-
-    /// Sets the `ICodecAPI` value `key` on the transform, for measuring.
-    #[cfg(all(windows, test))]
-    pub(crate) fn set_codec(&self, key: &windows::core::GUID, value: u32) -> bool {
-        // SAFETY: `transform` is this encoder's live transform, used from the thread that owns
-        // it.
-        unsafe { set_codec_u32(&self.transform, key, value) }.is_ok()
-    }
-
     /// Whether the open transform is a hardware encoder.
     #[cfg(windows)]
     pub(crate) fn hardware(&self) -> bool {
