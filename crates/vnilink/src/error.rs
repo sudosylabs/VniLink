@@ -188,11 +188,11 @@ impl Error {
         Self::network_text(format!("{err:?}"))
     }
 
+    /// At most 256 bytes of `text`, cut before a character the limit would
+    /// split: OS messages are localized and need not be ASCII.
     fn network_text(mut text: String) -> Self {
         const MAX: usize = 256;
-        if text.len() > MAX {
-            text.truncate(MAX);
-        }
+        text.truncate(text.floor_char_boundary(MAX));
         Self::Network(text)
     }
 }
@@ -221,6 +221,16 @@ mod tests {
         match Error::network_debug("z".repeat(400)) {
             Error::Network(text) => assert_eq!(text.len(), 256),
             other => panic!("debug network error was {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_network_message_is_cut_before_a_character_the_limit_splits() {
+        // A localized OS message: "é" is two bytes, starting at byte 255.
+        let message = format!("{}é and more", "x".repeat(255));
+        match Error::network(message) {
+            Error::Network(text) => assert_eq!(text, "x".repeat(255)),
+            other => panic!("long localized network error was {other:?}"),
         }
     }
 }
