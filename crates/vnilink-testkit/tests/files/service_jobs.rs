@@ -15,7 +15,7 @@
 use expect_test::expect;
 use std::time::Duration;
 
-use vnilink::{Error, JobSnapshot, JobState, ServiceInfo, ServiceKind, SessionPhase};
+use vnilink::{Error, JobSnapshot, JobState, ServiceInfo, ServiceKind, SessionInfo, SessionPhase};
 use vnilink_testkit::files::{self, drive_to_end, job_on, payload};
 use vnilink_testkit::session::service_ended;
 use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, Traced, DEFAULT_WAIT, FILES};
@@ -36,16 +36,17 @@ fn last_received(trace: &Traced, engine: &str) -> serde_json::Value {
         .expect("a file received whole")
 }
 
-/// An upload and a download on a services connection's Files service both
-/// land exactly and leave their sources, and closing a Desktop service on
-/// the same connection does not disturb them.
-#[test]
-fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult {
-    let trace = traced();
-    let pair = Pair::for_files();
+/// Uploads one file and downloads another through a services
+/// connection's Files service, calling `while_uploading` once the upload is
+/// asked for and before it moves. Asserts that both jobs complete on both
+/// sides, land exactly, keep their sources and are the Files service's
+/// jobs, and that the engines told the same story of them.
+fn moves_files_both_ways(
+    trace: &Traced,
+    pair: &Pair,
+    while_uploading: impl FnOnce(&SessionInfo) -> TestResult,
+) -> TestResult {
     let (host, controller) = (&pair.host, &pair.controller);
-    // The host offers a Desktop only with a screen to show.
-    vnilink_testkit::desktop::install_screen(&host.core)?;
     let upload = payload(8192, 113);
     let download = payload(16384, 117);
     std::fs::write(controller.folder().join("up.bin"), &upload)?;
@@ -61,11 +62,7 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
         host.location().root,
         &host.location().path("uploads"),
     )?;
-    let desktop = pair.attach(&connection, ServiceKind::Desktop);
-    controller
-        .core
-        .open_desktop_service(desktop.id, desktop.generation)?
-        .close();
+    while_uploading(&connection)?;
     let receiver = job_on(&host.core, false)?;
     let (sent, got) = drive_to_end(&controller.core, up, &host.core, receiver, TRANSFER);
     assert_eq!(
@@ -139,105 +136,41 @@ fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult 
     Ok(())
 }
 
+/// An upload and a download on a services connection's Files service both
+/// land exactly and leave their sources, and closing a Desktop service on
+/// the same connection mid-upload does not disturb them.
+#[test]
+fn files_service_jobs_complete_both_ways_and_keep_their_sources() -> TestResult {
+    let trace = traced();
+    let pair = Pair::for_files();
+    // The host offers a Desktop only with a screen to show.
+    vnilink_testkit::desktop::install_screen(&pair.host.core)?;
+    moves_files_both_ways(&trace, &pair, |connection| {
+        let desktop = pair.attach(connection, ServiceKind::Desktop);
+        pair.controller
+            .core
+            .open_desktop_service(desktop.id, desktop.generation)?
+            .close();
+        Ok(())
+    })
+}
+
 /// A services connection with no desktop, which carries no picture
 /// quality, moves files both ways through its Files service.
 #[test]
 fn a_services_connection_without_a_desktop_moves_files_both_ways() -> TestResult {
     let trace = traced();
     let pair = Pair::for_files();
-    let (host, controller) = (&pair.host, &pair.controller);
-    host.core.set_service_sharing(ServiceKind::Desktop, false)?;
-    host.core
-        .set_video_codecs(vnilink::VideoCodecCaps::default())?;
-    controller
+    pair.host
+        .core
+        .set_service_sharing(ServiceKind::Desktop, false)?;
+    pair.host
         .core
         .set_video_codecs(vnilink::VideoCodecCaps::default())?;
-    let upload = payload(8192, 113);
-    let download = payload(16384, 117);
-    std::fs::write(controller.folder().join("up.bin"), &upload)?;
-    std::fs::write(host.folder().join("down.bin"), &download)?;
-    let connection = pair.connect_services();
-    let (files, _pipe) = pair.controller.open_files(&connection)?;
-    let up = controller.core.files_service_upload(
-        files.id,
-        files.generation,
-        controller.location().root,
-        &controller.location().path(""),
-        &["up.bin".to_owned()],
-        host.location().root,
-        &host.location().path("uploads"),
-    )?;
-    let receiver = job_on(&host.core, false)?;
-    let (sent, got) = drive_to_end(&controller.core, up, &host.core, receiver, TRANSFER);
-    assert_eq!(
-        both(&sent, &got),
-        (JobState::Complete, JobState::Complete),
-        "an upload without a desktop completes on both sides"
-    );
-    let down = controller.core.files_service_download(
-        files.id,
-        files.generation,
-        host.location().root,
-        &host.location().path(""),
-        &["down.bin".to_owned()],
-        controller.location().root,
-        &controller.location().path("downloads"),
-    )?;
-    let sender = job_on(&host.core, true)?;
-    let (got, sent) = drive_to_end(&controller.core, down, &host.core, sender, TRANSFER);
-    assert_eq!(
-        both(&sent, &got),
-        (JobState::Complete, JobState::Complete),
-        "a download without a desktop completes on both sides"
-    );
-    assert_eq!(
-        std::fs::read(host.folder().join("uploads/up.bin"))?,
-        upload,
-        "the upload lands exactly"
-    );
-    assert_eq!(
-        std::fs::read(controller.folder().join("downloads/down.bin"))?,
-        download,
-        "the download lands exactly"
-    );
-    assert_eq!(
-        std::fs::read(controller.folder().join("up.bin"))?,
-        upload,
-        "an upload keeps its source"
-    );
-    assert_eq!(
-        std::fs::read(host.folder().join("down.bin"))?,
-        download,
-        "a download keeps its source"
-    );
-    assert_eq!(
-        controller
-            .core
-            .files_service_jobs(files.id, files.generation)?
-            .len(),
-        2,
-        "the Files service lists both of its jobs"
-    );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          files: job state from=preparing job=1 sender=true to=serving
-          files: file served ended=sent from=0 sent=8192 size=8192
-          files: job state done_bytes=8192 files_done=1 from=serving job=1 sender=true to=complete
-          files: file received outcome=received resumed_at=0 size=16384 took=16384
-          files: received files flushed job=2
-          files: job state done_bytes=16384 files_done=1 from=transferring job=2 sender=false to=complete
-        host:
-          files: file received outcome=received resumed_at=0 size=8192 took=8192
-          files: received files flushed job=1
-          files: job state done_bytes=8192 files_done=1 from=transferring job=1 sender=false to=complete
-          files: job state from=preparing job=2 sender=true to=serving
-          files: file served ended=sent from=0 sent=16384 size=16384
-          files: job state done_bytes=16384 files_done=1 from=serving job=2 sender=true to=complete
-    "#]],
-        || trace.story(&["files"]),
-    );
-    Ok(())
+    pair.controller
+        .core
+        .set_video_codecs(vnilink::VideoCodecCaps::default())?;
+    moves_files_both_ways(&trace, &pair, |_| Ok(()))
 }
 
 /// The controller closing a Files service interrupts its own job on both

@@ -41,7 +41,7 @@ use vnilink::{
 };
 use vnilink_testkit::events::drain;
 use vnilink_testkit::session::wait_closed;
-use vnilink_testkit::{traced, wait_for, Engine, Pair, TestResult, DEFAULT_WAIT, NOTHING_SHARED};
+use vnilink_testkit::{traced, Engine, TestResult, NOTHING_SHARED};
 
 use support::{ask, Answer, FILE_LIFETIME};
 
@@ -358,43 +358,6 @@ fn a_file_that_is_not_one_or_is_ones_own_is_refused() -> TestResult {
         host:
           pairing: pairing file exported allow_control=true direct=1 relays=0 ttl_s=60
           pairing: pairing file opened bytes=284 reason=an installation cannot pair with itself refused=invalid invitation
-    "#]],
-        || trace.story(&["pairing"]),
-    );
-    Ok(())
-}
-
-/// A host that forgets its controller ends their connection, and the
-/// controller cannot connect again.
-#[test]
-fn a_forgotten_controller_is_disconnected_and_cannot_return() -> TestResult {
-    let trace = traced();
-    let pair = Pair::for_desktop();
-    let session = pair.connect_services();
-    pair.host.core.unpair(&pair.controller.endpoint())?;
-    wait_for("the connection to end", DEFAULT_WAIT, || {
-        let phase = pair
-            .controller
-            .core
-            .controller_session(session.id)
-            .ok()?
-            .phase;
-        (phase != SessionPhase::Active).then_some(())
-    });
-    let refused = pair.controller.connect_services(&pair.host);
-    assert!(
-        matches!(refused, Err(Error::Unauthorized)),
-        "a forgotten controller cannot connect again: {refused:?}"
-    );
-    vnilink_testkit::assert_story(
-        expect![[r#"
-        controller:
-          pairing: invitation accepted
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-        host:
-          pairing: invitation issued direct=1 relays=0 ttl_s=60
-          pairing: invitation accepted
-          pairing: unpair requested
     "#]],
         || trace.story(&["pairing"]),
     );

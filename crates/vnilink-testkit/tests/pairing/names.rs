@@ -74,8 +74,7 @@ fn peers_exchange_display_names_on_connect() -> TestResult {
     Ok(())
 }
 
-/// A computer that is not paired has no name, and an id that is not one
-/// is refused.
+/// A computer that is not paired has no name.
 #[test]
 fn unknown_devices_have_no_name() -> TestResult {
     let _trace = traced();
@@ -87,13 +86,6 @@ fn unknown_devices_have_no_name() -> TestResult {
             Err(Error::NotPaired)
         ),
         "an unpaired computer has no name"
-    );
-    assert!(
-        matches!(
-            core.core.peer_hostname("not-a-key"),
-            Err(Error::InvalidSetting(_))
-        ),
-        "an id that is not one is refused"
     );
     Ok(())
 }

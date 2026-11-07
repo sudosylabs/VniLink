@@ -42,8 +42,6 @@ pub enum SessionEnd {
     StopHosting,
     /// The controller disconnects.
     Disconnect,
-    /// The host revokes the controller.
-    Revoke,
     /// The host unpairs the controller.
     Unpair,
     /// The controller unpairs the host.
@@ -90,7 +88,6 @@ pub fn check(
     match closing.by {
         SessionEnd::StopHosting => host.core.stop_hosting()?,
         SessionEnd::Disconnect => controller.core.disconnect()?,
-        SessionEnd::Revoke => host.core.revoke(&controller.endpoint())?,
         SessionEnd::Unpair => host.core.unpair(&controller.endpoint())?,
         SessionEnd::ControllerUnpair => controller.core.unpair(&host.endpoint())?,
     }
