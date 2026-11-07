@@ -21,7 +21,7 @@ import type { Automation } from '../../../../automation/src/automation.js';
 import { restoresWindow, setNativeTheme } from '../../utils.js';
 
 /** Resolves when `window` emits `event`, or fails after ten seconds. */
-function windowEvent(window: BrowserWindow, event: 'minimize' | 'restore' | 'enter-full-screen' | 'leave-full-screen'): Promise<void> {
+function windowEvent(window: BrowserWindow, event: 'minimize' | 'restore' | 'maximize' | 'unmaximize' | 'enter-full-screen' | 'leave-full-screen'): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
 			window.removeListener(event as 'minimize', done);
@@ -191,8 +191,15 @@ export function setup(automation: Automation): void {
 		Mocha.it('focuses, maximizes and restores through its own actions', async () => {
 			automation.window.show();
 			await nativeHost('focusWindow');
+			// Maximizing animates on macOS; each state is checked after its native event.
+			const maximized = windowEvent(automation.window, 'maximize');
 			await nativeHost('maximizeWindow');
+			await maximized;
+			assert.equal(automation.window.isMaximized(), true, 'maximizeWindow left the window unmaximized');
+			const unmaximized = windowEvent(automation.window, 'unmaximize');
 			await nativeHost('unmaximizeWindow');
+			await unmaximized;
+			assert.equal(automation.window.isMaximized(), false, 'unmaximizeWindow left the window maximized');
 		});
 		for (const fullscreen of [true, false]) {
 			Mocha.it(`${fullscreen ? 'hides' : 'shows'} the titlebar as it ${fullscreen ? 'enters' : 'leaves'} full screen`, async () => {
@@ -326,30 +333,41 @@ export function setup(automation: Automation): void {
 	Mocha.describe('settings-layout', () => {
 		restoresWindow(automation);
 		Mocha.after(() => automation.settings.setTheme('system'));
-		for (const theme of ['light', 'dark']) {
-			for (const width of [1200, 760]) {
-				for (const category of ['general', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection']) {
-					Mocha.it(`lays out ${category} in the ${theme} theme at ${String(width)} px, each fact once and no button to save`, async () => {
-						await automation.settings.setTheme(theme);
-						automation.window.setSize(width, 820);
-						await automation.settings.open(category);
-						const page = await automation.settings.facts();
-						assert.equal(page.overflows, false, `${category} overflowed at ${String(width)} px`);
-						assert.equal(page.submits, false, `${category} still saves through a button`);
-						assert.equal(page.refreshes, false, `${category} offers a Refresh button`);
-						// Each fact is said once, in its row or section; pages carry no closing note.
-						assert.equal(page.note, '', `${category} has a page note`);
-						assert.equal(page.legacyRows, 0, `${category} uses a retired row layout`);
-						if (category === 'access') {
-							assert.equal(page.text.includes('Device access'), false);
-						}
-						if (category === 'desktop') {
-							assert.equal(page.text.includes('Session overrides'), false);
-						}
-						await automation.settings.waitUntilSettled();
-						await automation.screenshot(`settings-${category}-${theme}-${String(width)}`);
-					});
-				}
+		const categories = ['general', 'access', 'desktop', 'input', 'terminal', 'media', 'recording', 'power', 'connection'];
+		// The layout does not depend on the theme: it is checked in the light theme, and the dark one is only pictured.
+		for (const width of [1200, 760]) {
+			for (const category of categories) {
+				Mocha.it(`lays out ${category} at ${String(width)} px, each fact once and no button to save`, async () => {
+					await automation.settings.setTheme('light');
+					automation.window.setSize(width, 820);
+					await automation.settings.open(category);
+					const page = await automation.settings.facts();
+					assert.equal(page.overflows, false, `${category} overflowed at ${String(width)} px`);
+					assert.equal(page.submits, false, `${category} still saves through a button`);
+					assert.equal(page.refreshes, false, `${category} offers a Refresh button`);
+					// Each fact is said once, in its row or section; pages carry no closing note.
+					assert.equal(page.note, '', `${category} has a page note`);
+					assert.equal(page.legacyRows, 0, `${category} uses a retired row layout`);
+					if (category === 'access') {
+						assert.equal(page.text.includes('Device access'), false);
+					}
+					if (category === 'desktop') {
+						assert.equal(page.text.includes('Session overrides'), false);
+					}
+					await automation.settings.waitUntilSettled();
+					await automation.screenshot(`settings-${category}-light-${String(width)}`);
+				});
+			}
+		}
+		for (const width of [1200, 760]) {
+			for (const category of categories) {
+				Mocha.it(`pictures ${category} in the dark theme at ${String(width)} px`, async () => {
+					await automation.settings.setTheme('dark');
+					automation.window.setSize(width, 820);
+					await automation.settings.open(category);
+					await automation.settings.waitUntilSettled();
+					await automation.screenshot(`settings-${category}-dark-${String(width)}`);
+				});
 			}
 		}
 		Mocha.it('shows the welcome across its whole tab, at any width', async () => {

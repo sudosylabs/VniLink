@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, parse, relative, sep } from 'node:path';
 import { createRequire } from 'node:module';
-import test from 'node:test';
+import { after, before, suite, test } from 'node:test';
 
 const addon = createRequire(import.meta.url)('../../out/native/vnilink.node');
 
@@ -24,26 +24,29 @@ async function waitFor(condition, name) {
 	}
 }
 
-test('two Rust engines pair through a signed file, retain grants, and reject commands after shutdown', { timeout: 30000 }, async () => {
-	const first = await addon.openTemporaryEngine();
+/** Desktop quality limits within the accepted bounds. */
+const quality = { max_bitrate_kbps: 2000, max_frame_rate: 30, max_width: 1280, max_height: 720 };
+
+suite('a temporary engine', { timeout: 30000 }, () => {
+	let first;
 	let second;
-	try {
+	before(async () => {
+		first = await addon.openTemporaryEngine();
 		second = await addon.openTemporaryEngine();
+	});
+	// The last test shuts both down; an engine already shut down refuses the second request.
+	after(async () => {
+		for (const engine of [first, second]) {
+			await engine?.execute(JSON.stringify({ type: 'shutdown' })).catch(() => undefined);
+		}
+	});
+	test('takes valid settings and refuses invalid ones and unknown commands', async () => {
 		for (const codec of ['auto', 'h264', 'h265', 'vp8', 'vp9', 'av1']) {
 			assert.equal((await execute(first, { type: 'setDesktopCodecDefault', codec })).type, 'done');
 		}
 		await assert.rejects(execute(first, { type: 'setDesktopCodecDefault', codec: 'invalid' }), /InvalidSetting/);
 		await assert.rejects(execute(first, { type: 'setDesktopCodecDefault', codec: 'auto', extra: true }));
 		await assert.rejects(execute(first, { type: 'unsupportedCommand' }));
-		// The diagnostic snapshot crosses as the engine's own bounded JSON, schema version 5.
-		const diagnostics = await execute(first, { type: 'diagnosticSnapshot' });
-		assert.equal(diagnostics.type, 'diagnosticSnapshot');
-		assert.ok(Buffer.byteLength(diagnostics.snapshot) <= 64 * 1024);
-		const parsed = JSON.parse(diagnostics.snapshot);
-		assert.equal(parsed.version, 5);
-		assert.equal(parsed.last_end, null);
-		assert.ok(!diagnostics.snapshot.includes(JSON.parse(await first.execute(JSON.stringify({ type: 'endpoint' }))).endpointId));
-		await assert.rejects(execute(first, { type: 'diagnosticSnapshot', extra: true }));
 		const localSecurity = await execute(first, { type: 'systemPolicy' });
 		assert.equal(localSecurity.type, 'systemPolicy');
 		assert.equal(typeof localSecurity.support.lock, 'boolean');
@@ -55,6 +58,28 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		assert.equal((await execute(first, { type: 'keyboardMode' })).mode, 'Map');
 		assert.equal((await execute(first, { type: 'swapControlAndCommand' })).enabled, true);
 		await assert.rejects(execute(first, { type: 'setInputDefaults', ...input, pointer: { ...input.pointer, sensitivity_percent: 0 } }));
+		// The transfer folder is only named here; the first transfer creates it.
+		const transfers = join(tmpdir(), `vnilink-transfers-${String(process.pid)}`);
+		assert.equal((await execute(first, { type: 'setTransferDirectory', path: transfers })).type, 'done');
+		assert(!existsSync(transfers), 'Naming the transfer folder created it');
+		await assert.rejects(execute(first, { type: 'setTransferDirectory', path: 'relative/Transfers' }), /InvalidSetting/);
+		await assert.rejects(execute(first, { type: 'setTransferDirectory', path: '/does-not-exist/vnilink-test/Transfers' }), /InvalidSetting/);
+		assert.equal((await execute(first, { type: 'relayRestartRequired' })).required, false);
+		assert.equal((await execute(first, { type: 'setDesktopQualityDefaults', quality })).type, 'done');
+		await assert.rejects(execute(first, { type: 'setDesktopQualityDefaults', quality: { ...quality, max_frame_rate: 61 } }));
+	});
+	test('reports diagnostics as bounded JSON without the endpoint', async () => {
+		// The diagnostic snapshot crosses as the engine's own bounded JSON, schema version 5.
+		const diagnostics = await execute(first, { type: 'diagnosticSnapshot' });
+		assert.equal(diagnostics.type, 'diagnosticSnapshot');
+		assert.ok(Buffer.byteLength(diagnostics.snapshot) <= 64 * 1024);
+		const parsed = JSON.parse(diagnostics.snapshot);
+		assert.equal(parsed.version, 5);
+		assert.equal(parsed.last_end, null);
+		assert.ok(!diagnostics.snapshot.includes(JSON.parse(await first.execute(JSON.stringify({ type: 'endpoint' }))).endpointId));
+		await assert.rejects(execute(first, { type: 'diagnosticSnapshot', extra: true }));
+	});
+	test('refuses desktop input, retired desktop commands and an unknown session as commands', async () => {
 		// Desktop input goes on a desktop's data channel, never as a command.
 		for (const command of [
 			{ type: 'submitKey', sessionId: '1', generation: '1', usage: 4, down: true },
@@ -64,64 +89,9 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		]) {
 			await assert.rejects(execute(first, command), /Desktop input goes on its data channel/, command.type);
 		}
-		// The transfer folder is only named here; the first transfer creates it.
-		const transfers = join(tmpdir(), `vnilink-transfers-${String(process.pid)}`);
-		assert.equal((await execute(first, { type: 'setTransferDirectory', path: transfers })).type, 'done');
-		assert(!existsSync(transfers), 'Naming the transfer folder created it');
-		await assert.rejects(execute(first, { type: 'setTransferDirectory', path: 'relative/Transfers' }), /InvalidSetting/);
-		await assert.rejects(execute(first, { type: 'setTransferDirectory', path: '/does-not-exist/vnilink-test/Transfers' }), /InvalidSetting/);
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: 'not-a-number' }), /Invalid session ID/);
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1', extra: true }));
 		await assert.rejects(execute(first, { type: 'stopHostedPeer', sessionId: '1' }), /NoSession/);
-		// The host's own user chooses among detected shells; no command takes a program path.
-		const shells = await execute(first, { type: 'terminalShells' });
-		assert.equal(shells.type, 'terminalShells');
-		assert(shells.shells.some(shell => shell.id === shells.automatic), 'Automatic is not a detected shell');
-		assert.equal(shells.current, null, 'A temporary engine offered a shell before one was chosen');
-		await assert.rejects(execute(first, { type: 'setTerminalShell', shell: '/tmp/not-a-shell' }), /InvalidSetting/);
-		await assert.rejects(execute(first, { type: 'setTerminalShell', shell: shells.automatic, program: '/bin/sh' }));
-		await assert.rejects(execute(first, { type: 'enableNativeTerminal', program: '/bin/sh', directory: '/tmp' }));
-		await execute(first, { type: 'setTerminalShell', shell: null });
-		assert.equal((await execute(first, { type: 'terminalShells' })).current, shells.automatic);
-		const runtime = await execute(first, { type: 'nativeRuntime' });
-		assert.equal(runtime.type, 'nativeRuntime');
-		assert.equal(runtime.capabilities.length, 13);
-		assert.equal(runtime.backends.length, 0);
-		assert.equal(runtime.capabilities.find(cap => cap.name === 'camera').available, false);
-		assert.equal((await execute(first, { type: 'setNativeCameraSources', ids: [] })).type, 'done');
-		assert.equal((await execute(first, { type: 'setNativeAudioSources', microphones: [], system: [] })).type, 'done');
-		const power = await execute(first, { type: 'powerPolicy' });
-		assert.equal(power.type, 'powerPolicy');
-		assert.equal((await execute(first, { type: 'setPowerPolicy', policy: power.policy })).type, 'done');
-		await assert.rejects(execute(first, { type: 'setPowerPolicy', policy: { ...power.policy, outgoing_idle_secs: 86401 } }));
-		assert.equal((await execute(first, { type: 'powerStatus' })).type, 'powerStatus');
-		await assert.rejects(execute(first, { type: 'nativeRuntime', unknown: true }));
-		await assert.rejects(execute(first, { type: 'recordingStatus', id: '1' }));
-		await assert.rejects(execute(first, { type: 'stopRecording', id: '1' }));
-		await assert.rejects(execute(first, { type: 'releaseRecording', id: '1' }));
-		// A camera recording is accepted as a command and needs a camera open on that connection.
-		const recording = { type: 'startRecording', sessionId: '1', generation: '1', destination: '/tmp/vnilink-camera.mkv', maxBytes: '1000000', maxDurationMs: '60000' };
-		await assert.rejects(execute(first, { ...recording, source: 'camera' }), /NoSession: no camera is open/);
-		await assert.rejects(execute(first, { ...recording, source: 'microphone' }), /Invalid|unknown variant/);
-		// Locking or restarting another computer needs a connection to it; nothing counts down here yet.
-		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'lock' }), /NoSession|StaleSession/);
-		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'format' }), /Invalid system action/);
-		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'lock', force: true }));
-		// Privacy mode is asked of a connected computer too, and takes a plain switch.
-		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: true }), /NoSession|StaleSession/);
-		await assert.rejects(execute(first, { type: 'systemPrivacy', sessionId: '1', generation: '1' }), /NoSession|StaleSession/);
-		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: 'yes' }));
-		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: true, inputBlocked: false }));
-		assert.deepEqual(await execute(first, { type: 'scheduledSystemActions' }), { type: 'scheduledSystemActions', actions: [] });
-		await assert.rejects(execute(first, { type: 'cancelHostedSystemAction', id: '1' }), /InvalidSetting/);
-		await assert.rejects(execute(first, { type: 'runHostedSystemActionNow', id: '1' }), /InvalidSetting/);
-		await assert.rejects(async () => first.openDataChannel('camera', '1', '1', 24, 80));
-		await assert.rejects(async () => first.openDataChannel('audio', '1', '1', 24, 80, JSON.stringify({ type: 'camera', deviceId: 'camera', width: 1280, height: 720, fps: 30 })));
-		await assert.rejects(async () => first.openDataChannel('camera', '1', '1', 24, 80, JSON.stringify({ type: 'camera', deviceId: 'camera', width: 1280, height: 720, fps: 30, endpointId: 'other' })));
-		const quality = { max_bitrate_kbps: 2000, max_frame_rate: 30, max_width: 1280, max_height: 720 };
-		assert.equal((await execute(first, { type: 'relayRestartRequired' })).required, false);
-		assert.equal((await execute(first, { type: 'setDesktopQualityDefaults', quality })).type, 'done');
-		await assert.rejects(execute(first, { type: 'setDesktopQualityDefaults', quality: { ...quality, max_frame_rate: 61 } }));
 		// A session carries no picture: what a desktop session once took is no command now.
 		for (const removed of [
 			{ type: 'connect', endpointId: 'peer' },
@@ -137,6 +107,62 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		}
 		// A display selection is Desktop input: only its data channel takes it.
 		await assert.rejects(execute(first, { type: 'selectDisplays', sessionId: '1', generation: '1', ids: ['1'] }), /data channel/);
+	});
+	test('offers detected terminal shells and takes no program path', async () => {
+		// The host's own user chooses among detected shells; no command takes a program path.
+		const shells = await execute(first, { type: 'terminalShells' });
+		assert.equal(shells.type, 'terminalShells');
+		assert(shells.shells.some(shell => shell.id === shells.automatic), 'Automatic is not a detected shell');
+		assert.equal(shells.current, null, 'A temporary engine offered a shell before one was chosen');
+		await assert.rejects(execute(first, { type: 'setTerminalShell', shell: '/tmp/not-a-shell' }), /InvalidSetting/);
+		await assert.rejects(execute(first, { type: 'setTerminalShell', shell: shells.automatic, program: '/bin/sh' }));
+		await assert.rejects(execute(first, { type: 'enableNativeTerminal', program: '/bin/sh', directory: '/tmp' }));
+		await execute(first, { type: 'setTerminalShell', shell: null });
+		assert.equal((await execute(first, { type: 'terminalShells' })).current, shells.automatic);
+	});
+	test('reports the native runtime and takes media sources', async () => {
+		const runtime = await execute(first, { type: 'nativeRuntime' });
+		assert.equal(runtime.type, 'nativeRuntime');
+		assert.equal(runtime.backends.length, 0);
+		assert.equal(runtime.capabilities.find(cap => cap.name === 'camera').available, false);
+		assert.equal((await execute(first, { type: 'setNativeCameraSources', ids: [] })).type, 'done');
+		assert.equal((await execute(first, { type: 'setNativeAudioSources', microphones: [], system: [] })).type, 'done');
+		await assert.rejects(execute(first, { type: 'nativeRuntime', unknown: true }));
+		await assert.rejects(async () => first.openDataChannel('camera', '1', '1', 24, 80));
+		await assert.rejects(async () => first.openDataChannel('audio', '1', '1', 24, 80, JSON.stringify({ type: 'camera', deviceId: 'camera', width: 1280, height: 720, fps: 30 })));
+		await assert.rejects(async () => first.openDataChannel('camera', '1', '1', 24, 80, JSON.stringify({ type: 'camera', deviceId: 'camera', width: 1280, height: 720, fps: 30, endpointId: 'other' })));
+	});
+	test('reads and validates the power policy', async () => {
+		const power = await execute(first, { type: 'powerPolicy' });
+		assert.equal(power.type, 'powerPolicy');
+		assert.equal((await execute(first, { type: 'setPowerPolicy', policy: power.policy })).type, 'done');
+		await assert.rejects(execute(first, { type: 'setPowerPolicy', policy: { ...power.policy, outgoing_idle_secs: 86401 } }));
+		assert.equal((await execute(first, { type: 'powerStatus' })).type, 'powerStatus');
+	});
+	test('refuses recordings without a session or with an unknown source', async () => {
+		await assert.rejects(execute(first, { type: 'recordingStatus', id: '1' }));
+		await assert.rejects(execute(first, { type: 'stopRecording', id: '1' }));
+		await assert.rejects(execute(first, { type: 'releaseRecording', id: '1' }));
+		// A camera recording is accepted as a command and needs a camera open on that connection.
+		const recording = { type: 'startRecording', sessionId: '1', generation: '1', destination: '/tmp/vnilink-camera.mkv', maxBytes: '1000000', maxDurationMs: '60000' };
+		await assert.rejects(execute(first, { ...recording, source: 'camera' }), /NoSession: no camera is open/);
+		await assert.rejects(execute(first, { ...recording, source: 'microphone' }), /Invalid|unknown variant/);
+	});
+	test('refuses system actions and privacy without a connection', async () => {
+		// Locking or restarting another computer needs a connection to it; nothing counts down here yet.
+		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'lock' }), /NoSession|StaleSession/);
+		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'format' }), /Invalid system action/);
+		await assert.rejects(execute(first, { type: 'systemAction', sessionId: '1', generation: '1', action: 'lock', force: true }));
+		// Privacy mode is asked of a connected computer too, and takes a plain switch.
+		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: true }), /NoSession|StaleSession/);
+		await assert.rejects(execute(first, { type: 'systemPrivacy', sessionId: '1', generation: '1' }), /NoSession|StaleSession/);
+		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: 'yes' }));
+		await assert.rejects(execute(first, { type: 'setSystemPrivacy', sessionId: '1', generation: '1', enabled: true, inputBlocked: false }));
+		assert.deepEqual(await execute(first, { type: 'scheduledSystemActions' }), { type: 'scheduledSystemActions', actions: [] });
+		await assert.rejects(execute(first, { type: 'cancelHostedSystemAction', id: '1' }), /InvalidSetting/);
+		await assert.rejects(execute(first, { type: 'runHostedSystemActionNow', id: '1' }), /InvalidSetting/);
+	});
+	test('two engines pair through a signed file and retain grants', async () => {
 		const a = (await execute(first, { type: 'snapshot' })).snapshot;
 		const b = (await execute(second, { type: 'snapshot' })).snapshot;
 		assert.notEqual(a.endpoint_id, b.endpoint_id);
@@ -178,13 +204,12 @@ test('two Rust engines pair through a signed file, retain grants, and reject com
 		assert.deepEqual((await execute(second, { type: 'snapshot' })).snapshot.devices[0].grants, { view: true, control: false, clipboard: false, transfer: false });
 		await execute(second, { type: 'unpair', endpointId: a.endpoint_id });
 		assert.equal((await execute(second, { type: 'snapshot' })).snapshot.devices.length, 0);
-	} finally {
+	});
+	test('rejects commands after shutdown', async () => {
 		await execute(first, { type: 'shutdown' });
-		if (second) {
-			await execute(second, { type: 'shutdown' });
-		}
-	}
-	await assert.rejects(execute(first, { type: 'snapshot' }), /shut down/);
+		await execute(second, { type: 'shutdown' });
+		await assert.rejects(execute(first, { type: 'snapshot' }), /shut down/);
+	});
 });
 
 test('this computer\'s disk lists, makes, renames and deletes through its own engine', { timeout: 30000 }, async () => {

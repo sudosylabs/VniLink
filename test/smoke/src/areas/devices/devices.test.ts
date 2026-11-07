@@ -38,6 +38,9 @@ export function setup(automation: Automation): void {
 				await setNativeTheme(automation, mode);
 				automation.window.setSize(1400, 900);
 				await automation.devices.show('selected');
+				const selection = await automation.devices.selection();
+				assert.strictEqual(selection.rows.length, 1, 'one computer is selected');
+				assert.ok(selection.rows[0].includes(selection.inspector), `the inspector shows ${selection.inspector}, not the selected computer`);
 				await automation.screenshot(`devices-selected-${mode}`);
 			});
 		}
@@ -61,9 +64,10 @@ export function setup(automation: Automation): void {
 			assert.deepEqual({ overList: sheet.overList, atRightEdge: sheet.atRightEdge }, { overList: true, atRightEdge: true }, 'a narrow window split the page instead of showing the inspector as a sheet');
 			await automation.screenshot('devices-selected-narrow');
 		});
-		for (const state of ['empty', 'unavailable'] as const) {
+		for (const [state, title] of [['empty', 'Bring your computers together'], ['unavailable', 'Devices unavailable']] as const) {
 			Mocha.it(`shows the page ${state}`, async () => {
 				await automation.devices.show(state);
+				await automation.devices.waitForEmptyTitle(title);
 				await automation.screenshot(`devices-${state}`);
 			});
 		}
@@ -83,7 +87,8 @@ export function setup(automation: Automation): void {
 			await automation.screenshot('devices-import-choose');
 			await automation.devices.openInvitation('04251');
 			await automation.screenshot('devices-import-code');
-			await automation.devices.finishInvitation('7');
+			// The fixture's engine answers the creator's 042517 with this computer's 918273.
+			assert.strictEqual(await automation.devices.finishInvitation('7'), '918273');
 			await automation.screenshot('devices-import-confirm');
 		});
 	});
