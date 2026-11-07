@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { release } from 'node:os';
 import { join } from 'node:path';
-import { nativeTheme, type BrowserWindow } from 'electron';
+import { nativeTheme, screen, type BrowserWindow } from 'electron';
 import Mocha from 'mocha';
 import { isMacintosh } from '../../../../../src/base/common/platform.js';
 import { registerDevelopmentWindow } from '../../../../../src/code/electron-main/development.js';
@@ -21,7 +21,7 @@ import type { Automation } from '../../../../automation/src/automation.js';
 import { restoresWindow, setNativeTheme } from '../../utils.js';
 
 /** Resolves when `window` emits `event`, or fails after ten seconds. */
-function windowEvent(window: BrowserWindow, event: 'minimize' | 'restore' | 'maximize' | 'unmaximize' | 'enter-full-screen' | 'leave-full-screen'): Promise<void> {
+function windowEvent(window: BrowserWindow, event: 'minimize' | 'restore' | 'enter-full-screen' | 'leave-full-screen'): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
 			window.removeListener(event as 'minimize', done);
@@ -33,6 +33,21 @@ function windowEvent(window: BrowserWindow, event: 'minimize' | 'restore' | 'max
 		}
 		window.once(event as 'minimize', done);
 	});
+}
+
+/**
+ * Resolves once `window.isMaximized()` is `maximized`. macOS zooms with an
+ * animation and sends no `maximize` event when zooming changes nothing, so
+ * the state is read rather than an event awaited.
+ */
+async function maximizedState(window: BrowserWindow, maximized: boolean): Promise<void> {
+	const deadline = Date.now() + 10000;
+	while (window.isMaximized() !== maximized) {
+		if (Date.now() > deadline) {
+			throw new Error(`The window did not ${maximized ? 'maximize' : 'restore from maximized'}`);
+		}
+		await new Promise(resolve => setTimeout(resolve, 50));
+	}
 }
 
 const DARK_CONTENT = 'rgb(33, 33, 35)';
@@ -190,16 +205,15 @@ export function setup(automation: Automation): void {
 		}
 		Mocha.it('focuses, maximizes and restores through its own actions', async () => {
 			automation.window.show();
+			// Half the work area, so maximizing changes the window whatever size earlier tests left.
+			const area = screen.getDisplayMatching(automation.window.getBounds()).workArea;
+			automation.window.setBounds({ x: area.x, y: area.y, width: Math.floor(area.width / 2), height: Math.floor(area.height / 2) });
+			assert.equal(automation.window.isMaximized(), false, 'a window half the work area counts as maximized');
 			await nativeHost('focusWindow');
-			// Maximizing animates on macOS; each state is checked after its native event.
-			const maximized = windowEvent(automation.window, 'maximize');
 			await nativeHost('maximizeWindow');
-			await maximized;
-			assert.equal(automation.window.isMaximized(), true, 'maximizeWindow left the window unmaximized');
-			const unmaximized = windowEvent(automation.window, 'unmaximize');
+			await maximizedState(automation.window, true);
 			await nativeHost('unmaximizeWindow');
-			await unmaximized;
-			assert.equal(automation.window.isMaximized(), false, 'unmaximizeWindow left the window maximized');
+			await maximizedState(automation.window, false);
 		});
 		for (const fullscreen of [true, false]) {
 			Mocha.it(`${fullscreen ? 'hides' : 'shows'} the titlebar as it ${fullscreen ? 'enters' : 'leaves'} full screen`, async () => {
